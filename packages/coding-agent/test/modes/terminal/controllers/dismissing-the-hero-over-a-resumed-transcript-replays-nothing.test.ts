@@ -167,8 +167,8 @@ describe("dismissing the hero over a resumed transcript replays nothing", () => 
 			mode.ui = new TUI(terminal);
 			vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 			await mode.init();
-			// The resume render `main.ts` runs once the mode is up.
-			mode.renderInitialMessages({ preserveExistingChat: true, clearTerminalHistory: false });
+			// The resume replay `main.ts` runs once the mode is up.
+			await mode.replayInitialMessages({ clearTerminalHistory: false });
 			await settleFrames(terminal, mode.ui);
 
 			const before = buffer(terminal);

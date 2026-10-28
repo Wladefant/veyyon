@@ -190,30 +190,31 @@ fn re_or_saved_re<'a>(
 	}
 }
 
+/// The platform shell running `cmd`, started the way the embedding shell
+/// starts a child ([`veyyon_uutils_ctx::child_command`]). `output()` keeps
+/// the child's stdio away from the host's: stdin closed, stdout and stderr
+/// captured.
 #[cfg(unix)]
-fn shell_command(cmd: &str) -> std::process::Command {
-	let mut c = std::process::Command::new("/bin/sh");
+fn shell_command(cmd: &str) -> std::io::Result<std::process::Command> {
+	let mut c = veyyon_uutils_ctx::child_command("/bin/sh", veyyon_uutils_ctx::cwd())?;
 	c.arg("-c").arg(cmd);
-	// Patched for veyyon-uutils-ctx embedding: run relative to the shell's cwd,
-	// not the host process cwd. `output()` already keeps the child's stdio
-	// away from the host's (stdin closed, stdout/stderr captured).
-	c.current_dir(veyyon_uutils_ctx::cwd());
-	c
+	Ok(c)
 }
 
 #[cfg(windows)]
-fn shell_command(cmd: &str) -> std::process::Command {
-	let mut c = std::process::Command::new("cmd.exe");
+fn shell_command(cmd: &str) -> std::io::Result<std::process::Command> {
+	let mut c = veyyon_uutils_ctx::child_command("cmd.exe", veyyon_uutils_ctx::cwd())?;
 	c.arg("/C").arg(cmd);
-	// Patched for veyyon-uutils-ctx embedding: see the unix variant above.
-	c.current_dir(veyyon_uutils_ctx::cwd());
-	c
+	Ok(c)
 }
 
 // Fallback if the target OS is neither Windows nor UNIX-like
 #[cfg(not(any(unix, windows)))]
-fn shell_command(_cmd: &str) -> std::process::Command {
-	unimplemented!("the 'e' substitute flag requires a platform shell (/bin/sh or cmd.exe)");
+fn shell_command(_cmd: &str) -> std::io::Result<std::process::Command> {
+	Err(std::io::Error::new(
+		std::io::ErrorKind::Unsupported,
+		"the 'e' substitute flag requires a platform shell (/bin/sh or cmd.exe)",
+	))
 }
 
 /// Perform the specified RE replacement in the provided pattern space.
@@ -330,14 +331,16 @@ fn substitute(
 		// Execute the pattern space as a shell command if the 'e' flag is set
 		if sub.execute {
 			let cmd_str = pattern.as_str()?.to_string();
-			let output_bytes = shell_command(&cmd_str).output().map_err(|e| {
-				input_runtime_error::<()>(
-					&command.location,
-					context,
-					format!("failed to execute shell command: {e}"),
-				)
-				.unwrap_err()
-			})?;
+			let output_bytes = shell_command(&cmd_str)
+				.and_then(|mut c| c.output())
+				.map_err(|e| {
+					input_runtime_error::<()>(
+						&command.location,
+						context,
+						format!("failed to execute shell command: {e}"),
+					)
+					.unwrap_err()
+				})?;
 			let mut shell_out = String::from_utf8_lossy(&output_bytes.stdout).into_owned();
 			if shell_out.ends_with("\r\n") {
 				// On windows, both return carriage and newline characters are used

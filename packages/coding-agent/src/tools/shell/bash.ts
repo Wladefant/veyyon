@@ -796,6 +796,7 @@ export class BashTool
 						timeout: options.timeoutMs ?? 0,
 						signal: runSignal,
 						env: options.resolvedEnv,
+						redactOutput: this.session.obfuscateProviderText,
 						artifactPath,
 						artifactId,
 						spillThreshold: inlineBudgetFor(this.session),
@@ -1232,10 +1233,10 @@ export class BashTool
 		const waitResult = await this.#waitForManagedBashJob(job, { thresholdMs: wallThresholdMs, stallMs, signal });
 		switch (waitResult.kind) {
 			case "completed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				return waitResult.result;
 			case "failed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				throw waitResult.error;
 			case "aborted":
 				manager.cancel(job.jobId);
@@ -1391,6 +1392,7 @@ export class BashTool
 					timeout: timeoutMs ?? 0,
 					signal,
 					env: resolvedEnv,
+					redactOutput: this.session.obfuscateProviderText,
 					artifactPath,
 					artifactId,
 					spillThreshold: inlineBudgetFor(this.session),

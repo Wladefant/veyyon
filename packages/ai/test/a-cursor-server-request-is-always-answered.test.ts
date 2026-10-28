@@ -4,9 +4,10 @@
  * WHY. The server holds a turn open until the client answers each exec request and each
  * interaction query. A request the client dropped left nothing on the wire but heartbeats, and the
  * turn ended 30 minutes later as "Cursor made no progress for 1800s". Two holes did it: an exec
- * request whose case is newer than the generated protocol (`mcp_state_exec_args`, field 36) was
+ * request whose case was newer than the generated protocol (`mcp_state_exec_args`, field 36) was
  * returned from without a reply, and an interaction query (Cursor's built-in web search asks for
- * approval this way) was never read at all.
+ * approval this way) was never read at all. Field 36 is now in the protocol and answered with the
+ * MCP server this client advertises, as Cursor's own client answers it.
  *
  * The class is "a server request with no answer", so the suite sweeps both oneofs from the generated
  * descriptors and adds one field number past the last the descriptor defines, standing in for the
@@ -29,6 +30,8 @@ import {
 	ExecServerMessageSchema,
 	InteractionQuerySchema,
 	InteractionResponseSchema,
+	type McpToolDefinition,
+	McpToolDefinitionSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { cursorAssistantMessage, newBlockState } from "./helpers/cursor-stream-harness";
 
@@ -57,7 +60,7 @@ function unknownCase(no: number) {
 	return [{ no, wireType: WireType.LengthDelimited, data: new Uint8Array([0]) }];
 }
 
-function newTurn() {
+function newTurn(advertisedTools: McpToolDefinition[] = []) {
 	const output = cursorAssistantMessage();
 	const replies: AgentClientMessage[] = [];
 	const run = async (toolCallId: string, toolName: string): Promise<ToolResultMessage> => ({
@@ -95,7 +98,7 @@ function newTurn() {
 			h2Request,
 			execHandlers,
 			async result => result,
-			[],
+			advertisedTools,
 		);
 	return { replies, send };
 }
@@ -126,6 +129,36 @@ function execAnswer(replies: readonly AgentClientMessage[]): "result" | "throw" 
 	}
 	return undefined;
 }
+
+/** The tools a turn advertises to Cursor over MCP, as `requestContextArgs` lists them. */
+const ADVERTISED = ["goal", "set_cwd"].map(name =>
+	create(McpToolDefinitionSchema, { name, toolName: name, providerIdentifier: "pi-agent" }),
+);
+
+/** The MCP state answer to exec request {@link EXEC_REQUEST_ID}: its case and each server's name, id and tools. */
+function mcpStateAnswer(replies: readonly AgentClientMessage[]) {
+	for (const reply of replies) {
+		const message = reply.message;
+		if (message.case !== "execClientMessage" || message.value.id !== EXEC_REQUEST_ID) continue;
+		const answer = message.value.message;
+		if (answer.case !== "mcpStateExecResult") return { case: answer.case };
+		const result = answer.value.result;
+		return {
+			case: result.case,
+			servers:
+				result.case === "success"
+					? result.value.servers.map(server => [
+							server.serverName,
+							server.serverIdentifier,
+							server.tools.map(tool => tool.name),
+						])
+					: [],
+		};
+	}
+	return undefined;
+}
+
+const PI_AGENT = ["pi-agent", "pi-agent", ["goal", "set_cwd"]];
 
 const execCases = ExecServerMessageSchema.fields.filter(field => field.oneof !== undefined && field.message);
 
@@ -168,24 +201,40 @@ describe("an exec request Cursor sends", () => {
 	});
 
 	// Backtest: the request a live turn sent before each call to a tool Cursor reaches over MCP
-	// (`goal`, `set_cwd`), `mcp_state_exec_args` naming the `pi-agent` server. Dropped, it hung the
-	// turn until the 30-minute ceiling; answered, the server went on to the MCP call.
-	it("for MCP state (field 36), sent before an MCP tool call, is failed rather than dropped", async () => {
-		const turn = newTurn();
-		expect(ExecServerMessageSchema.fields.some(field => field.number === 36)).toBe(false);
+	// (`goal`, `set_cwd`), `mcp_state_exec_args` naming the `pi-agent` server. Failed with a throw,
+	// it came again 3 to 8 s later; Cursor's own client answers it with its MCP servers.
+	it("for MCP state, sent before an MCP tool call, lists the tools advertised under pi-agent", async () => {
+		const turn = newTurn(ADVERTISED);
 		const request = create(ExecServerMessageSchema, { id: EXEC_REQUEST_ID, execId: "" });
 		// The captured bytes as protobuf-es keeps them: length prefix, then field 1 = "pi-agent".
 		const mcpState = Uint8Array.from([0x0a, 0x0a, 0x08, ...new TextEncoder().encode("pi-agent")]);
 		request.$unknown = [{ no: 36, wireType: WireType.LengthDelimited, data: mcpState }];
 		await turn.send(create(AgentServerMessageSchema, { message: { case: "execServerMessage", value: request } }));
 
-		expect(execAnswer(turn.replies)).toBe("throw");
-		const thrown = turn.replies.flatMap(reply =>
-			reply.message.case === "execClientControlMessage" && reply.message.value.message.case === "throw"
-				? [reply.message.value.message.value.error]
-				: [],
+		expect(mcpStateAnswer(turn.replies)).toEqual({ case: "success", servers: [PI_AGENT] });
+		expect(turn.replies.filter(reply => reply.message.case === "execClientControlMessage")).toEqual([]);
+	});
+
+	it.each([
+		["names no server", [], ADVERTISED, [PI_AGENT]],
+		["names pi-agent among others", ["other", "pi-agent"], ADVERTISED, [PI_AGENT]],
+		["names only another server", ["other"], ADVERTISED, []],
+		["arrives in a turn that advertises no tool", [], [], []],
+	] as const)("for MCP state that %s lists the matching servers", async (_name, serverIdentifiers, tools, servers) => {
+		const turn = newTurn([...tools]);
+		await turn.send(
+			create(AgentServerMessageSchema, {
+				message: {
+					case: "execServerMessage",
+					value: create(ExecServerMessageSchema, {
+						id: EXEC_REQUEST_ID,
+						execId: EXEC_ID,
+						message: { case: "mcpStateExecArgs", value: { serverIdentifiers: [...serverIdentifiers] } },
+					}),
+				},
+			}),
 		);
-		expect(thrown).toEqual(["This client does not run Cursor exec field 36."]);
+		expect(mcpStateAnswer(turn.replies)).toEqual({ case: "success", servers: [...servers] });
 	});
 });
 

@@ -3,6 +3,7 @@
  * the final case executes the real Windows ACL provider when the platform can support it.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -82,8 +83,8 @@ describe("owner-only Windows ACL helpers", () => {
 		expect(called).toBe(false);
 	});
 
-	/** A hostile pathname must remain environment data while both scripts enforce every owner-only ACE invariant. */
-	it("carries literal paths separately from strict apply and verify scripts", async () => {
+	/** Paths remain data passed to the runner, not executable arguments or shell source. */
+	it("passes the literal target separately to apply and verify runners", async () => {
 		const target = "C:\\Users\\owner\\quote' \" $() ;\r\nhostile.txt";
 		const calls: Array<{ script: string; filePath: string }> = [];
 		const run: WindowsAclCommandRunner = async (script, filePath) => {
@@ -94,18 +95,9 @@ describe("owner-only Windows ACL helpers", () => {
 		await applyOwnerOnlyWindowsAcl(target, { platform: "win32", run });
 		await verifyOwnerOnlyWindowsAcl(target, { platform: "win32", run });
 
+		expect(calls).toHaveLength(2);
 		expect(calls.map(call => call.filePath)).toEqual([target, target]);
 		expect(calls.every(call => !call.script.includes(target))).toBe(true);
-		expect(calls[0].script).toContain("SetAccessRuleProtection($true, $false)");
-		expect(calls[0].script).toContain("Set-Acl -LiteralPath $target");
-		expect(calls[1].script).not.toContain("Set-Acl -LiteralPath $target");
-		for (const call of calls) {
-			expect(call.script).toContain("$item.PSProvider.Name -ne 'FileSystem'");
-			expect(call.script).toContain("$rule.IsInherited");
-			expect(call.script).toContain("$rule.FileSystemRights -ne");
-			expect(call.script).toContain("$rule.PropagationFlags -ne");
-			expect(call.script).toContain("$rule.InheritanceFlags -ne $expectedInheritance");
-		}
 	});
 
 	/** Fail-closed diagnostics must identify exit status, escape controls, reject ambiguity, and validate before running. */
@@ -270,14 +262,40 @@ describe("owner-only Windows ACL helpers", () => {
 	});
 
 	describe.skipIf(process.platform !== "win32")("real Windows ACL", () => {
-		/** The injected-runner contract is backed by the real Windows security descriptor provider when available. */
-		it("applies a protected owner-only DACL and independently verifies it", async () => {
+		/** Applying a private record must allow verification with only the owner and LocalSystem principals. */
+		it("applies and independently verifies a protected owner-and-SYSTEM DACL", async () => {
 			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-"));
 			const filePath = path.join(cleanupPath, "secret.txt");
 			await fs.writeFile(filePath, "secret");
 
 			await applyOwnerOnlyWindowsAcl(filePath);
 			await verifyOwnerOnlyWindowsAcl(filePath);
+		});
+
+		/** Removing SYSTEM violates issue #580's required owner-plus-SYSTEM pipe and record policy. */
+		it("refuses a protected DACL after the required SYSTEM ACE is removed", async () => {
+			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-"));
+			const filePath = path.join(cleanupPath, "secret.txt");
+			await fs.writeFile(filePath, "secret");
+			await applyOwnerOnlyWindowsAcl(filePath);
+			const removed = spawnSync("icacls", [filePath, "/remove", "*S-1-5-18"], {
+				windowsHide: true,
+			});
+			expect(removed.status).toBe(0);
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
+		});
+
+		/** Adding Everyone proves the verifier rejects an unapproved principal, not only missing SYSTEM. */
+		it("refuses an added Everyone allow ACE", async () => {
+			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-"));
+			const filePath = path.join(cleanupPath, "secret.txt");
+			await fs.writeFile(filePath, "secret");
+			await applyOwnerOnlyWindowsAcl(filePath);
+			const granted = spawnSync("icacls", [filePath, "/grant", "*S-1-1-0:(R)"], {
+				windowsHide: true,
+			});
+			expect(granted.status).toBe(0);
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
 		});
 	});
 });

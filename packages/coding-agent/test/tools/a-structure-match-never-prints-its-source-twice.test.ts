@@ -14,9 +14,8 @@
 // a fixture that exercises it turns the guard case red.
 //
 // What it does not catch: a value under the bound, which is kept because it
-// names which fragment bound to which variable for about ten tokens; the
-// separator ast-grep uses for a multi-node capture, which lists a comma token as
-// an element of its own; and duplication between the match text and note lines.
+// names which fragment bound to which variable for about ten tokens, and
+// duplication between the match text and note lines.
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -130,9 +129,9 @@ describe("a structure match never prints its source twice", () => {
 	it("elides an oversized binding rather than restating the body", async () => {
 		await withWorkspace(async dir => {
 			const text = await structureText(dir, PATTERNS[0]!);
-			// Only `BODY` is past the bound: the argument list is 34 bytes and stays,
+			// Only `BODY` is past the bound: the argument list is 26 bytes and stays,
 			// as do both of `beta`'s values.
-			expect(text).toContain("meta: ARGS=[one: string, ,, two: number], BODY=…, NAME=alpha");
+			expect(text).toContain("meta: ARGS=[one: string, two: number], BODY=…, NAME=alpha");
 			expect(text).toContain("meta: ARGS=[], BODY=[return 7;], NAME=beta");
 			expect(text).not.toContain("const trimmed = joined.trim();, return trimmed;");
 		});

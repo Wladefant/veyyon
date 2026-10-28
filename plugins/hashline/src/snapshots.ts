@@ -21,6 +21,7 @@
  */
 import { LRUCache } from "lru-cache/raw";
 import { computeFileHash } from "./format";
+import { LineMap } from "./line-map";
 
 /**
  * One full-file version observed at a point in time. The tag the model sees is
@@ -62,6 +63,15 @@ export interface Snapshot {
 }
 
 /**
+ * Bound on the diff {@link SnapshotStore.mergeUnmovedLines} runs between two
+ * versions, in edit count times compared lines (see {@link LineMap}). A full
+ * diff of a 5,000-line file reindented throughout takes 3 s; under this bound
+ * a diff takes at most about 12 ms, and a change past it carries only the
+ * lines outside its changed middle.
+ */
+const UNMOVED_DIFF_BUDGET = 500_000;
+
+/**
  * Storage seam for full-file version snapshots. The patcher calls {@link head}
  * for the latest version of a path and {@link byHash} when it needs the
  * historical version a section's stale tag names.
@@ -95,6 +105,49 @@ export abstract class SnapshotStore {
 	 */
 	findByHash(_hash: string): Snapshot[] {
 		return [];
+	}
+
+	/**
+	 * Every retained version of `path`, most recently recorded first. The base
+	 * returns the head alone; stores that retain a history override it.
+	 */
+	versions(path: string): readonly Snapshot[] {
+		const head = this.head(path);
+		return head ? [head] : [];
+	}
+
+	/**
+	 * Merge into `snapshot` the displayed and clipped lines of every other
+	 * retained version, under any path, whose text equals `snapshot.text`. The
+	 * tag is a hash of the content, so a line displayed in one copy of a text
+	 * was displayed for every copy. A copy with no displayed-line record adds
+	 * nothing.
+	 */
+	mergeDisplayedCopies(snapshot: Snapshot): void {
+		for (const copy of this.findByHash(snapshot.hash)) {
+			if (copy === snapshot || copy.text !== snapshot.text) continue;
+			mergeLines(snapshot, "seenLines", copy.seenLines);
+			mergeLines(snapshot, "clippedLines", copy.clippedLines);
+		}
+	}
+
+	/**
+	 * Merge into `snapshot` the displayed and clipped lines of every other
+	 * retained version of its path that the change between the two left at the
+	 * same line: the bytes displayed there are the bytes there now. A line the
+	 * change rewrote, added or moved is not merged, and a version with no
+	 * displayed-line record adds nothing. Past {@link UNMOVED_DIFF_BUDGET}, no
+	 * line between the first and the last line the change rewrote is merged.
+	 */
+	mergeUnmovedLines(snapshot: Snapshot): void {
+		for (const version of this.versions(snapshot.path)) {
+			if (version === snapshot) continue;
+			const { seenLines, clippedLines } = version;
+			if (!seenLines?.size && !clippedLines?.size) continue;
+			const change = new LineMap(version.text, snapshot.text, UNMOVED_DIFF_BUDGET);
+			if (seenLines?.size) mergeLines(snapshot, "seenLines", change.unmoved(seenLines));
+			if (clippedLines?.size) mergeLines(snapshot, "clippedLines", change.unmoved(clippedLines));
+		}
 	}
 
 	/**
@@ -139,6 +192,10 @@ const DEFAULT_MAX_PATHS = 30;
 const DEFAULT_MAX_VERSIONS_PER_PATH = 4;
 /** Global ceiling on retained snapshot text across all paths (UTF-16 code units). */
 const DEFAULT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+/** Paths whose dropped versions keep their displayed-line provenance. */
+const DEFAULT_MAX_DROPPED_PATHS = 1024;
+/** Ceiling on retained provenance across every dropped version, in range bounds (4 bytes each). */
+const MAX_DROPPED_RANGE_BOUNDS = 256 * 1024;
 
 /** Union `lines` into `snapshot[key]`, lazily creating the set. */
 function mergeLines(snapshot: Snapshot, key: "seenLines" | "clippedLines", lines: Iterable<number> | undefined): void {
@@ -146,6 +203,59 @@ function mergeLines(snapshot: Snapshot, key: "seenLines" | "clippedLines", lines
 	snapshot[key] ??= new Set<number>();
 	const target = snapshot[key];
 	for (const line of lines) target.add(line);
+}
+
+/**
+ * Displayed-line provenance of a version the store no longer holds, kept
+ * without its text. `length` and `digest` identify the exact text; `seen` and
+ * `clipped` are inclusive `[start, end]` line ranges, flattened.
+ */
+interface DroppedVersion {
+	readonly length: number;
+	readonly digest: bigint;
+	readonly seen?: Uint32Array;
+	readonly clipped?: Uint32Array;
+}
+
+/**
+ * Identity of a dropped version's text, computed on every eviction. `node:crypto`
+ * has no non-cryptographic hash: SHA-1 of a 26 KB file takes 9 µs, xxHash64 1 µs.
+ */
+function textDigest(text: string): bigint {
+	return Bun.hash.xxHash64(text);
+}
+
+function toRanges(lines: Set<number> | undefined): Uint32Array | undefined {
+	if (lines === undefined || lines.size === 0) return undefined;
+	const sorted = Uint32Array.from(lines).sort();
+	const bounds: number[] = [];
+	let start = sorted[0];
+	let end = start;
+	for (let i = 1; i < sorted.length; i++) {
+		const line = sorted[i];
+		if (line === end + 1) {
+			end = line;
+			continue;
+		}
+		bounds.push(start, end);
+		start = line;
+		end = line;
+	}
+	bounds.push(start, end);
+	return Uint32Array.from(bounds);
+}
+
+function* fromRanges(bounds: Uint32Array): Generator<number> {
+	for (let i = 0; i < bounds.length; i += 2) {
+		for (let line = bounds[i]; line <= bounds[i + 1]; line++) yield line;
+	}
+}
+
+function droppedVersion(version: Snapshot): DroppedVersion | undefined {
+	const seen = toRanges(version.seenLines);
+	const clipped = toRanges(version.clippedLines);
+	if (seen === undefined && clipped === undefined) return undefined;
+	return { length: version.text.length, digest: textDigest(version.text), seen, clipped };
 }
 
 export interface InMemorySnapshotStoreOptions {
@@ -159,6 +269,11 @@ export interface InMemorySnapshotStoreOptions {
 	 * Least-recently-used path histories are evicted to stay under it.
 	 */
 	maxTotalBytes?: number;
+	/**
+	 * Maximum number of paths whose dropped versions keep their displayed-line
+	 * provenance (default 1024). LRU eviction.
+	 */
+	maxDroppedPaths?: number;
 }
 
 /**
@@ -172,9 +287,17 @@ export interface InMemorySnapshotStoreOptions {
  * short 4-hex tag are retained as separate versions so callers can still tell
  * them apart via {@link Snapshot.text} — the tag is only a fast index, never
  * the identity.
+ *
+ * A version that leaves the store by LRU eviction or by the per-path ring keeps
+ * its {@link Snapshot.seenLines} and {@link Snapshot.clippedLines} as compact
+ * ranges keyed by a digest of its text. Recording the same text again restores
+ * them, so a line displayed before the version was dropped stays displayed
+ * under the tag it was displayed with. {@link invalidate} and {@link clear}
+ * discard that provenance.
  */
 export class InMemorySnapshotStore extends SnapshotStore {
 	readonly #versions: LRUCache<string, Snapshot[]>;
+	readonly #dropped: LRUCache<string, DroppedVersion[]>;
 	readonly #maxVersionsPerPath: number;
 
 	constructor(options: InMemorySnapshotStoreOptions = {}) {
@@ -187,8 +310,50 @@ export class InMemorySnapshotStore extends SnapshotStore {
 				for (const version of history) total += version.text.length;
 				return total;
 			},
+			dispose: (history, path, reason) => {
+				if (reason === "evict") this.#retainDropped(path, history);
+			},
+		});
+		this.#dropped = new LRUCache<string, DroppedVersion[]>({
+			max: options.maxDroppedPaths ?? DEFAULT_MAX_DROPPED_PATHS,
+			maxSize: MAX_DROPPED_RANGE_BOUNDS,
+			sizeCalculation: dropped => {
+				let total = 1;
+				for (const version of dropped) total += (version.seen?.length ?? 0) + (version.clipped?.length ?? 0);
+				return total;
+			},
 		});
 		this.#maxVersionsPerPath = options.maxVersionsPerPath ?? DEFAULT_MAX_VERSIONS_PER_PATH;
+	}
+
+	/** Keep the provenance of `versions`, which are leaving the store, ahead of what `path` already kept. */
+	#retainDropped(path: string, versions: readonly Snapshot[]): void {
+		const kept: DroppedVersion[] = [];
+		for (const version of versions) {
+			const dropped = droppedVersion(version);
+			if (dropped) kept.push(dropped);
+		}
+		if (kept.length === 0) return;
+		for (const earlier of this.#dropped.get(path) ?? []) {
+			if (!kept.some(version => version.digest === earlier.digest)) kept.push(earlier);
+		}
+		this.#dropped.set(path, kept.slice(0, this.#maxVersionsPerPath));
+	}
+
+	/** Restore onto a freshly minted `snapshot` the provenance its text had when an earlier version of it was dropped. */
+	#restoreDropped(snapshot: Snapshot): void {
+		const dropped = this.#dropped.get(snapshot.path);
+		if (dropped === undefined) return;
+		const { length } = snapshot.text;
+		if (!dropped.some(version => version.length === length)) return;
+		const digest = textDigest(snapshot.text);
+		const match = dropped.find(version => version.length === length && version.digest === digest);
+		if (match === undefined) return;
+		if (match.seen) mergeLines(snapshot, "seenLines", fromRanges(match.seen));
+		if (match.clipped) mergeLines(snapshot, "clippedLines", fromRanges(match.clipped));
+		const rest = dropped.filter(version => version !== match);
+		if (rest.length === 0) this.#dropped.delete(snapshot.path);
+		else this.#dropped.set(snapshot.path, rest);
 	}
 
 	head(path: string): Snapshot | null {
@@ -215,6 +380,31 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		return matches;
 	}
 
+	versions(path: string): readonly Snapshot[] {
+		return this.#versions.get(path) ?? [];
+	}
+
+	/**
+	 * Also merges the provenance kept for a dropped version of the same text
+	 * under another path. The entry stays, since that path may record the text
+	 * again.
+	 */
+	mergeDisplayedCopies(snapshot: Snapshot): void {
+		super.mergeDisplayedCopies(snapshot);
+		const { length } = snapshot.text;
+		let digest: bigint | undefined;
+		for (const [path, dropped] of this.#dropped.entries()) {
+			if (path === snapshot.path) continue;
+			for (const version of dropped) {
+				if (version.length !== length) continue;
+				digest ??= textDigest(snapshot.text);
+				if (version.digest !== digest) continue;
+				if (version.seen) mergeLines(snapshot, "seenLines", fromRanges(version.seen));
+				if (version.clipped) mergeLines(snapshot, "clippedLines", fromRanges(version.clipped));
+			}
+		}
+	}
+
 	record(path: string, fullText: string, seenLines?: Iterable<number>): string {
 		const hash = computeFileHash(fullText);
 		// `get` refreshes LRU recency for `path`.
@@ -239,8 +429,11 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		}
 
 		const snapshot: Snapshot = { path, text: fullText, hash, recordedAt: Date.now() };
+		this.#restoreDropped(snapshot);
 		mergeLines(snapshot, "seenLines", seenLines);
-		this.#versions.set(path, [snapshot, ...history].slice(0, this.#maxVersionsPerPath));
+		const next = [snapshot, ...history];
+		if (next.length > this.#maxVersionsPerPath) this.#retainDropped(path, next.slice(this.#maxVersionsPerPath));
+		this.#versions.set(path, next.slice(0, this.#maxVersionsPerPath));
 		return hash;
 	}
 
@@ -256,9 +449,19 @@ export class InMemorySnapshotStore extends SnapshotStore {
 
 	invalidate(path: string): void {
 		this.#versions.delete(path);
+		this.#dropped.delete(path);
 	}
 
 	relocate(from: string, to: string): void {
+		const sourceDropped = this.#dropped.get(from);
+		if (sourceDropped !== undefined) {
+			this.#dropped.delete(from);
+			const destDropped = this.#dropped.get(to) ?? [];
+			const merged = sourceDropped.concat(
+				destDropped.filter(version => !sourceDropped.some(source => source.digest === version.digest)),
+			);
+			this.#dropped.set(to, merged.slice(0, this.#maxVersionsPerPath));
+		}
 		const sourceHistory = this.#versions.get(from);
 		if (sourceHistory === undefined || sourceHistory.length === 0) return;
 		const relocated = sourceHistory.map(version => ({ ...version, path: to }));
@@ -273,6 +476,7 @@ export class InMemorySnapshotStore extends SnapshotStore {
 				seen.add(version.hash);
 				merged.push(version);
 			}
+			if (merged.length > this.#maxVersionsPerPath) this.#retainDropped(to, merged.slice(this.#maxVersionsPerPath));
 			this.#versions.set(to, merged.slice(0, this.#maxVersionsPerPath));
 		}
 		this.#versions.delete(from);
@@ -280,5 +484,6 @@ export class InMemorySnapshotStore extends SnapshotStore {
 
 	clear(): void {
 		this.#versions.clear();
+		this.#dropped.clear();
 	}
 }

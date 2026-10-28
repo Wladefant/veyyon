@@ -58,6 +58,7 @@ operator manual.
 |`natives/testing/scratch`|Scratch directories removed on drop, including on panic (test only)|
 |`natives/text/keys`|Zero-copy parser for the Kitty keyboard protocol and legacy escape sequences|
 |`natives/text/measure`|ANSI-aware width measurement, grapheme segmentation and truncation over UTF-16|
+|`natives/text/session-skim`|Parallel skim of a session file into the records a load keeps for cold entries, so a resume parses kilobytes where a line holds megabytes|
 |`tests/conformance`|Whole-product conformance corpus and harness, on virtual clock, filesystem, terminal and network (test only, issue #877)|
 |`crates/veyyon-desktop`|The desktop front end binary: loads tokens and theme, opens the GPUI window, attaches to a GUI host (private)|
 |`crates/veyyon-desktop-kit`|Token-driven primitive kit for the desktop front end: buttons, fields, rows, cards, badges|

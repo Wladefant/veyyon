@@ -120,8 +120,7 @@ At load time, an extracted embedded candidate, or a staged Windows candidate whe
 
 - `platformTag`
 - `version`
-- `archive`: `{ format: "tar.gz", filename, filePath }`
-- `files[]` entries with `variant`, `filename`, and `size`
+- `files[]` entries with `variant`, `filename`, `size`, `sha256` (hex digest of the `.node` bytes), and `archive`: `{ format: "tar.gz", filename, filePath }`, one archive per variant
 
 Extraction (`maybeExtractEmbeddedAddon`) runs only when:
 
@@ -137,12 +136,14 @@ Variant file selection:
 - x64 + `modern`: prefer `modern`, fallback to `baseline`.
 - x64 + `baseline`: require `baseline`.
 
-Materialization, with the archive branch first because that is what a release manifest carries:
+Materialization:
 
 1. Ensure `<versionedDir>` exists. A failure here is recorded and extraction gives up.
-2. With an `archive`, extract `embeddedAddon.archive.filePath` into `<versionedDir>`, admitting only the paths in the manifest `files[]` allowlist. There is no reuse check first: extraction runs, and then `<versionedDir>/<selected filename>` has to exist with the size the manifest recorded, or the attempt is recorded as an error and returns nothing.
-3. Without an `archive`, the cached file is checked first and reused when its size matches, and only otherwise is the single embedded file copied from its `filePath`.
-4. Either way the returned path becomes the first candidate the loader tries.
+2. Reuse `<versionedDir>/<selected filename>` when `<filename>.stamp` beside it records the manifest's `sha256` and the file's current inode and modification time. Otherwise extract the selected file from its `archive.filePath` through a temporary file and a rename, then write the stamp with the digest and the inode and modification time of the file written.
+3. A manifest entry with no `archive` or no `sha256` is recorded as an error and nothing is written.
+4. The returned path becomes the first candidate the loader tries.
+
+The version does not identify a build: every rebuild of one version extracts into the same `<versionedDir>`, and a change that keeps the code the same length keeps the `.node` the same size. The stamp separates them. A file with no stamp, an unparseable stamp, another build's digest, or an inode or modification time that differs from the stamp (a copy or staging write over it) is extracted again. The bytes are not hashed at launch.
 
 Archive, directory, or write failures are appended to the loader error list; probing continues through normal candidates.
 
@@ -153,7 +154,7 @@ Init
   -> Load package metadata and embedded-addon manifest
   -> Compute platform/version/variant/filenames/candidate paths
   -> (compiled + embedded manifest matches?)
-       yes -> extract archive to versionedDir when needed (record errors, continue)
+       yes -> extract archive to versionedDir unless the stamp matches (record errors, continue)
        no  -> skip extraction
   -> (Windows non-compiled node_modules install and no embedded candidate?)
        yes -> stage leaf/core addon to versionedDir (record errors, continue)
@@ -241,4 +242,4 @@ Source-install/runtime diagnostics include:
 - local rebuild command (`bun --cwd=natives/bridge/bindings run build`) with the optional x64 variant hint (`TARGET_VARIANT=baseline|modern`),
 - standalone-binary reinstall hint (`curl -fsSL https://get.veyyon.dev | sh`).
 
-*Verified against `03f0da34` on 2026-08-05.*
+*Verified against `b68e3a26` on 2026-10-20.*

@@ -49,6 +49,9 @@ class CloseHoldingStorage implements SessionStorage {
 			flush() {
 				return inner.flush();
 			},
+			sync() {
+				return inner.sync();
+			},
 			isOpen() {
 				return inner.isOpen();
 			},

@@ -162,6 +162,8 @@ export const DEAD_SOCKET_PHRASE_SOURCES = [
 	"connection.?refused",
 	"unable to connect",
 	"fetch failed",
+	// Go's `net.ErrClosed`, forwarded verbatim by a gateway written in Go.
+	"use of closed network connection",
 ] as const;
 
 const DEAD_SOCKET_SOURCE = `${DEAD_SOCKET_PHRASE_SOURCES.join("|")}|(?<![\\w-])(?:${DEAD_SOCKET_ERRNOS.join("|")})(?![\\w-])`;

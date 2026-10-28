@@ -53,6 +53,9 @@ import {
 	McpErrorSchema,
 	McpImageContentSchema,
 	McpResultSchema,
+	McpStateExecResultSchema,
+	McpStateServerSchema,
+	McpStateSuccessSchema,
 	McpSuccessSchema,
 	McpTextContentSchema,
 	McpToolDefinitionSchema,
@@ -759,7 +762,7 @@ class CursorRunStream {
 		this.#pendingMessages.add(handled);
 		handled
 			.catch(error => {
-				// `log` writes nothing unless DEBUG_CURSOR is set, so a failure inside a handler (an
+				// `logCursorDiagnostic` writes nothing unless DEBUG_CURSOR is set, so a failure inside a handler (an
 				// exec handler that threw, a malformed interaction update, a checkpoint that could not
 				// be applied) is reported here and fails the turn at once.
 				logger.warn("Cursor server message handler failed", {
@@ -1737,6 +1740,32 @@ async function handleExecServerMessage(
 
 		sendExecReply(h2Request, execMsg, { case: "requestContextResult", value: requestContextResult });
 		void logCursorDiagnostic("execClient", "requestContextResult", { tools: requestContextTools.length });
+		return;
+	}
+	if (execMsg.message.case === "mcpStateExecArgs") {
+		// Cursor asks for this before it calls a tool it reaches over MCP. The one server this
+		// client runs is the one `requestContextArgs` advertised: every tool under
+		// CURSOR_MCP_SERVER. A failed request was sent again 3 to 8 s later.
+		const { serverIdentifiers } = execMsg.message.value;
+		const listed = serverIdentifiers.length === 0 || serverIdentifiers.includes(CURSOR_MCP_SERVER);
+		const servers =
+			listed && requestContextTools.length > 0
+				? [
+						create(McpStateServerSchema, {
+							serverName: CURSOR_MCP_SERVER,
+							serverIdentifier: CURSOR_MCP_SERVER,
+							tools: requestContextTools,
+						}),
+					]
+				: [];
+		const mcpStateResult = create(McpStateExecResultSchema, {
+			result: { case: "success", value: create(McpStateSuccessSchema, { servers }) },
+		});
+		sendExecReply(h2Request, execMsg, { case: "mcpStateExecResult", value: mcpStateResult });
+		void logCursorDiagnostic("execClient", "mcpStateExecResult", {
+			servers: servers.length,
+			requested: serverIdentifiers.length,
+		});
 		return;
 	}
 
@@ -2892,6 +2921,9 @@ function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array):
 
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "lsp", "todo"]);
 
+/** The MCP server identifier every tool this client advertises to Cursor is listed under. */
+const CURSOR_MCP_SERVER = "pi-agent";
+
 function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[] {
 	if (!tools || tools.length === 0) {
 		return [];
@@ -2912,7 +2944,7 @@ function buildMcpToolDefinitions(tools: Tool[] | undefined): McpToolDefinition[]
 		return create(McpToolDefinitionSchema, {
 			name: tool.name,
 			description: tool.description || "",
-			providerIdentifier: "pi-agent",
+			providerIdentifier: CURSOR_MCP_SERVER,
 			toolName: tool.name,
 			inputSchema,
 		});

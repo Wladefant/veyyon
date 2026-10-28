@@ -50,6 +50,25 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+def _guard_windows_signal_zero() -> None:
+    """Reject accidental POSIX liveness probes before Windows can terminate a PID.
+
+    Audit hooks cover aliases of os.kill too. This is not a sandbox against
+    hostile code invoking native APIs directly.
+    """
+    if os.name != "nt":
+        return
+
+    def guard(event: str, args: tuple) -> None:
+        if event == "os.kill" and len(args) >= 2 and args[1] == 0:
+            raise PermissionError(
+                "os.kill(pid, 0) terminates the target on Windows; "
+                "use a non-signalling process handle wait for liveness"
+            )
+
+    sys.addaudithook(guard)
+
+
 def _guard_host_lifetime() -> None:
     """Bind this runner and its descendants to the host's lifetime."""
     parent_pid = os.getppid()
@@ -1232,15 +1251,26 @@ _MANAGED_ENV_KEYS = (
 )
 
 
+# The cwd the previous request put at the front of sys.path. One kernel serves a
+# session in every directory it moves to, so the previous project leaves the
+# import path when the next cell runs somewhere else.
+_REQUEST_CWD: str | None = None
+
+
 def _apply_request_runtime(req: dict) -> None:
+    global _REQUEST_CWD
     cwd = req.get("cwd")
     if isinstance(cwd, str) and cwd:
         os.chdir(cwd)
-        try:
-            sys.path.remove(cwd)
-        except ValueError:
-            pass
+        for entry in (_REQUEST_CWD, cwd):
+            if entry is None:
+                continue
+            try:
+                sys.path.remove(entry)
+            except ValueError:
+                pass
         sys.path.insert(0, cwd)
+        _REQUEST_CWD = cwd
 
     env = req.get("env")
     if isinstance(env, dict):
@@ -1252,6 +1282,37 @@ def _apply_request_runtime(req: dict) -> None:
                 os.environ.pop(key, None)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Heap trim
+# ---------------------------------------------------------------------------
+
+# glibc keeps a freed block below its mmap threshold inside its heap and returns
+# only the heap's top to the system, so a cell that read files or responses of
+# varying sizes leaves its peak resident after it drops them. ``malloc_trim(0)``
+# returns the free pages inside the heap as well. None until first use, False
+# where the C library has no such call (macOS, musl, Windows).
+_MALLOC_TRIM: Any = None
+
+
+def _trim_freed_heap() -> None:
+    """Return the free pages of the C heap to the system, where glibc provides ``malloc_trim``."""
+    global _MALLOC_TRIM
+    if _MALLOC_TRIM is None:
+        _MALLOC_TRIM = False
+        if sys.platform.startswith("linux"):
+            try:
+                import ctypes
+
+                trim = ctypes.CDLL(None).malloc_trim
+                trim.argtypes = [ctypes.c_size_t]
+                trim.restype = ctypes.c_int
+                _MALLOC_TRIM = trim
+            except (ImportError, OSError, AttributeError):
+                pass
+    if _MALLOC_TRIM:
+        _MALLOC_TRIM(0)
 
 
 # ---------------------------------------------------------------------------
@@ -1323,6 +1384,9 @@ async def _handle_request_async(req: dict) -> None:
                 pass
 
         _flush_stream_proxies(rid)
+        # Before the done frame, so a kernel the host sees finish a cell holds
+        # only what its namespace still references.
+        _trim_freed_heap()
         _emit(
             {
                 "type": "done",
@@ -1384,6 +1448,7 @@ async def _main_async() -> None:
     sys.stdout = _StreamProxy("stdout")
     sys.stderr = _StreamProxy("stderr")
     _install_idle_sigint()
+    _guard_windows_signal_zero()
     _guard_host_lifetime()
     _start_capture_drain()
 

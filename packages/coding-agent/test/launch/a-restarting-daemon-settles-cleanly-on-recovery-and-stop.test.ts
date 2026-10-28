@@ -8,10 +8,10 @@
  *    recovery logic contained an unreachable `else if (snapshot.state === "restarting")`
  *    branch that attempted to set state to `"starting"`/`"running"` without a process PID.
  *    Because non-detached and non-running daemons evaluate `!detached && !wasTerminal`,
- *    the daemon was unconditionally handled by the fallback and marked `exited` with
- *    `terminatedBy = "broker-recovery"`. This suite proves that daemons left in
- *    `"restarting"` state settle cleanly as `exited` with `broker-recovery` attribution
- *    and no lingering ghost state or unreachable branch.
+ *    the daemon must settle as `failed` with `ownershipUncertain` and
+ *    `terminatedBy = "broker-recovery"`. This suite also proves that cleanup
+ *    cannot discard that quarantine and that the retained completion preserves
+ *    the same terminal state.
  *
  * 2. Duplicate completion records on operator stop during backoff: When a daemon configured
  *    with `restart` crashes, `#settle` queues a completion record for that execution
@@ -104,7 +104,7 @@ async function shutdown(client: DaemonBrokerClient): Promise<void> {
 }
 
 describe("a restarting daemon settles cleanly on recovery and stop", () => {
-	it("marks a daemon left in restarting state as exited with broker-recovery upon broker recovery", async () => {
+	it("keeps a recovered restarting daemon failed and quarantined beyond its cleanup TTL", async () => {
 		const projectDir = await tempDir("project-recover-restarting-");
 		const runtimeDir = await tempDir("runtime-recover-restarting-");
 
@@ -141,15 +141,17 @@ describe("a restarting daemon settles cleanly on recovery and stop", () => {
 		};
 		await fs.writeFile(managedDaemonMetaPath(daemonDir), JSON.stringify({ daemon: snapshot, spec }), "utf8");
 
-		const client = await connect(projectDir, runtimeDir);
+		const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 10_000, cleanupWaitMs: 100 });
+		cleanupClients.push(client);
 		try {
 			const described = await client.request({ op: "describe", name: "restarting-daemon" });
 			expect(described.op).toBe("describe");
 			if (described.op === "describe") {
-				expect(described.daemon.state).toBe("exited");
+				expect(described.daemon.state).toBe("failed");
+				expect(described.daemon.ownershipUncertain).toBeTrue();
 				expect(described.daemon.terminatedBy).toBe("broker-recovery");
 				expect(described.daemon.exitReason).toContain(
-					"the previous broker exited; its replacement terminated this non-detached daemon",
+					"the previous broker exited and the recovered process tree may still have descendants",
 				);
 				expect(described.daemon.pid).toBeUndefined();
 			}
@@ -158,13 +160,30 @@ describe("a restarting daemon settles cleanly on recovery and stop", () => {
 			expect(listed.op).toBe("list");
 			if (listed.op === "list") {
 				const active = listed.daemons.find(d => d.name === "restarting-daemon");
-				expect(active?.state).toBe("exited");
+				expect(active?.state).toBe("failed");
+				expect(active?.ownershipUncertain).toBeTrue();
 				expect(active?.terminatedBy).toBe("broker-recovery");
 
 				const completion = listed.completions.find(c => c.name === "restarting-daemon");
 				expect(completion).toBeDefined();
 				expect(completion?.terminatedBy).toBe("broker-recovery");
 			}
+
+			expect(
+				await waitUntil(async () => {
+					const records = await readDaemonCompletions(runtimeDir).catch(() => []);
+					return records.some(record => record.name === "restarting-daemon" && record.state === "failed");
+				}, 5_000),
+			).toBeTrue();
+			await delay(300);
+			const retained = await client.request({ op: "describe", name: "restarting-daemon" });
+			expect(retained.op).toBe("describe");
+			if (retained.op === "describe") {
+				expect(retained.daemon.state).toBe("failed");
+				expect(retained.daemon.ownershipUncertain).toBeTrue();
+			}
+			const persisted = JSON.parse(await fs.readFile(managedDaemonMetaPath(daemonDir), "utf8"));
+			expect(persisted.daemon.ownershipUncertain).toBeTrue();
 		} finally {
 			await shutdown(client);
 		}

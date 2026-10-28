@@ -12,11 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	canonicalProjectRoot,
-	describeProjectExecutable,
-	ProjectTrust,
-} from "@veyyon/coding-agent/config/project-trust";
+import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
 import {
 	clearClaudePluginRootsCache,
 	listClaudePluginRoots,
@@ -147,6 +143,7 @@ describe("listClaudePluginRoots — project shadows user", () => {
 	let userRegPath: string;
 	/** Path where listClaudePluginRoots reads the project registry (resolved from tmpProject). */
 	let projectRegPath: string;
+	let projectInstallPath: string;
 
 	beforeEach(() => {
 		tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-shadow-home-"));
@@ -164,6 +161,8 @@ describe("listClaudePluginRoots — project shadows user", () => {
 		fs.mkdirSync(path.dirname(userRegPath), { recursive: true });
 
 		projectRegPath = path.join(tmpProject, CONFIG_DIR_NAME, "plugins", "installed_plugins.json");
+		projectInstallPath = path.join(tmpProject, "install", "shared-plugin");
+		fs.mkdirSync(projectInstallPath, { recursive: true });
 	});
 
 	afterEach(() => {
@@ -181,17 +180,13 @@ describe("listClaudePluginRoots — project shadows user", () => {
 		await writeInstalledPluginsRegistry(userRegPath, userReg);
 
 		let projReg = await readInstalledPluginsRegistry(projectRegPath);
-		projReg = addInstalledPlugin(projReg, pluginId, makeEntry("/project/install/shared-plugin", "project"));
+		projReg = addInstalledPlugin(projReg, pluginId, makeEntry(projectInstallPath, "project"));
 		await writeInstalledPluginsRegistry(projectRegPath, projReg);
 	}
 
-	/** Record the operator's approval of the project registry file's exact bytes. */
+	/** Record approval through the production project trust command. */
 	async function trustProjectRegistry(): Promise<void> {
-		const canonicalRoot = await canonicalProjectRoot(tmpProject);
-		const executable = await describeProjectExecutable(projectRegPath, canonicalRoot);
-		if (!executable) throw new Error("Expected the project registry to be readable");
-		const trust = await ProjectTrust.load(tmpAgentDir);
-		await trust.trust(canonicalRoot, [executable]);
+		await runTrustCommand({ cwd: tmpProject, agentDir: tmpAgentDir, action: "approve", paths: [projectRegPath] });
 	}
 
 	it("project entry shadows user entry when plugin IDs match", async () => {
@@ -204,7 +199,7 @@ describe("listClaudePluginRoots — project shadows user", () => {
 
 		// Exactly one entry survives — the user entry is suppressed.
 		expect(matching).toHaveLength(1);
-		expect(matching[0]?.path).toBe("/project/install/shared-plugin");
+		expect(matching[0]?.path).toBe(projectInstallPath);
 		expect(matching[0]?.scope).toBe("project");
 	});
 

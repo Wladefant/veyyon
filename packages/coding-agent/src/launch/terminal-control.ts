@@ -1,9 +1,9 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as net from "node:net";
 import * as path from "node:path";
-import { atomicWriteFile, getConfigRootDir, postmortem } from "@veyyon/utils";
+import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
 import { getLoadedBuildIdentity } from "./build-info";
+import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -27,8 +27,12 @@ export interface TerminalControlTarget {
 	subscribe(listener: (event: unknown) => void): () => void;
 }
 
+export interface TerminalControlOptions {
+	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
+}
+
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices"] as const;
+export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate"] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
@@ -68,25 +72,33 @@ function isStreamingSnapshotEvent(event: unknown): event is StreamingSnapshotEve
 	);
 }
 
+/** Return the platform-specific endpoint used by terminal-control servers. */
+export function terminalControlEndpoint(directory: string, nonce: string, platform = process.platform): string {
+	return platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
+}
+
 /** The socket lives in the CLI process; neither this module nor a client opens a session file. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
 	root = getConfigRootDir(),
+	options: TerminalControlOptions = {},
 ): Promise<() => void> {
 	const directory = path.join(root, "run", "terminals");
 	await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(directory);
+	else await fs.chmod(directory, 0o700);
 	const nonce = crypto.randomUUID();
-	const endpoint =
-		process.platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
-	const token = crypto.randomBytes(32).toString("hex");
+	const endpoint = terminalControlEndpoint(directory, nonce);
+	let token = crypto.randomBytes(32).toString("hex");
 	const recordPath = path.join(directory, `${process.pid}-${nonce}.json`);
-	const sockets = new Set<net.Socket>();
-	const subscribers = new Set<net.Socket>();
+	const sockets = new Set<TerminalSocket>();
+	const subscribers = new Set<TerminalSocket>();
 	let closed = false;
 	let publishedSessionId = target.identity().sessionId;
 	let unsubscribe: (() => void) | undefined;
 	let refresh: NodeJS.Timeout | undefined;
 	let refreshing = false;
+	let publication: Promise<void> = Promise.resolve();
 	// No timer stays armed while no client is connected: a resting terminal wakes for no one. The
 	// owner poll runs only while a socket is open, the journal poll only while one is subscribed.
 	const reconcile = (): void => {
@@ -127,7 +139,7 @@ export async function serveTerminalControl(
 		unsubscribe = undefined;
 		currentStreamingEvent = undefined;
 	};
-	const send = (socket: net.Socket, frame: unknown): void => {
+	const send = (socket: TerminalSocket, frame: unknown): void => {
 		if (socket.destroyed) return;
 		if (socket.writableLength > 1024 * 1024) {
 			socket.destroy();
@@ -135,11 +147,18 @@ export async function serveTerminalControl(
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
 	};
-	// Delivery ids are scoped to the session that accepted them.
+	// Acked deliveries, by the daemon's message id, scoped to the session that accepted them. The table
+	// lets a retry after a lost connection find the earlier request instead of enqueueing the message
+	// twice. Insertion order = age. Only settled records are evicted, so a pending id is never forgotten
+	// and re-enqueued.
+	//
+	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
+	// A crash or close in that window loses it, although the daemon already holds the ack. The window
+	// is the time the terminal needs to reach the message on the chain.
 	const deliveryKey = (sessionId: string, messageId: string): string => `${sessionId}\0${messageId}`;
 	const deliveries = new Map<
 		string,
-		{ sessionId: string; messageId: string; status: DeliveryState; watchers: Set<net.Socket>; promise?: Promise<string> }
+		{ sessionId: string; messageId: string; status: DeliveryState; watchers: Set<TerminalSocket>; promise?: Promise<string> }
 	>();
 	const evictOldDeliveries = (): void => {
 		for (const [oldestId, oldest] of deliveries) {
@@ -150,7 +169,7 @@ export async function serveTerminalControl(
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
-	const announceDelivery = (record: { sessionId: string; messageId: string; status: DeliveryState; watchers: Set<net.Socket> }): void => {
+	const announceDelivery = (record: { sessionId: string; messageId: string; status: DeliveryState; watchers: Set<TerminalSocket> }): void => {
 		for (const socket of record.watchers) {
 			send(socket, { event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status } });
 		}
@@ -192,7 +211,7 @@ export async function serveTerminalControl(
 		return run;
 	};
 	const acceptDelivery = (
-		socket: net.Socket,
+		socket: TerminalSocket,
 		sessionId: string,
 		messageId: string,
 		text: string,
@@ -234,7 +253,7 @@ export async function serveTerminalControl(
 		});
 		return { accepted: true, messageId, state: "pending" };
 	};
-	const server = net.createServer(socket => {
+	const server = await createTerminalControlTransport(endpoint, socket => {
 		sockets.add(socket);
 		armRefresh();
 		socket.setEncoding("utf8");
@@ -389,7 +408,7 @@ export async function serveTerminalControl(
 										sessionId: request.sessionId,
 										messageId: request.messageId,
 										status: { state: "pending" } as DeliveryState,
-										watchers: new Set<net.Socket>(),
+										watchers: new Set<TerminalSocket>(),
 										promise: deliveryPromise,
 									};
 									deliveries.set(key, record);
@@ -423,6 +442,16 @@ export async function serveTerminalControl(
 							case "abort":
 								result = await target.abort();
 								break;
+							case "rotate":
+								await publish(crypto.randomBytes(32).toString("hex"), request.token);
+								for (const peer of sockets) {
+									if (peer !== socket) peer.destroy();
+								}
+								subscribers.clear();
+								stopEvents();
+								for (const delivery of deliveries.values()) delivery.watchers.clear();
+								result = { rotated: true };
+								break;
 							case "ping":
 								result = { ...target.identity(), pid: process.pid, capabilities: TERMINAL_CAPABILITIES };
 								break;
@@ -440,37 +469,53 @@ export async function serveTerminalControl(
 			}
 		});
 	});
-	const ready = Promise.withResolvers<void>();
-	server.once("error", ready.reject);
-	server.listen(endpoint, ready.resolve);
-	await ready.promise;
-	if (process.platform !== "win32") await fs.chmod(endpoint, 0o600);
-	const publish = async (): Promise<void> => {
-		const identity = target.identity();
-		const build = getLoadedBuildIdentity();
-		const record: TerminalOwner = {
-			version: 1,
-			...identity,
-			pid: process.pid,
-			endpoint,
-			token,
-			loadedVersion: build.version,
-			loadedBuildSha: build.buildSha,
-			capabilities: TERMINAL_CAPABILITIES,
-		};
-		await atomicWriteFile(recordPath, JSON.stringify(record));
-		if (closed) {
-			await fs.rm(recordPath, { force: true });
-			return;
-		}
-		const previousSessionId = publishedSessionId;
-		publishedSessionId = identity.sessionId;
-		if (previousSessionId !== identity.sessionId) {
-			currentStreamingEvent = undefined;
-			for (const [key, delivery] of deliveries) {
-				if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending") deliveries.delete(key);
+	const writeOwner = options.writeOwner ?? (async (destination: string, record: TerminalOwner): Promise<void> => {
+		await atomicWriteFileWith(destination, async temporary => {
+			await applyOwnerOnlyWindowsAcl(temporary);
+			await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+		}, {
+			mode: 0o600,
+			// This credential dies with the process. No fallible flush may follow its atomic replacement.
+			fsync: false,
+			requireAtomicReplace: true,
+		});
+	});
+	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
+		const run = publication.then(async () => {
+			if (closed) throw new Error("Terminal control is closed");
+			if (expectedToken !== undefined && expectedToken !== token) {
+				throw new Error("Terminal credential changed; rediscover its owner");
 			}
-		}
+			const identity = target.identity();
+			const credential = nextToken ?? token;
+			const build = getLoadedBuildIdentity();
+			const record: TerminalOwner = {
+				version: 1,
+				...identity,
+				pid: process.pid,
+				endpoint,
+				token: credential,
+				loadedVersion: build.version,
+				loadedBuildSha: build.buildSha,
+				capabilities: TERMINAL_CAPABILITIES,
+			};
+			await writeOwner(recordPath, record);
+			if (closed) {
+				await fs.rm(recordPath, { force: true });
+				throw new Error("Terminal control is closed");
+			}
+			token = credential;
+			const previousSessionId = publishedSessionId;
+			publishedSessionId = identity.sessionId;
+			if (previousSessionId !== identity.sessionId) {
+				currentStreamingEvent = undefined;
+				for (const [key, delivery] of deliveries) {
+					if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending") deliveries.delete(key);
+				}
+			}
+		});
+		publication = run.catch(() => {});
+		return run;
 	};
 	try {
 		await publish();
@@ -489,5 +534,6 @@ export async function serveTerminalControl(
 		void fs.rm(recordPath, { force: true }).catch(() => {});
 	};
 	const cancelCleanup = postmortem.register(`terminal-control:${nonce}`, close);
+	server.onClose?.(close);
 	return close;
 }

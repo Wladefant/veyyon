@@ -128,6 +128,25 @@ const SOURCE = FILES.map(entry => entry.text).join("\n");
 const KEYS = Object.keys(SETTINGS_SCHEMA);
 const GROUPS_READ = new Set(Array.from(SOURCE.matchAll(/getGroup\("([a-zA-Z0-9._]+)"\)/g), match => match[1]));
 
+/** The characters a key is written in, which the quoted-text index below reads. */
+const KEY_TEXT = /^[A-Za-z0-9._-]+$/;
+/** The characters a group field is written in, which the field indexes below read. */
+const FIELD_TEXT = /^\w+$/;
+
+/**
+ * Every run of key characters written between two quotes of one kind, so `"key"` or `'key'` appears in
+ * `SOURCE` exactly when `key` is in the set. A quote cannot occur inside the run, so the run after a quote
+ * is the only text that quote can open, and the lookahead leaves the closing quote to open the next run.
+ */
+const QUOTED = new Set(Array.from(SOURCE.matchAll(/(["'])([A-Za-z0-9._-]+)(?=\1)/g), match => match[2]));
+/** Every word read off an object as `.field`: `\.field\b` matches `SOURCE` exactly when `field` is here. */
+const DOTTED_FIELDS = new Set(Array.from(SOURCE.matchAll(/\.(\w+)/g), match => match[1]));
+/**
+ * Every word bound out of an object by destructuring or written as a shorthand property, `{ field,`,
+ * `, field }`, `{ field = `, `{ field: `: `[{,]\s*field\s*[,}=:]` matches `SOURCE` exactly when `field` is here.
+ */
+const BOUND_FIELDS = new Set(Array.from(SOURCE.matchAll(/[{,]\s*(\w+)(?=\s*[,}=:])/g), match => match[1]));
+
 /**
  * How a key is reached, or `null` when nothing reads it.
  *
@@ -149,7 +168,7 @@ const GROUPS_READ = new Set(Array.from(SOURCE.matchAll(/getGroup\("([a-zA-Z0-9._
  * key list started coming from the schema.
  */
 function readerOf(key: string): "literal" | "group" | "assembled" | "binding" | "desktop" | null {
-	if (SOURCE.includes(`"${key}"`) || SOURCE.includes(`'${key}'`)) return "literal";
+	if (QUOTED.has(key)) return "literal";
 	if (key in GLOBAL_SETTING_BINDINGS) return "binding";
 	if (key in ASSEMBLED_AT_RUNTIME) return "assembled";
 	if (key in READ_BY_THE_DESKTOP) return "desktop";
@@ -158,8 +177,7 @@ function readerOf(key: string): "literal" | "group" | "assembled" | "binding" | 
 		const group = key.slice(0, separator);
 		const field = key.slice(separator + 1);
 		if (!GROUPS_READ.has(group)) return null;
-		if (new RegExp(`\\.${field}\\b`).test(SOURCE)) return "group";
-		if (new RegExp(`[{,]\\s*${field}\\s*[,}=:]`).test(SOURCE)) return "group";
+		if (DOTTED_FIELDS.has(field) || BOUND_FIELDS.has(field)) return "group";
 	}
 	return null;
 }
@@ -316,6 +334,16 @@ describe("the walk this lock depends on", () => {
 	/** No key is declared twice, or the counts above would be measuring duplicates. */
 	it("declares each key once", () => {
 		expect(new Set(KEYS).size).toBe(KEYS.length);
+	});
+
+	/**
+	 * The indexes `readerOf` looks keys up in hold runs of key and field characters only. A key written
+	 * in any other character would read as unwired whatever reads it, so it fails here instead.
+	 */
+	it("declares every key in the characters the reader indexes hold", () => {
+		expect(KEYS.filter(key => !KEY_TEXT.test(key))).toEqual([]);
+		const fields = KEYS.filter(key => key.lastIndexOf(".") > 0).map(key => key.slice(key.lastIndexOf(".") + 1));
+		expect(fields.filter(field => !FIELD_TEXT.test(field))).toEqual([]);
 	});
 
 	/**

@@ -137,7 +137,7 @@ const step = async (name, fn) => {
 const keywords = await step("keywords", () => loadEnvSecretKeywords({ cwd: ${dir}, agentDir: ${dir} }));
 const tracerResolved = await step("telemetry", () => resolveTelemetry({}, "census")?.tracer !== undefined);
 const statusError = SpanStatusCode.ERROR;
-const editDiff = await step("editDiff", () => generateDiffString("one\\ntwo\\n", "one\\nthree\\n").diff);
+const editDiff = await step("editDiff", async () => (await generateDiffString("one\\ntwo\\n", "one\\nthree\\n")).diff);
 process.stdout.write(JSON.stringify({
 	evaluated: Object.keys(require.cache).length,
 	atRest,

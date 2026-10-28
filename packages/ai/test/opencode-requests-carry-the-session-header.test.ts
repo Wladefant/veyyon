@@ -4,6 +4,7 @@ import { openAIResponsesServerCompaction } from "@veyyon/ai/providers/openai-com
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import { resolveOpenAIRequestSetup } from "@veyyon/ai/providers/openai-shared";
+import { completeSimple } from "@veyyon/ai/stream";
 import type { Api, Context, Message, Model } from "@veyyon/ai/types";
 import {
 	conversationIdForOpenCode,
@@ -20,8 +21,10 @@ import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
  * use it?" (https://opencode.ai/docs/go/): a request has to identify itself
  * with a narrow user agent, and has to carry `x-opencode-session` so the
  * gateway can optimize prompt caching. Traffic that does neither is flagged as
- * abusive, and a request without the session header loses the prompt-cache
- * routing it would otherwise get.
+ * abusive, and a request without the session header is rejected with
+ * `400 ... (type=MissingSessionID)`: session titles and task labels, which are
+ * requested with no session id, were rejected that way until a session-less
+ * request carried one process-stable value.
  *
  * THE CLASS: every OpenCode provider id, on every transport it is served over,
  * under every local cache setting. OpenCode fronts models on three wire
@@ -140,18 +143,22 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
 
 type WireArm = {
 	name: string;
-	send: (provider: string, cacheDisabled: boolean) => Promise<{ headers: Record<string, string>; calls: number }>;
+	send: (
+		provider: string,
+		cacheDisabled: boolean,
+		session: string | undefined,
+	) => Promise<{ headers: Record<string, string>; calls: number }>;
 };
 
 const WIRE_ARMS: WireArm[] = [
 	{
 		name: "anthropic-messages",
-		send: async (provider, cacheDisabled) => {
+		send: async (provider, cacheDisabled, session) => {
 			const { captured, fetchImpl, calls } = captureFetch(ANTHROPIC_SSE);
 			await drain(
 				streamAnthropic(openCodeModel("anthropic-messages", provider, "claude-fable-5-1"), CONTEXT, {
 					apiKey: "test-key",
-					sessionId: SESSION,
+					sessionId: session,
 					cacheRetention: cacheDisabled ? "none" : undefined,
 					fetch: fetchImpl,
 				}),
@@ -161,12 +168,12 @@ const WIRE_ARMS: WireArm[] = [
 	},
 	{
 		name: "openai-completions",
-		send: async (provider, cacheDisabled) => {
+		send: async (provider, cacheDisabled, session) => {
 			const { captured, fetchImpl, calls } = captureFetch(OPENAI_SSE);
 			await drain(
 				streamOpenAICompletions(openCodeModel("openai-completions", provider, "glm-5"), CONTEXT, {
 					apiKey: "test-key",
-					sessionId: SESSION,
+					sessionId: session,
 					cacheRetention: cacheDisabled ? "none" : undefined,
 					fetch: fetchImpl,
 				}),
@@ -176,12 +183,12 @@ const WIRE_ARMS: WireArm[] = [
 	},
 	{
 		name: "openai-responses",
-		send: async (provider, cacheDisabled) => {
+		send: async (provider, cacheDisabled, session) => {
 			const { captured, fetchImpl, calls } = captureFetch(OPENAI_SSE);
 			await drain(
 				streamOpenAIResponses(openCodeModel("openai-responses", provider, "gpt-5.5"), CONTEXT, {
 					apiKey: "test-key",
-					sessionId: SESSION,
+					sessionId: session,
 					cacheRetention: cacheDisabled ? "none" : undefined,
 					fetch: fetchImpl,
 				}),
@@ -191,17 +198,17 @@ const WIRE_ARMS: WireArm[] = [
 	},
 	{
 		name: "openai-responses server compaction",
-		send: async (provider, cacheDisabled) => {
+		send: async (provider, cacheDisabled, session) => {
 			const { captured, fetchImpl, calls } = captureFetch(OPENAI_SSE);
 			try {
 				await openAIResponsesServerCompaction.compact({
 					model: openCodeModel("openai-responses", provider, "gpt-5.5"),
 					messages: MESSAGES,
 					apiKey: "test-key",
-					sessionId: SESSION,
+					sessionId: session,
 					// Same conversation as the session id, so every arm derives one
 					// value; the side-channel test below covers a pinned cache key.
-					promptCacheKey: cacheDisabled ? undefined : SESSION,
+					promptCacheKey: cacheDisabled ? undefined : session,
 					fetch: fetchImpl,
 				});
 			} catch {
@@ -229,7 +236,7 @@ describe("every OpenCode provider labels its traffic and carries a session", () 
 	it.each(matrix)(
 		"%s carries both headers for %s (cache disabled: %p)",
 		async (_armName, provider, cacheDisabled, arm) => {
-			const { headers, calls } = await arm.send(provider, cacheDisabled);
+			const { headers, calls } = await arm.send(provider, cacheDisabled, SESSION);
 			// A transport that never reached fetch would assert nothing below.
 			expect(calls).toBeGreaterThan(0);
 			expect(headerCaseInsensitive(headers, "User-Agent")).toMatch(/^Veyyon\//);
@@ -242,7 +249,7 @@ describe("every OpenCode provider labels its traffic and carries a session", () 
 		// a turn and its compaction pass have to agree on it.
 		const values = await Promise.all(
 			WIRE_ARMS.map(async arm =>
-				headerCaseInsensitive((await arm.send("opencode-zen", false)).headers, SESSION_HEADER),
+				headerCaseInsensitive((await arm.send("opencode-zen", false, SESSION)).headers, SESSION_HEADER),
 			),
 		);
 		expect(new Set(values).size).toBe(1);
@@ -261,20 +268,63 @@ describe("every OpenCode provider labels its traffic and carries a session", () 
 
 	it("leaves a non-OpenCode provider untouched on every transport", async () => {
 		for (const arm of WIRE_ARMS) {
-			const { headers } = await arm.send("openai", false);
-			expect(headerCaseInsensitive(headers, SESSION_HEADER)).toBeUndefined();
+			for (const session of [SESSION, undefined]) {
+				const { headers } = await arm.send("openai", false, session);
+				expect(headerCaseInsensitive(headers, SESSION_HEADER)).toBeUndefined();
+			}
 		}
 	});
 
-	it("omits the session header when there is no session, and still labels the request", () => {
-		// A per-request value would defeat the affinity the header exists for, so
-		// the absence of a session must not be papered over with a random id.
-		const headers = resolveOpenAIRequestSetup(
-			{ provider: "opencode-zen", id: "gpt-5.5", baseUrl: "https://opencode.ai/zen/v1" },
-			{ apiKey: "test-key", messages: MESSAGES },
-		).headers;
-		expect(headerCaseInsensitive(headers, SESSION_HEADER)).toBeUndefined();
-		expect(headerCaseInsensitive(headers, "User-Agent")).toMatch(/^Veyyon\//);
+	it("routes every session-less request under one process-stable session", async () => {
+		// A session title or a task label is requested with no session id. The
+		// gateway rejects a request without the header (`MissingSessionID`), and a
+		// per-request value would defeat the affinity it exists for, so every
+		// session-less request from this process carries one shared value.
+		const sent = await Promise.all(
+			matrix.map(async ([, provider, cacheDisabled, arm]) => {
+				const { headers, calls } = await arm.send(provider, cacheDisabled, undefined);
+				expect(calls).toBeGreaterThan(0);
+				expect(headerCaseInsensitive(headers, "User-Agent")).toMatch(/^Veyyon\//);
+				return headerCaseInsensitive(headers, SESSION_HEADER);
+			}),
+		);
+		const values = new Set(sent);
+		expect(values.size).toBe(1);
+		const [value] = values;
+		expect(value).toMatch(/^ses_[0-9a-f]{32}$/);
+		expect(value).not.toBe(openCodeSessionHeaderValue(SESSION));
+		expect(value).toBe(getOpenCodeHeaders()[SESSION_HEADER]);
+	});
+
+	it("sends the recorded session-less title request with the session header", async () => {
+		// Backtest: a session title on opencode-go, requested through
+		// `completeSimple` with no session id, was answered `400 Request is missing
+		// x-opencode-session and cannot be routed efficiently (type=MissingSessionID)`.
+		const { captured, fetchImpl, calls } = captureFetch(OPENAI_SSE);
+		const model = buildModel({
+			id: "deepseek-v4.1-flash",
+			name: "DeepSeek V4.1 Flash",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 4_096,
+		});
+		await completeSimple(
+			model,
+			{
+				systemPrompt: ["# Task\nWrite a 3-7 word title for the task in `<user>`."],
+				messages: [{ role: "user", content: "<user>\nfix the login redirect\n</user>", timestamp: 0 }],
+			},
+			{ apiKey: "test-key", maxTokens: 1024, disableReasoning: true, fetch: fetchImpl },
+		);
+		expect(calls()).toBe(1);
+		const sent = headerCaseInsensitive(captured, SESSION_HEADER);
+		expect(sent).toMatch(/^ses_[0-9a-f]{32}$/);
+		expect(sent).toBe(getOpenCodeHeaders()[SESSION_HEADER]);
 	});
 
 	it("lets a caller-supplied user agent win", () => {
@@ -365,9 +415,11 @@ describe("the session value is stable, opaque and per-conversation", () => {
 		expect(value).toMatch(/^ses_[0-9a-f]{32}$/);
 	});
 
-	it("carries no session header when the caller has no session id", () => {
-		expect(getOpenCodeHeaders()[SESSION_HEADER]).toBeUndefined();
-		expect(getOpenCodeHeaders("")[SESSION_HEADER]).toBeUndefined();
+	it("carries the process session when the caller has no session id", () => {
+		const processValue = getOpenCodeHeaders()[SESSION_HEADER];
+		expect(processValue).toMatch(/^ses_[0-9a-f]{32}$/);
+		expect(getOpenCodeHeaders("")[SESSION_HEADER]).toBe(processValue);
+		expect(getOpenCodeHeaders(SESSION)[SESSION_HEADER]).toBe(openCodeSessionHeaderValue(SESSION));
 	});
 
 	it("keys the conversation on the pinned cache key before the session id", () => {

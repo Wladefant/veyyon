@@ -19,6 +19,15 @@
  * stopping the profile, discarding it and starting the next — costs 2ms. A rotation runs on a tick
  * the watchdog saw as quiet, so a stall's own samples are never the ones a rotation throws away.
  *
+ * Retention. Until a profile stops, JSC keeps every function its samples caught reachable, and with
+ * each function the closure it captured. A provider request's closures capture the request context
+ * and its serialized body, so a busy profile kept for 10s kept every request of those 10s alive:
+ * over 40 prompts of a mixed-tool session the heap left after a full collection peaked at 173-177 MB,
+ * against 66-68 MB with no profiler running and 69-71 MB once every busy tick replaced the profile.
+ * So a busy tick replaces the profile. A late tick's stacks are read from the tick that armed it,
+ * so the replacement discards no sample a report reads. Replacing a 250ms profile measured
+ * 0.14-0.18ms.
+ *
  * Idle cost. The profiler's thread wakes at the sampling interval whether or not JavaScript runs,
  * and each restart wakes the collector's helper threads. Over 30s of an idle process, a 10ms
  * interval measured 2,981 wakeups of the profiler's thread, and a rotation every 10s added 2,514
@@ -264,9 +273,10 @@ export class StallSampler implements StallStackSource {
 		if (this.#state !== "running") return;
 		const intervalUs = nowMs - this.#busyAtMs < IDLE_AFTER_MS ? BUSY_INTERVAL_US : IDLE_INTERVAL_US;
 		const full = nowMs - this.#startedAtMs >= (this.#intervalUs / 1000) * ROTATE_AFTER_SAMPLES;
-		// A busy tick restarts an idle-interval profile at once. Going idle waits for the rotation,
-		// which restarts the profile regardless.
-		if (!full && intervalUs >= this.#intervalUs) return;
+		// A busy tick replaces the profile at once: its samples keep their functions reachable, and the
+		// watchdog never reads a sample from before the tick it arms next. Going idle waits for the
+		// rotation, which restarts the profile regardless.
+		if (!busy && !full && intervalUs >= this.#intervalUs) return;
 		this.#restartAt(intervalUs);
 	}
 

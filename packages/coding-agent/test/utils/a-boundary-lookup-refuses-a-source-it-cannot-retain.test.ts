@@ -52,21 +52,23 @@ function paddedBlock(bytes: number): { text: string; lines: string[]; closerLine
 }
 
 describe("a boundary lookup refuses a source it cannot retain", () => {
-	it("answers a source of exactly the ceiling", () => {
+	it("answers a source of exactly the ceiling", async () => {
 		const { text, lines, closerLine } = paddedBlock(CEILING_BYTES);
 
-		expect(findBlockContextLines(lines, [1], { path: "wrapper.ts", text })).toEqual(new Map([[closerLine, "}"]]));
+		expect(await findBlockContextLines(lines, [1], { path: "wrapper.ts", text })).toEqual(
+			new Map([[closerLine, "}"]]),
+		);
 		expect(exceedsBlockContextScanCeiling(text)).toBe(false);
 	});
 
-	it("refuses a source one byte over the ceiling", () => {
+	it("refuses a source one byte over the ceiling", async () => {
 		const { text, lines } = paddedBlock(CEILING_BYTES + 1);
 
-		expect(findBlockContextLines(lines, [1], { path: "wrapper.ts", text }).size).toBe(0);
+		expect((await findBlockContextLines(lines, [1], { path: "wrapper.ts", text })).size).toBe(0);
 		expect(exceedsBlockContextScanCeiling(text)).toBe(true);
 	});
 
-	it("sizes the source in bytes, not UTF-16 units", () => {
+	it("sizes the source in bytes, not UTF-16 units", async () => {
 		// Half the ceiling in characters, every one of them two bytes: under the
 		// ceiling by `.length`, over it by the bytes a parser would read.
 		const half = CEILING_BYTES / 2;
@@ -75,41 +77,41 @@ describe("a boundary lookup refuses a source it cannot retain", () => {
 		expect(Buffer.byteLength(text)).toBeGreaterThan(CEILING_BYTES);
 
 		expect(exceedsBlockContextScanCeiling(text)).toBe(true);
-		expect(findBlockContextLines(text.split("\n"), [2], { path: "wrapper.ts", text }).size).toBe(0);
+		expect((await findBlockContextLines(text.split("\n"), [2], { path: "wrapper.ts", text })).size).toBe(0);
 	});
 
-	it("refuses a line array over the ceiling when the caller kept no source string", () => {
+	it("refuses a line array over the ceiling when the caller kept no source string", async () => {
 		const { lines } = paddedBlock(CEILING_BYTES + 1);
 
 		// No `text`: the size has to come from the array, newline separators
 		// included, or a file that is over the ceiling only by its line breaks
 		// gets scanned anyway.
-		expect(findBlockContextLines(lines, [1], { path: "wrapper.ts" }).size).toBe(0);
+		expect((await findBlockContextLines(lines, [1], { path: "wrapper.ts" })).size).toBe(0);
 	});
 
-	it("answers a line array at the ceiling when the caller kept no source string", () => {
+	it("answers a line array at the ceiling when the caller kept no source string", async () => {
 		const { lines, closerLine } = paddedBlock(CEILING_BYTES);
 
-		expect(findBlockContextLines(lines, [1], { path: "wrapper.ts" })).toEqual(new Map([[closerLine, "}"]]));
+		expect(await findBlockContextLines(lines, [1], { path: "wrapper.ts" })).toEqual(new Map([[closerLine, "}"]]));
 	});
 
-	it("keeps the predicate the diff consults in step with the lookup's refusal", () => {
+	it("keeps the predicate the diff consults in step with the lookup's refusal", async () => {
 		// Straddle the ceiling: the diff asks the predicate before allocating
 		// two whole-file line arrays, so a predicate that disagrees with the
 		// lookup either pays for a scan that returns nothing or drops rows the
 		// lookup would have produced.
 		for (const bytes of [CEILING_BYTES - 1, CEILING_BYTES, CEILING_BYTES + 1, CEILING_BYTES + 4096]) {
 			const { text, lines } = paddedBlock(bytes);
-			const refused = findBlockContextLines(lines, [1], { path: "wrapper.ts", text }).size === 0;
+			const refused = (await findBlockContextLines(lines, [1], { path: "wrapper.ts", text })).size === 0;
 			expect(exceedsBlockContextScanCeiling(text)).toBe(refused);
 		}
 	});
 
-	it("still diffs a pair over the ceiling, without boundary rows", () => {
+	it("still diffs a pair over the ceiling, without boundary rows", async () => {
 		const { text, closerLine } = paddedBlock(CEILING_BYTES + 1);
 		const edited = text.replace("export function wrapper() {", "export function wrapper(arg: number) {");
 
-		const over = generateDiffString(text, edited, undefined, { path: "wrapper.ts" });
+		const over = await generateDiffString(text, edited, undefined, { path: "wrapper.ts" });
 		expect(over.firstChangedLine).toBe(1);
 		expect(over.diff.split("\n").slice(0, 2)).toEqual([
 			"-1|export function wrapper() {",
@@ -118,11 +120,11 @@ describe("a boundary lookup refuses a source it cannot retain", () => {
 		expect(over.diff).not.toContain(`${closerLine}|}`);
 	});
 
-	it("keeps boundary rows in a diff of a pair under the ceiling", () => {
+	it("keeps boundary rows in a diff of a pair under the ceiling", async () => {
 		const { text, closerLine } = paddedBlock(1024);
 		const edited = text.replace("export function wrapper() {", "export function wrapper(arg: number) {");
 
-		const under = generateDiffString(text, edited, undefined, { path: "wrapper.ts" });
+		const under = await generateDiffString(text, edited, undefined, { path: "wrapper.ts" });
 		expect(under.diff).toContain(`${closerLine}|}`);
 	});
 });

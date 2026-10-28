@@ -93,6 +93,58 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 		);
 	});
 
+	it("keeps a correlated event stream alive past the ordinary request deadline and settles on cancellation", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				requestBody = (await request.json()) as Record<string, unknown>;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							const params = requestBody?.params;
+							const metadata =
+								params && typeof params === "object" && "_meta" in params ? params._meta : undefined;
+							const subscriptionId =
+								metadata && typeof metadata === "object" && "io.modelcontextprotocol/subscriptionId" in metadata
+									? metadata["io.modelcontextprotocol/subscriptionId"]
+									: undefined;
+							controller.enqueue(
+								encoder.encode(
+									`data: ${JSON.stringify({
+										jsonrpc: "2.0",
+										method: "events/occurred",
+										params: { _meta: { "io.modelcontextprotocol/subscriptionId": subscriptionId } },
+									})}\n\n`,
+								),
+							);
+						},
+					}),
+					{ headers: { "Content-Type": "text/event-stream" } },
+				);
+			},
+		});
+		const transport = await connectedTransport();
+		const notifications: unknown[] = [];
+		const stream = transport.streamRequest("events/subscribe", { eventId: "test" }, notification =>
+			notifications.push(notification),
+		);
+		await expect(withPendingGuard(Promise.resolve().then(() => stream.done), "stream")).rejects.toThrow(
+			`stayed pending past ${GUARD_TIMEOUT_MS}ms`,
+		);
+		stream.cancel();
+		await withPendingGuard(stream.done, "cancelled stream");
+		expect(requestBody).toMatchObject({
+			method: "events/subscribe",
+			params: {
+				eventId: "test",
+				_meta: { "io.modelcontextprotocol/subscriptionId": stream.id },
+			},
+		});
+		expect(notifications).toHaveLength(1);
+		await transport.close();
+	});
+
 	it("still resolves normal JSON response bodies", async () => {
 		server = Bun.serve({
 			port: 0,

@@ -2412,7 +2412,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,
@@ -2471,7 +2471,7 @@ describe("AgentSession retry fallback", () => {
 			"retry.maxRetries": 1,
 			"retry.modelFallback": false,
 		});
-		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		settings.setDefaultModel(`${model.provider}/${model.id}`);
 
 		session = new AgentSession({
 			agent,

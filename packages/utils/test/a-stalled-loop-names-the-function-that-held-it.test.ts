@@ -177,18 +177,18 @@ describe("a stalled loop names the function that held it", () => {
 		expect(frames.some(frame => frame.startsWith("holdTheLoopElsewhereForMs"))).toBe(false);
 	});
 
-	test("a quiet tick keeps a profile younger than the rotation and discards an older one", async () => {
+	test("an idle tick keeps a profile younger than the rotation and discards an older one", async () => {
 		const sampler = newSampler();
 		sampler.quiet(performance.now(), true);
 		await sampler.stacksBetween(0, 0);
 
 		holdTheLoopForMs(200);
-		sampler.quiet(performance.now() + 1_000, true);
+		sampler.quiet(performance.now() + 1_000, false);
 		const kept = await sampler.stacksBetween(0, performance.now());
 		expect(framesOf(kept)[0]!.startsWith("holdTheLoopForMs")).toBe(true);
 
 		holdTheLoopForMs(200);
-		sampler.quiet(performance.now() + 60_000, true);
+		sampler.quiet(performance.now() + 60_000, false);
 		const rotated = await sampler.stacksBetween(0, performance.now());
 		expect(rotated?.samples).toBe(0);
 	});

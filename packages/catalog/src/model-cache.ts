@@ -9,7 +9,10 @@ import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v13 invalidates
+// the model manager rebuilds via `buildModel` on load. v14 invalidates Codex
+// rows discovered before `available_access_programs` was read: a cached row
+// without `accessPrograms` sends no `access_programs.cyber` for up to the 24
+// hour TTL. v13 invalidates
 // Antigravity rows discovered as client 2.1.4: the endpoint lists Gemini 4 Argon
 // and the per-tier Gemini 3.8 Flash deployments only to client 3.0.0 or later,
 // so a cached list keeps Argon out of the picker for up to the 24 hour TTL. v12 invalidates rows
@@ -39,7 +42,7 @@ import type { Api, Model, ModelSpec } from "./types";
 // (222222/8888); v5 invalidated rows predating effort-tier variant collapsing
 // (raw `-low`/`-high`/`-thinking` member ids); v4 dropped the pre-efforts
 // ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 13;
+const CACHE_SCHEMA_VERSION = 14;
 
 interface CacheRow {
 	provider_id: string;
@@ -80,6 +83,10 @@ function openDb(resolvedPath: string): Database {
 			// Install the busy handler BEFORE any lock-taking statement.
 			db.run("PRAGMA busy_timeout = 3000");
 			db.run("PRAGMA journal_mode = WAL");
+			// A commit appends to the WAL without an fsync; the checkpoint syncs. A power loss can drop the
+			// last rows written, which the next refresh rewrites, and cannot corrupt the file. A full sync
+			// costs each provider's upsert a disk flush on the main thread, 0.4 to 38 ms apiece.
+			db.run("PRAGMA synchronous = NORMAL");
 			db.run(`
 				CREATE TABLE IF NOT EXISTS model_cache (
 					provider_id TEXT PRIMARY KEY,

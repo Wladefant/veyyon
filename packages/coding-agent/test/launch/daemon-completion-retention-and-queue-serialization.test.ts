@@ -38,6 +38,7 @@ import {
 	appendDaemonCompletion,
 	DAEMON_COMPLETIONS_LIMIT,
 	DAEMON_COMPLETIONS_MAX_AGE_MS,
+	type RetainedDaemonCompletion,
 	readDaemonCompletions,
 } from "../../src/launch/completions";
 import { DAEMON_TERMINATION_OWNERS, type DaemonCompletionRecord, type DaemonSpec } from "../../src/launch/protocol";
@@ -252,7 +253,7 @@ describe("daemon completion record retention and queue bounds", () => {
 		const runtimeDir = await tempDir("retention-bounds-runtime-");
 		const now = Date.now();
 
-		function makeFakeRecord(name: string, exitedAt: number): DaemonCompletionRecord {
+		function makeFakeRecord(name: string, exitedAt: number): RetainedDaemonCompletion {
 			return {
 				name,
 				id: crypto.randomUUID(),
@@ -265,6 +266,18 @@ describe("daemon completion record retention and queue bounds", () => {
 				restartCount: 0,
 				outputBytes: 20,
 				outputTail: `output for ${name}\n`,
+				state: "exited",
+				spec: {
+					name,
+					application: "true",
+					args: [],
+					env: {},
+					cwd: runtimeDir,
+					pty: false,
+					restart: "no",
+					persist: false,
+					detached: false,
+				},
 			};
 		}
 

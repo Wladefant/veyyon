@@ -140,3 +140,19 @@ export function displayArguments(tool: AnyAgentTool | undefined, args: unknown):
 	const conformed = conform(args, schema, 0);
 	return conformed === DROP ? {} : conformed;
 }
+
+/**
+ * Build the schema {@link displayArguments} conforms `tool`'s arguments against. The first read of a
+ * tool's `parameters` constructs its ArkType schema, so a caller that spreads its work across
+ * event-loop turns calls this in a turn of its own instead of paying for the build inside the call
+ * that draws the tool's first card. A schema that cannot be read is left to `displayArguments`, which
+ * then draws the arguments as recorded.
+ */
+export function warmDisplaySchema(tool: AnyAgentTool | undefined): void {
+	if (!tool?.parameters) return;
+	try {
+		toolWireSchema(tool);
+	} catch {
+		return;
+	}
+}

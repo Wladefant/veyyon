@@ -1,5 +1,5 @@
 import { countTokens as countTokensNat } from "@veyyon/natives";
-import { estimateTokensFromText } from "@veyyon/utils/tokens";
+import { estimateTokensFromBytes, estimateTokensFromText } from "@veyyon/utils/tokens";
 
 const accurate = process.env.VEYYON_TOKENIZER_ACCURATE === "1" && Bun.env.NODE_ENV !== "test";
 
@@ -11,4 +11,12 @@ export function countTokens(text: string | string[]): number {
 	} else {
 		return estimateTokensFromText(text);
 	}
+}
+
+/**
+ * The fewest tokens {@link countTokens} returns for a text of at least `bytes` UTF-8 bytes, or
+ * undefined when the native tokenizer counts, whose count no byte length bounds.
+ */
+export function minTokensForBytes(bytes: number): number | undefined {
+	return accurate ? undefined : estimateTokensFromBytes(bytes);
 }
