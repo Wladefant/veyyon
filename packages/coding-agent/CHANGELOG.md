@@ -7,6 +7,7 @@
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
 
 ### Fixed
+- MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Tool admission on a synchronized cloud session ends the run when write authority is lost, instead of letting the model re-sample against the fence; every admission throw, including a transient `assertWritable` failure, now ends the run (fail closed) ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
