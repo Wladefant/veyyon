@@ -25,10 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { AgentMessage, AsideMessage } from "@veyyon/agent-core";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -40,21 +38,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
+import { createMockModel } from "./helpers/mock-model";
 
 interface Harness {
 	session: AgentSession;
@@ -90,7 +74,7 @@ async function harness(): Promise<Harness> {
 		},
 	};
 	const agent = new Agent({
-		initialState: { model: createModel(), systemPrompt: ["base"], tools: [readTool], messages: [] },
+		initialState: { model: createMockModel(), systemPrompt: ["base"], tools: [readTool], messages: [] },
 	});
 	// The provider is private on the Agent, so capture the function the session installs.
 	// Wrapping the setter keeps this test at the real seam without adding test-only API.

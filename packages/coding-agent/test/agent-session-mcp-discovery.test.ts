@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool, type AgentToolContext, ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
-import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
@@ -13,22 +12,8 @@ import type { OutputMeta } from "@veyyon/coding-agent/tools/core/output-notice";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
+import { createMockModel } from "./helpers/mock-model";
 import { toolResultText } from "./helpers/tool-result-text";
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
 
 function createBasicTool(name: string, label: string): AgentTool {
 	const schema = type({ value: "string" });
@@ -152,7 +137,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -199,7 +184,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
@@ -241,7 +226,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
@@ -281,7 +266,7 @@ describe("AgentSession MCP discovery", () => {
 		const toolRegistry = new Map([[readTool.name, readTool]]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -335,7 +320,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -383,7 +368,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -428,7 +413,7 @@ describe("AgentSession MCP discovery", () => {
 		const sessionManager = SessionManager.inMemory();
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -475,7 +460,7 @@ describe("AgentSession MCP discovery", () => {
 		const sessionManager = SessionManager.inMemory();
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -510,7 +495,7 @@ describe("AgentSession MCP discovery", () => {
 		sessionManager.appendMCPToolSelection(["mcp__docs_search"]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -548,7 +533,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: sessionManager.buildSessionContext().messages,
@@ -593,7 +578,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: sessionManager.buildSessionContext().messages,
@@ -638,7 +623,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: sessionManager.buildSessionContext().messages,
@@ -687,7 +672,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: sessionManager.buildSessionContext().messages,
@@ -744,7 +729,7 @@ describe("AgentSession MCP discovery", () => {
 		await sessionManager.flush();
 
 		const reasoningModel: Model<"openai-responses"> = {
-			...createModel(),
+			...createMockModel(),
 			reasoning: true,
 			thinking: { mode: "effort", efforts: [Effort.Medium] },
 		};
@@ -820,7 +805,7 @@ describe("AgentSession MCP discovery", () => {
 		const sessionManager = SessionManager.inMemory();
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, docsSearchTool],
 				messages: [],
@@ -880,7 +865,7 @@ describe("AgentSession MCP discovery", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool],
 				messages: [],
@@ -918,7 +903,7 @@ describe("AgentSession MCP discovery", () => {
 			[docsSearchTool.name, docsSearchTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
+			initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -961,7 +946,7 @@ describe("AgentSession MCP discovery", () => {
 			[customTool.name, customTool],
 		]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
+			initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
@@ -987,7 +972,7 @@ describe("AgentSession MCP discovery", () => {
 		const readTool = createBasicTool("read", "Read");
 		const toolRegistry = new Map([[readTool.name, readTool]]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
+			initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const sessionManager = SessionManager.inMemory();
 		const session = new AgentSession({
@@ -1026,7 +1011,7 @@ describe("AgentSession MCP discovery", () => {
 		const readTool = createBasicTool("read", "Read");
 		const toolRegistry = new Map([[readTool.name, readTool]]);
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
+			initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,

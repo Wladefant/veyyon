@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
-import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
+import { createMockModel } from "./helpers/mock-model";
 
 // Subject: `session/runtime/tool-activation.ts`, driven through `AgentSession`.
 //
@@ -14,21 +13,6 @@ import { type } from "arktype";
 // definitions, `refreshMCPTools` must not rebuild the system prompt. A rebuild
 // invalidates the Anthropic prompt-cache breakpoint placed on the system block
 // and forces a full prefix re-encode on the next request.
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
 
 function createBasicTool(name: string, label: string, description = `${label} tool`): AgentTool {
 	return {
@@ -87,7 +71,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, initialMcp as unknown as AgentTool],
 				messages: [],
@@ -230,7 +214,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		]);
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: [readTool, bashTool, searchTool],
 				messages: [],
@@ -306,7 +290,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		// hookless session would otherwise read the empty result as a teaching
 		// failure and report a harness bug that is not there.
 		const agent = new Agent({
-			initialState: { model: createModel(), systemPrompt: ["fixed prompt"], tools: [], messages: [] },
+			initialState: { model: createMockModel(), systemPrompt: ["fixed prompt"], tools: [], messages: [] },
 		});
 		const session = new AgentSession({
 			agent,
