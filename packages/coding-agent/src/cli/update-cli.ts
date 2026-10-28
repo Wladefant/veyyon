@@ -1876,7 +1876,7 @@ export async function installRelease(
 	const result =
 		target.method === "source"
 			? await updateViaSourceAt(target.path, version, report)
-			: await updateViaBinaryAt(target.path, version, report, force);
+			: await updateViaBinaryAt(target.path, version, report)
 	if (version !== currentVersion) {
 		await recordVersionMove({ from: currentVersion, to: version, at: new Date().toISOString() }, historyPath);
 	}
