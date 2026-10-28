@@ -8,7 +8,7 @@
  *
  * THE CLASS: a base-root path declared through this package's own accessors and
  * missing from the exemption table in `@veyyon/utils/dirs`. The sibling suite
- * `packages/utils/test/global-config.test.ts` pins the table by name; this one
+ * `packages/utils/test/the-global-config-selects-the-profile-and-migrates-the-legacy-layout.test.ts` pins the table by name; this one
  * pins it against the accessors, so a rename on either side goes red.
  *
  * NOT CAUGHT: a NEW base-root accessor added to this package. Nothing here can

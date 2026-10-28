@@ -25,7 +25,8 @@ beforeEach(() => {
 	tempRoot = path.join(os.tmpdir(), `veyyon-global-durability-${Snowflake.next()}`);
 	fs.mkdirSync(tempRoot, { recursive: true });
 	// Flip the config-dir basename so the global config root lands in the temp tree
-	// (same technique as global-config.test.ts and install-id.test.ts).
+	// (same technique as the-global-config-selects-the-profile-and-migrates-the-legacy-layout.test.ts
+	// and install-id.test.ts).
 	process.env.VEYYON_CONFIG_DIR = path.relative(os.homedir(), tempRoot);
 });
 
