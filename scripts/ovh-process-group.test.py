@@ -113,7 +113,7 @@ def main():
     run_case("failure", ["bash", "-c", "exit 7"], 7)
     run_startup_cancellation()
     run_case("normal descendant", ["python3", "-c", TREE, "exit"], 0, need_tree=True)
-    run_case("timeout", ["timeout", "--signal=TERM", ".2", "python3", "-c", TREE, "sleep"], 124, need_tree=True)
+    run_case("timeout", ["timeout", "--signal=TERM", "1.5", "python3", "-c", TREE, "sleep"], 124, need_tree=True)
     run_case("INT", ["python3", "-c", TREE, "sleep"], 130, signal.SIGINT, True)
     run_case("TERM escalation", ["python3", "-c", TREE, "stubborn"], 143, signal.SIGTERM, True)
     workflow_shell = "bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail"
