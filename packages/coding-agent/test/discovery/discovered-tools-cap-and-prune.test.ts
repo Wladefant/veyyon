@@ -1011,7 +1011,9 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 			session,
 			sessionManager,
 			settings,
-			output: text => output.push(text),
+			output: text => {
+				output.push(text);
+			},
 			cwd: tempDir.path(),
 			refreshCommands: () => {},
 			reloadPlugins: async () => {},
