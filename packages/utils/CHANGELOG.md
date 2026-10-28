@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- `sgrCarryAfter` returns only the styles still set at the end of the text, as one SGR sequence, so a multi-line `Text` streamed one styled line at a time no longer grows every replayed row by each colour an earlier line closed (2000 lines: 17238 ms to 217 ms) and no longer opens a row with empty colour runs.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
 

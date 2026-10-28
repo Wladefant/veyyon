@@ -2,9 +2,8 @@
  * The `structure_search` card draws what main's renderer drew.
  *
  * THREE DIFFERENCES ARE ASSERTED AS EXCEPTION CELLS. The empty answer, whose rows carry their own
- * two-column indent and open only the colour runs they use, where main joined pre-coloured strings
- * into one `Text` and left each row in column zero behind the zero-width runs its neighbours had
- * closed. The rail, quieted for the reason `file_search`'s and `text_search`'s are: the cap stays in
+ * two-column indent, where main joined pre-coloured strings into one `Text` and left each row in
+ * column zero. The rail, quieted for the reason `file_search`'s and `text_search`'s are: the cap stays in
  * the words on the rows, which are byte-identical, and in the view's own `state`, which a second host
  * reads. And the held-back count, which closes the card in the same dim main wrote it in and adds the
  * expand gesture the host offers on every other card.
@@ -75,36 +74,6 @@ describe("structure_search tool differential", () => {
 	function withoutExpandHint(lines: readonly string[]): string[] {
 		const hint = ` ${formatExpandHint(theme, false, true)}`;
 		return lines.map(line => line.replace(hint, ""));
-	}
-
-	/**
-	 * Every colour sequence that paints nothing, removed.
-	 *
-	 * Main joined pre-coloured strings into one `Text`, so a row carries the runs its neighbours opened
-	 * and closed with no character between them. Nothing on any terminal draws differently for them.
-	 */
-	function withoutEmptyRuns(lines: readonly string[]): string[] {
-		const sequence = /\u001b\[(?:38;2;\d+;\d+;\d+|39)m/g;
-		return lines.map(line => {
-			let out = "";
-			let cursor = 0;
-			let open: string | undefined;
-			for (const match of line.matchAll(sequence)) {
-				const text = line.slice(cursor, match.index);
-				cursor = match.index + match[0].length;
-				if (text.length > 0) {
-					out += `${open ?? ""}${text}`;
-					open = undefined;
-				}
-				if (match[0] === "\u001b[39m") {
-					if (text.length > 0) out += match[0];
-					open = undefined;
-					continue;
-				}
-				open = match[0];
-			}
-			return `${out}${open ?? ""}${line.slice(cursor)}`;
-		});
 	}
 
 	function viewLines(
@@ -313,11 +282,10 @@ describe("structure_search tool differential", () => {
 			] as const) {
 				for (const width of [200, WIDTH] as const) {
 					const drawn = viewLines(detailed(details), context, args, width);
-					const oracle = withoutEmptyRuns(oracleLines(detailed(details), options, args, width));
+					const oracle = oracleLines(detailed(details), options, args, width);
 					expect(drawn).toHaveLength(oracle.length);
 					// The head row is the same row. Every row under it is the same row indented two
-					// columns under that head, where main left it in column zero behind the zero-width
-					// runs its neighbours had closed.
+					// columns under that head, where main left it in column zero.
 					expect(drawn[0]).toBe(oracle[0]);
 					for (let row = 1; row < oracle.length; row++) expect(drawn[row]).toBe(`  ${oracle[row]}`);
 				}

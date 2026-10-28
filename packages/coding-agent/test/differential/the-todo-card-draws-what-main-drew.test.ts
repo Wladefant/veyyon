@@ -311,15 +311,13 @@ describe("todo tool differential", () => {
 		expect(stripVTControlCharacters(drawn)).toContain("4 tasks · 1 done · Foundation");
 	});
 
-	it("exception cell: a board with no tasks opens no empty colour runs", () => {
+	it("draws a board with no tasks with main's bytes", () => {
 		const bodyRow = (rows: readonly string[]): string => rows.find(row => row.includes("No todos")) ?? "";
 		const drawn = bodyRow(viewLines(emptyBoard, { expanded: true, partial: false }));
 		const oracle = bodyRow(oracleLines(emptyBoard, HOST_EXPANDED));
-		// Main's status line opened and closed a colour for a title it had already drawn and for an
-		// emblem this card does not carry, leaving two zero-width runs before the text. The host emits
-		// a run only for a span that has something in it.
-		expect(stripVTControlCharacters(drawn)).toBe(stripVTControlCharacters(oracle));
-		expect(/\x1b\[[\d;]+m\x1b\[39m/u.test(oracle)).toBe(true);
+		// Main's status row once opened the closed colours of the row above as empty runs, through the SGR
+		// carry of its multi-line `Text`. The carry now holds only what is set, so both arms agree.
+		expect(drawn).toBe(oracle);
 		expect(/\x1b\[[\d;]+m\x1b\[39m/u.test(drawn)).toBe(false);
 		expect(stripVTControlCharacters(drawn)).toContain("No todos");
 	});

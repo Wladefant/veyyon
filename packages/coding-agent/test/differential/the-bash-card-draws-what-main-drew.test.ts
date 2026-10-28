@@ -479,17 +479,14 @@ describe("bash tool differential", () => {
 			expect(oracle.join("\n")).toContain(`… (${total - mainShown.length} earlier lines, showing`);
 		});
 
-		it("differs from main by empty styling runs alone, which is what the comparison closes up", () => {
+		it("draws main's windowed rows byte for byte, with no empty styling run in either", () => {
 			const settled = result("alpha\nbeta", { wallTimeMs: 100 });
 			const view = viewResult(settled, { command: COMMAND });
 			const oracle = oracleResult(settled, { command: COMMAND });
-			// The residue is real and is the reason `sameRows` exists: main opened and closed a colour
-			// with no glyph in it on a windowed row, and the host does not. Byte equality fails, and
-			// equality with the empty runs closed up holds.
-			expect(view).not.toEqual(oracle);
-			expect(oracle.some(line => /\u001b\[38;2;\d+;\d+;\d+m\u001b\[39m/.test(line))).toBe(true);
-			expect(view.some(line => /\u001b\[38;2;\d+;\d+;\d+m\u001b\[39m/.test(line))).toBe(false);
-			sameRows(view, oracle);
+			// Main drew its rows as one multi-line `Text`, whose SGR carry once re-opened every closed
+			// colour at the start of the next row as an empty run. The carry now holds only what is set.
+			expect(view).toEqual(oracle);
+			expect(oracle.some(line => /\u001b\[38;2;\d+;\d+;\d+m\u001b\[39m/.test(line))).toBe(false);
 		});
 
 		it("spends no more rows on output than the tool's bound", () => {

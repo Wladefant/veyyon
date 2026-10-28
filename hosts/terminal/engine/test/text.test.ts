@@ -68,6 +68,22 @@ describe("Text component", () => {
 		expect(plainTail?.includes("\x1b[31m")).toBe(false);
 	});
 
+	it("draws the last of many styled lines as that line alone draws, streamed or not", () => {
+		// Each line closes its own color with `ESC [ 39 m`. A carry that replayed every closed span made the
+		// last row grow with the line count, and streaming the block cost O(lines^3).
+		const muted = (line: string) => `\x1b[38;2;139;144;153m${line}\x1b[39m`;
+		const streaming = new Text("", 2, 0);
+		let accumulated = "";
+		for (let line = 0; line < 400; line++) {
+			const styled = muted(`output line ${line}`);
+			accumulated += line === 0 ? styled : `\n${styled}`;
+			streaming.setText(accumulated);
+			const alone = new Text(styled, 2, 0).render(60);
+			expect(streaming.render(60).at(-1)).toBe(alone[0]);
+			expect(new Text(accumulated, 2, 0).render(60).at(-1)).toBe(alone[0]);
+		}
+	});
+
 	it("renders CRLF and bare-CR content without leaving a stray carriage return", () => {
 		// End-to-end guard through the real render sink: a surviving `\r` would move
 		// the terminal cursor to column 0 and corrupt the row. CRLF and bare CR both

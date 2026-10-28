@@ -14,21 +14,181 @@ import { visibleWidth } from "./width";
 const SGR_SEQUENCE_GLOBAL = sgrSequence("g");
 
 /**
- * Everything before the last full SGR reset is dead state — drop it so a
- * re-played carry stays bounded by the live style run instead of the whole
- * code history.
+ * The attributes an SGR parameter sets, one slot each: a parameter replaces whatever its slot held, and an off
+ * code empties its slots. Slots follow ECMA-48 and the xterm extensions (overline, underline color).
  */
-export function compactSgrCarry(carry: string): string {
-	// Both spellings of the reset, and the cut is measured from each constant's own length
-	// rather than from a literal 3 and 4. The lengths were inline next to inline bytes, so
-	// changing either spelling meant remembering to change a number three lines away.
-	const shortReset = carry.lastIndexOf(SGR_RESET_SHORT);
-	const longReset = carry.lastIndexOf(SGR_RESET);
-	const cut = Math.max(
-		shortReset === -1 ? -1 : shortReset + SGR_RESET_SHORT.length,
-		longReset === -1 ? -1 : longReset + SGR_RESET.length,
-	);
-	return cut === -1 ? carry : carry.slice(cut);
+const BOLD = 0;
+const DIM = 1;
+const ITALIC = 2;
+const UNDERLINE = 3;
+const BLINK = 4;
+const INVERSE = 5;
+const HIDDEN = 6;
+const STRIKE = 7;
+const FOREGROUND = 8;
+const BACKGROUND = 9;
+const FONT = 10;
+const FRAKTUR = 11;
+const PROPORTIONAL = 12;
+const FRAME = 13;
+const OVERLINE = 14;
+const UNDERLINE_COLOR = 15;
+const IDEOGRAM = 16;
+const SCRIPT = 17;
+/** A parameter no slot holds (an unknown code, a color with missing channels): kept as written until a full reset. */
+const UNKNOWN = -1;
+
+/** One attribute still set, and the parameter text that set it. */
+interface SetParam {
+	readonly slot: number;
+	readonly param: string;
+}
+
+function setSlot(set: SetParam[], slot: number, param: string): void {
+	const at = set.findIndex(entry => entry.slot === slot);
+	if (at === -1) set.push({ slot, param });
+	else set[at] = { slot, param };
+}
+
+function clearSlot(set: SetParam[], slot: number): void {
+	const at = set.findIndex(entry => entry.slot === slot);
+	if (at !== -1) set.splice(at, 1);
+}
+
+/** Keep a parameter no slot holds, once however often the text repeats it. */
+function keepUnknown(set: SetParam[], param: string): void {
+	if (!set.some(entry => entry.slot === UNKNOWN && entry.param === param)) set.push({ slot: UNKNOWN, param });
+}
+
+/** Apply the SGR parameter list `params` (the text between `ESC [` and `m`) to the attributes in `set`. */
+function applySgrParams(set: SetParam[], params: string): void {
+	const list = params.split(";");
+	for (let i = 0; i < list.length; i++) {
+		const param = list[i]!;
+		const colon = param.indexOf(":");
+		const code = Number(colon === -1 ? param : param.slice(0, colon));
+		switch (code) {
+			case 0:
+				set.length = 0;
+				break;
+			case 1:
+				setSlot(set, BOLD, param);
+				break;
+			case 2:
+				setSlot(set, DIM, param);
+				break;
+			case 22:
+				clearSlot(set, BOLD);
+				clearSlot(set, DIM);
+				break;
+			case 3:
+				setSlot(set, ITALIC, param);
+				break;
+			case 20:
+				setSlot(set, FRAKTUR, param);
+				break;
+			case 23:
+				clearSlot(set, ITALIC);
+				clearSlot(set, FRAKTUR);
+				break;
+			case 4:
+				// `4:0` is the colon spelling of "no underline"; `4:1` to `4:5` pick a style.
+				if (colon !== -1 && Number(param.slice(colon + 1)) === 0) clearSlot(set, UNDERLINE);
+				else setSlot(set, UNDERLINE, param);
+				break;
+			case 21:
+				setSlot(set, UNDERLINE, param);
+				break;
+			case 24:
+				clearSlot(set, UNDERLINE);
+				break;
+			case 5:
+			case 6:
+				setSlot(set, BLINK, param);
+				break;
+			case 25:
+				clearSlot(set, BLINK);
+				break;
+			case 7:
+				setSlot(set, INVERSE, param);
+				break;
+			case 27:
+				clearSlot(set, INVERSE);
+				break;
+			case 8:
+				setSlot(set, HIDDEN, param);
+				break;
+			case 28:
+				clearSlot(set, HIDDEN);
+				break;
+			case 9:
+				setSlot(set, STRIKE, param);
+				break;
+			case 29:
+				clearSlot(set, STRIKE);
+				break;
+			case 10:
+				clearSlot(set, FONT);
+				break;
+			case 26:
+				setSlot(set, PROPORTIONAL, param);
+				break;
+			case 50:
+				clearSlot(set, PROPORTIONAL);
+				break;
+			case 51:
+			case 52:
+				setSlot(set, FRAME, param);
+				break;
+			case 54:
+				clearSlot(set, FRAME);
+				break;
+			case 53:
+				setSlot(set, OVERLINE, param);
+				break;
+			case 55:
+				clearSlot(set, OVERLINE);
+				break;
+			case 65:
+				clearSlot(set, IDEOGRAM);
+				break;
+			case 75:
+				clearSlot(set, SCRIPT);
+				break;
+			case 39:
+				clearSlot(set, FOREGROUND);
+				break;
+			case 49:
+				clearSlot(set, BACKGROUND);
+				break;
+			case 59:
+				clearSlot(set, UNDERLINE_COLOR);
+				break;
+			case 38:
+			case 48:
+			case 58: {
+				const slot = code === 38 ? FOREGROUND : code === 48 ? BACKGROUND : UNDERLINE_COLOR;
+				// The colon spelling holds the whole color in this parameter; the semicolon spelling spends the
+				// next two (`5;n`) or four (`2;r;g;b`).
+				const spent = colon !== -1 ? 0 : list[i + 1] === "5" ? 2 : list[i + 1] === "2" ? 4 : -1;
+				if (spent === -1 || i + spent >= list.length) {
+					// A terminal reads the rest of this sequence however it reads it; replay it as written.
+					keepUnknown(set, list.slice(i).join(";"));
+					return;
+				}
+				setSlot(set, slot, list.slice(i, i + spent + 1).join(";"));
+				i += spent;
+				break;
+			}
+			default:
+				if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) setSlot(set, FOREGROUND, param);
+				else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) setSlot(set, BACKGROUND, param);
+				else if (code >= 11 && code <= 19) setSlot(set, FONT, param);
+				else if (code >= 60 && code <= 64) setSlot(set, IDEOGRAM, param);
+				else if (code === 73 || code === 74) setSlot(set, SCRIPT, param);
+				else keepUnknown(set, param);
+		}
+	}
 }
 
 /**
@@ -85,12 +245,25 @@ function sgrResetEnd(text: string, esc: number): number {
 }
 
 /**
- * Advance an SGR carry across `text`: the returned string, replayed at the
- * start of whatever follows `text`, restores the styling state open at its
- * end. Compacts at every step so the carry never grows past the live run.
+ * Advance an SGR carry across `text`: the returned string, replayed at the start of whatever follows `text`,
+ * restores the styling state set at its end.
+ *
+ * The carry is one sequence holding, for each attribute still set, the parameter that last set it, so it is
+ * bounded by the attributes a terminal has rather than by the text it crossed. Theme styling closes each span
+ * with the attribute's own off code (`ESC [ 39 m`, `ESC [ 22 m`), never a full reset, and a carry that kept
+ * every sequence since the last `ESC [ 0 m` grew with every span: a streamed `Text` replays its carry into the
+ * wrap of each new line, and streaming 2000 styled lines took 17 s.
  */
 export function sgrCarryAfter(carry: string, text: string): string {
-	return compactSgrCarry(carry + (text.match(SGR_SEQUENCE_GLOBAL)?.join("") ?? ""));
+	// A canonical carry is unchanged by text that sets nothing.
+	if (!text.includes(ESC)) return carry;
+	const set: SetParam[] = [];
+	for (const match of carry.matchAll(SGR_SEQUENCE_GLOBAL)) applySgrParams(set, match[1]!);
+	for (const match of text.matchAll(SGR_SEQUENCE_GLOBAL)) applySgrParams(set, match[1]!);
+	if (set.length === 0) return "";
+	let params = set[0]!.param;
+	for (let i = 1; i < set.length; i++) params += `;${set[i]!.param}`;
+	return `${ESC}[${params}m`;
 }
 
 /**
