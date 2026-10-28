@@ -125,7 +125,7 @@ marker_for() {
 	esac
 }
 
-# Two properties that need a WORKING rung, which is why they live here and not in
+# Three properties that need a WORKING rung, which is why they live here and not in
 # a bun suite: a test process is always already inside a guest, and a guest has no
 # docker socket, no qemu and no ssh key to start another one with.
 #
@@ -137,6 +137,10 @@ marker_for() {
 #   the marker names the rung that actually ran. The bootstrap gate reads it, so a
 #   rung exporting somebody else's id means a suite believing it is somewhere it
 #   is not.
+#
+#   the guest is not inside the multiplexer the host runs in. The engine reads
+#   TERM, TMUX, STY and ZELLIJ to detect one, so a rung that carries them in makes
+#   64 engine tests fail for a run started from a tmux pane and pass on CI.
 check_rung_contract() {
 	local rung="$1" status=0 out expected
 	printf '  --- exit status pass-through ---\n'
@@ -157,6 +161,17 @@ check_rung_contract() {
 		printf '    FAIL     the guest exported VEYYON_TEST_SANDBOX=%s, expected %s\n' "${out:-(unset)}" "$expected"
 		return 1
 	fi
+
+	printf '  --- terminal identity ---\n'
+	out="$(TERM=tmux-256color TMUX=/tmp/tmux-probe,1,0 STY=1.probe ZELLIJ=0 VEYYON_SANDBOX_REPO_ROOT="${REPO_ROOT}" \
+		bash "$ENTRYPOINT" --rung="$rung" sh -c 'printf "%s|%s|%s|%s" "${TERM-}" "${TMUX-}" "${STY-}" "${ZELLIJ-}"' 2>/dev/null | tail -n1)"
+	case "$out" in
+		tmux-256color\|* | *\|/tmp/tmux-probe,1,0\|* | *\|1.probe\|* | *\|0)
+			printf '    FAIL     the guest inherited the host multiplexer identity: TERM|TMUX|STY|ZELLIJ=%s\n' "$out"
+			return 1
+			;;
+	esac
+	printf '    ok       the guest saw TERM|TMUX|STY|ZELLIJ=%s\n' "$out"
 	return 0
 }
 
@@ -191,7 +206,7 @@ check_rung() {
 		pass=$((pass + 1))
 	else
 		[ "$leaked" = 1 ] && printf '  RESULT: FAIL - the sandbox leaked to the host\n'
-		[ "$broken" = 1 ] && printf '  RESULT: FAIL - the rung broke its exit-status or marker contract\n'
+		[ "$broken" = 1 ] && printf '  RESULT: FAIL - the rung broke its exit-status, marker or terminal-identity contract\n'
 		fail=$((fail + 1))
 		cleanup_targets
 		if [ "$rung" = remote ]; then cleanup_remote_targets; fi

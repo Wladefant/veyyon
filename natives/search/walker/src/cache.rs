@@ -4,11 +4,11 @@ use std::{
 	borrow::Cow,
 	fmt,
 	path::{Path, PathBuf},
-	sync::LazyLock,
+	sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError},
 	time::{Duration, Instant},
 };
 
-use dashmap::DashMap;
+use dashmap::{DashMap, mapref::entry::Entry};
 use rayon::{ThreadPool, prelude::*};
 
 use crate::{CollectedEntries, CollectedEntry, FileType, WalkError, WalkOptions};
@@ -21,8 +21,36 @@ struct CacheKey {
 
 #[derive(Clone)]
 struct CacheEntry {
-	created_at: Instant,
-	entries:    Vec<CollectedEntry>,
+	/// When the walk that produced `entries` finished. The TTL counts from here,
+	/// so a walk that takes longer than the TTL is still served once it lands.
+	stored_at: Instant,
+	entries:   Arc<Vec<CollectedEntry>>,
+}
+
+impl CacheEntry {
+	fn shared(self) -> SharedEntries {
+		SharedEntries {
+			cache_age_ms: self.stored_at.elapsed().as_millis() as u64,
+			entries:      self.entries,
+		}
+	}
+}
+
+/// A cached walk in progress. Every request for the same key waits for it
+/// instead of walking the same tree again.
+struct Flight {
+	/// [`GENERATION`] when the walk began. A request that reads a newer one does
+	/// not join this walk, because an invalidation landed after it started.
+	generation: u64,
+	outcome:    Mutex<Outcome>,
+	settled:    Condvar,
+}
+
+enum Outcome {
+	Running,
+	Walked(CacheEntry),
+	/// The walk failed, was cancelled or panicked. A waiter walks itself.
+	Failed,
 }
 
 static CACHE_TTL_MS: LazyLock<u64> =
@@ -48,6 +76,15 @@ static WALK_POOL: LazyLock<Option<ThreadPool>> = LazyLock::new(|| {
 		.ok()
 });
 static SCAN_CACHE: LazyLock<DashMap<CacheKey, CacheEntry>> = LazyLock::new(DashMap::new);
+static FLIGHTS: LazyLock<DashMap<CacheKey, Arc<Flight>>> = LazyLock::new(DashMap::new);
+/// Counts invalidations. A walk records it when it starts, and is neither
+/// stored nor joined once it has moved on. An invalidation holds the lock while
+/// it removes keys and a walk holds it while it stores, so no scan taken before
+/// an invalidation is inserted after that invalidation's removal.
+static GENERATION: Mutex<u64> = Mutex::new(0);
+/// How long a request waiting on another request's walk sleeps between calls
+/// to its own heartbeat.
+const JOIN_POLL: Duration = Duration::from_millis(10);
 
 fn env_uint<T>(name: &str, default: T, min: T, max: T) -> T
 where
@@ -158,11 +195,31 @@ fn evict_oldest() {
 	if SCAN_CACHE.len() > *MAX_CACHE_ENTRIES
 		&& let Some(oldest_key) = SCAN_CACHE
 			.iter()
-			.min_by_key(|entry| entry.value().created_at)
+			.min_by_key(|entry| entry.value().stored_at)
 			.map(|entry| entry.key().clone())
 	{
 		SCAN_CACHE.remove(&oldest_key);
 	}
+}
+
+/// Drops every cached scan older than the TTL and returns how many it dropped.
+///
+/// A scan is served for one TTL and never again, but the map held it until a
+/// request for the same root and options replaced it or sixteen newer scans
+/// pushed it out, so a process that scanned a tree once kept that scan for the
+/// rest of its life: one `@` completion over a tree of 510 000 entries held
+/// 79 MiB. The cold path of every cached walk calls this before it scans, so
+/// the next scan allocates into the pages the expired ones freed, and the
+/// addon's heap release calls it before returning free pages to the kernel.
+pub fn release_expired_scans() -> usize {
+	let ttl = Duration::from_millis(*CACHE_TTL_MS);
+	let mut released = 0;
+	SCAN_CACHE.retain(|_, entry| {
+		let fresh = entry.stored_at.elapsed() < ttl;
+		released += usize::from(!fresh);
+		fresh
+	});
+	released
 }
 
 fn cache_key(root: &Path, mut options: WalkOptions) -> CacheKey {
@@ -381,6 +438,152 @@ where
 	crate::collect_entries_native(root, options, || heartbeat().map_err(|err| err.to_string()))
 }
 
+/// The cached scan for `key`, unless it is older than the TTL.
+fn fresh_entry(key: &CacheKey) -> Option<CacheEntry> {
+	let entry = SCAN_CACHE.get(key)?;
+	(entry.stored_at.elapsed() < Duration::from_millis(*CACHE_TTL_MS)).then(|| entry.value().clone())
+}
+
+/// Serve a fresh scan of `root`, join the walk already producing one, or walk.
+///
+/// Requests for one key never walk the tree at the same time. `@` completion
+/// asks once per typed character before its first popup opens, and on a tree of
+/// six million entries each of those walks held most of a gigabyte. A request
+/// joins a running walk only when no invalidation has landed since that walk
+/// began, and a request whose walk fails walks itself.
+fn cached_entries<H, E>(
+	root: &Path,
+	options: WalkOptions,
+	heartbeat: &H,
+) -> Result<SharedEntries, WalkError<String>>
+where
+	H: Fn() -> std::result::Result<(), E> + Sync,
+	E: fmt::Display,
+{
+	let key = cache_key(root, options);
+	loop {
+		if let Some(hit) = fresh_entry(&key) {
+			return Ok(hit.shared());
+		}
+		let generation = *current_generation();
+		let (flight, leads) = match FLIGHTS.entry(key.clone()) {
+			Entry::Occupied(running) if running.get().generation == generation => {
+				(Arc::clone(running.get()), false)
+			},
+			Entry::Occupied(mut overtaken) => {
+				let flight = Flight::start(generation);
+				overtaken.insert(Arc::clone(&flight));
+				(flight, true)
+			},
+			Entry::Vacant(slot) => {
+				let flight = Flight::start(generation);
+				slot.insert(Arc::clone(&flight));
+				(flight, true)
+			},
+		};
+		if leads {
+			return lead(&key, &flight, root, options, heartbeat);
+		}
+		if let Some(walked) = flight.wait(heartbeat)? {
+			return Ok(walked.shared());
+		}
+	}
+}
+
+/// Walk `root` for the flight this request registered, cache the scan, and hand
+/// it to every request that joined.
+fn lead<H, E>(
+	key: &CacheKey,
+	flight: &Arc<Flight>,
+	root: &Path,
+	options: WalkOptions,
+	heartbeat: &H,
+) -> Result<SharedEntries, WalkError<String>>
+where
+	H: Fn() -> std::result::Result<(), E> + Sync,
+	E: fmt::Display,
+{
+	let mut settle = Settle { key, flight, outcome: Outcome::Failed };
+	// The walk this request missed may have stored its scan between the lookup
+	// and the registration.
+	if let Some(hit) = fresh_entry(key) {
+		settle.outcome = Outcome::Walked(hit.clone());
+		return Ok(hit.shared());
+	}
+	release_expired_scans();
+	let scan = collect_entries_uncached(root, options, heartbeat)?;
+	let entries = Arc::new(scan.entries);
+	let walked = CacheEntry { stored_at: Instant::now(), entries: Arc::clone(&entries) };
+	store(key, flight.generation, &walked);
+	settle.outcome = Outcome::Walked(walked);
+	Ok(SharedEntries { entries, cache_age_ms: 0 })
+}
+
+fn current_generation() -> MutexGuard<'static, u64> {
+	GENERATION.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Cache `walked` unless an invalidation landed after its walk began.
+fn store(key: &CacheKey, generation_at_start: u64, walked: &CacheEntry) {
+	let current = current_generation();
+	if *current != generation_at_start {
+		return;
+	}
+	SCAN_CACHE.insert(key.clone(), walked.clone());
+	drop(current);
+	evict_oldest();
+}
+
+impl Flight {
+	fn start(generation: u64) -> Arc<Self> {
+		Arc::new(Self { generation, outcome: Mutex::new(Outcome::Running), settled: Condvar::new() })
+	}
+
+	/// Wait for the walk to settle, calling `heartbeat` between waits so a
+	/// cancelled request stops waiting. `None` means the walk failed and the
+	/// caller walks itself.
+	fn wait<H, E>(&self, heartbeat: &H) -> Result<Option<CacheEntry>, WalkError<String>>
+	where
+		H: Fn() -> std::result::Result<(), E>,
+		E: fmt::Display,
+	{
+		loop {
+			heartbeat().map_err(|err| WalkError::Interrupted(err.to_string()))?;
+			let outcome = self.outcome.lock().unwrap_or_else(PoisonError::into_inner);
+			let (outcome, _) = self
+				.settled
+				.wait_timeout_while(outcome, JOIN_POLL, |outcome| matches!(outcome, Outcome::Running))
+				.unwrap_or_else(PoisonError::into_inner);
+			match &*outcome {
+				Outcome::Running => {},
+				Outcome::Walked(walked) => return Ok(Some(walked.clone())),
+				Outcome::Failed => return Ok(None),
+			}
+		}
+	}
+}
+
+/// Settles a flight however its walk ends, a panic included, so no request
+/// waits on a walk that will never finish.
+struct Settle<'a> {
+	key:     &'a CacheKey,
+	flight:  &'a Arc<Flight>,
+	outcome: Outcome,
+}
+
+impl Drop for Settle<'_> {
+	fn drop(&mut self) {
+		FLIGHTS.remove_if(self.key, |_, running| Arc::ptr_eq(running, self.flight));
+		let outcome = std::mem::replace(&mut self.outcome, Outcome::Failed);
+		*self
+			.flight
+			.outcome
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner) = outcome;
+		self.flight.settled.notify_all();
+	}
+}
+
 fn get_or_scan<H, E>(
 	root: &Path,
 	options: WalkOptions,
@@ -390,39 +593,25 @@ where
 	H: Fn() -> std::result::Result<(), E> + Sync,
 	E: fmt::Display,
 {
-	let ttl = *CACHE_TTL_MS;
-	if ttl == 0 {
+	if *CACHE_TTL_MS == 0 {
 		return collect_entries_uncached(root, options, heartbeat);
 	}
-
-	let key = cache_key(root, options);
-	let now = Instant::now();
-	if let Some(entry) = SCAN_CACHE.get(&key) {
-		let age = now.duration_since(entry.created_at);
-		if age < Duration::from_millis(ttl) {
-			return Ok(CollectedEntries {
-				entries:      entry.entries.clone(),
-				cache_age_ms: age.as_millis() as u64,
-			});
-		}
-		drop(entry);
-		SCAN_CACHE.remove(&key);
-	}
-
-	let scan = collect_entries_uncached(root, options, heartbeat)?;
-	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries.clone() });
-	evict_oldest();
-	Ok(CollectedEntries { entries: scan.entries, cache_age_ms: 0 })
+	let scan = cached_entries(root, options, heartbeat)?;
+	// The cache holds the same vector, so handing out an owned one copies it.
+	let entries = Arc::unwrap_or_clone(scan.entries);
+	Ok(CollectedEntries { entries, cache_age_ms: scan.cache_age_ms })
 }
 
 /// Entries a filter accepted, plus what the walk or the cache actually held.
 pub struct FilteredEntries {
 	/// Accepted entries, in the order the walk or the cache held them.
-	pub entries:      Vec<CollectedEntry>,
+	pub entries:          Vec<CollectedEntry>,
 	/// Age of the cache entry in milliseconds; zero means freshly scanned.
-	pub cache_age_ms: u64,
+	pub cache_age_ms:     u64,
 	/// Entries considered, accepted or not.
-	pub scanned:      usize,
+	pub scanned:          usize,
+	/// The walk stopped at its deadline before it read the whole tree.
+	pub deadline_reached: bool,
 }
 
 /// Clone the entries `accept` keeps, and only those.
@@ -483,28 +672,57 @@ where
 		let mut scan = collect_entries_uncached(root, options, heartbeat)?;
 		let scanned = scan.entries.len();
 		scan.entries.retain(|entry| accept(entry));
-		return Ok(FilteredEntries { entries: scan.entries, cache_age_ms: 0, scanned });
+		return Ok(FilteredEntries {
+			entries: scan.entries,
+			cache_age_ms: 0,
+			scanned,
+			deadline_reached: false,
+		});
 	}
 
-	let key = cache_key(root, options);
-	let now = Instant::now();
-	if let Some(entry) = SCAN_CACHE.get(&key) {
-		let age = now.duration_since(entry.created_at);
-		if age < Duration::from_millis(ttl) {
-			let scanned = entry.entries.len();
-			let entries = clone_accepted(&entry.entries, accept);
-			return Ok(FilteredEntries { entries, cache_age_ms: age.as_millis() as u64, scanned });
-		}
-		drop(entry);
-		SCAN_CACHE.remove(&key);
-	}
-
-	let scan = collect_entries_uncached(root, options, heartbeat)?;
+	let scan = cached_entries(root, options, heartbeat)?;
 	let scanned = scan.entries.len();
 	let entries = clone_accepted(&scan.entries, accept);
-	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries });
-	evict_oldest();
-	Ok(FilteredEntries { entries, cache_age_ms: 0, scanned })
+	Ok(FilteredEntries {
+		entries,
+		cache_age_ms: scan.cache_age_ms,
+		scanned,
+		deadline_reached: false,
+	})
+}
+
+/// Every entry a walk or a cache entry holds, shared rather than copied.
+pub struct SharedEntries {
+	/// The entries, unfiltered, in the order the walk or the cache held them.
+	pub entries:      Arc<Vec<CollectedEntry>>,
+	/// Age of the cache entry in milliseconds; zero means freshly scanned.
+	pub cache_age_ms: u64,
+}
+
+/// Collect entries without copying them out of the cache.
+///
+/// The owned paths copy every entry they deliver: a fuzzy ranking that reads
+/// all 510 000 entries of a cached scan to keep the best hundred cloned them
+/// all first. A hit here hands the caller the cache entry's own vector behind
+/// a reference count, and the cold path stores the scan it returns, so reading
+/// the entries allocates nothing. A caller that holds the vector past an
+/// eviction or a release keeps it alive until it drops it.
+pub fn collect_entries_shared<H, E>(
+	root: &Path,
+	options: WalkOptions,
+	heartbeat: &H,
+) -> Result<SharedEntries, WalkError<String>>
+where
+	H: Fn() -> std::result::Result<(), E> + Sync,
+	E: fmt::Display,
+{
+	let ttl = *CACHE_TTL_MS;
+	if !options.cache || ttl == 0 {
+		let scan = collect_entries_uncached(root, options, heartbeat)?;
+		return Ok(SharedEntries { entries: Arc::new(scan.entries), cache_age_ms: 0 });
+	}
+
+	cached_entries(root, options, heartbeat)
 }
 
 pub fn collect_entries<H, E>(
@@ -524,7 +742,12 @@ where
 }
 
 /// Invalidate cache entries whose root contains `target`.
+///
+/// A cached walk still running when this lands is neither stored nor joined,
+/// whatever its root: the walk may have listed the directory before the change.
 pub fn invalidate_path(target: &Path) {
+	let mut generation = current_generation();
+	*generation += 1;
 	let keys_to_remove: Vec<CacheKey> = SCAN_CACHE
 		.iter()
 		.filter(|entry| target.starts_with(&entry.key().root))
@@ -557,8 +780,11 @@ pub fn invalidate_path_string(path: &str) {
 	invalidate_path(&target);
 }
 
-/// Clear the entire scan cache.
+/// Clear the entire scan cache. A cached walk still running is neither stored
+/// nor joined.
 pub fn invalidate_all() {
+	let mut generation = current_generation();
+	*generation += 1;
 	SCAN_CACHE.clear();
 }
 

@@ -28,7 +28,7 @@
 import { scheduler } from "node:timers/promises";
 import { discardAttemptUsage } from "@veyyon/catalog/models";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, Usage } from "../types";
+import type { Api, AssistantMessage, AssistantMessageEvent, CacheRequestRecord, Context, Model, Usage } from "../types";
 import { AssistantMessageEventStream } from "./event-stream";
 import {
 	type FirstEventBudget,
@@ -274,7 +274,19 @@ class TurnRetries<TApi extends Api> {
 	}
 
 	#carrySpend(delivered: AssistantMessage): AssistantMessage {
-		for (const spent of this.#discardedUsages) discardAttemptUsage(this.#model, spent, delivered.usage);
+		const discardedCacheRequests: CacheRequestRecord[] = [];
+		for (const spent of this.#discardedUsages) {
+			discardAttemptUsage(this.#model, spent, delivered.usage);
+			if (spent.cacheRequests && spent.cacheRequests.length > 0) {
+				discardedCacheRequests.push(...spent.cacheRequests);
+			}
+		}
+		if (discardedCacheRequests.length > 0) {
+			delivered.usage.cacheRequests = [
+				...discardedCacheRequests,
+				...(delivered.usage.cacheRequests ?? []),
+			];
+		}
 		return delivered;
 	}
 }

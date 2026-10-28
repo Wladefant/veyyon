@@ -404,6 +404,20 @@ describe("veyyon-natives", () => {
 			expect(hiddenIncluded.matches.some(match => match.path.endsWith(".hidden-ignored.ts"))).toBe(true);
 		});
 
+		it("returns what it found with timedOut set when timeoutMs passes, instead of failing", async () => {
+			const passed = await grep({ pattern: "TODO", path: testDir, timeoutMs: 0 });
+			expect(passed.timedOut).toBe(true);
+			expect(passed.matches).toEqual([]);
+			expect(passed.filesSearched).toBe(0);
+
+			const beaten = await grep({ pattern: "TODO", path: testDir, timeoutMs: 60_000 });
+			const unbounded = await grep({ pattern: "TODO", path: testDir });
+			expect(beaten.timedOut).toBeUndefined();
+			expect(unbounded.timedOut).toBeUndefined();
+			expect(beaten.matches).toEqual(unbounded.matches);
+			expect(beaten.matches).toHaveLength(1);
+		});
+
 		it("should skip FIFOs when searching a directory", async () => {
 			if (!canCreateFifo()) {
 				return;
@@ -531,6 +545,20 @@ describe("veyyon-natives", () => {
 
 			expect(result.totalMatches).toBe(0);
 			expect(result.matches).toHaveLength(0);
+		});
+
+		it("returns what it found with timedOut set when timeoutMs passes, instead of failing", async () => {
+			const passed = await glob({ pattern: "**/*", path: testDir, timeoutMs: 0 });
+			expect(passed.timedOut).toBe(true);
+			expect(passed.matches).toEqual([]);
+
+			const beaten = await glob({ pattern: "*.ts", path: testDir, timeoutMs: 60_000 });
+			const unbounded = await glob({ pattern: "*.ts", path: testDir });
+			expect(beaten.timedOut).toBe(false);
+			expect(unbounded.timedOut).toBe(false);
+			expect(beaten.matches.map(match => match.path).sort()).toEqual(
+				unbounded.matches.map(match => match.path).sort(),
+			);
 		});
 
 		it("should stream sorted callbacks for entries admitted to the bounded top-n heap", async () => {
@@ -974,6 +1002,16 @@ describe("veyyon-natives", () => {
 			expect(result.totalMatches).toBe(1);
 			expect(result.matches[0]?.text).toBe('console.log("hi")');
 			expect(result.matches[0]?.metaVariables?.MSG).toBe('"hi"');
+		});
+
+		it("binds a multi capture to the source it spans", async () => {
+			const result = await astMatch({
+				source: "foo(a, b);",
+				lang: "ts",
+				patterns: ["foo($$$ARGS)"],
+				includeMeta: true,
+			});
+			expect(result.matches[0]?.metaVariables?.ARGS).toBe("[a, b]");
 		});
 
 		it("enforces metavariable equality within a pattern", async () => {

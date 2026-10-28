@@ -229,11 +229,52 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 	if (typeof item.call_id === "string") {
 		sanitizedItem.call_id = normalizeReplayedResponsesHistoryCallId(item.call_id, normalizedCallIds);
 	}
+	if (item.type === "function_call") sanitizedItem.arguments = replayFunctionCallArguments(item);
 
 	return clampReplayItemImageDetail(
 		sanitizedItem,
 		supportsImageDetailOriginal,
 	) as unknown as OpenAIResponsesReplayItem;
+}
+
+/** Cap on the unparsable text a replayed diagnostic echoes, the same cap the stream paths apply. */
+const MAX_REPLAY_RAW_JSON_LENGTH = 512;
+
+/**
+ * Replay history is immutable and re-sanitized on every request, so each item remembers the replay
+ * `arguments` derived from its stored value instead of re-parsing large write/edit payloads per request.
+ */
+const replayArgumentsCache = new WeakMap<object, { raw: unknown; replay: string }>();
+
+/**
+ * `arguments` to replay for a native `function_call`: the stored string when it parses, `{}` when it is
+ * absent or blank, else the `{__parseError, __rawJson}` diagnostic the stream paths already record.
+ *
+ * Unparsable text (a stream cut off mid-JSON) 400s the whole request, and dropping the call instead
+ * orphans its recorded tool result.
+ */
+function replayFunctionCallArguments(item: Record<string, unknown>): string {
+	const raw = item.arguments;
+	const cached = replayArgumentsCache.get(item);
+	if (cached && cached.raw === raw) return cached.replay;
+	let replay = "{}";
+	if (typeof raw === "string" && raw.trim().length > 0) {
+		try {
+			JSON.parse(raw);
+			replay = raw;
+		} catch (error) {
+			const rawJson =
+				raw.length <= MAX_REPLAY_RAW_JSON_LENGTH
+					? raw
+					: `${raw.slice(0, MAX_REPLAY_RAW_JSON_LENGTH)}… [truncated ${raw.length - MAX_REPLAY_RAW_JSON_LENGTH} chars]`;
+			replay = JSON.stringify({
+				__parseError: error instanceof Error ? error.message : String(error),
+				__rawJson: rawJson,
+			});
+		}
+	}
+	replayArgumentsCache.set(item, { raw, replay });
+	return replay;
 }
 
 function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unknown>): OpenAIResponsesReplayItem {

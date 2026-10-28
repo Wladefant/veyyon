@@ -362,6 +362,28 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * type-only. `goals/goal-record.ts`, already here, checks a recorded goal's status against that
  * tuple when a session resumes, so a status no build writes restores no goal.
  *
+ * 1491 to 1492: `cli/launch-card-eligibility.ts`, the argv-only launch decisions, which `main.ts`
+ * imports to tell a bare `--resume` (the session picker, no launch card) from a resume that names its
+ * session. Its only import is type-only, and the shipped launch already evaluates it through
+ * `commands/launch.ts`. Measured 2026-10-19 at 1492.
+ *
+ * 1492 to 1493: `agent/src/tool-call-preparation.ts`, which strips the intent field, repairs,
+ * validates and transforms a tool call's arguments, and which left `agent/src/agent-loop.ts` so the
+ * Cursor exec channel prepares the calls it runs itself exactly as the loop does. It imports only
+ * what that code imported there.
+ *
+ * 1493 to 1494: `utils/src/fs-io.ts`, the reads and writes that open a workspace file through
+ * `node:fs` so an open under an NFS lease waits for the lease to break instead of failing with
+ * `EAGAIN`. It replaced `Bun.file` and `Bun.write` calls on the launch path, its only imports are
+ * `node:fs/promises` and `node:path`, and its callers name it by subpath, so the `@veyyon/utils`
+ * barrel does not carry it. Measured 2026-10-20 at 1494.
+ *
+ * 1494 to 1495: `hashline/src/line-map.ts`, which pairs the unchanged lines of two versions of a
+ * file. It left `hashline/src/recovery.ts`, and `hashline/src/patcher.ts`, already here, uses it to
+ * keep the lines an edit's text was displayed with under the edited version's tag. Its only runtime
+ * import is `@veyyon/utils/abortable`, already here; `diff` stays a lazy `require`. Measured
+ * 2026-10-20 at 1495.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.

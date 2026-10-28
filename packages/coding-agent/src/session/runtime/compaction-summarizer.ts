@@ -19,13 +19,15 @@ import {
 	estimateCompactionRequestTokens,
 	resolveServerCompactionTransport,
 	type SummaryOptions,
+	serverCompactionChainsWindow,
 	serverCompactionRouteAbsent,
 } from "@veyyon/agent-core/compaction";
 import { modelServesPrefixCacheHits } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import type { CodexCompactionContext, Message, Model, ProviderSessionState, ServiceTier } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { readColdMessage } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
-import { errorMessage, exponentialBackoffDelay, extractRetryHint, logger } from "@veyyon/utils";
+import { errorMessage, exponentialBackoffDelay, extractRetryHint, logger, TimeSlice } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner } from "../../extensibility/extensions";
@@ -92,6 +94,31 @@ export type CompactionHookPreparation =
  */
 function compactionCandidateError(candidate: Model, error: unknown): Error {
 	return new Error(`${modelKey(candidate)}: ${errorMessage(error)}`, { cause: error });
+}
+
+/**
+ * Read the span `preparation` summarizes back from the session file, replacing each message of
+ * its arrays with a plain copy in slices that yield to the event loop. The entries of compacted
+ * history stay cold: the copies live as long as the preparation, and a consumer that walks the
+ * span after this reads memory rather than reading each message back on the event loop at first
+ * touch. Messages already in memory are kept, so a second call costs one lookup per message.
+ *
+ * The arrays are replaced in place rather than the preparation copied, because copying a
+ * preparation reads the file operations it extracts on first read, which walks the cold span.
+ * Called by each consumer of the span rather than once after `prepareCompaction`, because a
+ * server-side pass that chains a window never reads the span and reading it back costs the whole
+ * compacted history.
+ */
+export async function readCompactionSpanBack(
+	preparation: Pick<CompactionPreparation, "messagesToSummarize" | "turnPrefixMessages">,
+): Promise<void> {
+	const slice = new TimeSlice();
+	for (const messages of [preparation.messagesToSummarize, preparation.turnPrefixMessages]) {
+		for (let i = 0; i < messages.length; i++) {
+			if (slice.due) await slice.yield();
+			messages[i] = readColdMessage(messages[i]);
+		}
+	}
 }
 
 export class CompactionSummarizer {
@@ -163,6 +190,7 @@ export class CompactionSummarizer {
 			codexCompaction,
 		});
 		if (remote) return remote;
+		await readCompactionSpanBack(preparation);
 		return this.#compactWithFallbackModel(
 			preparation,
 			customInstructions,
@@ -330,6 +358,7 @@ export class CompactionSummarizer {
 			}
 			return undefined;
 		}
+		if (!serverCompactionChainsWindow(preparation, model)) await readCompactionSpanBack(preparation);
 		try {
 			return await compactWithProvider(
 				this.#host.secrets().obfuscatePreparationForProvider(preparation),
@@ -401,7 +430,7 @@ export class CompactionSummarizer {
 		for (const candidate of candidates) {
 			const cachePrefix = await this.#cacheAlignedCompactionPrefix(candidate, signal);
 			const candidateOptions: SummaryOptions = cachePrefix ? { ...options, ...cachePrefix } : options;
-			summarizePayloadTokens = estimateCompactionRequestTokens(
+			summarizePayloadTokens = await estimateCompactionRequestTokens(
 				preparation,
 				candidate,
 				customInstructions,
@@ -510,6 +539,7 @@ export class CompactionSummarizer {
 		let preserveData: Record<string, unknown> | undefined;
 
 		if (!hookCompaction && this.#session.extensionRunner?.hasHandlers("session_compacting")) {
+			await readCompactionSpanBack(preparation);
 			const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 			const result = (await this.#session.extensionRunner.emit({
 				type: "session_compacting",
@@ -587,6 +617,7 @@ export class CompactionSummarizer {
 			codexCompaction,
 		});
 		if (remote) return remote;
+		await readCompactionSpanBack(preparation);
 
 		const configuredCompactionWindow = this.#session.settings.get("compaction.modelContextWindow");
 		// Why each candidate before the one that ran was passed over, so the
@@ -633,7 +664,7 @@ export class CompactionSummarizer {
 				typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
 					? configuredCompactionWindow
 					: (candidate.contextWindow ?? 0);
-			const summarizePayloadTokens = estimateCompactionRequestTokens(
+			const summarizePayloadTokens = await estimateCompactionRequestTokens(
 				preparation,
 				candidate,
 				undefined,

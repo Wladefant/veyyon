@@ -28,8 +28,16 @@
 //!   reparses from an [`InputEdit`] in time proportional to the edit, and the
 //!   result is the tree a fresh parse produces, so a near miss is served by
 //!   editing the retained tree and reparsing against it.
+//!
+//! A lookup the caller awaits runs on whichever pool thread is free, so it
+//! borrows one shared entry through [`with_shared_slot`] instead: a per-thread
+//! entry there would retain a source on every pool thread and miss whenever the
+//! next window of the file landed on another one.
 
-use std::cell::RefCell;
+use std::{
+	cell::RefCell,
+	sync::{Mutex, MutexGuard, PoisonError},
+};
 
 use anyhow::{Result, anyhow};
 use tree_sitter::{InputEdit, Parser, Point, Tree};
@@ -49,6 +57,34 @@ struct Cached {
 
 thread_local! {
 	static CACHE: RefCell<Option<Cached>> = const { RefCell::new(None) };
+}
+
+/// The entry lookups on pool threads share. It sits in the asking thread's
+/// slot for the length of one lookup, so lookups that share it run one at a
+/// time and a pool thread retains nothing between them.
+static SHARED: Mutex<Option<Cached>> = Mutex::new(None);
+
+/// Run `f` with the shared entry in this thread's slot.
+///
+/// What the slot holds afterwards becomes the shared entry. The thread's own
+/// entry is set aside for the call and put back after it, also when `f` panics.
+pub fn with_shared_slot<T>(f: impl FnOnce() -> T) -> T {
+	struct Restore<'a> {
+		shared: MutexGuard<'a, Option<Cached>>,
+		own:    Option<Cached>,
+	}
+
+	impl Drop for Restore<'_> {
+		fn drop(&mut self) {
+			let own = self.own.take();
+			*self.shared = CACHE.with(|cache| cache.replace(own));
+		}
+	}
+
+	let mut shared = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
+	let own = CACHE.with(|cache| cache.replace(shared.take()));
+	let _restore = Restore { shared, own };
+	f()
 }
 
 /// One contiguous run of bytes that turns the retained source into the
@@ -336,6 +372,73 @@ mod tests {
 		// Coming back to the first source is a miss, not a second entry.
 		assert_eq!(boundaries(FN_A, "typescript", (1, 1)), Some(vec![4]));
 		assert_eq!(cached_source_len(), Some(FN_A.len()));
+	}
+
+	#[test]
+	fn lookups_on_other_threads_share_one_entry_and_keep_none() {
+		// WHY: a lookup the caller awaits runs on whichever pool thread is free.
+		// The class this closes is an awaited lookup that parses again because
+		// the file's tree sits on another thread, a pool thread that keeps a
+		// source after its lookup, and a lookup that panics and loses the entry
+		// or the asking thread's own. This is the only test that touches the
+		// shared entry, so the entry is its own for the whole run.
+		//
+		// What it does not catch: two lookups contending for the entry at once,
+		// which the mutex serializes and which only changes which one misses.
+		let unit = "export function unit$N() {\n  const a = $N;\n  return a;\n}\n";
+		let mut code = String::with_capacity(400_000);
+		for index in 0..4_000 {
+			code.push_str(&unit.replace("$N", &index.to_string()));
+		}
+		let lines = code.lines().count() as u32;
+		let window = (lines / 2, lines / 2 + 19);
+		let on_another_thread = |code: String| {
+			std::thread::spawn(move || {
+				let start = std::time::Instant::now();
+				let found = with_shared_slot(|| boundaries(&code, "typescript", window));
+				(found, start.elapsed(), cached_source_len())
+			})
+			.join()
+			.expect("lookup thread finishes")
+		};
+
+		clear();
+		assert_eq!(boundaries(FN_A, "typescript", (1, 1)), Some(vec![4]));
+
+		let (first, miss, kept_after_miss) = on_another_thread(code.clone());
+		let (second, hit, kept_after_hit) = on_another_thread(code.clone());
+		assert_eq!(first, second);
+		assert!(
+			first.as_ref().is_some_and(|lines| !lines.is_empty()),
+			"the window straddles a block"
+		);
+		assert!(
+			hit.as_secs_f64() < miss.as_secs_f64() / 4.0,
+			"a second thread {hit:?} did not reuse the tree the first parsed ({miss:?})"
+		);
+		assert_eq!((kept_after_miss, kept_after_hit), (None, None), "a pool thread kept a source");
+
+		// A lookup on this thread borrows the shared entry too, and its own entry
+		// stays.
+		assert_eq!(with_shared_slot(|| boundaries(&code, "typescript", window)), first);
+		assert_eq!(cached_source_len(), Some(FN_A.len()));
+
+		// A lookup that panics after its parse still hands the entry back and
+		// restores the thread's own.
+		let unwound = std::panic::catch_unwind(|| {
+			with_shared_slot(|| {
+				boundaries(&code, "typescript", window);
+				panic!("the lookup failed after its parse");
+			})
+		});
+		assert!(unwound.is_err());
+		assert_eq!(cached_source_len(), Some(FN_A.len()));
+		let (after_panic, hit_after_panic, _) = on_another_thread(code.clone());
+		assert_eq!(after_panic, first);
+		assert!(
+			hit_after_panic.as_secs_f64() < miss.as_secs_f64() / 4.0,
+			"the entry was lost to a panic: {hit_after_panic:?} against a parse of {miss:?}"
+		);
 	}
 
 	/// The edit shapes a caller produces: a replacement in place, an insertion,

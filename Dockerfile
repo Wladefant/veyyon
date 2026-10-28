@@ -22,7 +22,7 @@
 #     FROM ${VEYYON_BASE} AS base
 ###############################################################################
 
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.3
 
 ############################
 # 1) natives-builder — Rust + Bun → veyyon_natives.linux-<arch>.node

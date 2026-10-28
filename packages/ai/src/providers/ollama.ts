@@ -89,6 +89,8 @@ type OllamaChunkToolCall = {
 };
 
 type OllamaChatChunk = {
+	/** A failure Ollama reports in-band once the HTTP 200 response has started. */
+	error?: string;
 	message?: {
 		role?: string;
 		content?: string;
@@ -529,8 +531,14 @@ class OllamaTurn {
 		this.#healing = new StreamMarkupHealing({ pattern: getStreamMarkupHealingPattern(model.provider, model.id) });
 	}
 
-	/** Fold one NDJSON line of the response into the message and the event stream. */
+	/** Fold one NDJSON line of the response into the message and the event stream; throw on an error record. */
 	consume(chunk: OllamaChatChunk): void {
+		if (chunk.error) {
+			throw new AIError.ProviderResponseError(`Ollama stream error: ${chunk.error}`, {
+				provider: this.#model.provider,
+				kind: "runtime",
+			});
+		}
 		const message = chunk.message;
 		if (message?.thinking) {
 			this.#suppressHealedThinking = true;

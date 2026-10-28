@@ -38,6 +38,7 @@ import {
 	DAEMON_COMPLETIONS_MAX_AGE_MS,
 	DAEMON_COMPLETIONS_SCHEMA_VERSION,
 	parseDaemonCompletionsFile,
+	type RetainedDaemonCompletion,
 	readDaemonCompletions,
 } from "../../src/launch/completions";
 import { daemonBrokerEndpoint, daemonBrokerLeasePath, daemonCompletionsPath } from "../../src/launch/paths";
@@ -569,7 +570,7 @@ describe("a completed finite job stays queryable", () => {
 });
 
 describe("a stale completion store is rejected, not served", () => {
-	function fakeRecord(name: string, exitedAt: number): DaemonCompletionRecord {
+	function fakeRecord(name: string, exitedAt: number): RetainedDaemonCompletion {
 		return {
 			name,
 			id: crypto.randomUUID(),
@@ -582,6 +583,8 @@ describe("a stale completion store is rejected, not served", () => {
 			restartCount: 0,
 			outputBytes: 12,
 			outputTail: "some output\n",
+			state: "exited",
+			spec: idleSpec(name),
 		};
 	}
 
@@ -593,6 +596,19 @@ describe("a stale completion store is rejected, not served", () => {
 		expect(() => parseDaemonCompletionsFile({ version: DAEMON_COMPLETIONS_SCHEMA_VERSION, records: "x" })).toThrow(
 			"must be an array",
 		);
+	});
+
+	it("rejects a current-version record that lacks the state or spec a purged name is answered from", () => {
+		const { state: _state, ...withoutState } = fakeRecord("no-state", Date.now());
+		const { spec: _spec, ...withoutSpec } = fakeRecord("no-spec", Date.now());
+		const version = DAEMON_COMPLETIONS_SCHEMA_VERSION;
+		expect(() => parseDaemonCompletionsFile({ version, records: [withoutState] })).toThrow("completion.state");
+		expect(() => parseDaemonCompletionsFile({ version, records: [withoutSpec] })).toThrow(
+			"daemon spec must be an object",
+		);
+		expect(() =>
+			parseDaemonCompletionsFile({ version, records: [{ ...fakeRecord("running", Date.now()), state: "running" }] }),
+		).toThrow("completion.state");
 	});
 
 	it("refuses the stale file through the store and serves nothing stale over the wire", async () => {

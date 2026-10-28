@@ -504,8 +504,9 @@ export class Settings extends SettingsStore {
 	/** Reload approved settings without rebinding Main or existing workers. */
 	reloadConfig() {
 		const paths = new Set<SettingPath>([
-			"modelRoles",
+			"defaultModel",
 			"agent.agents",
+			"agent.helpers",
 			"agent.model",
 			"agent.sharedModel",
 			"agent.thinkingLevel",
@@ -527,14 +528,8 @@ export class Settings extends SettingsStore {
 		return this.reloadSelectedConfig([...paths], {
 			defaultEffort:
 				"pickInitialThinkingLevel captures it at startup and resolveAgentThinkingLevel always supplies a concrete lane, frontmatter or AGENT_DEFAULT_EFFORT value, so a reload cannot honestly change dispatched worker effort.",
-			"modelRoles.default":
+			defaultModel:
 				"Main's initial provider/model selection is already bound; restart to change its configured default.",
-			...(this.getModelRole("default")?.includes("@")
-				? {
-						modelRoles:
-							"A startup-bound role references another role; restart to change the role map without changing its captured target.",
-					}
-				: {}),
 		});
 	}
 

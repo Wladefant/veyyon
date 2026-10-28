@@ -2,10 +2,11 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 18 modules against 74. `logger` is a namespace re-export
+// Owners, not the `@veyyon/utils` barrel: 19 modules against 74. `logger` is a namespace re-export
 // (`export * as logger from "./logger"`), so it is imported as one here.
 import { formatBytes, formatCount } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileRange, readFileText } from "@veyyon/utils/fs-io";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
@@ -106,18 +107,6 @@ function buildLargeLocalTextResource(url: InternalUrl, filePath: string, size: n
 	};
 }
 
-async function readFilePrefix(filePath: string, maxBytes: number): Promise<Uint8Array> {
-	if (maxBytes <= 0) return new Uint8Array();
-	const handle = await fs.open(filePath, "r");
-	try {
-		const buffer = Buffer.allocUnsafe(maxBytes);
-		const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-		return buffer.subarray(0, bytesRead);
-	} finally {
-		await handle.close();
-	}
-}
-
 function isUtf8Text(bytes: Uint8Array): boolean {
 	if (bytes.indexOf(0) !== -1) return false;
 	try {
@@ -137,14 +126,14 @@ async function buildFileResource(
 	if (BINARY_FILE_EXTENSIONS.has(path.extname(resolved.path).toLowerCase())) {
 		return buildNonTextLocalResource(url, resolved.path, resolved.size, "extension is a known binary/container type");
 	}
-	const sniffBytes = await readFilePrefix(resolved.path, Math.min(resolved.size, LOCAL_TEXT_SNIFF_BYTES));
+	const sniffBytes = await readFileRange(resolved.path, 0, Math.min(resolved.size, LOCAL_TEXT_SNIFF_BYTES));
 	if (!isUtf8Text(sniffBytes)) {
 		return buildNonTextLocalResource(url, resolved.path, resolved.size, "content is not valid UTF-8 text");
 	}
 	if (resolved.size > LOCAL_TEXT_RESOURCE_MAX_BYTES) {
 		return buildLargeLocalTextResource(url, resolved.path, resolved.size);
 	}
-	const content = await Bun.file(resolved.path).text();
+	const content = await readFileText(resolved.path);
 	return {
 		url: url.href,
 		content,

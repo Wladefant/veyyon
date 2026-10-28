@@ -6,6 +6,7 @@
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@veyyon/hashline";
 import { formatBytes } from "@veyyon/utils/format";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";
 import type { ToolSession } from "../../sdk";
@@ -65,7 +66,7 @@ export async function readHashlineHeaderContext(
 	session: ToolSession,
 	absolutePath: string,
 ): Promise<HashlineHeaderContext> {
-	const fullText = await Bun.file(absolutePath).text();
+	const fullText = await readFileText(absolutePath);
 	const context = recordFullHashlineContext(session, true, absolutePath, fullText);
 	if (!context) throw new ToolError(`Cannot record hashline snapshot for non-absolute path: ${absolutePath}`);
 	return context;

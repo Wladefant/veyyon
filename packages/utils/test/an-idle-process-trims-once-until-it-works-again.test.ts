@@ -1,8 +1,10 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
+import * as natives from "@veyyon/natives";
 import { logger } from "@veyyon/utils";
-import { IdleTrim } from "@veyyon/utils/idle-trim";
+import { IdleTrim, trimEngine } from "@veyyon/utils/idle-trim";
 
 /**
  * Contract: `IdleTrim` runs its trim once the process has spent `quietMs` without a busy sampling
@@ -21,7 +23,9 @@ import { IdleTrim } from "@veyyon/utils/idle-trim";
  * return the pages freed in the C allocator's heap, which `Bun.shrink()` leaves resident, and a
  * started trim must never keep a process alive. Those fail if Bun turns `shrink()` into a no-op, the
  * trim stops releasing the C heap, or a regression drops the `unref`. The C heap is read on glibc
- * only; the release in its worker-thread arenas is checked by the addon's own test.
+ * only; the release in its worker-thread arenas is checked by the addon's own test. The C heap walk
+ * runs on libuv's pool, so a walk that fails must be logged rather than left as an unhandled
+ * rejection.
  *
  * Not caught: whether 30 s and 5 % are the right numbers for a given host. They are measured
  * defaults, recorded on the class.
@@ -287,6 +291,30 @@ describe("lifecycle", () => {
 		expect(h.idle.running).toBe(true);
 		expect(warnings).toEqual([["Idle release failed; release stopped", { error: "pagemap unreadable" }]]);
 	});
+
+	test("a C heap walk that fails is logged and never left as an unhandled rejection", async () => {
+		const warnings: unknown[][] = [];
+		vi.spyOn(logger, "warn").mockImplementation((message, context) => {
+			warnings.push([message, context]);
+		});
+		vi.spyOn(Bun, "shrink").mockImplementation(() => {});
+		vi.spyOn(natives, "releaseFreeHeapPages").mockImplementation(() =>
+			Promise.reject(new Error("arena walk failed")),
+		);
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			trimEngine();
+			await sleep(0);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+		expect(unhandled).toEqual([]);
+		expect(warnings).toEqual([["Releasing the C allocator's free pages failed", { error: "arena walk failed" }]]);
+	});
 });
 
 describe("against the engine", () => {
@@ -354,12 +382,14 @@ describe("against the engine", () => {
 	/**
 	 * glibc keeps a freed chunk's pages mapped until the top of its heap is free, and `Bun.shrink()`
 	 * releases only the engine's heaps: 512 blocks freed under a live one stay resident through it.
-	 * The child allocates them with the C allocator, frees all but the pin, and reads their whole
-	 * pages with `mincore` around one sample that runs the default trim.
+	 * The child allocates them with the C allocator, frees all but the pin, runs one sample that
+	 * starts the default trim, and reads their whole pages with `mincore` until the arena walk on
+	 * libuv's pool has released them, for at most 5 s.
 	 */
 	test.skipIf(!hasGlibc())("the default trim returns the pages freed in the C heap", () => {
 		const { status, stdout, stderr } = run(`
 			import { dlopen, FFIType, toArrayBuffer } from "bun:ffi";
+			import { setTimeout as sleep } from "node:timers/promises";
 			const { IdleTrim } = await import(${JSON.stringify(moduleUrl)});
 			const libc = dlopen("libc.so.6", {
 				malloc: { args: [FFIType.u64], returns: FFIType.ptr },
@@ -407,7 +437,12 @@ describe("against the engine", () => {
 			now = 10;
 			sample();
 			idle.stop();
-			const after = resident();
+			const deadline = performance.now() + 5_000;
+			let after = resident();
+			while (after.count > after.total * 0.1 && performance.now() < deadline) {
+				await sleep(5);
+				after = resident();
+			}
 			libc.free(pin);
 			console.log(JSON.stringify({ before, after }));
 		`);

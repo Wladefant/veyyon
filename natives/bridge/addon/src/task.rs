@@ -164,6 +164,12 @@ impl CancelToken {
 		self.core.aborted()
 	}
 
+	/// Whether the timeout passed with no abort requested; see
+	/// [`core_cancel::CancelToken::timed_out`].
+	pub fn timed_out(&self) -> bool {
+		self.core.timed_out()
+	}
+
 	pub fn into_core(self) -> core_cancel::CancelToken {
 		self.core
 	}

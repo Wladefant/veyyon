@@ -11,6 +11,13 @@ import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
+function setPlanHelperModel(settings: Settings, model: string): void {
+	settings.set("agent.helpers", {
+		...settings.get("agent.helpers"),
+		plan: { ...settings.get("agent.helpers").plan, model },
+	});
+}
+
 describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -71,11 +78,10 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 			configurable: true,
 			get: () => true,
 		});
-		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
+		vi.spyOn(session, "resolveHelperModel").mockReturnValue({
 			model: planModel,
 			thinkingLevel: undefined,
-			explicitThinkingLevel: false,
-			warning: undefined,
+			inherited: false,
 		});
 		// Avoid kicking off real session work during plan mode entry.
 		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
@@ -117,8 +123,8 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		});
 
 		isStreaming = true;
-		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
-		session.settings.setModelRole("plan", `${activePlanModel.provider}/${activePlanModel.id}`);
+		setPlanHelperModel(session.settings, `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		setPlanHelperModel(session.settings, `${activePlanModel.provider}/${activePlanModel.id}`);
 		isStreaming = false;
 
 		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
@@ -144,7 +150,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockImplementation(async () => {
 			applied.resolve();
 		});
-		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		setPlanHelperModel(session.settings, `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
 		await applied.promise;
 
 		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);

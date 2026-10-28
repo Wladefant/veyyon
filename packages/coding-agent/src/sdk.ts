@@ -39,7 +39,7 @@ import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "./config/provider-globals";
 import { Settings } from "./config/settings";
-import { CursorExecHandlers } from "./cursor";
+import { type CursorExecHandlers, cursorExecHandlersForAgent } from "./cursor";
 import { createBridgeEditToolProvider } from "./cursor-bridge-tools";
 import { initializeWithSettings } from "./discovery";
 import { type Rule, setActiveRules } from "./discovery/capability/rule";
@@ -132,7 +132,22 @@ export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools
 export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
-export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export type {
+	MCPEventCallback,
+	MCPEventDeliveryMode,
+	MCPEventDescriptor,
+	MCPEventOccurrence,
+	MCPEventStatePayload,
+	MCPEventsListResult,
+	MCPEventsPollResult,
+	MCPEventWebhookConfig,
+	MCPManager,
+	MCPServerConfig,
+	MCPServerConnection,
+	MCPServerEventsConfig,
+	MCPServerEventSubscriptionConfig,
+	MCPToolsLoadResult,
+} from "./mcp";
 export type { Tool } from "./tools";
 export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -185,7 +200,9 @@ import { openSessionMCP, type SessionMCP, wireReactiveMCPManager } from "./sessi
 import {
 	buildAsyncResultBatchMessage,
 	buildLateDiagnosticsBatchMessage,
+	buildMcpEventBatchMessage,
 	buildMcpNotificationBatchMessage,
+	type McpEventEntry,
 	type McpNotificationEntry,
 } from "./session/factory-notices";
 import {
@@ -1118,11 +1135,11 @@ class SessionStartup {
 			toolSession,
 			extensionRunner,
 		});
-		this.#cursorExecHandlers = new CursorExecHandlers({
+		this.#cursorExecHandlers = cursorExecHandlersForAgent({
 			cwd: this.#cwd,
 			tools,
+			agent: () => this.#agent,
 			getToolContext: () => this.#toolContextStore.getContext(),
-			emitEvent: event => this.#agent?.emitExternalEvent(event),
 			getEditReplaceTool: createBridgeEditToolProvider(tools, toolSession, extensionRunner),
 		});
 	}
@@ -1513,6 +1530,7 @@ class SessionStartup {
 			serviceTierByFamily: this.#serviceTierByFamily,
 			sessionManager: this.#sessionManager,
 			settings,
+			modelPatternFallbackKey: options.modelPatternFallbackKey ?? this.#modelSelection.modelPatternFallbackKey,
 			autoApprove: options.autoApprove,
 			bypassAllApprovals: options.bypassAllApprovals,
 			parentApprovalBypassed: options.parentApprovalBypassed,
@@ -1620,6 +1638,9 @@ class SessionStartup {
 		}
 		session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
 			build: buildMcpNotificationBatchMessage,
+		});
+		session.yieldQueue.register<McpEventEntry>("mcp-event", {
+			build: buildMcpEventBatchMessage,
 		});
 		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
 			isStale: entry => entry.isStale(),

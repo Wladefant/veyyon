@@ -19,7 +19,8 @@ import {
 	renderHandoffPrompt,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
-import { countTokens, type AssistantMessage, type Message, type Model, type ServiceTier, type SimpleStreamOptions } from "@veyyon/ai";
+import { countTokens } from "@veyyon/agent-core/tokenizer";
+import type { AssistantMessage, Message, Model, ServiceTier, SimpleStreamOptions } from "@veyyon/ai";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
@@ -66,7 +67,8 @@ export interface SessionHandoffHost {
 	/** Drops the queued next-turn asides and the scheduled hidden next turn. */
 	clearNextTurnMessages(): void;
 	cancelOwnAsyncJobs(): void;
-	rescopeAgentRegistry(): Promise<void>;
+	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
+	endConversation(): Promise<void>;
 	resetMemoryContextForNewTranscript(): void;
 	resetAllAdvisorRuntimes(): void;
 }
@@ -298,7 +300,11 @@ export class SessionHandoff {
 					maxNestedSpawnDepth: childInit.maxNestedSpawnDepth,
 				});
 			}
-			if (!options?.preserveAgentLineage) await host.rescopeAgentRegistry();
+			// A handoff continues the work in a NEW transcript. The pre-handoff
+			// spawned agents wrote into the old one and their jobs were just cancelled;
+			// leaving them registered would list them under the new conversation, and
+			// no cell of the new transcript reaches the old one's eval kernels.
+			await host.endConversation();
 
 			host.checkpoint.clear();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
