@@ -960,7 +960,14 @@ export class MCPManager {
 						`push:${key}:${notification.method}:${cursor ?? "null"}:${String((value.error as { code?: unknown } | undefined)?.code ?? "")}`;
 					if (notification.method === "notifications/events/event") {
 						if (!isMCPEventOccurrence(value) || value.name !== requested.name) {
-							throw new Error("MCP event stream occurrence is invalid or does not match its subscription");
+							// Throwing here would cancel the stream and reopen it at the same cursor; the server would
+							// resend this frame and the subscription would never move past it. Drop it as poll mode does.
+							logger.warn("Skipping invalid MCP event occurrence", {
+								path: `mcp:${serverName}`,
+								event: value.name,
+							});
+							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+							return;
 						}
 						await this.#deliverEvent(serverName, key, subscription, value, cursor);
 					} else if (
