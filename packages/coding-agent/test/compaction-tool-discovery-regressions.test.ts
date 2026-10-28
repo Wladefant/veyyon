@@ -46,6 +46,7 @@ type AutoCompactionEnd = Extract<AgentSessionEvent, { type: "auto_compaction_end
 function createTool(name: string, options?: { loadMode?: "essential" | "discoverable" }): AgentTool {
 	return {
 		name,
+		label: name,
 		description: `Tool ${name}`,
 		parameters: type({ value: "string" }),
 		loadMode: options?.loadMode,
@@ -357,7 +358,7 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 				return undefined;
 			},
 		};
-		const session = {
+		const partialSession: Partial<CompactionSession> = {
 			agent: new Agent({
 				initialState: { model, systemPrompt: ["test system prompt"], messages: [], tools: [] },
 			}),
@@ -380,7 +381,8 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 				contextWindow: model.contextWindow ?? 128000,
 				percent: currentTokens / (model.contextWindow ?? 128000),
 			}),
-		} satisfies Partial<CompactionSession> as CompactionSession;
+		};
+		const session = partialSession as CompactionSession;
 		const host: CompactionHost = {
 			emitSessionEvent: async event => {
 				events.push(event);
@@ -408,7 +410,6 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 			baseSystemPrompt: () => ["base"],
 			memoryBackendContext: async () => "",
 			withPlanProtection: config => config,
-			promptCompaction: async () => undefined,
 			offloadAndApplyShakeRegions: async () => ({
 				toolResultsDropped: 0,
 				blocksDropped: 0,

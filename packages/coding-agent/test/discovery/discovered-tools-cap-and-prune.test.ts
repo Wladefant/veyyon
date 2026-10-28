@@ -83,6 +83,7 @@ function toolResult(toolName: string, callId: string): ToolResultMessage {
 		toolCallId: callId,
 		toolName,
 		content: [{ type: "text", text: "done" }],
+		isError: false,
 		timestamp: Date.now(),
 	};
 }

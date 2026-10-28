@@ -47,6 +47,7 @@ function createTool(name: string, options?: { loadMode?: "essential" | "discover
 	const schema = type({ value: "string" });
 	return {
 		name,
+		label: name,
 		description: `Tool ${name}`,
 		parameters: schema,
 		loadMode: options?.loadMode,
@@ -205,7 +206,7 @@ function createCompactionRuntimeHarness(
 		},
 	};
 
-	const session = {
+	const partialSession: Partial<CompactionSession> = {
 		agent,
 		sessionManager,
 		settings,
@@ -233,7 +234,8 @@ function createCompactionRuntimeHarness(
 			state.prunedMessages = messages;
 			if (options.pruneBreakdown) state.breakdown = options.pruneBreakdown;
 		},
-	} satisfies Partial<CompactionSession> as CompactionSession;
+	};
+	const session = partialSession as CompactionSession;
 
 	const host: CompactionHost = {
 		emitSessionEvent: async event => {
@@ -262,7 +264,6 @@ function createCompactionRuntimeHarness(
 		baseSystemPrompt: () => ["base"],
 		memoryBackendContext: async () => "",
 		withPlanProtection: config => config,
-		promptCompaction: async () => undefined,
 		offloadAndApplyShakeRegions: async () => ({
 			toolResultsDropped: 0,
 			blocksDropped: 0,
