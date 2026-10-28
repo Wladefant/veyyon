@@ -444,10 +444,13 @@ export interface Terminal {
 	stop(): void;
 
 	/**
-	 * Drain stdin before exiting to prevent Kitty key release events from
-	 * leaking to the parent shell over slow SSH connections.
+	 * Swallow stdin that was already in flight when the TUI stopped reading, so a key the terminal
+	 * encoded under a keyboard protocol (a Kitty key release) never reaches the parent shell. The
+	 * keyboard protocols are popped first. On a terminal that answered a DA1 query this session, the
+	 * drain ends when the answer to a DA1 query written after the pop arrives; any other terminal is
+	 * drained until no input arrives for `idleMs`.
 	 * @param maxMs - Maximum time to drain (default: 1000ms)
-	 * @param idleMs - Exit early if no input arrives within this time (default: 50ms)
+	 * @param idleMs - Quiet window that ends the drain on a terminal that never answered DA1 (default: 50ms)
 	 */
 	drainInput(maxMs?: number, idleMs?: number): Promise<void>;
 
@@ -558,7 +561,8 @@ type Da1SentinelOwner =
 	| { kind: "keyboard" }
 	| { kind: "osc11" }
 	| { kind: "privateMode"; mode: number }
-	| { kind: "osc99Probe"; id: string };
+	| { kind: "osc99Probe"; id: string }
+	| { kind: "inputFence"; settle: () => void };
 
 /** Kitty keyboard protocol reply: `\x1b[?<flags>u`. */
 const KITTY_RESPONSE = /^\x1b\[\?(\d+)u$/;
@@ -691,6 +695,8 @@ export class ProcessTerminal implements Terminal {
 	#osc99Capabilities = new Map<string, string>();
 	#privateCsiResponseBuffer = "";
 	#da1SentinelOwners: Da1SentinelOwner[] = [];
+	/** Whether the terminal answered a DA1 sentinel since `start()`, which makes a DA1 query a usable input fence. */
+	#da1Answered = false;
 	/** Resolved DECRQM support per private mode (mode → supported). */
 	#privateModeSupport = new Map<number, boolean>();
 	#privateModeCallbacks: Array<(mode: number, supported: boolean) => void> = [];
@@ -1079,6 +1085,7 @@ export class ProcessTerminal implements Terminal {
 		// capability-specific reply already succeeded. Other terminal probes
 		// never see these replies.
 		if (this.#da1SentinelOwners.length > 0 && DA1_RESPONSE.test(sequence)) {
+			this.#da1Answered = true;
 			this.#settleDa1Sentinel(this.#da1SentinelOwners.shift()!);
 			return true;
 		}
@@ -1141,6 +1148,10 @@ export class ProcessTerminal implements Terminal {
 			}
 			case "osc99Probe": {
 				this.#resolveOsc99Support(owner.id, false);
+				break;
+			}
+			case "inputFence": {
+				owner.settle();
 				break;
 			}
 		}
@@ -1533,6 +1544,15 @@ export class ProcessTerminal implements Terminal {
 		const previousHandler = this.#inputHandler;
 		this.#inputHandler = undefined;
 
+		if (this.#da1Answered && !this.#dead) {
+			try {
+				await this.#awaitInputFence(maxMs);
+			} finally {
+				this.#inputHandler = previousHandler;
+			}
+			return;
+		}
+
 		let lastDataTime = Date.now();
 		const onData = () => {
 			lastDataTime = Date.now();
@@ -1552,6 +1572,23 @@ export class ProcessTerminal implements Terminal {
 		} finally {
 			process.stdin.removeListener("data", onData);
 			this.#inputHandler = previousHandler;
+		}
+	}
+
+	/**
+	 * Resolve when the terminal answers a DA1 query written now, or after `maxMs`. A terminal answers
+	 * in the order it reads, so every byte it sent before reading the query, including a key encoded
+	 * under a keyboard protocol popped just before it, arrives ahead of the answer.
+	 */
+	async #awaitInputFence(maxMs: number): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#da1SentinelOwners.push({ kind: "inputFence", settle: resolve });
+		this.#safeWrite("\x1b[c");
+		const timer = setTimeout(resolve, maxMs);
+		try {
+			await promise;
+		} finally {
+			clearTimeout(timer);
 		}
 	}
 
@@ -1628,6 +1665,7 @@ export class ProcessTerminal implements Terminal {
 		this.#privateCsiResponseBuffer = "";
 		this.#inBandResizeBuffer = "";
 		this.#da1SentinelOwners.length = 0;
+		this.#da1Answered = false;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
 		this.#xtermScrollToBottomRestoreModes.clear();
