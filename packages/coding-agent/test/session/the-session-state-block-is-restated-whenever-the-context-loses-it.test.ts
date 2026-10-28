@@ -29,13 +29,13 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SESSION_STATE_MESSAGE_TYPE } from "@veyyon/coding-agent/session/nudges";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 const sessions: AgentSession[] = [];
@@ -50,8 +50,7 @@ afterEach(async () => {
 });
 
 async function createSession(settings: Record<string, unknown> = {}): Promise<AgentSession> {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const dir = TempDir.createSync("@session-state-restated-");
 	dirs.push(dir);
 	const authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));

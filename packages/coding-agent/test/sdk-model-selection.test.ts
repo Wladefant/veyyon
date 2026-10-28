@@ -13,6 +13,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("createAgentSession deferred model pattern resolution", () => {
 	let tempDir: string;
@@ -206,10 +207,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	test("uses auth fallback when deferred agent modelPattern resolves without working credentials", async () => {
-		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!parentModel) {
-			throw new Error("Expected bundled anthropic parent model");
-		}
+		const parentModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(path.join(tempDir, "fallback-auth.db"));
 		authStoragesToClose.push(authStorage);
 		authStorage.setRuntimeApiKey(parentModel.provider, "test-key");
@@ -321,10 +319,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	test("selects the settings default model without synchronously validating auth", async () => {
-		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!defaultModel) {
-			throw new Error("Expected bundled anthropic default model");
-		}
+		const defaultModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey(defaultModel.provider, "test-key");
@@ -444,10 +439,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		// ~10s refresh timeout — the "Still starting … restoreSessionModel" hang.
 		// Selection now uses the synchronous, side-effect-free `hasConfiguredAuth`
 		// probe; the real key is resolved lazily per request via the resolver.
-		const savedModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!savedModel) {
-			throw new Error("Expected bundled anthropic default model");
-		}
+		const savedModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "resume-saved-auth.db"));
 		authStoragesToClose.push(authStorage);
@@ -595,10 +587,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	test("restores role model max selector from extension provider after startup resume", async () => {
-		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!defaultModel) {
-			throw new Error("Expected bundled anthropic default model");
-		}
+		const defaultModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey(defaultModel.provider, "test-key");
@@ -664,10 +653,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	});
 
 	test("restores extension role model when saved default cannot be restored before extensions load", async () => {
-		const settingsDefaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!settingsDefaultModel) {
-			throw new Error("Expected bundled anthropic default model");
-		}
+		const settingsDefaultModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey(settingsDefaultModel.provider, "test-key");

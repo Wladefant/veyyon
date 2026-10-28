@@ -36,7 +36,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
 import { expandToolArguments } from "@veyyon/coding-agent/argot-wire";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -57,6 +56,7 @@ import {
 } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { type ArgotSession, renderPreamble } from "argot";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { stopReply } from "./helpers/mock-turns";
 
 const CONNECTION = "packages/server/src/database/connection.ts";
@@ -150,8 +150,7 @@ describe("argot agent-driven adoption loop (e2e)", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir });
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const model = getBundledModel("anthropic", MODEL_ID);
-		if (!model) throw new Error(`expected ${MODEL_ID} to be bundled`);
+		const model = requireBundledModel("anthropic", MODEL_ID);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 
 		const settings = Settings.isolated({

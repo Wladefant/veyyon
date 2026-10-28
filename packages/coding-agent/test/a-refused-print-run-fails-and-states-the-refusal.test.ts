@@ -18,7 +18,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { EXIT_FAILURE } from "@veyyon/coding-agent/cli/exit-codes";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -26,6 +25,7 @@ import { type PrintModeOptions, runPrintMode } from "@veyyon/coding-agent/modes/
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const OUTPUT_MODES: PrintModeOptions["mode"][] = ["text", "json"];
 const REFUSAL_LINE = "Refusal (cyber): Classifier declined this turn.";
@@ -94,8 +94,7 @@ describe("a print run whose turn a classifier refused", () => {
 	});
 
 	function startSession(responses: MockResponse[]): AgentSession {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const mock = createMockModel({ responses });
 		session = new AgentSession({
 			agent: new Agent({

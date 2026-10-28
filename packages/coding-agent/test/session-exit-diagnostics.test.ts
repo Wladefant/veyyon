@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createSessionTeardown } from "@veyyon/coding-agent/modes/terminal/session-teardown";
@@ -20,6 +19,7 @@ import {
 } from "@veyyon/kernel/session/exit-diagnostics";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const pendingAssistant: AssistantMessage = {
 	role: "assistant",
@@ -65,8 +65,7 @@ describe("session exit diagnostics", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const agent = new Agent({
 			initialState: {
@@ -138,8 +137,7 @@ describe("session exit diagnostics", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const agent = new Agent({
 			initialState: {
@@ -202,8 +200,7 @@ describe("session exit diagnostics", () => {
 		tempDir = TempDir.createSync("@pi-empty-session-exit-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		const sessionFile = sessionManager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file path");

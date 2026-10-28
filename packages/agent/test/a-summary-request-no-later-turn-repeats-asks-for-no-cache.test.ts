@@ -43,7 +43,6 @@ import {
 	type ToolResultMessage,
 	type UserMessage,
 } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
 import { requireBundledModel } from "./helpers";
 
@@ -324,8 +323,7 @@ describe("a summary request that no later turn repeats asks for no cache", () =>
 	});
 
 	it("summarizeRemoteCompactionWindow(): the window port asks for a cache only behind the session's prompt", async () => {
-		const model = getBundledModel("openai", "gpt-5.1");
-		if (!model) throw new Error("expected bundled openai/gpt-5.1");
+		const model = requireBundledModel("openai", "gpt-5.1");
 		const entry: CompactionEntry = {
 			type: "compaction",
 			id: "remote-compaction",

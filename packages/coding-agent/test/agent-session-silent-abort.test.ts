@@ -18,7 +18,6 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
@@ -27,6 +26,7 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function makeAbortedAssistantMessage(text = "partial draft"): AssistantMessage {
 	return {
@@ -66,8 +66,7 @@ async function createSessionWithObfuscator(obfuscator?: SecretObfuscator): Promi
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 	const agent = new Agent({
 		initialState: {

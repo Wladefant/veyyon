@@ -14,13 +14,13 @@
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { type CommitAgentReporter, runCommitAgentSession } from "@veyyon/coding-agent/commit/agentic/agent";
 import * as toolsModule from "@veyyon/coding-agent/commit/agentic/tools";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import type { CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return { role: "assistant", content, timestamp: 0 } as AssistantMessage;
@@ -68,8 +68,7 @@ async function reportsFor(events: AgentSessionEvent[]): Promise<{ previews: stri
 		toolFinished: () => {},
 		finished: () => {},
 	};
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	await runCommitAgentSession({
 		cwd: ".",
 		model,

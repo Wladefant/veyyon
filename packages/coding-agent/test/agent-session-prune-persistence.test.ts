@@ -3,12 +3,12 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * The per-turn stale-result pass (`#pruneStaleToolResults`) and the
@@ -64,8 +64,7 @@ describe("AgentSession per-turn prune", () => {
 	}
 
 	async function startSession(overrides: Record<string, unknown>): Promise<void> {
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 		const modelRegistry = new ModelRegistry(authStorage);
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });

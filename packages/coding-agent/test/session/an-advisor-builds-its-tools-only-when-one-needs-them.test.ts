@@ -23,7 +23,6 @@ import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -33,6 +32,7 @@ import { BUILTIN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const ADVISOR_MODEL = "anthropic/claude-sonnet-4-5";
 
@@ -161,8 +161,8 @@ describe("an advisor receives its tools before its first request", () => {
 	}
 
 	function harness(options: { turns: number; loader?: "pool" | "fails-once" | "none" }): Harness {
-		const advisorModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!advisorModel) throw new Error("Expected the bundled advisor model to exist");
+		// ADVISOR_MODEL resolves against the bundled catalog, so the suite fails here if the catalog drops it.
+		requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const mainMock = createMockModel({
 			responses: Array.from({ length: options.turns }, (_, i) => ({ content: [`ANSWER-${i}`], stopReason: "stop" })),
 		});

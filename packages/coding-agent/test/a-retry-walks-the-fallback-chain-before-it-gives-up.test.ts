@@ -22,6 +22,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -886,10 +887,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("drops classifier refusal messages before later prompts", async () => {
-		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!primaryModel) {
-			throw new Error("Expected bundled test model to exist");
-		}
+		const primaryModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -1080,10 +1078,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("uses Google retry hints in quota errors before quota backoff", async () => {
-		const model = getBundledModel("google", "gemini-1.5-flash");
-		if (!model) {
-			throw new Error("Expected bundled Google test model to exist");
-		}
+		const model = requireBundledModel("google", "gemini-1.5-flash");
 
 		const errorMessage =
 			"Google API error (429): Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000. Please retry in 0.05s.";
@@ -1222,10 +1217,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries preserved OpenAI first-event timeout errors", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 
 		const timeoutMessage = "OpenAI responses stream timed out while waiting for the first event";
 		const requestedModels: string[] = [];
@@ -1280,10 +1272,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries stream stall errors", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 
 		const stallMessage = "Provider stream stalled while waiting for the next event";
 		const requestedModels: string[] = [];
@@ -1338,10 +1327,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries OpenAI processing-request transient errors", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 
 		const processingError =
 			"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 4a4c6b73-a07c-4de0-aaaf-82560f9f626a in your message.";
@@ -1555,10 +1541,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries Anthropic stream-envelope failures before message_start", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const envelopeError = "Anthropic stream envelope error: received content_block_start before message_start";
 		const requestedModels: string[] = [];
@@ -1694,10 +1677,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries a bare Request was aborted error-stop turn (issue #5375)", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 
 		const requestedModels: string[] = [];
 		// A stalled/dropped stream that the provider surfaces as stopReason:"error"
@@ -1752,10 +1732,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("matches plain fallback roles for compat-routed primary models", async () => {
-		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!fallbackModel) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const fallbackModel = requireBundledModel("openai", "gpt-4o-mini");
 		const routedPrimary = buildModel({
 			id: "z-ai/glm-4.7",
 			name: "GLM 4.7",
@@ -2080,10 +2057,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("accepts cached Ollama Cloud fallback selectors during startup validation", () => {
-		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!primaryModel) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const primaryModel = requireBundledModel("openai", "gpt-4o-mini");
 		const cachedModel: Model<"ollama-chat"> = buildModel({
 			id: "deepseek-v4-pro",
 			name: "DeepSeek V4 Pro",
@@ -2125,10 +2099,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("warns on unknown or malformed model-selector chain keys at startup", () => {
-		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
-		if (!primaryModel) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const primaryModel = requireBundledModel("openai", "gpt-4o-mini");
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.fallbackChains": {
@@ -2178,10 +2149,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries Gemini MALFORMED_FUNCTION_CALL transient errors", async () => {
-		const model = getBundledModel("google", "gemini-1.5-flash");
-		if (!model) {
-			throw new Error("Expected bundled Google test model to exist");
-		}
+		const model = requireBundledModel("google", "gemini-1.5-flash");
 
 		const malformedError = "Generation failed with finish reason: MALFORMED_FUNCTION_CALL";
 		const requestedModels: string[] = [];
@@ -2251,10 +2219,7 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("auto-retries provider finish_reason errors after partial text", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 
 		const errorMessage = "Provider returned error finish_reason";
 		const mock = createMockModel({

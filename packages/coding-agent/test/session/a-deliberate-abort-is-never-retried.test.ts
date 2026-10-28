@@ -6,7 +6,6 @@ import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -15,6 +14,7 @@ import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * WHY. A turn stopped by `session.abort()` was re-sent by the auto-retry ladder as if the provider
@@ -120,8 +120,7 @@ describe("a deliberate session abort", () => {
 	 * request opened on a signal that is already aborted re-sends nothing and is not counted.
 	 */
 	function startSession(phase: AbortPhase, abortOptions: AbortShape["options"]) {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled Anthropic test model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const abortPoint = Promise.withResolvers<void>();
 		let liveRequests = 0;
 		const tool: AgentTool = {

@@ -27,7 +27,6 @@ import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Context, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
@@ -36,6 +35,7 @@ import { ThinkingRuntime } from "@veyyon/coding-agent/session/runtime/thinking-r
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@veyyon/coding-agent/thinking";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const ONLINE_CLASSIFIER = "online";
 
@@ -156,8 +156,7 @@ describe("how hard the model thinks has one owner", () => {
 		tempDir = TempDir.createSync("@pi-thinking-owner-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!bundled) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		model = bundled;
 		host = new RecordingHost(
 			Settings.isolated({ "providers.autoThinkingModel": ONLINE_CLASSIFIER }),

@@ -4,13 +4,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir, withTimeout } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * Regression coverage for issue #2590: `TodoRuntime.checkCompletionAtSettle` used to schedule
@@ -114,8 +114,7 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const agent = new Agent({
 			initialState: {

@@ -31,7 +31,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -56,6 +55,7 @@ import {
 } from "@veyyon/utils/dirs";
 import { pathIsWithin } from "@veyyon/utils/path";
 import { getTerminalId } from "@veyyon/utils/ttyid";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { makeAssistantMessage } from "../session-manager/helpers";
 
@@ -355,8 +355,7 @@ for (const layout of LAYOUTS) {
 
 		describe("AgentSession.switchSession to another profile's transcript", () => {
 			async function withRunningSession(run: (session: AgentSession) => Promise<void>): Promise<void> {
-				const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-				if (!model) throw new Error("expected the bundled anthropic model");
+				const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 				const authStorage = await AuthStorage.create(path.join(getAgentDir(), "switch-test-auth.db"));
 				const session = new AgentSession({
 					agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

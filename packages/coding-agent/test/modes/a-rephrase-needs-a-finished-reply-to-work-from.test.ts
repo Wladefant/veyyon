@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { submitInteractiveInput } from "@veyyon/coding-agent/main";
@@ -37,6 +36,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 interface MockResponseScript {
 	content?: ReadonlyArray<
@@ -68,8 +68,7 @@ describe("/rephrase needs a finished reply to work from", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-		const model = getBundledModel("openai", "gpt-5");
-		if (!model) throw new Error("Expected bundled openai/gpt-5 test model");
+		const model = requireBundledModel("openai", "gpt-5");
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

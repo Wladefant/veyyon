@@ -25,7 +25,6 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
@@ -35,6 +34,7 @@ import type { CustomMessage, FileMentionMessage } from "@veyyon/coding-agent/ses
 import { formatHashlineHeader } from "@veyyon/hashline";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const BASE_PROMPT = ["base system prompt"];
 const MODE_BLOCKS = ["plan-mode-reference", "plan-mode-context", "goal-mode-context", "vibe-mode-context"];
@@ -81,8 +81,7 @@ const editTool: AgentTool = {
  * `before_agent_start` handler returns one entry per call, in order; omitting it loads no extension.
  */
 async function openSession(handlerResults?: HandlerResult[]): Promise<Harness> {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const mock = createMockModel({ handler: { content: ["done"] } });
 	const agent = new Agent({
 		getApiKey: () => "test-key",

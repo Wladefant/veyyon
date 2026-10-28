@@ -21,7 +21,6 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Context } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -29,6 +28,7 @@ import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const REFUSAL_TEXT = "Refusal (cyber): Classifier declined this turn.";
 const REFUSED_CALL_ID = "toolu_refused_eval";
@@ -87,8 +87,7 @@ describe("a classifier refusal with a streamed tool call", () => {
 	}
 
 	it("leaves no placeholder result in the log, so a resumed session never replays the refusal", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const replayedLive: boolean[] = [];
 		const mock = createMockModel({
 			responses: [

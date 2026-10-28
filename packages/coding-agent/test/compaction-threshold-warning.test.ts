@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * What the compaction-threshold notice may say, and when it may say it.
@@ -62,8 +62,7 @@ describe("compaction threshold clamp warning", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the window: the warning text quotes it verbatim, so a catalog
 		// regeneration must not shift the asserted bytes.
 		const model = { ...bundled, contextWindow: WINDOW, maxTokens: 64_000 };

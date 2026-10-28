@@ -27,13 +27,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { compactionDeadEndWarning } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const NOTICE_SOURCE = "compaction";
 const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
@@ -52,8 +52,7 @@ describe("a failed compaction parks the run instead of looping", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });

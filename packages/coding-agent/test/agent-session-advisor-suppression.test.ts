@@ -31,6 +31,7 @@ import type { IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 interface MockYieldDetails {
 	status: "success";
@@ -507,8 +508,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	});
 
 	it("stops an idle IRC wake after a terminal yield", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		let providerCalls = 0;
 		const mock = createMockModel({
 			handler: () => {

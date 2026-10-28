@@ -27,6 +27,7 @@ import {
 import type { TinyMemoryLocalModelKey } from "@veyyon/coding-agent/tiny/models";
 import { tinyTitleClient } from "@veyyon/coding-agent/tiny/title-client";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("auto thinking classifier helpers", () => {
 	afterEach(() => {
@@ -165,8 +166,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("uses a reasoning-safe online classifier budget when the catalog disables reasoning", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
 			get(path: string) {
@@ -200,8 +200,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("redacts secrets at the online auto-thinking provider boundary", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
 			get(path: string) {
@@ -238,8 +237,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("keeps a complete placeholder when online classification truncates around a secret", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) => {
@@ -278,8 +276,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("re-reads the online classifier sanitizer after credential resolution", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) => {
@@ -321,8 +318,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("re-sanitizes online classification for a credential retry", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		const classifierModel = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) => {
@@ -370,8 +366,7 @@ describe("auto thinking classifier helpers", () => {
 	});
 
 	it("clamps auto effort to model support while never resolving below low", () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-6");
-		if (!model) throw new Error("Expected bundled Claude Sonnet 4.6 model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-6");
 
 		expect(clampAutoThinkingEffort(model, Effort.XHigh)).toBe(Effort.High);
 		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);

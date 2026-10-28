@@ -11,7 +11,6 @@ import type {
 import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -20,7 +19,7 @@ import { normalizeCustomMessagePayload } from "@veyyon/coding-agent/session/mess
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
-import { identityConverter } from "../../agent/test/helpers";
+import { identityConverter, requireBundledModel } from "../../agent/test/helpers";
 import { loopSource, unionMembers } from "../../agent/test/support/invented-tool-result-sources";
 
 /**
@@ -220,8 +219,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

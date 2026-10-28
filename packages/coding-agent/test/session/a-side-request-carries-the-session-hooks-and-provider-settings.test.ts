@@ -21,7 +21,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model, ProviderResponseMetadata, RawSseEvent, SimpleStreamOptions } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
@@ -29,13 +28,13 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionConfig, SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const RESPONSE: ProviderResponseMetadata = { status: 200, headers: {}, requestId: "req_fake_0001" };
 const FRAME: RawSseEvent = { event: "message_start", data: "{}", raw: ["event: message_start", "data: {}"] };
 
 function bundledModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("missing bundled model anthropic/claude-sonnet-4-5");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	return model as Model;
 }
 

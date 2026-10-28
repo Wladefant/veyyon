@@ -22,7 +22,6 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockHandler, type MockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -31,6 +30,7 @@ import { QueuedMessages } from "@veyyon/coding-agent/session/runtime/queued-mess
 import * as fileMentions from "@veyyon/coding-agent/utils/file-mentions";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const NOTE = "NOTE-FOR-THE-NEXT-TURN";
 const CONTINUATION = "CONTINUATION-THE-INTERRUPT-CANCELS";
@@ -65,8 +65,7 @@ afterEach(async () => {
 });
 
 async function openSession(responses: MockHandler[]): Promise<Harness> {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const mock = createMockModel({ responses, handler: { content: ["later"] } });
 	const agent = new Agent({
 		getApiKey: () => "test-key",

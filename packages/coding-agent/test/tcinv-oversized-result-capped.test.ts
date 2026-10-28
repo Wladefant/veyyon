@@ -43,7 +43,6 @@ import * as path from "node:path";
 import { Agent, type AgentTool, DEFAULT_TOOL_RESULT_MAX_BYTES } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -51,6 +50,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { findToolResult, nextRequestToolResultText, stopReply } from "./helpers/mock-turns";
 import { toolResultText } from "./helpers/tool-result-text";
 
@@ -75,8 +75,7 @@ describe("an oversized tool result is capped before it is persisted or sent", ()
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected claude-sonnet-4-5 to be bundled");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		const settings = Settings.isolated({

@@ -28,7 +28,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type WorkspaceTree } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -42,6 +41,7 @@ import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/fac
 import { createSubagentSession } from "@veyyon/coding-agent/task/executor";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, setAgentDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -83,8 +83,7 @@ async function makeSession(spawn?: {
 	const cwd = project.join("project");
 	fs.mkdirSync(cwd, { recursive: true });
 	const agentDir = makeTempDir("budget-agent").path();
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected a bundled model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const sessionOptions: CreateAgentSessionOptions = {
 		cwd,
 		agentDir,

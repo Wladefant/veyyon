@@ -6,7 +6,6 @@ import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as codexSessionState from "@veyyon/ai/providers/openai-codex/session-state";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -17,6 +16,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
 // oldest messages, so compaction summarizes them away and the agent silently loses
@@ -157,8 +157,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			predicate: (call: ObservedPromptCall) => boolean;
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
-		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const defaultModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const selectedModel = opts.model ?? defaultModel;
 		// Pin the window and output reservation: usage figures below trip the
 		// context-full strategy at a 200k/64k threshold; catalog regeneration must
@@ -394,8 +393,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 	});
 
 	it("resets Codex provider history after successful auto-compaction", async () => {
-		const model = getBundledModel("openai-codex", "gpt-5.6-terra");
-		if (!model) throw new Error("Expected gpt-5.6-terra model to exist");
+		const model = requireBundledModel("openai-codex", "gpt-5.6-terra");
 		const resetSpy = vi.spyOn(codexSessionState, "resetOpenAICodexHistoryAfterCompaction");
 		const { session, waitForCall } = await createHarness({}, { model });
 		stubCompaction();

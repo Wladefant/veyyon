@@ -39,7 +39,6 @@ import * as path from "node:path";
 import { Agent, countTokens } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -49,6 +48,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { obfuscateProviderPayload } from "@veyyon/coding-agent/session/agent-session-provider-request";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const CONTEXT_WINDOW = 200_000;
 const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
@@ -119,8 +119,7 @@ describe("a turn too large to summarize is truncated, not parked", () => {
 			modelRegistry,
 		);
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: CONTEXT_WINDOW, maxTokens: 64_000 };
 
 		const agent = new Agent({

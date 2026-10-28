@@ -29,7 +29,6 @@ import { Agent, type AgentMessage, type AgentOptions, type AsideMessage, Thinkin
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -43,6 +42,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 const OWNER = "Self";
@@ -60,8 +60,7 @@ beforeAll(async () => {
 	authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	modelRegistry = new ModelRegistry(authStorage);
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected a bundled anthropic model");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	model = bundled;
 });
 

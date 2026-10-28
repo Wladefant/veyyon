@@ -26,7 +26,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -34,6 +33,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SESSION_EXIT_CUSTOM_TYPE, type SessionExitLogLevel } from "@veyyon/kernel/session/exit-diagnostics";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, postmortem, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const EXIT_MESSAGE = "Session exit recorded";
 
@@ -138,8 +138,7 @@ describe("the severity of a recorded session exit", () => {
 		transcript: Transcript,
 	): Promise<ExitObservation> => {
 		const modelRegistry = await registry();
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const dir = TempDir.createSync("@pi-exit-severity-session-");
 		tempDirs.push(dir);
 		const sessionManager = SessionManager.inMemory(dir.path());

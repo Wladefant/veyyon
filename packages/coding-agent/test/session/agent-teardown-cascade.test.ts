@@ -26,6 +26,7 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 describe("agent teardown cascade", () => {
 	let tempDir: TempDir;
@@ -71,8 +72,7 @@ describe("agent teardown cascade", () => {
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		manager = new AsyncJobManager({ onJobComplete: async () => {} });
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

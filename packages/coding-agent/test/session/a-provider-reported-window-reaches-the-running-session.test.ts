@@ -26,6 +26,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 function replyReportingWindow(model: Model<Api>, providerContextWindow: number): AssistantMessageEventStream {
 	const stream = new AssistantMessageEventStream();
@@ -80,8 +81,7 @@ describe("a provider-reported context window", () => {
 	async function runTurnReporting(
 		window: number,
 	): Promise<{ session: AgentSession; registry: ModelRegistry; catalogued: number | null }> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },

@@ -5,7 +5,6 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -14,6 +13,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * Regression test for the auto-compaction thrash loop.
@@ -85,10 +85,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			modelRegistry,
 		);
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the window and output reservation: every usage figure below is tuned
 		// to a 200k/64k threshold, so catalog regeneration must not shift the
 		// headroom math.

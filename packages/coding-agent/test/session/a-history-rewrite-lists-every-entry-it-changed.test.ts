@@ -5,7 +5,6 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
@@ -18,6 +17,7 @@ import {
 	type WriteTextAtomicOptions,
 } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * WHY: a history rewrite (prune, shake, image drop, compaction tail elision, dead-end stamp) changes
@@ -158,8 +158,7 @@ describe("a history rewrite lists every entry it changed", () => {
 	});
 
 	function start(settings: Partial<Record<SettingPath, unknown>>): AgentSession {
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 		apiInfo = { api: model.api, provider: model.provider, model: model.id };
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });

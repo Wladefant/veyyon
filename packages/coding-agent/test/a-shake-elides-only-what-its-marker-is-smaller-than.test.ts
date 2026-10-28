@@ -29,12 +29,12 @@ import type { SessionEntry, ShakeConfig, ShakeRegion } from "@veyyon/agent-core/
 import * as compaction from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const usage = {
 	input: 16,
@@ -71,8 +71,7 @@ describe("a shake elides only what its marker is smaller than", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		apiInfo = { api: model.api, provider: model.provider, model: model.id };
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
 		session = new AgentSession({

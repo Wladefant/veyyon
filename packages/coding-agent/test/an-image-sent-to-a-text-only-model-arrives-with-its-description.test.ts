@@ -17,13 +17,13 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { ImageContent, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import * as imageVisionFallback from "@veyyon/coding-agent/utils/image-vision-fallback";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const RED_1X1_PNG: ImageContent = {
 	type: "image",
@@ -47,8 +47,7 @@ describe("an image sent to a text-only model", () => {
 	let authStorage: AuthStorage | undefined;
 
 	async function createSession(input: Model["input"]): Promise<AgentSession> {
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected bundled Claude Sonnet model");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model: Model = { ...bundled, input };
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [], thinkingLevel: Effort.High },

@@ -43,7 +43,6 @@ import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -52,6 +51,7 @@ import { SESSION_STATE_MESSAGE_TYPE } from "@veyyon/coding-agent/session/nudges"
 import type { CompactionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 // ~25-30 tokens each: the cut math in the WHY comment depends on every turn
 // message sitting in this band, so the markers ride long sentences.
@@ -188,8 +188,7 @@ describe("compaction round-trip: the continued turn sees the summary, the kept t
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the window so catalog regeneration cannot shift the compaction
 		// budget math under the test.
 		const model: Model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };

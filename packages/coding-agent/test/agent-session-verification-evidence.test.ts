@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -13,6 +12,7 @@ import {
 } from "@veyyon/coding-agent/session/verification-evidence-ledger";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function recordEdit(ledger: VerificationEvidenceLedger, callId = "edit-1"): void {
 	ledger.recordToolEnd({
@@ -324,8 +324,7 @@ describe("verification evidence ledger", () => {
 		let session: AgentSession | undefined;
 		try {
 			authStorage.setRuntimeApiKey("anthropic", "test-key");
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected built-in anthropic model");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 			const agent = new Agent({
 				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			});

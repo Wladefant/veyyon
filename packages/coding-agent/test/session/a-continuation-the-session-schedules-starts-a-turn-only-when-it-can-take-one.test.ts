@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -44,6 +43,7 @@ import {
 } from "@veyyon/coding-agent/session/runtime/turn-continuations";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 /** What the fake session's hooks do; a test replaces one to hold or fail it. */
@@ -378,8 +378,7 @@ describe("a session compacting or writing a handoff", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		const loaded = await loadExtensions([extensionPath], projectDir);
 		expect(loaded.errors).toEqual([]);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: history } });
 		const opened = new AgentSession({
 			agent,

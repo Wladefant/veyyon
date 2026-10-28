@@ -23,7 +23,6 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { RetryRecoveryMode } from "@veyyon/coding-agent/modes/retry-display";
@@ -31,6 +30,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -38,8 +38,7 @@ type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 /** Bound on a prompt whose recovery was cancelled; every wait below resolves at once. */
 const SETTLE_BOUND_MS = 2_000;
 
-const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-if (!bundled) throw new Error("missing bundled model anthropic/claude-sonnet-4-5");
+const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 const model = bundled as Model;
 const TIMEOUT = "The operation timed out.";
 

@@ -141,7 +141,6 @@ import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { MemoryBackend } from "@veyyon/coding-agent/memory/backend";
@@ -171,6 +170,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import * as natives from "@veyyon/natives";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import type { ColdHistoryHeap } from "../fixtures/cold-history-heap";
 import type { DroppedDescriptors } from "../fixtures/dropped-session-manager-descriptors";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
@@ -822,8 +822,7 @@ async function summarizeBranch(
 		onCredential();
 		return resolveKey(provider, sessionId, options);
 	});
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 	const session = new AgentSession({
 		agent: new Agent({
@@ -868,8 +867,7 @@ async function resumeSession(
 ): Promise<{ session: AgentSession; close: () => Promise<void> }> {
 	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",

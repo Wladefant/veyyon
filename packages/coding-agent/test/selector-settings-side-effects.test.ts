@@ -6,6 +6,7 @@ import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controll
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -126,8 +127,7 @@ describe("selector setting side effects", () => {
 		if (!testTheme) throw new Error("Failed to load dark theme for model selector test");
 		setThemeInstance(testTheme);
 
-		const nextModel = getBundledModel("openai", "gpt-5.6") ?? getBundledModel("openai", "gpt-5.5");
-		if (!nextModel) throw new Error("Expected bundled OpenAI models for selector test");
+		const nextModel = requireBundledModel("openai", "gpt-5.6") ?? getBundledModel("openai", "gpt-5.5");
 
 		const setModel = vi.fn(async () => ({ switched: true }));
 		let picker: { handleInput(data: string): void } | undefined;

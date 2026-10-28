@@ -29,7 +29,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Context, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
@@ -42,6 +41,7 @@ import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-comman
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 type Transform = (context: Context, model: Model) => Context | Promise<Context>;
 
@@ -172,8 +172,7 @@ describe("a request renders paths against the directory the session is in", () =
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected the bundled anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 		// The terminal `/move` row presents its confirmation through the active theme.
 		const dark = await getThemeByName("dark");

@@ -10,7 +10,7 @@ import type { AssistantMessage, Context, Message, ToolResultMessage } from "@vey
 import { normalizeResponsesToolCallId } from "@veyyon/ai/utils";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
-import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -25,6 +25,7 @@ import {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const LONG_A = "call_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|fc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const LONG_B = "call_cccccccccccccccccccccccccccccccc|fc_dddddddddddddddddddddddddddddddddddd";
@@ -374,8 +375,7 @@ describe("AgentSession transformProviderContext canonicalization", () => {
 
 	async function createHarness(seedMessages: Message[] = []) {
 		const observedContexts: Context[] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

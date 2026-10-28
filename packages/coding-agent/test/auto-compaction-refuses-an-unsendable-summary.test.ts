@@ -20,13 +20,13 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("auto-compaction candidate admission", () => {
 	let tempDir: TempDir;
@@ -34,8 +34,7 @@ describe("auto-compaction candidate admission", () => {
 	let modelRegistry: ModelRegistry;
 	let session: AgentSession;
 
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected bundled anthropic/claude-sonnet-4-5 model");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 	beforeEach(async () => {

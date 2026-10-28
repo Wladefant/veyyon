@@ -20,10 +20,10 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
@@ -122,8 +122,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the context window so the fixed 191k high-usage turn stays above the
 		// compaction threshold across catalog regenerations: claude-sonnet-4-5's
 		// bundled window grew to 1M, which a 191k turn no longer trips. Mirrors

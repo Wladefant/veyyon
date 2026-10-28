@@ -4,7 +4,6 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -14,6 +13,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * WHY: the settle of a turn edits the session branch for the reply that ended it. The empty-stop
@@ -100,8 +100,7 @@ describe("an empty stop", () => {
 	 * whose provider answers the retry the empty-stop pass schedules with text.
 	 */
 	async function startSession(holdDisplay: boolean) {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled Anthropic test model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const release = Promise.withResolvers<void>();
 		const displayHeld = Promise.withResolvers<void>();
 		const extensionRuntime = new ExtensionRuntime();

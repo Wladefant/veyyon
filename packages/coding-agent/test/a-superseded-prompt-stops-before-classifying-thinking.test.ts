@@ -24,7 +24,6 @@ import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
@@ -33,6 +32,7 @@ import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import * as classifier from "@veyyon/coding-agent/thinking/auto-classifier";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("a prompt superseded inside before_agent_start", () => {
 	let tempDir: TempDir;
@@ -69,8 +69,7 @@ describe("a prompt superseded inside before_agent_start", () => {
 			emit: vi.fn().mockResolvedValue(undefined),
 		} as unknown as ExtensionRunner;
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",

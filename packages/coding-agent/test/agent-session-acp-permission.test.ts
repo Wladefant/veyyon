@@ -9,7 +9,6 @@ import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import { createMockModel, type MockModelOptions } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { EditTool } from "@veyyon/coding-agent/edit";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -23,6 +22,7 @@ import type {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { makeToolSession } from "./helpers/tool-session";
 
 // ---------------------------------------------------------------------------
@@ -78,8 +78,7 @@ async function createSession(
 	bridge?: ClientBridge,
 	settingsOverrides: Partial<Record<SettingPath, unknown>> = {},
 ): Promise<AgentSession> {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 	const settings = Settings.isolated({ "compaction.enabled": false, ...settingsOverrides });
 	const sessionManager = SessionManager.inMemory(tempDir.path());

@@ -26,7 +26,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -34,6 +33,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { collectPendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const CALL_ID = "call_cooldown";
 
@@ -86,8 +86,7 @@ describe("a late job result completes its interrupted call", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic test model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// Interrupted-turn shape: the assistant's toolCall block sits in the live
 		// context with no toolResult, and the persisted branch ends the same way —

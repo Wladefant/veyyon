@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { handleRpcCommand, type RpcCommandHost } from "@veyyon/coding-agent/modes/rpc/rpc-commands";
@@ -43,6 +42,7 @@ import {
 import type { TuiSlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { APP_NAME, getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const REPORTED = "Session exported to: ";
 
@@ -150,8 +150,7 @@ describe("an export lands in the directory the session is in", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected the bundled anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 	});
 

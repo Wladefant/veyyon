@@ -3,12 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * An agent moving its working directory does not move anyone else's.
@@ -72,8 +72,7 @@ describe("an agent's re-root leaves the process where it is", () => {
 	 * is passed exactly as `sdk.ts` passes it, from `isSubagentSession(options)`.
 	 */
 	async function createSession(cwd: string, isSpawned: boolean): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [], thinkingLevel: undefined },
 		});
@@ -214,8 +213,7 @@ describe("an agent's re-root leaves the process where it is", () => {
 		const originDir = makeDir("origin-project");
 		const destinationDir = makeDir("destination-project");
 		setProjectDir(originDir);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [], thinkingLevel: undefined },
 		});

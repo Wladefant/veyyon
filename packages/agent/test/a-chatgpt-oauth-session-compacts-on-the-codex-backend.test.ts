@@ -58,7 +58,6 @@ import {
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
 import { createUserMessage, requireBundledModel } from "./helpers";
@@ -437,8 +436,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 		// A real bundled lite row, not a flag flipped onto another row: lite is
 		// refused for a model that cannot be sent `all_turns` reasoning context,
 		// so a hand-built spec would prove the opposite of what it claims.
-		const lite = getBundledModel("openai-codex", "gpt-5.6-sol");
-		if (!lite) throw new Error("Expected built-in openai-codex/gpt-5.6-sol to exist");
+		const lite = requireBundledModel("openai-codex", "gpt-5.6-sol");
 		expect(lite.useResponsesLite).toBe(true);
 		const calls = codexBackend();
 
@@ -482,8 +480,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 	test("opening codex does not open every Responses host", () => {
 		// A repointed `openai` row: the same api family, a host that does not
 		// serve the route.
-		const official = getBundledModel("openai", "gpt-5.1");
-		if (!official) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const official = requireBundledModel("openai", "gpt-5.1");
 		const proxied: Model = {
 			...official,
 			baseUrl: "https://proxy.example.com/v1",
@@ -495,8 +492,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 		};
 		expect(resolveServerCompactionTransport(proxied)).toBeUndefined();
 
-		const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!anthropic) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const anthropic = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		expect(resolveServerCompactionTransport(anthropic)).toBeUndefined();
 	});
 });

@@ -8,7 +8,6 @@ import {
 } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type { AssistantMessage, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { requireBundledModel } from "./helpers";
 
 /**
@@ -201,8 +200,7 @@ describe("modelServesPrefixCacheHits", () => {
 		// id and api say anthropic.
 		expect(modelServesPrefixCacheHits(anthropicModel())).toBe(true);
 		expect(modelServesPrefixCacheHits(nonCachingModel())).toBe(false);
-		const openai = getBundledModel("openai", "gpt-5");
-		if (!openai) throw new Error("Expected a bundled openai model");
+		const openai = requireBundledModel("openai", "gpt-5");
 		expect(modelServesPrefixCacheHits(openai)).toBe(false);
 	});
 });

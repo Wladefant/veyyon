@@ -27,7 +27,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -40,6 +39,7 @@ import {
 } from "@veyyon/coding-agent/session/cpu-limit";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /** Registering at 0 cores creates no group and touches no cgroup tree, which is all these cases need. */
 const INERT = { cores: 0, kill: false, onNotice: () => {} };
@@ -146,8 +146,7 @@ describe("the registry follows a session that was renamed", () => {
 
 describe("a live session keeps its budget across a new conversation", () => {
 	async function createSession(): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("bundled model missing");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			getApiKey: () => "not-used: nothing in this suite reaches a provider",
 			initialState: { model, systemPrompt: ["test"], tools: [] },

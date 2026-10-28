@@ -16,7 +16,6 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { createAssistantText, createUserMessage, requireBundledModel } from "./helpers";
 
 /**
@@ -166,8 +165,7 @@ describe("server-side compaction transport resolution is capability data", () =>
 	});
 
 	test("a non-Responses api does not: gating is api plus capability data, not a provider-name check", () => {
-		const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!anthropic) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const anthropic = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		expect(resolveServerCompactionTransport(anthropic)).toBeUndefined();
 	});
 
@@ -177,14 +175,12 @@ describe("server-side compaction transport resolution is capability data", () =>
 	// it stores — so a ChatGPT OAuth session compacts server-side like any
 	// other Responses host.
 	test("a codex model resolves a transport", () => {
-		const codex = getBundledModel("openai-codex", "gpt-5.1-codex");
-		if (!codex) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+		const codex = requireBundledModel("openai-codex", "gpt-5.1-codex");
 		expect(resolveServerCompactionTransport(codex)).toBeDefined();
 	});
 
 	test("an Azure Responses model resolves a transport", () => {
-		const azure = getBundledModel("azure", "gpt-4");
-		if (!azure) throw new Error("Expected built-in azure/gpt-4 to exist");
+		const azure = requireBundledModel("azure", "gpt-4");
 		expect(resolveServerCompactionTransport(azure)).toBeDefined();
 	});
 });

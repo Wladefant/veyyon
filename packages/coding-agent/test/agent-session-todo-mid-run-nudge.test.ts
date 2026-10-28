@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Agent, type AgentTool, type AsideMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -13,6 +12,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * Regression coverage for issue #3651 and its redesign: the mid-run todo
@@ -151,8 +151,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,

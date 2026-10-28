@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -14,6 +13,7 @@ import * as unexpectedStopClassifier from "@veyyon/coding-agent/session/unexpect
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, TempDir, withTimeout } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const runtimeSignalStoreKey = "__veyyonRuntimeSignals";
 
@@ -102,10 +102,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			modelRegistry,
 		);
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the window and output reservation: the threshold/usage math below is
 		// tuned to a 200k/64k context-full budget and must stay stable across
 		// catalog regenerations.

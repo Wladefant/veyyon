@@ -22,7 +22,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool, ThinkingLevel } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
@@ -32,6 +31,7 @@ import type { CustomMessage } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 const SYSTEM_PROMPT = "You are the transcript export test.";
@@ -75,8 +75,7 @@ function openSession(options: SessionOptions): AgentSession {
 	for (const message of options.messages) {
 		if (message.role === "user" || message.role === "assistant") sessionManager.appendMessage(message);
 	}
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic/claude-sonnet-4-5 model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const agent = new Agent({
 		initialState: { model, systemPrompt: [SYSTEM_PROMPT], tools: options.tools ?? [], messages: options.messages },
 	});

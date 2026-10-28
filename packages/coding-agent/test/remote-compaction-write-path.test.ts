@@ -38,7 +38,6 @@ import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveCompactionKind } from "@veyyon/coding-agent/presentation/summary-builder";
@@ -47,6 +46,7 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /** The compaction item OpenAI returns: opaque, and the whole point of the window. */
 const COMPACTION_ITEM = {
@@ -134,8 +134,7 @@ describe("a remote compaction result reaching the driver write path", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		// The transport gate is capability DATA plus the Responses api family, so
 		// the only edit needed is the host: point it at the local compact server.
 		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
@@ -323,8 +322,7 @@ describe("compaction.remote off: the local pass runs with the configured compact
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		// Same model as the remote suite: a transport resolves, so the setting is
 		// the ONLY thing keeping the provider's compact endpoint out of this run.
 		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
@@ -466,8 +464,7 @@ describe("remote compaction with no resolvable credential", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
 		expect(resolveServerCompactionTransport(model)).toBeDefined();
 
@@ -527,8 +524,7 @@ describe("remote compaction with no resolvable credential", () => {
 			modelRegistry,
 			sideStreamFn,
 		});
-		const localCandidate = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!localCandidate) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const localCandidate = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		session.settings.setDefaultModel(`${localCandidate.provider}/${localCandidate.id}`);
 		session.subscribe(event => {
 			if (event.type === "notice") notices.push(event);
@@ -629,8 +625,7 @@ describe("a compact route that answers 404 during a live session", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
 		expect(resolveServerCompactionTransport(model)).toBeDefined();
 

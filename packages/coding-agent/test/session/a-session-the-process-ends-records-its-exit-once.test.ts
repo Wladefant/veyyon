@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -33,6 +32,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SESSION_EXIT_CUSTOM_TYPE, type SessionExitData } from "@veyyon/kernel/session/exit-diagnostics";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** The kind each process teardown records. Keyed by the persisted reason string. */
 const EXPECTED_KIND: Record<string, SessionExitData["kind"]> = {
@@ -118,8 +118,7 @@ describe("a session the process ends records its exit once", () => {
 			};
 		});
 		const modelRegistry = await registry();
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const dir = TempDir.createSync("@pi-exit-once-session-");
 		tempDirs.push(dir);
 		const sessionManager = SessionManager.inMemory(dir.path());

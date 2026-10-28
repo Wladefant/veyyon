@@ -29,7 +29,6 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getBundledModel } from "@veyyon/catalog/models";
 import {
 	BUILTIN_SLASH_COMMAND_DECLARATIONS,
 	type BuiltinSlashCommandDeclaration,
@@ -49,6 +48,7 @@ import {
 	moduleSpecifiersIn,
 } from "@veyyon/utils/module-reach";
 import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const SRC = path.join(import.meta.dir, "..", "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
@@ -164,8 +164,7 @@ describe("the text-mode view is a leaf", () => {
 		// command's state. The choices come from the MODEL's catalog row rather than from a session
 		// method: no model means no levels, so the stub carries a real reasoning row instead of a
 		// list it makes up.
-		const model = getBundledModel("anthropic", "claude-opus-4-1");
-		if (!model) throw new Error("Expected a bundled reasoning model to exist");
+		const model = requireBundledModel("anthropic", "claude-opus-4-1");
 		const withSession = {
 			output: (text: string) => lines.push(text),
 			session: {

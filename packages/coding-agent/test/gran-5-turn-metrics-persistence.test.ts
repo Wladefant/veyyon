@@ -22,14 +22,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
 import { captureAssistantTurnMetrics } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function assistantWithTurnMetrics(): AssistantMessage {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const turnMetrics = captureAssistantTurnMetrics({
 		level: "ultra",
 		startedAt: 1_700_000_000_000,

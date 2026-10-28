@@ -8,7 +8,6 @@ import {
 import type { Model } from "@veyyon/ai";
 import { buildResponsesInput, supportsFreeformApplyPatch } from "@veyyon/ai/providers/openai-shared";
 import type { Message } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { requireBundledModel } from "../../../agent/test/helpers";
@@ -195,8 +194,7 @@ describe("remote compaction entry rebuild", () => {
 	});
 
 	test("a provider that cannot replay the window sends the original messages instead", () => {
-		const azure = getBundledModel("azure", "gpt-4");
-		if (!azure) throw new Error("Expected built-in azure/gpt-4 to exist");
+		const azure = requireBundledModel("azure", "gpt-4");
 		// Resumed onto azure: the window is an openai blob azure cannot decrypt,
 		// and no summary stands in for the span. The rebuild must re-expand the
 		// real messages, because the alternative is a blank divider where four

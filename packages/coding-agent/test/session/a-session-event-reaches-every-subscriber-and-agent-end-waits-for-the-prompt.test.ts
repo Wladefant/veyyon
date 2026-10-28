@@ -21,7 +21,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -32,6 +31,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionEvents } from "@veyyon/coding-agent/session/runtime/session-events";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 
 /** Shared with the extension through `globalThis`, because the extension is a module loaded from disk. */
@@ -350,8 +350,7 @@ describe("a detached send whose extension path fails", () => {
 
 describe("a disposed session", () => {
 	it("delivers nothing more to the subscribers it had", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] }, convertToLlm }),
 			sessionManager: SessionManager.inMemory(tempDir.path()),

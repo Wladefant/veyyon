@@ -27,7 +27,6 @@ import type { AgentMessage, AsideMessage } from "@veyyon/agent-core";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { hindsightBackend } from "@veyyon/coding-agent/memory/hindsight/backend";
@@ -37,6 +36,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 import { createMockModel } from "./helpers/mock-model";
 
@@ -344,8 +344,7 @@ describe("the first turn of a session", () => {
 	/** A session wired to a stub model that records what each request carried. */
 	async function promptHarness(): Promise<{ session: AgentSession; calls: PromptCall[] }> {
 		const calls: PromptCall[] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in the bundled catalog");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));

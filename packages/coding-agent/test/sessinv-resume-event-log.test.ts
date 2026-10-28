@@ -39,7 +39,6 @@ import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -47,6 +46,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 // Same ~25-30-token band as the round-trip suite: keepRecentTokens = 40 makes
 // the cut keep exactly the final turn, so the compaction boundary is pinned.
@@ -173,8 +173,7 @@ describe("session resume and event-log integrity across a compaction boundary", 
 		// Disk-backed: the JSONL file IS the artifact under test.
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model: Model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const settings = Settings.isolated({

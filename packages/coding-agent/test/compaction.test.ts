@@ -564,8 +564,7 @@ describe("estimateTokens excludeEncryptedReasoning (compaction floor)", () => {
 
 describe("bigint tool arguments", () => {
 	it("preserves exact values through local compaction estimation and summary rendering", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected anthropic/claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const toolCallMessage: AssistantMessage = {
 			...createAssistantMessage("", createMockUsage(1_000, 100)),

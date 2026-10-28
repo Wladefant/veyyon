@@ -24,7 +24,6 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockHandler, type MockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls/local-protocol";
@@ -35,6 +34,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const RETITLED_PLAN = "local://auth-plan.md";
 
@@ -108,8 +108,7 @@ describe("plan mode state across its boundaries", () => {
 	});
 
 	function start(responses: MockHandler[]): { session: AgentSession; mock: MockModel; store: SessionManager } {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const tools = [fakeTool("ask"), fakeTool("resolve"), fakeTool("read")];
 		const mock = createMockModel({ responses });
 		let created: AgentSession | undefined;

@@ -30,7 +30,7 @@ import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
-import { getBundledModel, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -42,6 +42,7 @@ import {
 } from "@veyyon/kernel/session/retry-policy";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { extractRetryHint, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** The shipped `retry.*` defaults, which the incident ran under. */
 const GLOBAL_RETRY = { maxRetries: 10, baseDelayMs: 500, maxDelayMs: 5 * 60 * 1000 };
@@ -76,8 +77,7 @@ describe("a compaction summary retries under the policy a turn runs under", () =
 	let session: AgentSession | undefined;
 	let waits: number[];
 
-	const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!anthropic) throw new Error("Expected bundled anthropic/claude-sonnet-4-5 model");
+	const anthropic = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const ordinary: Model = { ...anthropic, contextWindow: 200_000, maxTokens: 64_000 };
 
 	beforeEach(async () => {

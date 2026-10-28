@@ -33,7 +33,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -50,6 +49,7 @@ import {
 } from "@veyyon/kernel/session/settle-continuation";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** A question the agent asks, followed by the options it offers. */
 const QUESTION_WITH_OPTIONS = [
@@ -261,8 +261,7 @@ describe("a reply that asks the user something ends the turn", () => {
 			authStorage.setRuntimeApiKey("anthropic", "test-key");
 			sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected built-in anthropic model to exist");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 			const agent = new Agent({
 				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
