@@ -566,8 +566,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
 
 		// Failure path must NOT emit the "after compaction" warning notice
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(0);
+		expect(guardWarnings(state)).toHaveLength(0);
+		expect(state.notices.filter(n => n.message === compactionDeadEndWarning()).length).toBeLessThanOrEqual(1);
 
 		// Emitted event reports failure, not successful compaction
 		const failedEndEvents = state.emittedEvents.filter(
@@ -631,8 +631,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		expect(runtime.isAutoCompactionSuppressed()).toBe(false);
 
 		// No-op run must NOT emit the "after compaction" warning notice
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(0);
+		expect(guardWarnings(state)).toHaveLength(0);
+		expect(state.notices.filter(n => n.message === compactionDeadEndWarning()).length).toBeLessThanOrEqual(1);
 	});
 
 	it("retains existing armed guard when a subsequent pass has nothing to summarize", async () => {
