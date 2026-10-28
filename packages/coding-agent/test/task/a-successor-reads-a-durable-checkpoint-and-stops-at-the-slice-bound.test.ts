@@ -21,10 +21,19 @@ const agent: AgentDefinition = { name: "task", description: "Work", systemPrompt
 
 function result(options: executor.ExecutorOptions): SingleResult {
 	return {
-		index: options.index, id: options.id, agent: options.agent.name, agentSource: options.agent.source,
-		task: options.task, assignment: options.assignment, exitCode: 0,
-		output: `Completed safe result from ${options.id}`, stderr: "", truncated: false,
-		durationMs: 1, tokens: 0, requests: 1,
+		index: options.index,
+		id: options.id,
+		agent: options.agent.name,
+		agentSource: options.agent.source,
+		task: options.task,
+		assignment: options.assignment,
+		exitCode: 0,
+		output: `Completed safe result from ${options.id}`,
+		stderr: "",
+		truncated: false,
+		durationMs: 1,
+		tokens: 0,
+		requests: 1,
 	};
 }
 
@@ -39,7 +48,9 @@ describe("explicit bounded lane successors", () => {
 		dir = TempDir.createSync("successor-");
 		executed = [];
 		settings = Settings.isolated({
-			"async.enabled": false, "agent.batch": false, "agent.isolation.mode": "none",
+			"async.enabled": false,
+			"agent.batch": false,
+			"agent.isolation.mode": "none",
 			"agent.agents": { task: { enabled: true } },
 		});
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
@@ -57,11 +68,17 @@ describe("explicit bounded lane successors", () => {
 	});
 
 	async function tool() {
-		return TaskTool.create(makeToolSession({
-			cwd: dir.path(), hasUI: false, settings,
-			getSessionFile: () => dir.join("parent.jsonl"), getSessionSpawns: () => "*",
-			getModelString: () => "openai/gpt-5", getActiveModelString: () => "openai/gpt-5",
-		}));
+		return TaskTool.create(
+			makeToolSession({
+				cwd: dir.path(),
+				hasUI: false,
+				settings,
+				getSessionFile: () => dir.join("parent.jsonl"),
+				getSessionSpawns: () => "*",
+				getModelString: () => "openai/gpt-5",
+				getActiveModelString: () => "openai/gpt-5",
+			}),
+		);
 	}
 
 	async function dispatch(name: string, successorOf?: string) {
@@ -103,7 +120,7 @@ describe("explicit bounded lane successors", () => {
 		expect(JSON.stringify(refused.content)).toContain("successor-claimed");
 	});
 
-	it("fails closed for missing or corrupt checkpoints and path-like IDs", async () => {
+	it("fails closed for missing checkpoints and path-like IDs", async () => {
 		for (const predecessor of ["Missing", "../escape", path.resolve(dir.path(), "escape")]) {
 			const refused = await dispatch("Invalid", predecessor);
 			expect(refused.isError).toBe(true);
@@ -111,10 +128,40 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(0);
 	});
 
+	it("rejects corrupt and unknown-version checkpoints", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const directory = dir.join("parent");
+		const file = (await fs.readdir(directory)).find(name => name.endsWith(".checkpoint.json"));
+		if (!file) throw new Error("No durable checkpoint");
+		const checkpointPath = path.join(directory, file);
+		const original = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+		for (const bytes of ["{", JSON.stringify({ ...original, version: 2 })]) {
+			await fs.writeFile(checkpointPath, bytes);
+			const refused = await dispatch("Invalid", predecessor);
+			expect(refused.isError).toBe(true);
+			expect(executed).toHaveLength(1);
+		}
+	});
+
+	it("rechecks current agent permission before claiming the checkpoint", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		settings.set("agent.agents", { task: { enabled: false } });
+		const refused = await dispatch("Denied", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(executed).toHaveLength(1);
+		settings.set("agent.agents", { task: { enabled: true } });
+		await dispatch("Allowed", predecessor);
+		expect(executed).toHaveLength(2);
+		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
+	});
+
 	it("refuses workflow drift instead of silently resuming different topology", async () => {
 		await dispatch("Original");
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
-			agents: [{ ...agent, systemPrompt: "Different workflow" }], projectAgentsDir: null,
+			agents: [{ ...agent, systemPrompt: "Different workflow" }],
+			projectAgentsDir: null,
 		});
 		const refused = await dispatch("Changed", executed[0].id);
 		expect(executed).toHaveLength(1);

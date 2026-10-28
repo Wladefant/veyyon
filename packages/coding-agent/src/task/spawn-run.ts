@@ -43,6 +43,12 @@ import {
 import { generateTaskName } from "./name-generator";
 import { classifyAgentOutcome } from "./outcome";
 import { AgentOutputManager } from "./output-manager";
+import {
+	claimSuccessorCheckpoint,
+	type SuccessorCheckpoint,
+	successorWorkflow,
+	writeSuccessorCheckpoint,
+} from "./successor-checkpoint";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -97,10 +103,15 @@ type SpawnModel = Pick<ExecutorOptions, "modelOverride" | "thinkingLevel">;
 /** Tools an agent declares that plan mode keeps beside its read-only base set. */
 const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([TOOL.report_finding]);
 
-export function renderAgentUserPrompt(assignment: string, parentAgentId?: string): string {
+export function renderAgentUserPrompt(
+	assignment: string,
+	parentAgentId?: string,
+	checkpoint?: SuccessorCheckpoint,
+): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
 		parentAgentId,
+		checkpoint: checkpoint ? JSON.stringify(checkpoint) : undefined,
 	});
 }
 
@@ -199,7 +210,11 @@ function spawnRefusal(
 	projectAgentsDir: string | null,
 	totalDurationMs: number,
 ): AgentToolResult<TaskToolDetails> {
-	return { content: [{ type: "text", text }], details: { projectAgentsDir, results: [], totalDurationMs } };
+	return {
+		content: [{ type: "text", text }],
+		isError: true,
+		details: { projectAgentsDir, results: [], totalDurationMs },
+	};
 }
 
 /**
@@ -584,6 +599,33 @@ async function runPreparedSpawn(
 	};
 
 	const { isolation } = spawn;
+	const workflow = successorWorkflow({
+		agent: spawn.runAgent,
+		assignment,
+		context: options.context,
+		cwd: spawnCwd,
+		outputSchema: options.outputSchema,
+	});
+	let checkpoint: SuccessorCheckpoint | undefined;
+	if (params.successorOf !== undefined) {
+		if (isolation || !spawn.sessionFile) {
+			return spawnRefusal(
+				"successor-unsupported: successors require a non-isolated task with a persisted parent session",
+				projectAgentsDir,
+				Date.now() - startTime,
+			);
+		}
+		const predecessor = AgentRegistry.global().get(params.successorOf);
+		if (predecessor?.status === "running") {
+			return spawnRefusal(
+				`successor-predecessor-active: ${params.successorOf} has not stopped`,
+				projectAgentsDir,
+				Date.now() - startTime,
+			);
+		}
+		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
+		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint);
+	}
 	let result: SingleResult;
 	let mergeSummary = "";
 	if (isolation) {
@@ -604,6 +646,16 @@ async function runPreparedSpawn(
 	}
 
 	recordSpawn(session, result, spawn.artifacts.dir, isolation);
+	if (!isolation) {
+		try {
+			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
+		} catch (error) {
+			result = {
+				...result,
+				error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
+			};
+		}
+	}
 	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 }
 
