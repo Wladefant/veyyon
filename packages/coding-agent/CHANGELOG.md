@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Syncing a written file to its language servers and announcing its save share one per-server loop; no user-facing change.
 - The plugin manager runs its `bun` subcommands through the command runner the git cache refresh uses; no user-facing change.
 - `veyyon stats --summary` prints the summary and draws the sync progress line through `@veyyon/stats`, which the standalone stats entry point also uses; no user-facing change.
 - The collab wire and the HTML export build a tool call's display and a tool result's display through the same two functions instead of a copy each; no user-facing change.
