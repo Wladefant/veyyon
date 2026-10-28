@@ -4,6 +4,7 @@ import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import type { Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { chatCompletionsOkSse, responsesCompletedSse } from "./helpers/fetch-mock";
 
 // GLM-5.2 reasoning-effort dialects diverge per host (verified against live
 // endpoints): a direct GLM host (Fireworks) exposes a real `max` top tier and
@@ -14,38 +15,11 @@ import { Effort } from "@veyyon/catalog/effort";
 // either host.
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
 
-function chatSse(): Response {
-	const chunk = (delta: unknown, finish: string | null) =>
-		JSON.stringify({
-			id: "x",
-			object: "chat.completion.chunk",
-			created: 0,
-			choices: [{ index: 0, delta, finish_reason: finish }],
-		});
-	return new Response(`data: ${chunk({ content: "ok" }, null)}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function responsesSse(): Response {
-	return new Response(
-		`data: ${JSON.stringify({
-			type: "response.completed",
-			response: {
-				status: "completed",
-				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
-			},
-		})}\n\n`,
-		{ status: 200, headers: { "content-type": "text/event-stream" } },
-	);
-}
-
 async function captureChatEffort(model: Model<"openai-completions">, reasoning: Effort): Promise<unknown> {
 	let body: Record<string, unknown> | undefined;
 	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-		return chatSse();
+		return chatCompletionsOkSse();
 	});
 	for await (const event of streamOpenAICompletions(model, context, { apiKey: "k", fetch: fetchMock, reasoning })) {
 		if (event.type === "done" || event.type === "error") break;
@@ -58,7 +32,7 @@ async function captureResponsesEffort(model: Model<"openrouter">, reasoning: Eff
 	let body: Record<string, unknown> | undefined;
 	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-		return responsesSse();
+		return responsesCompletedSse();
 	});
 	// OpenRouter is a pseudo-API driven through the Responses surface (stream.ts
 	// defaults `api: "openrouter"` to streamOpenAIResponses).

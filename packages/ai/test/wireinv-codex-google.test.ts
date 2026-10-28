@@ -3,6 +3,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { googleOkSse } from "./helpers/fetch-mock";
 
 /**
  * WHY: same 2026-08 incident class as wireinv-anthropic-thinking — bundled
@@ -65,17 +66,6 @@ function codexSse(): Response {
 	return new Response(`${frames.join("\n\n")}\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-function googleSse(): Response {
-	const chunk = {
-		candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
-		usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-	};
-	return new Response(`data: ${JSON.stringify(chunk)}\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 /** The codex token endpoint shape the transport parses the account id out of. */
 function codexTestToken(): string {
 	const payload = Buffer.from(
@@ -95,7 +85,7 @@ async function captureBody(
 	const fetchMock: FetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
 		fetchCalls += 1;
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-		return model.api === "google-generative-ai" ? googleSse() : codexSse();
+		return model.api === "google-generative-ai" ? googleOkSse() : codexSse();
 	}) as FetchImpl;
 	const isCodex = model.api === "openai-codex-responses";
 	for await (const event of streamSimple(model as never, context, {
@@ -202,7 +192,7 @@ describe("out-of-ladder tiers never reach the wire", () => {
 		let fetchCalls = 0;
 		const fetchMock: FetchImpl = (async () => {
 			fetchCalls += 1;
-			return model.api === "google-generative-ai" ? googleSse() : codexSse();
+			return model.api === "google-generative-ai" ? googleOkSse() : codexSse();
 		}) as FetchImpl;
 		let caught: unknown;
 		try {

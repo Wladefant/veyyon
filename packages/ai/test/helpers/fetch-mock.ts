@@ -17,3 +17,37 @@ export function sseResponse(events: readonly unknown[], headers: Record<string, 
 export function sseFetch(events: readonly unknown[]): FetchImpl {
 	return mockFetch(() => sseResponse(events));
 }
+
+/** A chat-completions stream that answers "ok" and stops. */
+export function chatCompletionsOkSse(): Response {
+	const chunk = (delta: unknown, finishReason: string | null) => ({
+		id: "x",
+		object: "chat.completion.chunk",
+		created: 0,
+		choices: [{ index: 0, delta, finish_reason: finishReason }],
+	});
+	return sseResponse([chunk({ content: "ok" }, null), chunk({}, "stop"), "[DONE]"]);
+}
+
+/** A Responses API stream holding one completed response with a one-token usage. */
+export function responsesCompletedSse(): Response {
+	return sseResponse([
+		{
+			type: "response.completed",
+			response: {
+				status: "completed",
+				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
+			},
+		},
+	]);
+}
+
+/** A Google generateContent stream that answers "ok" and stops. */
+export function googleOkSse(): Response {
+	return sseResponse([
+		{
+			candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+			usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+		},
+	]);
+}

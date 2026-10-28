@@ -3,6 +3,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { chatCompletionsOkSse } from "./helpers/fetch-mock";
 
 /**
  * WHY: same 2026-08 incident class as wireinv-anthropic-thinking — bundled
@@ -36,20 +37,6 @@ const glm = getBundledModel<"openai-completions">("fireworks", "glm-5.2");
 const deepseek = getBundledModel<"openai-completions">("deepseek", "deepseek-v4-pro");
 const noSurface = getBundledModel<"openai-completions">("aimlapi", "deepseek-v4-pro");
 
-function chatSse(): Response {
-	const chunk = (delta: unknown, finish: string | null) =>
-		JSON.stringify({
-			id: "x",
-			object: "chat.completion.chunk",
-			created: 0,
-			choices: [{ index: 0, delta, finish_reason: finish }],
-		});
-	return new Response(`data: ${chunk({ content: "ok" }, null)}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 interface ChatCapture {
 	body: Record<string, unknown>;
 	fetchCalls: number;
@@ -65,7 +52,7 @@ async function captureChatBody(
 	const fetchMock: FetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
 		fetchCalls += 1;
 		body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-		return chatSse();
+		return chatCompletionsOkSse();
 	}) as FetchImpl;
 	for await (const event of streamSimple(model, context, {
 		apiKey: "k",
@@ -172,7 +159,7 @@ describe("out-of-ladder tiers never reach the wire", () => {
 		let fetchCalls = 0;
 		const fetchMock: FetchImpl = (async () => {
 			fetchCalls += 1;
-			return chatSse();
+			return chatCompletionsOkSse();
 		}) as FetchImpl;
 		let caught: unknown;
 		try {
