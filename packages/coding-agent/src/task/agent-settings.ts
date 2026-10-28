@@ -36,7 +36,7 @@ const spawnCounters = new Map<string, number>();
 
 /**
  * A stable, unique identity for a spawn made outside the task tool (eval `agent()`, vibe workers).
- * The counter is per scope so one session's spawns alternate independently of any other.
+ * The counter is per scope, so each spawn in one session gets its own id. The id does not pick a pool.
  */
 export function nextSpawnId(scope: string): string {
 	const next = (spawnCounters.get(scope) ?? 0) + 1;
@@ -61,6 +61,7 @@ function shareTaskModelPools(
 	const lunaIndex = patterns.findIndex(pattern => SHARED_LUNA_POOL.test(pattern));
 	if (flashIndex < 0 || lunaIndex < 0) return patterns;
 
+	// Keep configured positions; only a pool already in cooldown may exchange positions with its peer.
 	const flashDown = suppression?.isSelectorSuppressed(patterns[flashIndex]!) === true;
 	const lunaDown = suppression?.isSelectorSuppressed(patterns[lunaIndex]!) === true;
 	const firstPoolPattern =
@@ -85,7 +86,10 @@ function shareTaskModelPools(
 			ordered.push(patterns[index]!);
 		}
 	}
-	return ordered;
+	const firstAvailable = ordered.findIndex(pattern => !suppression?.isSelectorSuppressed(pattern));
+	if (firstAvailable <= 0) return ordered;
+	// Both shared pools can be down. Start on the next healthy cheap candidate, not a known 429.
+	return [ordered[firstAvailable]!, ...ordered.slice(0, firstAvailable), ...ordered.slice(firstAvailable + 1)];
 }
 
 /**
