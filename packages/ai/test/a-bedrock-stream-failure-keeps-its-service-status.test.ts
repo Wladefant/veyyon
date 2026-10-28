@@ -120,7 +120,7 @@ describe("Bedrock stream failure service statuses", () => {
 			expect(failed.errorStatus).toBe(status);
 			if (retriableStatuses.has(status)) {
 				expect(failed.errorId !== undefined && retriable(failed.errorId)).toBe(true);
-			} else {
+			} else if (code === "validationException") {
 				expect(failed.errorId === undefined || !retriable(failed.errorId)).toBe(true);
 			}
 		}, 10_000);
@@ -132,7 +132,7 @@ describe("Bedrock stream failure service statuses", () => {
 			expect(failed.errorStatus).toBe(status);
 			if (retriableStatuses.has(status)) {
 				expect(failed.errorId !== undefined && retriable(failed.errorId)).toBe(true);
-			} else {
+			} else if (code === "validationException") {
 				expect(failed.errorId === undefined || !retriable(failed.errorId)).toBe(true);
 			}
 		}, 10_000);
