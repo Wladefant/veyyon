@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+
 ## [1.6.3] - 2026-10-28
 
 ### Fixed

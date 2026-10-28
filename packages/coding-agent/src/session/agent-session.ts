@@ -4927,12 +4927,12 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 	): Promise<{
-		content: (TextContent | ImageContent)[];
+		content: (TextContent | ImageContent | VideoContent)[];
 		images: ImageContent[] | undefined;
 		imageDescriptionNotice: CustomMessage | undefined;
 	}> {
 		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
 		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
 		content.push(...normalizedImages);
 		return {
