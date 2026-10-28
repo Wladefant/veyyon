@@ -21,9 +21,12 @@ if child == 0:
   time.sleep(60); os._exit(0)
  open(os.environ['PIDFILE']+'.child','w').write(str(os.getpid()))
  time.sleep(60); os._exit(0)
+def read_pid(path):
+ try: return int(open(path).read())
+ except (FileNotFoundError, ValueError): return None
 deadline=time.monotonic()+3
-while not (os.path.exists(os.environ['PIDFILE']+'.child') and os.path.exists(os.environ['PIDFILE']+'.grandchild')) and time.monotonic()<deadline: time.sleep(.005)
-pids=[os.getpid(),child,int(open(os.environ['PIDFILE']+'.child').read()),int(open(os.environ['PIDFILE']+'.grandchild').read())]
+while (read_pid(os.environ['PIDFILE']+'.child') is None or read_pid(os.environ['PIDFILE']+'.grandchild') is None) and time.monotonic()<deadline: time.sleep(.005)
+pids=[os.getpid(),child,read_pid(os.environ['PIDFILE']+'.child'),read_pid(os.environ['PIDFILE']+'.grandchild')]
 open(os.environ['PIDFILE'],'w').write(' '.join(map(str,pids)))
 if mode == 'exit': os._exit(0)
 time.sleep(60)
