@@ -39,10 +39,6 @@ import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/c
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 let previousAnsiPolicy: AnsiPolicy;
 
 beforeAll(async () => {
@@ -125,7 +121,7 @@ const clickAt = (row: number): string => `\x1b[<0;${COL};${row}M`;
 
 function rowIndex(component: SettingsSelectorComponent, rowText: string): number {
 	const lines = component.render(WIDTH);
-	const index = lines.findIndex(line => strip(line).includes(rowText));
+	const index = lines.findIndex(line => stripVTControlCharacters(line).includes(rowText));
 	if (index === -1) throw new Error(`no rendered row contains "${rowText}"`);
 	return index;
 }
@@ -136,13 +132,13 @@ function rowIndex(component: SettingsSelectorComponent, rowText: string): number
  */
 function expectHoverBand(component: SettingsSelectorComponent, rowText: string): void {
 	const before = component.render(WIDTH);
-	const index = before.findIndex(line => strip(line).includes(rowText));
+	const index = before.findIndex(line => stripVTControlCharacters(line).includes(rowText));
 	if (index === -1) throw new Error(`no rendered row contains "${rowText}"`);
 
 	component.handleInput(motionAt(index + 1));
 
 	const after = component.render(WIDTH);
-	expect(strip(after[index] ?? "")).toContain(rowText);
+	expect(stripVTControlCharacters(after[index] ?? "")).toContain(rowText);
 	expect(after[index]).not.toBe(before[index]);
 	// The hover band is a background fill; fg-only styling cannot produce "48;".
 	expect(after[index]).toContain("48;");
@@ -157,13 +153,13 @@ async function awaitRow(
 	awaitRenderRequest: () => Promise<void>,
 	rowText: string,
 ): Promise<void> {
-	while (component.render(WIDTH).every(line => !strip(line).includes(rowText))) {
+	while (component.render(WIDTH).every(line => !stripVTControlCharacters(line).includes(rowText))) {
 		await awaitRenderRequest();
 	}
 }
 
 function frameText(component: SettingsSelectorComponent): string {
-	return component.render(WIDTH).map(strip).join("\n");
+	return component.render(WIDTH).map(stripVTControlCharacters).join("\n");
 }
 
 describe("settings submenus answer the pointer", () => {

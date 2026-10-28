@@ -8,16 +8,8 @@ import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { clickAt } from "../../../helpers/sgr-pointer";
 import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
-/** SGR left-button press at a 1-based screen row/col. */
-function leftClick(row1Based: number, col1Based: number): string {
-	return `\x1b[<0;${col1Based};${row1Based}M`;
-}
 
 /** SGR pointer motion (no button) at a 1-based screen row/col. */
 function motion(row1Based: number, col1Based: number): string {
@@ -27,7 +19,7 @@ function motion(row1Based: number, col1Based: number): string {
 /** The card's top-border row (carries the title/breadcrumb and `[x]` close glyph), stripped of ANSI. */
 function titleRow(frame: readonly string[]): { index: number; text: string } {
 	const index = frame.findIndex(line => line.includes("[x]"));
-	return { index, text: index >= 0 ? strip(frame[index]!) : "" };
+	return { index, text: index >= 0 ? stripVTControlCharacters(frame[index]!) : "" };
 }
 
 beforeAll(async () => {
@@ -103,7 +95,7 @@ describe("settings breadcrumb chrome", () => {
 		const col = text.indexOf("Settings");
 		expect(col).toBeGreaterThanOrEqual(0);
 
-		comp.handleInput(leftClick(index + 1, col + 1));
+		comp.handleInput(clickAt(index + 1, col + 1));
 		expect(cancelCount).toBe(0); // peeled, did not close
 
 		const after = titleRow(comp.render(120));
@@ -112,7 +104,7 @@ describe("settings breadcrumb chrome", () => {
 
 		// A second click on the (now plain) title in Browse mode is a no-op —
 		// the breadcrumb hit-rect only exists while a sub-pane is open.
-		comp.handleInput(leftClick(after.index + 1, col + 1));
+		comp.handleInput(clickAt(after.index + 1, col + 1));
 		expect(cancelCount).toBe(0);
 	});
 
@@ -148,7 +140,7 @@ describe("settings breadcrumb chrome", () => {
 		// Clicking the plain "Settings" title in Browse mode must not close
 		// the modal — only the dedicated `[x]` glyph and footer chips do.
 		const col = text.indexOf("Settings");
-		comp.handleInput(leftClick(index + 1, col + 1));
+		comp.handleInput(clickAt(index + 1, col + 1));
 		expect(cancelCount).toBe(0);
 	});
 
@@ -162,25 +154,25 @@ describe("settings breadcrumb chrome", () => {
 
 		// Level 1: open the provider-limits list sub-pane.
 		comp.handleInput("\n");
-		let rendered = strip(comp.render(120).join("\n"));
+		let rendered = stripVTControlCharacters(comp.render(120).join("\n"));
 		expect(rendered).toContain("Max In-Flight Requests");
 		expect(rendered).toContain("alpha");
 
 		// Level 2: drill into the single provider's inline text editor.
 		comp.handleInput("\n");
-		rendered = strip(comp.render(120).join("\n"));
+		rendered = stripVTControlCharacters(comp.render(120).join("\n"));
 		expect(rendered).toContain("Enter to save");
 
 		// Esc #1: text editor -> provider list. Selector stays open.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		rendered = strip(comp.render(120).join("\n"));
+		rendered = stripVTControlCharacters(comp.render(120).join("\n"));
 		expect(rendered).toContain("Select a provider");
 
 		// Esc #2: provider list -> Browse. Selector stays open.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		rendered = strip(comp.render(120).join("\n"));
+		rendered = stripVTControlCharacters(comp.render(120).join("\n"));
 		expect(rendered).toContain("Max In-Flight Requests");
 		expect(rendered.toLowerCase()).toContain("esc close");
 		expect(rendered.toLowerCase()).not.toContain("esc back");
@@ -197,18 +189,18 @@ describe("settings breadcrumb chrome", () => {
 		});
 		comp.handleInput("/");
 		for (const char of "in-flight") comp.handleInput(char);
-		let rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		let rendered = stripVTControlCharacters(comp.render(120).join("\n")).toLowerCase();
 		expect(rendered).toContain("esc clear search");
 
 		// Enter opens the matched setting's sub-pane; Esc there goes back, not clearing the search.
 		comp.handleInput("\n");
-		rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		rendered = stripVTControlCharacters(comp.render(120).join("\n")).toLowerCase();
 		expect(rendered).toContain("select a provider");
 		expect(rendered).toContain("esc back");
 		expect(rendered).not.toContain("clear search");
 
 		comp.handleInput("\x1b");
-		rendered = strip(comp.render(120).join("\n")).toLowerCase();
+		rendered = stripVTControlCharacters(comp.render(120).join("\n")).toLowerCase();
 		expect(cancelCount).toBe(0);
 		expect(rendered).not.toContain("select a provider");
 		expect(rendered).toContain("esc clear search");
@@ -220,7 +212,7 @@ describe("settings column alignment", () => {
 		const comp = createSelector();
 		// Wide enough that the pane right of the category sidebar renders both
 		// rows inline with untruncated values.
-		const rendered = comp.render(120).map(strip);
+		const rendered = comp.render(120).map(stripVTControlCharacters);
 
 		const darkThemeLine = rendered.find(line => line.includes("Dark Theme"));
 		const hyperlinksLine = rendered.find(line => line.includes("Terminal Hyperlinks"));

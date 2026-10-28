@@ -77,6 +77,7 @@ import { motionClock } from "@veyyon/utils/motion";
 import { bandRgb, hexRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { requireTheme } from "../../../helpers/require-theme";
+import { motionAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -96,11 +97,6 @@ let originalTheme: typeof theme | undefined;
  * driven through its public `tick` rather than by waiting.
  */
 const { advance, settle } = useHandTickedMotion();
-
-/** SGR motion report (button 32+3=35) at a 1-based screen row, mid-card column. */
-function motionAt(row1: number, col1 = 40): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
 
 /** The panes share only this much surface, and it is all the cases below touch. */
 interface Pane {

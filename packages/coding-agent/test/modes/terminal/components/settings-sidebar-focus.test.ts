@@ -19,25 +19,21 @@ const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 
 function pointerAt(frame: readonly string[], needle: string, button = 0): string {
-	const row = frame.findIndex(line => strip(line).includes(needle));
-	const col = row >= 0 ? strip(frame[row]!).indexOf(needle) : -1;
+	const row = frame.findIndex(line => stripVTControlCharacters(line).includes(needle));
+	const col = row >= 0 ? stripVTControlCharacters(frame[row]!).indexOf(needle) : -1;
 	expect(row).toBeGreaterThanOrEqual(0);
 	expect(col).toBeGreaterThanOrEqual(0);
 	return `\x1b[<${button};${col + 1};${row + 1}M`;
 }
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 /** The stripped sidebar row carrying the category cursor, e.g. `› A Appearance`. */
 function cursorCategoryRow(frame: readonly string[]): string | undefined {
-	return frame.map(strip).find(line => /›\s+(Appearance|Model|Interaction|Context)/.test(line));
+	return frame.map(stripVTControlCharacters).find(line => /›\s+(Appearance|Model|Interaction|Context)/.test(line));
 }
 
 function footerText(frame: readonly string[]): string {
 	return frame
-		.map(strip)
+		.map(stripVTControlCharacters)
 		.filter(line => line.includes("navigate") || line.includes("category"))
 		.join(" | ");
 }
@@ -144,9 +140,9 @@ describe("settings sidebar focus", () => {
 		// No frame element may carry a raw newline (each row is one painted line)…
 		for (const line of frame) expect(line.includes("\n")).toBe(false);
 		// …and preview content never extends past the modal's right border.
-		const border = frame.map(strip).find(line => line.includes("[x]"));
+		const border = frame.map(stripVTControlCharacters).find(line => line.includes("[x]"));
 		const frameWidth = border ? border.trimEnd().length : 0;
-		for (const line of frame.map(strip)) {
+		for (const line of frame.map(stripVTControlCharacters)) {
 			if (!line.includes("X") && !line.includes("Y")) continue;
 			expect(line.trimEnd().length).toBeLessThanOrEqual(frameWidth);
 		}

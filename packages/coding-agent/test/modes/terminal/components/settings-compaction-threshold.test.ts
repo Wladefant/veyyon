@@ -18,12 +18,8 @@ import { getSettingDef } from "@veyyon/coding-agent/modes/terminal/components/se
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 function frameText(comp: SettingsSelectorComponent): string {
-	return comp.render(120).map(strip).join("\n");
+	return comp.render(120).map(stripVTControlCharacters).join("\n");
 }
 
 beforeAll(async () => {
