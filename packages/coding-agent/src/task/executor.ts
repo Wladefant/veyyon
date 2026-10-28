@@ -2020,7 +2020,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	// lifecycle reviver keeps the builder for as long as the agent is parked. Every field is read out
 	// of `ctx` here, so neither closure holds `ctx`, whose run monitor keeps every assistant text of the
 	// run, nor `ctx.options`, whose `onProgress` and `signal` belong to the spawning tool call.
-	const { options, marks, modelPatterns, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
+	const { options, marks, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
