@@ -18,8 +18,26 @@ export function installFakeTime(): void {
 
 const DRIVE_STEP_MS = 10;
 const DRIVE_MAX_STEPS = 10_000;
+/**
+ * Real milliseconds each step of {@link driveFakeTime} parks the thread before fake time moves.
+ *
+ * An event-loop turn does not wait for the thread pool, and a turn takes microseconds: stepping
+ * fake time once per turn spent seconds of fake time inside one 3ms write and fired the budget
+ * timers the code under test had armed ahead of that write. Bun's fake timers freeze `Date`,
+ * `performance.now`, `process.hrtime`, `node:timers/promises` and `Bun.sleep`, so `Atomics.wait`
+ * is the one real wait left.
+ */
+const DRIVE_PACE_MS = 0.1;
+const paceCell = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
-/** One real event-loop turn, so I/O in flight completes before fake time moves on. */
+/**
+ * The most fake milliseconds {@link driveFakeTime} spends per real millisecond. Real I/O inside the
+ * driven work consumes fake time at no more than this rate, so a budget the work arms ahead of its
+ * I/O expires only when the I/O takes longer than the budget divided by this factor.
+ */
+export const FAKE_TIME_MAX_SPEEDUP = DRIVE_STEP_MS / DRIVE_PACE_MS;
+
+/** One real event-loop turn, so a completion that landed during the pace runs before fake time moves. */
 function nextTurn(): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	setImmediate(resolve);
@@ -27,9 +45,10 @@ function nextTurn(): Promise<void> {
 }
 
 /**
- * Settle `work` under {@link installFakeTime} by alternating a real event-loop turn with a 10ms step
- * of fake time, so timers fire in time order while the I/O between them runs as it would. Fails after
- * 100s of fake time.
+ * Settle `work` under {@link installFakeTime}: each step parks the thread for {@link DRIVE_PACE_MS}
+ * of real time so in-flight I/O completes, runs one real event-loop turn, then advances fake time by
+ * 10ms, so timers fire in time order while the I/O between them runs as it would. Fails after 100s
+ * of fake time.
  *
  * Read a rejection with `.then(onFulfilled, onRejected)`, not `expect(...).rejects`: under fake
  * timers `rejects` can stall the turns this loop runs on, and the test then hangs until its timeout.
@@ -47,6 +66,7 @@ export async function driveFakeTime<T>(work: Promise<T>): Promise<T> {
 	});
 	for (let step = 0; !settled; step++) {
 		if (step === DRIVE_MAX_STEPS) throw new Error(`work did not settle within ${DRIVE_MAX_STEPS} steps of fake time`);
+		Atomics.wait(paceCell, 0, 0, DRIVE_PACE_MS);
 		await nextTurn();
 		if (!settled) vi.advanceTimersByTime(DRIVE_STEP_MS);
 	}

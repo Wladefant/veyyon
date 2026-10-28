@@ -10,7 +10,7 @@ import { createLspWritethrough } from "@veyyon/coding-agent/lsp/writethrough";
 import type { DeferredDiagnosticsEntry, ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { type ptree, TempDir } from "@veyyon/utils";
-import { driveFakeTime, installFakeTime } from "../helpers/fake-time";
+import { driveFakeTime, installFakeTime } from "../../../utils/test/helpers/fake-time";
 
 const TEST_SERVER: ServerConfig = {
 	command: "test-lsp",

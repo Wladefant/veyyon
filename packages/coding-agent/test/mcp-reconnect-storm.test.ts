@@ -22,7 +22,7 @@ import * as mcpClient from "@veyyon/coding-agent/mcp/client";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import type { MCPServerConnection, MCPStdioServerConfig, MCPTransport } from "@veyyon/coding-agent/mcp/types";
 import { attachFaultSink, type Fault, removeSyncWithRetries } from "@veyyon/utils";
-import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
+import { driveFakeTime, installFakeTime } from "../../utils/test/helpers/fake-time";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "crash-after-init-mcp.ts");
 const BUN_EXEC = process.execPath;

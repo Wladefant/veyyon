@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/session/client-bridge";
-import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
+import { driveFakeTime, installFakeTime } from "../../utils/test/helpers/fake-time";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 
