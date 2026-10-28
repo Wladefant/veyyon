@@ -5,6 +5,7 @@
 ### Changed
 
 - Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
+- Collected verified tool-failure cases into the eval corpus; no user-facing change ([#704](https://github.com/Wladefant/veyyon/pull/704)).
 
 ## [1.6.1] - 2026-10-28
 
