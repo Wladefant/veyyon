@@ -177,13 +177,9 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: true,
 		reason: "the streaming audio backend is adopted",
 	},
-	"packages/coding-agent/src/extensibility/plugins/manager.ts": {
-		wired: true,
-		reason: "bun install/update/uninstall runs are adopted",
-	},
 	"packages/coding-agent/src/extensibility/plugins/bun-git-cache.ts": {
 		wired: true,
-		reason: "the git cache refresh commands are adopted",
+		reason: "the git cache refresh commands and the plugin manager's bun install/update/uninstall runs are adopted",
 	},
 	"packages/coding-agent/src/ssh/ssh-executor.ts": { wired: true, reason: "the ssh client process is adopted" },
 	"packages/coding-agent/src/ssh/file-transfer.ts": {

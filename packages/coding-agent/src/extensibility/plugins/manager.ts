@@ -31,11 +31,9 @@ import {
 	logger,
 	pathExists,
 	pathState,
-	readPipeText,
 } from "@veyyon/utils";
-import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import { withExitGuard } from "../utils";
-import { refreshBunGitCache } from "./bun-git-cache";
+import { type CommandResult, refreshBunGitCache, runCommand } from "./bun-git-cache";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
 
@@ -185,13 +183,6 @@ interface PluginPackageSnapshot {
 
 interface RuntimePackageJson {
 	name?: unknown;
-}
-
-/** Exit code and drained output of one `bun` subcommand run in the plugins directory. */
-interface BunRun {
-	readonly exitCode: number;
-	readonly stdout: string;
-	readonly stderr: string;
 }
 
 // =============================================================================
@@ -1100,27 +1091,11 @@ async function removeDependencyEntry(pkgJsonPath: string, name: string): Promise
 }
 
 /**
- * Run `bun <args>` in the plugins directory and drain both pipes concurrently
- * with `exited`. Awaiting `exited` before reading either pipe risks a >64 KiB
- * OS-pipe-buffer deadlock once bun prints enough progress, and even where Bun
- * buffers eagerly that leaks unbounded memory. The caller interprets the exit
- * code, because each subcommand reports its own failure and fix.
+ * Run `bun <args>` in the plugins directory. The caller interprets the exit code, because each
+ * subcommand reports its own failure and fix.
  */
-async function runBun(args: readonly string[]): Promise<BunRun> {
-	const proc = Bun.spawn(["bun", ...args], {
-		cwd: getPluginsDir(),
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	adoptIntoPrimarySessionCpuBudget(proc.pid);
-	const [exitCode, stdout, stderr] = await Promise.all([
-		proc.exited,
-		readPipeText(proc.stdout),
-		readPipeText(proc.stderr),
-	]);
-	return { exitCode, stdout, stderr };
+function runBun(args: readonly string[]): Promise<CommandResult> {
+	return runCommand(["bun", ...args], getPluginsDir());
 }
 
 function collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
