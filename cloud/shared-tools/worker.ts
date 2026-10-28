@@ -1,6 +1,7 @@
 import { createAdmission, type AdmissionConfig, type ResolvedKey } from "./admission";
 import { createToolBudget } from "./budget";
 import type { AdmissionIdentity, AdmissionPolicy, BudgetNamespace, ToolScope } from "./contracts";
+import { isOpaqueId } from "./ids";
 
 export interface ToolContext {
 	identity: AdmissionIdentity;
@@ -81,7 +82,7 @@ export function createSharedToolsWorker(config: SharedToolsConfig): { fetch(requ
 				if (!scope) return Response.json({ error: "not_found" }, { status: 404 });
 				if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
 				const clientRequestId = request.headers.get("x-request-id");
-				if (clientRequestId === null || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(clientRequestId)) {
+				if (!isOpaqueId(clientRequestId)) {
 					return Response.json({ error: "bad_request" }, { status: 400 });
 				}
 				const identity = await admission.authorize(request, scope);

@@ -9,6 +9,7 @@ import type {
 	ToolBudget,
 	ToolScope,
 } from "./contracts";
+import { isOpaqueId } from "./ids";
 
 /**
  * Durable, server-only tool budget.
@@ -28,7 +29,7 @@ const RESERVE_URL = "https://budget.internal/reservations";
 const RESERVE_PATH = "/reservations";
 const MINUTE_MS = 60_000;
 const AUDIT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const SEEN_RETENTION_MS = AUDIT_RETENTION_MS;
 const SHARED_SUBJECT = "";
 const REQUEST_KEYS = ["costMicrousd", "nowMs", "requestId", "scope", "userId"];
 const MAX_REQUEST_BYTES = 4096;
@@ -65,7 +66,8 @@ const EMPTY_COUNTER: CounterRow = { started_ms: 0, requests: 0, cost_microusd: 0
 
 const SCHEMA: readonly string[] = [
 	"CREATE TABLE IF NOT EXISTS clock (id INTEGER PRIMARY KEY CHECK (id = 1), last_ms INTEGER NOT NULL)",
-	"CREATE TABLE IF NOT EXISTS seen_requests (request_id TEXT PRIMARY KEY)",
+	"CREATE TABLE IF NOT EXISTS seen_requests (request_id TEXT PRIMARY KEY, created_ms INTEGER NOT NULL)",
+	"CREATE INDEX IF NOT EXISTS seen_requests_created_ms ON seen_requests (created_ms)",
 	"CREATE TABLE IF NOT EXISTS counters (scope TEXT NOT NULL, subject TEXT NOT NULL, kind TEXT NOT NULL, period TEXT NOT NULL, started_ms INTEGER NOT NULL, requests INTEGER NOT NULL, cost_microusd INTEGER NOT NULL, PRIMARY KEY (scope, subject, kind, period))",
 	"CREATE TABLE IF NOT EXISTS minute_events (scope TEXT NOT NULL, user_id TEXT NOT NULL, request_id TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY (scope, user_id, request_id))",
 	"CREATE INDEX IF NOT EXISTS minute_events_created_ms ON minute_events (scope, user_id, created_ms)",
@@ -142,8 +144,7 @@ function parseRequest(text: string | null): ReservationRequest | null {
 	const record = value as Record<string, unknown>;
 	if (Object.keys(record).sort().join() !== REQUEST_KEYS.join()) return null;
 	const { userId, scope, requestId, nowMs, costMicrousd } = record;
-	if (typeof userId !== "string" || !OPAQUE_ID.test(userId)) return null;
-	if (typeof requestId !== "string" || !OPAQUE_ID.test(requestId)) return null;
+	if (!isOpaqueId(userId) || !isOpaqueId(requestId)) return null;
 	if (!isScope(scope)) return null;
 	if (!isNonNegativeSafeInteger(nowMs) || !isNonNegativeSafeInteger(costMicrousd)) return null;
 	return { userId, scope, requestId, nowMs, costMicrousd };
@@ -195,6 +196,7 @@ export class SharedToolBudgetAuthority implements BudgetAuthorityBinding {
 		if (!Number.isSafeInteger(now) || now < 0) throw new Error("server clock out of range");
 		this.#storage.transactionSync(() => {
 			this.#storage.sql.exec("DELETE FROM audit WHERE created_ms < ?", now - AUDIT_RETENTION_MS);
+			this.#storage.sql.exec("DELETE FROM seen_requests WHERE created_ms < ?", now - SEEN_RETENTION_MS);
 			this.#storage.sql.exec("DELETE FROM minute_events WHERE created_ms <= ?", now - MINUTE_MS);
 		});
 		await this.#scheduleAuditExpiry();
@@ -203,7 +205,7 @@ export class SharedToolBudgetAuthority implements BudgetAuthorityBinding {
 	async #scheduleAuditExpiry(): Promise<void> {
 		if (!this.#storage.setAlarm) return;
 		const next = this.#storage.sql.exec<{ next_ms: number | null }>(
-			"SELECT MIN(created_ms) AS next_ms FROM audit",
+			"SELECT MIN(created_ms) AS next_ms FROM (SELECT created_ms FROM audit UNION ALL SELECT created_ms FROM seen_requests)",
 		).toArray()[0]?.next_ms;
 		if (next !== null && next !== undefined) await this.#storage.setAlarm(next + AUDIT_RETENTION_MS + 1);
 	}
@@ -214,8 +216,8 @@ export class SharedToolBudgetAuthority implements BudgetAuthorityBinding {
 			if (sql.exec("SELECT 1 AS found FROM seen_requests WHERE request_id = ?", request.requestId).toArray().length > 0) {
 				return "duplicate";
 			}
-			sql.exec("INSERT INTO seen_requests (request_id) VALUES (?)", request.requestId);
 			const now = this.#clock();
+			sql.exec("INSERT INTO seen_requests (request_id, created_ms) VALUES (?, ?)", request.requestId, now);
 			const outcome = this.#decide(request, now);
 			sql.exec(
 				"INSERT INTO audit (request_id, user_id, scope, decision, created_ms) VALUES (?, ?, ?, ?, ?)",
@@ -226,6 +228,7 @@ export class SharedToolBudgetAuthority implements BudgetAuthorityBinding {
 				now,
 			);
 			sql.exec("DELETE FROM audit WHERE created_ms < ?", now - AUDIT_RETENTION_MS);
+			sql.exec("DELETE FROM seen_requests WHERE created_ms < ?", now - SEEN_RETENTION_MS);
 			return outcome;
 		});
 	}
@@ -333,11 +336,11 @@ export function createToolBudget(
 	scope: ToolScope,
 	clientRequestId: string,
 ): ToolBudget {
-	if (!OPAQUE_ID.test(clientRequestId)) throw new BudgetUnavailableError();
+	if (!isOpaqueId(clientRequestId)) throw new BudgetUnavailableError();
 	const id = namespace.idFromName(INSTANCE_NAME);
 	return {
 		async reserve(userId: string, _clientNowMs: number, costMicrousd: number): Promise<Reservation> {
-			if (!OPAQUE_ID.test(userId) || !isNonNegativeSafeInteger(costMicrousd)) throw new BudgetUnavailableError();
+			if (!isOpaqueId(userId) || !isNonNegativeSafeInteger(costMicrousd)) throw new BudgetUnavailableError();
 			const requestId = await crypto.subtle.digest(
 				"SHA-256",
 				new TextEncoder().encode(JSON.stringify([userId, scope, clientRequestId])),

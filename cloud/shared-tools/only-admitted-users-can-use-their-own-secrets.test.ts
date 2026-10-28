@@ -568,6 +568,27 @@ describe("only admitted users can use their own secrets", () => {
 		}
 	});
 
+	// WHY: the budget authority refuses any user ID outside the shared opaque form, so admission must
+	// refuse it too. Otherwise an admitted user could pass every check and then fail at reservation.
+	test("a user ID outside the shared opaque form fails closed in the policy and in the secret bindings", async () => {
+		const base = await fixture();
+		const config = (secrets: SecretBinding[] = base.secrets) => ({
+			issuer: ISSUER,
+			audience: AUDIENCE,
+			secrets,
+			fetch: fakeNetwork([]).fetch,
+		});
+		for (const userId of ["", "has space", "-leading-dash", "a".repeat(129), "user/a", "usér"]) {
+			expect(() =>
+				createAdmission({ ...base.policy, users: [{ ...base.userA, userId }, base.userB], devices: [base.deviceB] }, config()),
+			).toThrow("admission policy user is malformed");
+			expect(() => createAdmission(base.policy, config([{ ...base.secretA, userId }, base.secretB]))).toThrow(
+				"admission secret binding is malformed",
+			);
+		}
+		expect(() => createAdmission(base.policy, config())).not.toThrow();
+	});
+
 	test("a policy edited into a malformed state after construction refuses every request", async () => {
 		const h = await start(signer);
 		const token = await signJwt(signer, claimsFor({}));

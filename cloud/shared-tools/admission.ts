@@ -6,6 +6,7 @@ import type {
 	ToolScope,
 	UserPolicy,
 } from "./contracts";
+import { isOpaqueId } from "./ids";
 
 // Admission for shared tools. A caller proves two things on every request:
 // the Cloudflare Access service token it holds (client id and client secret,
@@ -269,7 +270,7 @@ function indexPolicy(policy: AdmissionPolicy): PolicyIndex {
 	const users = new Map<string, UserPolicy>();
 	for (const user of policy.users) {
 		if (
-			!isNonEmptyString(user.userId, MAX_ID_CHARS) ||
+			!isOpaqueId(user.userId) ||
 			typeof user.enabled !== "boolean" ||
 			!isScopeList(user.scopes)
 		) {
@@ -283,7 +284,7 @@ function indexPolicy(policy: AdmissionPolicy): PolicyIndex {
 	for (const device of policy.devices) {
 		if (
 			!isNonEmptyString(device.deviceId, MAX_ID_CHARS) ||
-			!isNonEmptyString(device.userId, MAX_ID_CHARS) ||
+			!isOpaqueId(device.userId) ||
 			!isNonEmptyString(device.clientId, MAX_CLIENT_ID_CHARS) ||
 			!isSha256Hex(device.secretSha256) ||
 			typeof device.enabled !== "boolean" ||
@@ -306,7 +307,7 @@ function indexSecrets(secrets: readonly SecretBinding[]): ReadonlyMap<string, Se
 	const byUser = new Map<string, SecretBinding>();
 	for (const binding of secrets) {
 		if (
-			!isNonEmptyString(binding.userId, MAX_ID_CHARS) ||
+			!isOpaqueId(binding.userId) ||
 			!isNonEmptyString(binding.value, MAX_SECRET_VALUE_CHARS) ||
 			!isSha256Hex(binding.sha256) ||
 			!Number.isSafeInteger(binding.costMicrousdPerRequest) ||

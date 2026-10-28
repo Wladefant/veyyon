@@ -658,6 +658,31 @@ describe("admission stops unauthorized tool dispatch", () => {
 		expect(rig.dispatches).toHaveLength(0);
 	});
 
+	// WHY: a search call is also re-checked by the key re-resolution, which hides a missing second
+	// admission. A fetch call holds no key, so the second admission is the only gate after the
+	// reservation hop. Removing that call lets a revoked caller reach the tool, and these fail.
+	describe("a fetch call, which holds no key, is re-admitted after the reservation", () => {
+		const revocations: [string, (rig: Rig) => void][] = [
+			["the global switch is flipped", (rig) => void (rig.policy.enabled = false)],
+			["the device is disabled", (rig) => void (rig.deviceA.enabled = false)],
+			["the user loses the scope", (rig) => void (rig.userA.scopes = ["search:public"])],
+			["the tool is switched off", (rig) => void (rig.policy.tools["fetch:public"] = false)],
+		];
+		for (const [name, revoke] of revocations) {
+			test(`${name} during reservation blocks dispatch, and the charge stands`, async () => {
+				const rig = await buildRig();
+				rig.hooks.afterReserve = () => revoke(rig);
+				const response = await post(rig, "/tools/fetch", await authFor(rig.signer, "a"));
+				expect(response.status).toBe(403);
+				expect(rig.hooks.reserves).toBe(1);
+				expect(rig.dispatches).toHaveLength(0);
+				expect(
+					rig.store.db.query<{ decision: string }, []>("SELECT decision FROM audit ORDER BY id").all().map((row) => row.decision),
+				).toEqual(["allowed"]);
+			});
+		}
+	});
+
 	test("a tool failure returns a generic error that hides the key and the provider text", async () => {
 		const rig = await buildRig();
 		rig.hooks.toolThrows = true;

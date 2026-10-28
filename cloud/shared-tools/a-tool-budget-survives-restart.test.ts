@@ -427,4 +427,55 @@ describe("SharedToolBudgetAuthority survives restart and enforces quotas", () =>
 			{ created_ms: T0 + DAY_MS },
 		]);
 	});
+
+	// WHY: seen_requests holds one row per request ID forever unless pruned, so a steady caller grows
+	// the Durable Object without bound. Retention matches the audit trail; a fresh ID is still a duplicate.
+	test("seen request IDs older than seven days are pruned on reserve, and fresh ones still reject a replay", async () => {
+		const clock: Clock = { now: T0 };
+		const { store, authority } = startAuthority(freshPath(), clock);
+		const old = body("user-a", { requestId: "old-request" });
+		expect(await send(authority, old)).toEqual(ALLOWED);
+		clock.now = T0 + DAY_MS;
+		const fresh = body("user-a", { requestId: "fresh-request" });
+		expect(await send(authority, fresh)).toEqual(ALLOWED);
+
+		clock.now = T0 + 7 * DAY_MS + 1;
+		const trigger = body("user-a", { requestId: "trigger-request" });
+		expect(await send(authority, trigger)).toEqual(ALLOWED);
+		expect(store.db.query("SELECT request_id FROM seen_requests ORDER BY created_ms").all()).toEqual([
+			{ request_id: "fresh-request" },
+			{ request_id: "trigger-request" },
+		]);
+		expect(await send(authority, fresh)).toEqual({ status: 409, json: { error: "duplicate_request" } });
+	});
+
+	test("the alarm prunes seen request IDs on its own and schedules itself for them", async () => {
+		const clock: Clock = { now: T0 };
+		const { store, authority } = startAuthority(freshPath(), clock);
+		expect(await send(authority, body("user-a", { requestId: "old-request" }))).toEqual(ALLOWED);
+		store.db.query("DELETE FROM audit").run();
+		await authority.alarm();
+		// Only the seen row remains, and it alone sets the next wake-up.
+		expect(store.alarms.at(-1)).toBe(T0 + 7 * DAY_MS + 1);
+
+		clock.now = T0 + 7 * DAY_MS + 1;
+		await authority.alarm();
+		expect(store.db.query("SELECT COUNT(*) AS n FROM seen_requests").get()).toEqual({ n: 0 });
+	});
+
+	// WHY: admission, the Worker and the authority once carried separate id rules, so a user that
+	// admission accepted could be one the budget refused (or the reverse). They share ids.ts now.
+	test("a user ID outside the shared opaque form is refused by the authority and by the client", async () => {
+		const { authority } = startAuthority(freshPath(), { now: T0 });
+		for (const userId of ["", "has space", "-leading-dash", "a".repeat(129), "user/a", "usér"]) {
+			expect(await send(authority, body(userId))).toEqual({ status: 400, json: { error: "invalid_request" } });
+			await expect(
+				createToolBudget({ idFromName: () => "id", get: () => authority }, "fetch:public", "req-1").reserve(
+					userId,
+					T0,
+					0,
+				),
+			).rejects.toBeInstanceOf(BudgetUnavailableError);
+		}
+	});
 });
