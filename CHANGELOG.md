@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-28
+
 ### Changed
 
 - Updated the OVH CI workflow; no user-facing change ([#727](https://github.com/Wladefant/veyyon/pull/727)).
