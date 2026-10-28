@@ -18,6 +18,9 @@
 
 ### Changed
 
+- The Cursor exec bridge and the commit agent read message text through the shared `contentText` and `assistantText` owners instead of local copies; no user-facing change.
+- Transcript, custom-display and rewind-report text now flatten message content through the shared `contentText` owner instead of two local copies; no user-facing change.
+- Hooks and extensions now share one definition of the `tool_result` event types, so a hook's `ToolResultEvent.isError` is typed `boolean`, matching what the extension runner delivers.
 - The bash and eval blocks run from the composer draw through one execution block that folds streamed chunks at the next draw and builds its header once, so an eval block drawn after each of 5000 streamed chunks takes 47 ms instead of 575 ms.
 - The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
 - The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
@@ -97,6 +100,7 @@
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
+- `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
 - `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
