@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effort } from "@veyyon/catalog/effort";
+import { DIALECTS } from "@veyyon/catalog/identity/dialect";
 import {
 	captureRegistryForTests,
 	initializeWithSettings,
@@ -513,24 +514,8 @@ describe("Settings", () => {
 			expect(getDefault("providers.maxInFlightRequests")).toEqual({});
 		});
 
-		it("exposes all tool calling mode options", () => {
-			const values = getEnumValues("tools.format");
-			expect(values).toEqual([
-				"auto",
-				"native",
-				"glm",
-				"hermes",
-				"kimi",
-				"xml",
-				"anthropic",
-				"deepseek",
-				"harmony",
-				"qwen3",
-				"gemini",
-				"gemma",
-				"minimax",
-				"pi-native",
-			]);
+		it("offers auto, native and every owned dialect as tool calling modes", () => {
+			expect(getEnumValues("tools.format")).toEqual(["auto", "native", ...DIALECTS]);
 		});
 	});
 
