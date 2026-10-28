@@ -54,6 +54,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { ses
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 	});
+	await sessionManager.ensureOnDisk();
 	const harness = { session, authStorage, tempDir };
 	activeHarnesses.push(harness);
 	return { ...harness, sessionManager };

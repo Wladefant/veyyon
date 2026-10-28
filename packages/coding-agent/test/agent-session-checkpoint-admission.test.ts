@@ -60,6 +60,7 @@ test("production prompt and tool admission both stop when the cloud lease is los
 	const sessionManager = SessionManager.create(tempDir.path(), join(tempDir.path(), "sessions"));
 	const sessionFile = sessionManager.getSessionFile();
 	const sessionId = sessionManager.getSessionId();
+	await sessionManager.ensureOnDisk();
 	const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "handoff-1", transferEpoch: 7 };
 	await persistNativeHandoffIdentity(sessionFile, identity);
 	const sessionsDirectory = dirname(sessionFile);
