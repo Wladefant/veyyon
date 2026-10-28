@@ -70,6 +70,7 @@
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
+- `privateTempDirName(uid)` in `@veyyon/utils/private-temp-dir-name` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
 - A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
 
 ### Removed
