@@ -48,7 +48,7 @@ import {
 	type SettingsSaveFailure,
 	settings,
 } from "../../config/settings";
-import { onStatusLineSessionAccentChanged } from "../../config/settings-signals";
+import { onHelperModelsChanged, onStatusLineSessionAccentChanged } from "../../config/settings-signals";
 import type {
 	AutocompleteProviderFactory,
 	ExtensionAskDialogQuestion,
@@ -1239,6 +1239,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#syncStatusLineSettings();
 				this.#handleSessionAccentInputsChanged();
 			}),
+			onHelperModelsChanged(() => this.#planMode.onHelperModelsChanged()),
 			// A provider moved to a different account because the one serving could not serve at all.
 			// A refused grant moves regardless of `accounts.loadBalancing`; a plan that does not include
 			// the model moves only with that setting on. Either way the notice names both accounts, so a

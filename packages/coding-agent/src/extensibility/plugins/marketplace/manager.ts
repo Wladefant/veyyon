@@ -80,6 +80,7 @@ export interface MarketplaceManagerOptions {
 	 */
 	projectInstalledRegistryPath?: string;
 	marketplacesCacheDir: string;
+	/** User-scope payload cache; project payloads live beside their own registry. */
 	pluginsCacheDir: string;
 	/** Injected for testing; production callers pass clearClaudePluginRootsCache.
 	 *  Receives any additional file paths that should also be invalidated from the fs cache.
@@ -342,7 +343,10 @@ export class MarketplaceManager {
 		let cachePath!: string;
 		try {
 			version = await resolvePluginVersion(pluginEntry, sourcePath);
-			cachePath = await cachePlugin(sourcePath, this.#opts.pluginsCacheDir, marketplace, name, version);
+			const pluginsCacheDir = scope === "project"
+				? path.join(path.dirname(registryPath), "cache", "plugins")
+				: this.#opts.pluginsCacheDir;
+			cachePath = await cachePlugin(sourcePath, pluginsCacheDir, marketplace, name, version);
 			await writeEmbeddedLspConfig(pluginEntry, cachePath);
 			await writeEmbeddedDapConfig(pluginEntry, cachePath);
 		} finally {
