@@ -1170,7 +1170,7 @@ export async function resolveAgentModelChain(
 			failures.push(`${pattern}: ${selector} is missing working credentials`);
 			continue;
 		}
-		if (!availableModels.some(model => modelsAreEqual(model, resolved.model))) {
+		if (!availableResolution.model) {
 			failures.push(`${pattern}: ${selector} is unavailable in the model registry`);
 			continue;
 		}

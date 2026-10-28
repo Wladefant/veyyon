@@ -202,7 +202,7 @@ describe("agent runtime model resolution", () => {
 	});
 
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
-		const defaultModel = model("zai", "glm-5.2");
+		const defaultModel = model("anthropic", "claude-opus-5-5");
 		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>
 				({
@@ -212,6 +212,8 @@ describe("agent runtime model resolution", () => {
 					setToolNotifier: () => {},
 				}) as never,
 		);
+		const settings = Settings.isolated();
+		settings.setDefaultModel("anthropic/claude-opus-5-5");
 
 		const result = await runSubprocess({
 			cwd: "/tmp",
@@ -219,9 +221,13 @@ describe("agent runtime model resolution", () => {
 			task: "work",
 			index: 0,
 			id: "missing-chain",
-			modelOverride: ["openai-codex/gpt-5.5:auto"],
-			parentActiveModelPattern: "openai-codex/gpt-5.5",
-			settings: Settings.isolated(),
+			modelOverride: [
+				"openai-codex/gpt-6-luna:medium",
+				"google-antigravity/gemini-3.8-flash:high",
+				"anthropic/claude-haiku-5-5:max",
+			],
+			parentActiveModelPattern: "anthropic/claude-opus-5-5",
+			settings,
 			modelRegistry: {
 				refresh: async () => {},
 				getAll: () => [defaultModel],
@@ -232,7 +238,9 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(result.error).toContain("openai-codex/gpt-5.5:auto: not found in the model catalog");
+		expect(result.error).toContain("openai-codex/gpt-6-luna:medium: not found in the model catalog");
+		expect(result.error).toContain("google-antigravity/gemini-3.8-flash:high: not found in the model catalog");
+		expect(result.error).toContain("anthropic/claude-haiku-5-5:max: not found in the model catalog");
 		expect(createSessionSpy).not.toHaveBeenCalled();
 	});
 });

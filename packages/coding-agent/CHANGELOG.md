@@ -11,6 +11,7 @@
 
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 - Spawned agents try configured model candidates in order and stop when no candidate is usable instead of inheriting the parent model ([issue](https://github.com/Wladefant/superboard/issues/1535)).
+- Spawn chains retain supported OpenRouter route-suffixed and Bedrock inference-profile selectors without admitting unavailable providers ([issue](https://github.com/Wladefant/superboard/issues/1536)).
 
 ## [1.6.1] - 2026-10-28
 
