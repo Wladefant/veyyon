@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-28
+
+### Added
+
+- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+
 ### Changed
 
 - Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
@@ -13,6 +19,7 @@
 
 - The root-changelog uniqueness check now applies per release; no user-facing change.
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 
 ## [1.6.1] - 2026-10-28
 
@@ -31,7 +38,6 @@
 ### Added
 
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
-- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
 - `Agent.buildSideRequestContext` takes an optional model, defaulting to the agent's, and normalizes messages and tools for that model.
 - Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
@@ -243,7 +249,6 @@
 
 ### Fixed
 
-- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
