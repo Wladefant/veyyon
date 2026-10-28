@@ -46,10 +46,9 @@ function bump(counter: Map<string, number>, key: string): void {
 /**
  * Count every whole-file decode and every line-scan open the tool performs.
  *
- * The two routes to a file's bytes in this path are `Bun.file` (whole contents) and
+ * The two routes to a file's bytes in this path are `fs.readFile` (whole contents) and
  * `fs.open` (the chunked line streamer), so wrapping both counts reads without
- * mocking the code under test. The `Bun.file` wrapper is a Proxy rather than a copy
- * because a BunFile carries getters (`size`) the reader uses and cannot be spread.
+ * mocking the code under test.
  */
 function ledgerFileReads(): FileReadLedger {
 	const ledger: FileReadLedger = { texts: new Map(), opens: new Map(), bytes: 0 };
@@ -58,28 +57,15 @@ function ledgerFileReads(): FileReadLedger {
 		if (typeof target === "string") bump(ledger.opens, target);
 		return (realOpen as (...args: unknown[]) => unknown)(target, ...rest);
 	}) as typeof fs.open);
-	const realFile = Bun.file.bind(Bun);
-	spyOn(Bun, "file").mockImplementation(((target: string, options?: BlobPropertyBag) => {
-		const file = realFile(target as never, options);
-		if (typeof target !== "string") return file;
-		return new Proxy(file, {
-			get(source, property) {
-				if (property === "text" || property === "bytes" || property === "arrayBuffer") {
-					return async () => {
-						bump(ledger.texts, target);
-						const whole = await (source[property] as () => Promise<string | Uint8Array | ArrayBuffer>)();
-						ledger.bytes += typeof whole === "string" ? Buffer.byteLength(whole) : whole.byteLength;
-						return whole;
-					};
-				}
-				// The real file is the receiver, not the proxy: `size` is a native getter
-				// that rejects a foreign `this`, and a throwing read is a read the ledger
-				// would never see.
-				const value = Reflect.get(source, property, source);
-				return typeof value === "function" ? value.bind(source) : value;
-			},
-		});
-	}) as typeof Bun.file);
+	const realReadFile = fs.readFile;
+	spyOn(fs, "readFile").mockImplementation((async (target: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+		const whole = (await (realReadFile as (...args: unknown[]) => Promise<string | Buffer>)(target, ...rest)) as
+			| string
+			| Buffer;
+		if (typeof target === "string") bump(ledger.texts, target);
+		ledger.bytes += typeof whole === "string" ? Buffer.byteLength(whole) : whole.byteLength;
+		return whole;
+	}) as typeof fs.readFile);
 	return ledger;
 }
 
@@ -130,9 +116,9 @@ function lfSource(): string {
 }
 
 afterEach(() => {
-	// spyOn installs on the global Bun object and on the fs/promises namespace;
-	// every case must hand both back or later files inherit the counters.
-	(Bun.file as unknown as { mockRestore?: () => void }).mockRestore?.();
+	// spyOn installs on the fs/promises namespace; every case must hand both
+	// spies back or later files inherit the counters.
+	(fs.readFile as unknown as { mockRestore?: () => void }).mockRestore?.();
 	(fs.open as unknown as { mockRestore?: () => void }).mockRestore?.();
 });
 
@@ -235,7 +221,7 @@ describe("a bounded range read touches the file once", () => {
 
 			const output = textOutput(await tool.execute("call-bom", { path: "bom.txt:2-4" }));
 
-			// `Bun.file().text()` drops a BOM and the streamer keeps it, so a
+			// `readFileText` drops a BOM and the streamer keeps it, so a
 			// materialization that decodes the ordinary way would show a first line
 			// the reader's file does not have. The BOM file keeps the streamed window.
 			expect(ledger.opens.get(file)).toBe(1);

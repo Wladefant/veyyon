@@ -423,12 +423,19 @@ VEYYON_MANAGED_ENV_KEYS = %w[
   VEYYON_EVAL_LOCAL_ROOTS
 ].freeze
 
+# The cwd the previous request put at the front of $LOAD_PATH. One kernel serves a
+# session in every directory it moves to, so the previous project leaves the load
+# path when the next cell runs somewhere else.
+$__veyyon_request_cwd = nil
+
 def __veyyon_apply_request_runtime(req)
   cwd = req["cwd"]
   if cwd.is_a?(String) && !cwd.empty?
     (Dir.chdir(cwd) rescue nil)
+    $LOAD_PATH.delete($__veyyon_request_cwd) if $__veyyon_request_cwd
     $LOAD_PATH.delete(cwd)
     $LOAD_PATH.unshift(cwd)
+    $__veyyon_request_cwd = cwd
   end
   env = req["env"]
   if env.is_a?(Hash)

@@ -2345,7 +2345,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(Cursor::new(stdin.as_bytes().to_vec())),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: true,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,
@@ -2380,7 +2380,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(Cursor::new(stdin.to_vec())),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: true,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,
@@ -2545,7 +2545,7 @@ mod tests {
 		let err = Arc::new(Mutex::new(Vec::new()));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
 			stdout_is_terminal:    false,

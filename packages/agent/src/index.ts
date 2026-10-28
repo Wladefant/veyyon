@@ -27,6 +27,8 @@ export * from "./tokenizer";
 
 // Partial-completion ledger for a batch of tool calls that was cut short
 export * from "./tool-batch-ledger";
+// The arguments a tool call runs with, for the loop and for a provider that runs calls itself
+export * from "./tool-call-preparation";
 // Tool specs as they go on the wire, intent injection included
 export * from "./tool-normalization";
 export * from "./tool-result-cap";

@@ -130,6 +130,29 @@ if "__veyyon_prelude_loaded__" not in globals():
         def _is_pid_alive(pid: int) -> bool:
             if not isinstance(pid, int) or pid <= 0:
                 return False
+            if os.name == "nt":
+                # Windows os.kill(pid, 0) terminates the target. A wait-only
+                # handle cannot signal it; unknown observations retain the lock.
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    dll = ctypes.WinDLL("kernel32", use_last_error=True)
+                    dll.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                    dll.OpenProcess.restype = wintypes.HANDLE
+                    dll.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                    dll.WaitForSingleObject.restype = wintypes.DWORD
+                    dll.CloseHandle.argtypes = [wintypes.HANDLE]
+                    dll.CloseHandle.restype = wintypes.BOOL
+                    handle = dll.OpenProcess(0x100000, False, pid)  # SYNCHRONIZE
+                    if not handle:
+                        return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such PID
+                    try:
+                        return dll.WaitForSingleObject(handle, 0) != 0  # only signalled proves exit
+                    finally:
+                        dll.CloseHandle(handle)
+                except Exception:
+                    return True
             try:
                 os.kill(pid, 0)
                 return True
@@ -138,7 +161,7 @@ if "__veyyon_prelude_loaded__" not in globals():
             except PermissionError:
                 return True
             except OSError:
-                return False
+                return True
 
         @staticmethod
         def _read_info(dir_path: Path) -> dict | None:

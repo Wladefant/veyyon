@@ -68,7 +68,12 @@ const EVERY_VARIANT_IS_LISTED: UnlistedVariant extends never ? true : false = tr
 const SELECTABLE_VARIANTS = ["modern", "baseline"] as const;
 
 function addonFile(variant: AddonVariant, size?: number): AddonFile {
-	return { variant, filename: `veyyon_natives.${variant}.node`, ...(size === undefined ? {} : { size }) };
+	return {
+		variant,
+		filename: `veyyon_natives.${variant}.node`,
+		sha256: `${variant}-build`,
+		...(size === undefined ? {} : { size }),
+	};
 }
 
 function tarHeader(filename: string, size: number): Buffer {
@@ -215,7 +220,10 @@ describe("the bytes a cold launch writes", () => {
 			expect(written).toEqual([path.join(targetDir, "veyyon_natives.modern.node")]);
 			expect(fs.readFileSync(path.join(targetDir, "veyyon_natives.modern.node")).equals(modern)).toBe(true);
 			expect(fs.existsSync(path.join(targetDir, "veyyon_natives.baseline.node"))).toBe(false);
-			expect(fs.readdirSync(targetDir)).toEqual(["veyyon_natives.modern.node"]);
+			expect(fs.readdirSync(targetDir).sort()).toEqual([
+				"veyyon_natives.modern.node",
+				"veyyon_natives.modern.node.stamp",
+			]);
 		});
 	});
 
@@ -247,7 +255,9 @@ describe("the bytes a cold launch writes", () => {
 			expect(fs.readFileSync(path.join(targetDir, "veyyon_natives.baseline.node")).equals(baseline)).toBe(true);
 			expect(fs.readdirSync(targetDir).sort()).toEqual([
 				"veyyon_natives.baseline.node",
+				"veyyon_natives.baseline.node.stamp",
 				"veyyon_natives.modern.node",
+				"veyyon_natives.modern.node.stamp",
 			]);
 		});
 	});
@@ -362,7 +372,7 @@ describe("the loader's own extraction pass, driven as the loader calls it", () =
 			const selectedName = expected.selected?.filename as string;
 			expect(returned).toBe(path.join(ctx.versionedDir, selectedName));
 			expect(errors).toEqual([]);
-			expect(fs.readdirSync(ctx.versionedDir)).toEqual([selectedName]);
+			expect(fs.readdirSync(ctx.versionedDir).sort()).toEqual([selectedName, `${selectedName}.stamp`]);
 			expect(fs.readFileSync(returned as string).equals(contents.get(selectedName) as Buffer)).toBe(true);
 		});
 	});
@@ -385,7 +395,9 @@ describe("the loader's own extraction pass, driven as the loader calls it", () =
 				plan.remaining.map(file => file.filename).sort(),
 			);
 			expect(errors).toEqual([]);
-			expect(fs.readdirSync(ctx.versionedDir).sort()).toEqual(bundle.files.map(file => file.filename).sort());
+			expect(fs.readdirSync(ctx.versionedDir).sort()).toEqual(
+				bundle.files.flatMap(file => [file.filename, `${file.filename}.stamp`]).sort(),
+			);
 			for (const file of bundle.files) {
 				const written = fs.readFileSync(path.join(ctx.versionedDir, file.filename));
 				expect(written.equals(contents.get(file.filename) as Buffer), file.filename).toBe(true);

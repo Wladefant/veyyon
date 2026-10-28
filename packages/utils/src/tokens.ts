@@ -7,5 +7,10 @@
  */
 export function estimateTokensFromText(text: string): number {
 	if (text.length === 0) return 0;
-	return (Buffer.byteLength(text, "utf-8") + 3) >> 2;
+	return estimateTokensFromBytes(Buffer.byteLength(text, "utf-8"));
+}
+
+/** {@link estimateTokensFromText} for a text of `bytes` UTF-8 bytes. */
+export function estimateTokensFromBytes(bytes: number): number {
+	return bytes <= 0 ? 0 : (bytes + 3) >> 2;
 }

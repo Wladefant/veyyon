@@ -14,12 +14,14 @@ import {
 	MCPToolCache,
 	parseMCPToolName,
 } from "../mcp";
+import type { MCPEventOccurrence } from "../mcp/types";
+import type { MCPWebhookControl } from "../mcp/events-webhook";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL } from "../mcp/startup-events";
 import type { Tool } from "../tools";
 import type { EventBus } from "../utils/event-bus";
 import type { AgentSession } from "./agent-session";
 import { sessionCpuExecHooks } from "./cpu-limit";
-import type { McpNotificationEntry } from "./factory-notices";
+import type { McpEventBatchDetails, McpEventEntry, McpNotificationEntry } from "./factory-notices";
 import { type CreateAgentSessionOptions, isInProcessChildSession } from "./factory-options";
 
 export type DeferredMCPActivation = {
@@ -27,6 +29,34 @@ export type DeferredMCPActivation = {
 	explicitlyRequestedMCPToolNames: string[];
 	activateAllMCPTools: boolean;
 };
+interface MCPEventsManagerTarget {
+	setOnEvent(
+		handler:
+			| ((
+					serverName: string,
+					event: MCPEventOccurrence,
+					subscriptionKey: string,
+				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			| undefined,
+	): void;
+	setOnEventCursor?(
+		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
+	): void;
+	setEventCursorProvider?(
+		provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined,
+	): void;
+	setOnEventControl?(
+		handler:
+			| ((
+					serverName: string,
+					subscriptionKey: string,
+					message: MCPWebhookControl,
+				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			| undefined,
+	): void;
+	clearOnEvent?(): void;
+	stopEvents?(): void | Promise<void>;
+}
 
 export function createPendingMCPTool(name: string): Tool {
 	const parsed = parseMCPToolName(name);
@@ -383,4 +413,136 @@ export function wireReactiveMCPManager({ manager, session, settings, refreshTool
 			}, settings.get("mcp.notificationDebounceMs")),
 		);
 	});
+	// Route MCP event occurrences to the creating session's yield queue only.
+	// Payloads remain untrusted data; teardown detaches callback on dispose or process exit.
+	if ("setOnEvent" in manager && typeof manager.setOnEvent === "function") {
+		const eventsManager = manager as unknown as MCPEventsManagerTarget;
+		const seenEventIds = new Set<string>();
+		const cursors = new Map<string, string | null>();
+		const pendingToReplay = new Map<string, McpEventEntry>();
+		const durableReceipts = new Set<string>();
+		let persistenceChain: Promise<void> = Promise.resolve();
+		const serializePersistence = <T>(operation: () => Promise<T>): Promise<T> => {
+			const result = persistenceChain.then(operation);
+			persistenceChain = result.then(() => undefined, () => undefined);
+			return result;
+		};
+		const ensureDurableJournal = async (): Promise<void> => {
+			if (!session.sessionManager.getSessionFile()) {
+				throw new Error("MCP event delivery requires a persistent session journal");
+			}
+			await session.sessionManager.ensureOnDisk();
+			await session.sessionManager.sync();
+		};
+		const scopedId = (subscriptionKey: string, id: string) => `${subscriptionKey}\0${id}`;
+		const journal = session.sessionManager.getEntries();
+
+		for (const entry of journal) {
+			if (entry.type === "custom_message" && entry.customType === "mcp-event") {
+				const receipts = (entry.details as Partial<McpEventBatchDetails> | undefined)?.receipts;
+				if (Array.isArray(receipts)) {
+					for (const receipt of receipts) {
+						if (
+							receipt !== null &&
+							typeof receipt === "object" &&
+							"subscriptionKey" in receipt &&
+							typeof receipt.subscriptionKey === "string" &&
+							"id" in receipt &&
+							typeof receipt.id === "string"
+						) {
+							durableReceipts.add(scopedId(receipt.subscriptionKey, receipt.id));
+						}
+					}
+				}
+				continue;
+			}
+			if (entry.type !== "custom" || entry.customType !== "mcp-events-state" || !entry.data) continue;
+			const state = entry.data as {
+				serverName?: string;
+				subscriptionKey?: string;
+				cursor?: string | null;
+				event?: MCPEventOccurrence;
+				control?: MCPWebhookControl;
+				eventId?: string;
+			};
+			if (!state.subscriptionKey) continue;
+			if (state.cursor === null || typeof state.cursor === "string") cursors.set(state.subscriptionKey, state.cursor);
+			const id = state.eventId ?? state.control?.messageId;
+			if (!id) continue;
+			seenEventIds.add(scopedId(state.subscriptionKey, id));
+			const item = state.serverName && state.event
+				? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, event: state.event }
+				: state.serverName && state.control
+					? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, control: state.control }
+					: undefined;
+			if (item) pendingToReplay.set(scopedId(state.subscriptionKey, id), item);
+		}
+
+		for (const receipt of durableReceipts) pendingToReplay.delete(receipt);
+		for (const item of pendingToReplay.values()) {
+			session.yieldQueue.enqueue<McpEventEntry>("mcp-event", item);
+		}
+
+		eventsManager.setEventCursorProvider?.((_serverName, subscriptionKey) => cursors.get(subscriptionKey) ?? null);
+		eventsManager.setOnEventCursor?.((serverName, subscriptionKey, cursor) =>
+			serializePersistence(async () => {
+				if (session.isDisposed) throw new Error("MCP session is disposed");
+				session.sessionManager.appendCustomEntry("mcp-events-state", {
+					serverName,
+					subscriptionKey,
+					cursor,
+				});
+				await ensureDurableJournal();
+				cursors.set(subscriptionKey, cursor);
+			}),
+		);
+
+		const persistNotice = (
+			serverName: string,
+			subscriptionKey: string,
+			item: McpEventEntry,
+			id: string,
+		): Promise<"queued" | "duplicate"> =>
+			serializePersistence(async () => {
+				if (session.isDisposed) throw new Error("MCP session is disposed");
+				const key = scopedId(subscriptionKey, id);
+				if (seenEventIds.has(key)) return "duplicate";
+				session.sessionManager.appendCustomEntry("mcp-events-state", {
+					serverName,
+					subscriptionKey,
+					eventId: id,
+					event: "event" in item ? item.event : undefined,
+					control: "control" in item ? item.control : undefined,
+				});
+				await ensureDurableJournal();
+				if (session.isDisposed) throw new Error("MCP session is disposed");
+				seenEventIds.add(key);
+				try {
+					session.yieldQueue.enqueue<McpEventEntry>("mcp-event", item);
+				} catch (error) {
+					seenEventIds.delete(key);
+					throw error;
+				}
+				return "queued";
+			});
+
+		eventsManager.setOnEvent(async (serverName, event, subscriptionKey) => {
+			if (session.isDisposed) throw new Error("MCP session is disposed");
+			return persistNotice(serverName, subscriptionKey, { serverName, subscriptionKey, event }, event.eventId);
+		});
+		eventsManager.setOnEventControl?.((serverName, subscriptionKey, control) => {
+			if (session.isDisposed) throw new Error("MCP session is disposed");
+			return persistNotice(serverName, subscriptionKey, { serverName, subscriptionKey, control }, control.messageId);
+		});
+
+		postmortem.register("mcp-event-cleanup", async () => {
+			if (typeof eventsManager.stopEvents === "function") {
+				await eventsManager.stopEvents();
+			}
+			eventsManager.setOnEvent(undefined);
+			eventsManager.setOnEventCursor?.(undefined);
+			eventsManager.setEventCursorProvider?.(undefined);
+			eventsManager.setOnEventControl?.(undefined);
+		});
+	}
 }

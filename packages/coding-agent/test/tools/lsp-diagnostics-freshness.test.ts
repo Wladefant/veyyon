@@ -151,8 +151,8 @@ describe("LSP diagnostics freshness", () => {
 			enableFormat: false,
 			enableDiagnostics: true,
 		});
-		await writethrough(stylesPath, ".section {}\n", undefined, undefined, { id: "batch", flush: false });
-		const result = await writethrough(tsPath, 'import styles from "./probe.module.scss";\n', undefined, undefined, {
+		await writethrough(stylesPath, ".section {}\n", undefined, { id: "batch", flush: false });
+		const result = await writethrough(tsPath, 'import styles from "./probe.module.scss";\n', undefined, {
 			id: "batch",
 			flush: true,
 		});
@@ -286,7 +286,7 @@ describe("LSP diagnostics freshness", () => {
 
 		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
 		const inline = await driveFakeTime(
-			writethrough(filePath, "export const value: number = 'x';\n", undefined, undefined, undefined, () => handle),
+			writethrough(filePath, "export const value: number = 'x';\n", undefined, undefined, () => handle),
 		);
 
 		// Inline returns undefined: the writethrough deferred rather than blocking on
@@ -336,7 +336,7 @@ describe("LSP diagnostics freshness", () => {
 
 		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
 		const inline = await driveFakeTime(
-			writethrough(filePath, "export const value: number = 'x';\n", undefined, undefined, undefined, () => handle),
+			writethrough(filePath, "export const value: number = 'x';\n", undefined, undefined, () => handle),
 		);
 
 		expect(inline?.messages.some(m => m.includes("fast error"))).toBe(true);

@@ -7,6 +7,7 @@ import type { ImageContent, TextContent } from "@veyyon/ai";
 import { type SummaryResult, summarizeCode } from "@veyyon/natives";
 import { isAbortError, isCancellation, isTimeoutError } from "@veyyon/utils/abortable";
 import { formatBytes } from "@veyyon/utils/format";
+import { readFileText } from "@veyyon/utils/fs-io";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { LRUCache } from "lru-cache/raw";
@@ -163,8 +164,8 @@ async function trySummarize(
 		const bridgePromise = routeReadThroughBridge(session, absolutePath);
 		const code =
 			bridgePromise !== undefined
-				? await bridgePromise.catch(() => Bun.file(absolutePath).text())
-				: await Bun.file(absolutePath).text();
+				? await bridgePromise.catch(() => readFileText(absolutePath))
+				: await readFileText(absolutePath);
 		throwIfAborted(signal);
 		const lineCount = countTextLines(code);
 		if (lineCount > MAX_SUMMARY_LINES) return null;

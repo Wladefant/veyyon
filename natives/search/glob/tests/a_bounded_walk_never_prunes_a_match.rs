@@ -26,6 +26,15 @@
 //! THE RULE NOW. A pattern whose bracket class can match `/` is unbounded.
 //! Ambiguity answers "can", because that answer only ever removes an
 //! optimization while the other one loses results.
+//!
+//! ALTERNATION. A `{a,b}` group used to disable the bound outright, so
+//! `source-cache/{plugins.json,pairs/manifest.json}` walked six million
+//! entries to find two files at depth two and timed out. A group now counts
+//! as its deepest alternative. The sweep below draws patterns from group
+//! syntax, classes and escapes, expands every alternative into a concrete path
+//! the engine itself must match, and requires the bound to reach it. It does
+//! not cover `\` as a separator on Windows, which a walk-relative pattern never
+//! holds because `build_glob_pattern` rewrites it to `/` first.
 
 use veyyon_glob::{compile_glob, walk_depth_bound};
 
@@ -155,12 +164,12 @@ mod a_class_that_cannot {
 mod the_rest_of_the_bound_is_unchanged {
 	use super::*;
 
-	/// `**` and `{...}` still disable it, for the reasons they always did.
+	/// `**` still disables it, inside a group or out.
 	#[test]
-	fn globstar_and_alternation_stay_unbounded() {
+	fn globstar_stays_unbounded() {
 		assert_eq!(walk_depth_bound("**/*.ts"), usize::MAX);
 		assert_eq!(walk_depth_bound("src/**"), usize::MAX);
-		assert_eq!(walk_depth_bound("{a,b}/c.ts"), usize::MAX);
+		assert_eq!(walk_depth_bound("{**/a,b}/c.ts"), usize::MAX);
 	}
 
 	/// A plain pattern is its segment count, never zero.
@@ -180,5 +189,220 @@ mod the_rest_of_the_bound_is_unchanged {
 		{
 			assert_bound_reaches(pattern, path);
 		}
+	}
+}
+
+mod an_alternation_reaches_its_deepest_alternative {
+	use globset::{GlobBuilder, GlobMatcher};
+
+	use super::*;
+
+	/// The shape that timed out: literal names in one group, one of them a
+	/// level deeper than the rest.
+	#[test]
+	fn a_group_of_literal_paths_reaches_its_deepest_member() {
+		let pattern = "{plugins.json,pairs/manifest.json,scan.py}";
+		assert_eq!(walk_depth_bound(pattern), 2);
+		for path in ["plugins.json", "pairs/manifest.json", "scan.py"] {
+			assert_bound_reaches(pattern, path);
+		}
+	}
+
+	/// The engine as the walker compiles it. Not `compile_glob`, which
+	/// rewrites `\` to `/` before it compiles.
+	fn engine(pattern: &str) -> Option<GlobMatcher> {
+		let glob = GlobBuilder::new(pattern)
+			.literal_separator(true)
+			.build()
+			.ok()?;
+		Some(glob.compile_matcher())
+	}
+
+	fn assert_engine_reaches(pattern: &str, path: &str, depth: usize) {
+		let matcher = engine(pattern).unwrap_or_else(|| panic!("{pattern:?} compiles"));
+		assert!(matcher.is_match(path), "the engine matches {path:?} with {pattern:?}");
+		assert_eq!(path.split('/').count(), depth);
+		assert_eq!(walk_depth_bound(pattern), depth);
+	}
+
+	/// A class the engine closes at its first `]` must not hide the `{` that
+	/// follows. Reading `\` inside a class as an escape keeps the class open
+	/// across `{a]`, splits the alternative at the inner group's `,`, and
+	/// bounds the walk short of the depth-six match.
+	#[cfg(unix)]
+	#[test]
+	fn a_backslash_inside_a_class_does_not_hide_a_group() {
+		assert_engine_reaches("{b/b/[\\]{a],b/b/b/a}a}", "b/b/\\b/b/b/aa", 6);
+	}
+
+	/// A `]` first in a class is a member, so `[]{]` and `[]}]` are classes
+	/// and the `,` between them is a literal at the top level. Closing either
+	/// class at its first `]` turns the braces into a group whose
+	/// alternatives are measured apart, one level short of the match.
+	#[test]
+	fn a_leading_bracket_in_a_class_does_not_open_a_group() {
+		assert_engine_reaches("[]{]b/b,b/b[]}]", "{b/b,b/b}", 3);
+	}
+
+	/// Pattern pieces, each with the text a match puts where it stands.
+	/// `None` marks group syntax.
+	const TOKENS: &[(&str, Option<&str>)] = &[
+		("a", Some("a")),
+		("b/", Some("b/")),
+		("/", Some("/")),
+		("*", Some("x")),
+		("?", Some("q")),
+		("]", Some("]")),
+		("\\{", Some("{")),
+		("\\,", Some(",")),
+		("[,}]", Some(",")),
+		("[\\]", Some("\\")),
+		("[]{]", Some("{")),
+		("[]}]", Some("}")),
+		("[],]", Some(",")),
+		("{", None),
+		(",", None),
+		("}", None),
+	];
+
+	/// A pattern as nested groups: each alternative is a sequence of literal
+	/// text and groups.
+	enum Piece {
+		Text(&'static str),
+		Group(Vec<Vec<Self>>),
+	}
+
+	/// Build the tree for a token sequence, or `None` when its braces do not
+	/// balance. A `,` outside every group is literal, as the engine reads it.
+	fn parse(tokens: &[usize]) -> Option<Vec<Piece>> {
+		let mut stack: Vec<Vec<Vec<Piece>>> = vec![vec![Vec::new()]];
+		for &token in tokens {
+			let (text, instance) = TOKENS[token];
+			match (text, instance) {
+				(_, Some(instance)) => stack.last_mut()?.last_mut()?.push(Piece::Text(instance)),
+				("{", None) => stack.push(vec![Vec::new()]),
+				(",", None) if stack.len() == 1 => stack[0][0].push(Piece::Text(",")),
+				(",", None) => stack.last_mut()?.push(Vec::new()),
+				(_, None) => {
+					if stack.len() == 1 {
+						return None;
+					}
+					let group = stack.pop()?;
+					stack.last_mut()?.last_mut()?.push(Piece::Group(group));
+				},
+			}
+		}
+		if stack.len() != 1 {
+			return None;
+		}
+		stack.pop()?.pop()
+	}
+
+	/// Every concrete path the sequence expands to, or `None` past `cap`.
+	///
+	/// The engine drops an alternative that compiles to nothing (`{a,}`
+	/// matches `a` and never the empty string), and a group left with no
+	/// alternative matches the empty string. Every text piece is non-empty, so
+	/// an alternative compiles to nothing exactly when it expands to `[""]`.
+	fn expand(sequence: &[Piece], cap: usize) -> Option<Vec<String>> {
+		let mut paths = vec![String::new()];
+		for piece in sequence {
+			paths = match piece {
+				Piece::Text(text) => paths.into_iter().map(|path| path + text).collect(),
+				Piece::Group(alternatives) => {
+					let mut tails = Vec::new();
+					for alternative in alternatives {
+						let expanded = expand(alternative, cap)?;
+						if expanded != [""] {
+							tails.extend(expanded);
+						}
+					}
+					if tails.is_empty() {
+						tails.push(String::new());
+					}
+					let mut joined = Vec::new();
+					for path in &paths {
+						for tail in &tails {
+							joined.push(format!("{path}{tail}"));
+						}
+					}
+					joined
+				},
+			};
+			if paths.len() > cap {
+				return None;
+			}
+		}
+		Some(paths)
+	}
+
+	/// Deterministic draws, so a failure reproduces.
+	struct SplitMix(u64);
+
+	impl SplitMix {
+		const fn below(&mut self, bound: usize) -> usize {
+			self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+			let mut z = self.0;
+			z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+			z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+			((z ^ (z >> 31)) % bound as u64) as usize
+		}
+	}
+
+	/// Tokens the engine reads as the sweep does. Windows reads `\` as a
+	/// separator, not an escape, so a token carrying one is drawn on Unix only.
+	fn drawable_tokens() -> Vec<usize> {
+		(0..TOKENS.len())
+			.filter(|&token| !cfg!(windows) || !TOKENS[token].0.contains('\\'))
+			.collect()
+	}
+
+	#[test]
+	fn every_alternative_of_a_drawn_pattern_is_reachable() {
+		let mut rng = SplitMix(0x5eed0fa17e57);
+		let drawable = drawable_tokens();
+		let mut bounded_groups = 0;
+		for _ in 0..60_000 {
+			let length = 1 + rng.below(12);
+			let tokens: Vec<usize> = (0..length)
+				.map(|_| drawable[rng.below(drawable.len())])
+				.collect();
+			let pattern: String = tokens.iter().map(|&token| TOKENS[token].0).collect();
+			let bound = walk_depth_bound(&pattern);
+			if bound == usize::MAX {
+				continue;
+			}
+			let Some(matcher) = engine(&pattern) else {
+				continue;
+			};
+			let tree = parse(&tokens).unwrap_or_else(|| {
+				panic!("the engine compiles {pattern:?} but the sweep cannot parse it")
+			});
+			let Some(paths) = expand(&tree, 512) else {
+				continue;
+			};
+			if tokens.iter().any(|&token| TOKENS[token].0 == "{") {
+				bounded_groups += 1;
+			}
+			for path in paths {
+				if path.is_empty()
+					|| path.starts_with('/')
+					|| path.ends_with('/')
+					|| path.contains("//")
+				{
+					continue;
+				}
+				assert!(
+					matcher.is_match(&path),
+					"the sweep reads {pattern:?} as matching {path:?} and the engine does not"
+				);
+				let depth = path.split('/').count();
+				assert!(
+					depth <= bound,
+					"{pattern:?} matches {path:?} at depth {depth} but bounds the walk at {bound}"
+				);
+			}
+		}
+		assert!(bounded_groups > 1_000, "only {bounded_groups} drawn patterns held a bounded group");
 	}
 }

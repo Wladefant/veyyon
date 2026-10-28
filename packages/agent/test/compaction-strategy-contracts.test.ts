@@ -143,7 +143,7 @@ describe("what both compaction prompts must guarantee", () => {
 	/**
 	 * `generateSummary` selects the iterative prompt exactly when it has a
 	 * previous summary to pass, and only then emits the `<previous-summary>`
-	 * block (`buildSummaryPrompt` in src/compaction/compaction.ts). An initial
+	 * block (`summaryPromptParts` in src/compaction/compaction.ts). An initial
 	 * prompt that referred to that block would send the model looking for a
 	 * section the builder did not write.
 	 */

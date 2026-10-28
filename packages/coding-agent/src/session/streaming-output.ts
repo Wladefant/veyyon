@@ -9,6 +9,7 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
+import type { ProducerOutputGuard } from "../secrets/producer-output";
 
 // =============================================================================
 // Constants
@@ -37,6 +38,12 @@ export const DEFAULT_MAX_COLUMN = 512; // Max UTF-8 bytes per grep match line
 export const ARTIFACT_DEFAULT_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 /** Default head budget; the remainder becomes the rolling tail window. */
 export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
+/**
+ * Minimum ms between two live output updates a running command sends its caller. Each update carries the whole
+ * visible tail, which the agent loop sanitizes and the renderer redraws, so an update per chunk costs the tail per
+ * printed line.
+ */
+export const LIVE_OUTPUT_INTERVAL_MS = 50;
 
 const NL = "\n";
 const ELLIPSIS = "…";
@@ -80,6 +87,8 @@ export interface OutputSummary {
 }
 
 export interface OutputSinkOptions {
+	/** Opt-in producer protection, applied before callbacks or backing artifact writes. */
+	outputGuard?: ProducerOutputGuard;
 	artifactPath?: string;
 	artifactId?: string;
 	/** Tail buffer budget (bytes). Default DEFAULT_MAX_BYTES. */
@@ -812,6 +821,12 @@ export class TailBuffer {
 export class OutputSink {
 	#buffer = "";
 	#bufferBytes = 0;
+	/**
+	 * `#buffer` holds more than the spill window. An overflowing push appends and cuts back only once two windows
+	 * are held, so a stream of small chunks encodes the window once per window of input rather than once per chunk;
+	 * {@link #cutTailToWindow} cuts the rest before the buffer is read.
+	 */
+	#bufferOverWindow = false;
 	#head = "";
 	#headBytes = 0;
 	#headLines = 0; // newline count inside #head
@@ -860,6 +875,7 @@ export class OutputSink {
 	readonly #onChunk?: (chunk: string) => void;
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
+	readonly #outputGuard?: ProducerOutputGuard;
 
 	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
 	// owns a head budget + a rolling tail buffer; once the head is closed,
@@ -893,6 +909,7 @@ export class OutputSink {
 			artifactHeadBytes = ARTIFACT_DEFAULT_HEAD_BYTES,
 		} = options ?? {};
 		this.#artifactPath = artifactPath;
+		this.#outputGuard = options?.outputGuard;
 		this.#artifactId = artifactId;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, headBytes);
@@ -917,11 +934,15 @@ export class OutputSink {
 	 * `emitInline: false` keeps that representation out of the live callback.
 	 */
 	push(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
+		this.#pushFiltered(this.#outputGuard ? this.#outputGuard.push(chunk) : chunk, options);
+	}
+
+	#pushFiltered(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
-		const inline = options?.inline;
+		const inline = options?.inline === undefined ? undefined : this.#outputGuard?.sanitize(options.inline) ?? options.inline;
 		const substituted = inline !== undefined;
 		const inlineChunk = inline === undefined ? chunk : sanitizeText(inline);
 
@@ -1076,15 +1097,22 @@ export class OutputSink {
 			const { text, bytes } = truncateTailBytes(chunk, threshold);
 			this.#buffer = text;
 			this.#bufferBytes = bytes;
-		} else {
-			// Intermediate size is bounded (<= threshold + dataBytes), safe to concat.
-			this.#buffer += chunk;
-			this.#bufferBytes += dataBytes;
-
-			const { text, bytes } = truncateTailBytes(this.#buffer, threshold);
-			this.#buffer = text;
-			this.#bufferBytes = bytes;
+			this.#bufferOverWindow = false;
+			return;
 		}
+		this.#buffer += chunk;
+		this.#bufferBytes += dataBytes;
+		this.#bufferOverWindow = true;
+		if (this.#bufferBytes > threshold * 2) this.#cutTailToWindow();
+	}
+
+	/** Cut `#buffer` to the last spill window of bytes, which is what every per-chunk cut would have kept. */
+	#cutTailToWindow(): void {
+		if (!this.#bufferOverWindow) return;
+		const { text, bytes } = truncateTailBytes(this.#buffer, this.#spillThreshold);
+		this.#buffer = text;
+		this.#bufferBytes = bytes;
+		this.#bufferOverWindow = false;
 	}
 
 	/**
@@ -1269,9 +1297,12 @@ export class OutputSink {
 	 * branch in `dump()` against stale totals.
 	 */
 	replace(text: string): void {
+		this.#outputGuard?.reset();
+		text = this.#outputGuard?.sanitize(text) ?? text;
 		this.#clearPendingChunkTimer();
 		this.#buffer = text;
 		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
+		this.#bufferOverWindow = false;
 		this.#head = "";
 		this.#headBytes = 0;
 		this.#headLines = 0;
@@ -1415,6 +1446,7 @@ export class OutputSink {
 	}
 
 	async #dumpInternal(notice: string | undefined, strict: boolean): Promise<OutputSummary> {
+		if (this.#outputGuard) this.#pushFiltered(this.#outputGuard.finish());
 		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
@@ -1445,6 +1477,7 @@ export class OutputSink {
 
 		// Compose the visible output. With head retention, splice head + marker
 		// + tail when content was elided. Otherwise return the rolling buffer.
+		this.#cutTailToWindow();
 		const headBytes = this.#headBytes;
 		const tailBuf = this.#buffer;
 		const tailBytes = this.#bufferBytes;

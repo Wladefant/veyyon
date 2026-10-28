@@ -433,15 +433,28 @@ export class InMemoryFilesystem extends Filesystem {
 }
 
 /**
- * Disk-backed {@link Filesystem} using Bun's file APIs. The default for CLI
- * use. Paths are accepted as-is; callers responsible for any cwd or
- * jail/sandbox resolution should wrap this with their own subclass.
+ * Disk-backed {@link Filesystem} over `node:fs`. The default for CLI use. Paths
+ * are accepted as-is; callers responsible for any cwd or jail/sandbox resolution
+ * should wrap this with their own subclass.
+ *
+ * Reads go through `node:fs` rather than `Bun.file`: Bun opens with
+ * `O_NONBLOCK`, so a file another process holds a lease on (an NFS server's
+ * delegation to a client writing it) fails with `EAGAIN` instead of waiting for
+ * the lease to break.
  */
 export class NodeFilesystem extends Filesystem {
 	async readText(path: string): Promise<string> {
-		const file = Bun.file(path);
-		if (!(await file.exists())) throw new NotFoundError(path);
-		return file.text();
+		try {
+			// `readFile`'s UTF-8 decode keeps a BOM; drop it as `Bun.file().text()` did.
+			const text = await fs.readFile(path, "utf8");
+			return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+		} catch (error) {
+			// A directory has no text to read; it is reported as no file, as the earlier existence check did.
+			if (isNotFound(error) || (error as NodeJS.ErrnoException).code === "EISDIR") {
+				throw new NotFoundError(path, error);
+			}
+			throw error;
+		}
 	}
 
 	async readBinary(path: string): Promise<Uint8Array> {

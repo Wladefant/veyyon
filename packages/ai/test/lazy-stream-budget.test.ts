@@ -32,9 +32,12 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
 	AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
 	CURSOR_LAZY_STREAM_LIMITS,
+	GEMINI_LAZY_STREAM_LIMITS,
 	type LazyStreamLimits,
 	resolveLazyStreamBudget,
 } from "@veyyon/ai/providers/register-builtins";
+import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { ANTIGRAVITY_MODEL_WIRE_PROFILES } from "@veyyon/catalog/wire/gemini-headers";
 import { $env } from "@veyyon/utils/env";
 
 /** The generic defaults in `idle-iterator.ts` — what an unlimited provider inherits. */
@@ -258,6 +261,55 @@ describe("lazy provider stream budget", () => {
 		});
 	});
 
+	describe("Gemini wires, which deliver a function call whole", () => {
+		/**
+		 * Under the slowest tenth of measured Gemini 4 Argon tool-call decodes, which ran at 99 to
+		 * 100 tokens/s; the median was 119.
+		 */
+		const SLOW_DECODE_TOKENS_PER_S = 100;
+		const GEMINI_WIRE_APIS = new Set<string>(["google-generative-ai", "google-vertex", "google-gemini-cli"]);
+
+		/**
+		 * The largest output one Gemini-wire request is sent with, read from the catalog. A Cloud Code
+		 * Assist request through `google-antigravity` is sent with its wire profile's cap; every other
+		 * request with its model's `maxTokens`.
+		 */
+		function largestRequestOutputCap(): number {
+			const caps = Object.values(ANTIGRAVITY_MODEL_WIRE_PROFILES).map(profile => profile.maxOutputTokens);
+			for (const provider of getBundledProviders()) {
+				if (provider === "google-antigravity") continue;
+				for (const model of getBundledModels(provider)) {
+					if (GEMINI_WIRE_APIS.has(model.api) && model.maxTokens !== null) caps.push(model.maxTokens);
+				}
+			}
+			return Math.max(...caps);
+		}
+
+		/**
+		 * The fix. The stream is silent while the model decodes a call's arguments, so a budget shorter
+		 * than that decode cuts every large `write` or `edit`, and the retry decodes the same call into
+		 * the same deadline. The first event gets the same budget: a call decoded with no thinking
+		 * first is the same silence before the first event.
+		 */
+		it("waits out the silent decode of a call at the largest request output cap", () => {
+			const budget = resolveLazyStreamBudget({}, GEMINI_LAZY_STREAM_LIMITS);
+			const decodeMs = Math.ceil(largestRequestOutputCap() / SLOW_DECODE_TOKENS_PER_S) * 1000;
+
+			expect(budget.idleTimeoutMs!).toBeGreaterThanOrEqual(decodeMs);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThanOrEqual(decodeMs);
+		});
+
+		/** An operator who lowers idle keeps the 300s wait for a cold first event. */
+		it("keeps the cold-start floor when an operator tightens idle", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, GEMINI_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+		});
+	});
+
 	describe("providers that own their watchdog", () => {
 		/**
 		 * Every OpenAI-family and Anthropic provider wraps its own transport
@@ -319,9 +371,8 @@ describe("lazy provider stream budget", () => {
 
 	describe("partial limits", () => {
 		/**
-		 * A provider that widens only the first-event floor (the Gemini CLI
-		 * case) must keep the generic idle budget rather than have it silently
-		 * dragged along.
+		 * A provider that widens only the first-event floor must keep the generic idle budget rather
+		 * than have it silently dragged along.
 		 */
 		it("widening only the first event leaves idle at the generic default", () => {
 			const limits: LazyStreamLimits = { defaultFirstEventTimeoutMs: 300_000 };

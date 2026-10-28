@@ -7,13 +7,19 @@
  * scanning and reading. Restoring a directory exclusion or ignoring changed sizes
  * must break these tests.
  *
- * Gaps: this drives the production describer, not the trust CLI or protocol reader.
+ * A refused scan must reach operators: project skill loading logs a warning, and `veyyon trust`
+ * lists the candidate as unreadable even though the bounded scanner returns `null`.
+ *
+ * Gaps: the suite does not test CLI argument parsing or the slash-command registry.
  * It does not measure scan cost or detect same-size edits during a read.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
 import { describeProjectSkill, PROJECT_SKILL_LIMITS } from "@veyyon/coding-agent/config/project-skill-trust";
+import { loadProjectSkills } from "@veyyon/coding-agent/discovery/project-skills";
+import { logger } from "@veyyon/utils";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirFactory();
@@ -23,14 +29,22 @@ let mockOpen: { mockRestore(): void } | undefined;
 interface Fixture {
 	root: string;
 	skillDir: string;
+	agentDir: string;
+	home: string;
 }
 
 async function makeFixture(): Promise<Fixture> {
 	const root = await fs.realpath(makeTempDir("veyyon-skill-bounds-"));
 	const skillDir = path.join(root, ".agents", "skills", "bounded");
-	await fs.mkdir(skillDir, { recursive: true });
+	const agentDir = path.join(root, "profile", "agent");
+	const home = path.join(root, "home");
+	await Promise.all([
+		fs.mkdir(skillDir, { recursive: true }),
+		fs.mkdir(agentDir, { recursive: true }),
+		fs.mkdir(home, { recursive: true }),
+	]);
 	await fs.writeFile(path.join(skillDir, "SKILL.md"), "---\nname: bounded\n---\nbody\n");
-	return { root, skillDir };
+	return { root, skillDir, agentDir, home };
 }
 
 async function writeFiles(dir: string, count: number, bytes = 0): Promise<void> {
@@ -48,6 +62,34 @@ describe("a skill folder over a bound is not trusted", () => {
 		await writeFiles(path.join(fixture.skillDir, "assets"), PROJECT_SKILL_LIMITS.maxFiles);
 
 		expect(await describeProjectSkill(fixture.skillDir, fixture.root)).toBeNull();
+	});
+	test("a refused scan is logged by skill discovery and listed as unreadable by trust", async () => {
+		const fixture = await makeFixture();
+		await writeFiles(path.join(fixture.skillDir, "assets"), PROJECT_SKILL_LIMITS.maxFiles);
+		const warning = spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			const result = await loadProjectSkills({
+				cwd: fixture.root,
+				home: fixture.home,
+				repoRoot: fixture.root,
+				agentDir: fixture.agentDir,
+			});
+			const listed = await runTrustCommand({
+				cwd: fixture.root,
+				agentDir: fixture.agentDir,
+				action: "list",
+				paths: [],
+			});
+			const skillPath = path.join(fixture.skillDir, "SKILL.md");
+			const relativePath = path.relative(fixture.root, skillPath).split(path.sep).join("/");
+			const message = `project-skills: ${relativePath} was not loaded because the skill folder is unsafe or unreadable.`;
+
+			expect(result.warnings).toContain(message);
+			expect(warning).toHaveBeenCalledWith(message, { path: skillPath, relativePath });
+			expect(listed.unreadable).toContain(skillPath);
+		} finally {
+			warning.mockRestore();
+		}
 	});
 
 	test("exactly the file count bound still describes the folder", async () => {

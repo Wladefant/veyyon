@@ -77,7 +77,7 @@ export class YieldQueue {
 		if (mode === "idle") {
 			this.#idleFlushPending = false;
 		}
-		const idleMessages: AgentMessage[] = [];
+		const idleDispatches: Array<{ kind: string; entries: unknown[]; message: AgentMessage }> = [];
 		for (const [kind, dispatcher] of this.#dispatchers) {
 			const entries = this.#drain(kind);
 			if (entries.length === 0) continue;
@@ -87,16 +87,18 @@ export class YieldQueue {
 				try {
 					this.#options.injectStreaming?.(message);
 				} catch (error) {
+					this.#restore(kind, entries);
 					logger.warn("Yield queue streaming dispatch failed", { kind, error: errorMessage(error) });
 				}
 			} else {
-				idleMessages.push(message);
+				idleDispatches.push({ kind, entries, message });
 			}
 		}
-		if (mode === "idle" && idleMessages.length > 0) {
+		if (mode === "idle" && idleDispatches.length > 0) {
 			try {
-				await this.#options.injectIdle(idleMessages);
+				await this.#options.injectIdle(idleDispatches.map(dispatch => dispatch.message));
 			} catch (error) {
+				for (const dispatch of idleDispatches) this.#restore(dispatch.kind, dispatch.entries);
 				logger.warn("Yield queue idle dispatch failed", { error: errorMessage(error) });
 			}
 		}
@@ -151,6 +153,11 @@ export class YieldQueue {
 		if (!entries || entries.length === 0) return [];
 		this.#entries.delete(kind);
 		return entries;
+	}
+
+	#restore(kind: string, entries: unknown[]): void {
+		const current = this.#entries.get(kind);
+		this.#entries.set(kind, current ? [...entries, ...current] : entries);
 	}
 
 	#build(kind: string, dispatcher: StoredDispatcher, entries: unknown[]): AgentMessage | null {

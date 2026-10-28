@@ -64,6 +64,7 @@ Unknown first tokens route to `launch` as a prompt:
 | `shell` | | Native shell probe |
 | `ssh` | | SSH host configuration |
 | `stats` | | Usage statistics dashboard (`--summary` prints to console, `--json` for machines) |
+| `terminal-control` | | Rotate credentials for a live terminal owned by your OS account |
 | `tiny-models` | | On-device tiny model utilities |
 | `token` | | Print a provider's API key or OAuth token |
 | `ttsr` | | Time-traveling stream rules test |
@@ -73,6 +74,21 @@ Unknown first tokens route to `launch` as a prompt:
 | `worktree` | `wt` | Git worktree helpers |
 
 Hidden worker selectors and `--smoke-test` are for CI/packaging, not daily use.
+
+## Rotating terminal credentials
+
+Run `veyyon terminal-control rotate <session-id>` as the terminal's OS owner.
+Use the same profile as the target terminal.
+The command reads private local discovery and prints only `Rotation succeeded.` on success.
+Never pass a credential as an argument.
+
+Rotation keeps the terminal and its active turn running.
+It replaces private discovery atomically, rejects old credentials, and disconnects existing subscribers.
+Clients must rediscover the terminal and authenticate with the new credential.
+Accepted deliveries continue; rotation does not erase delivery deduplication.
+
+If discovery replacement fails, rotation leaves the previous credential active.
+The command reports failure with a nonzero exit code.
 
 ## Studying a session
 

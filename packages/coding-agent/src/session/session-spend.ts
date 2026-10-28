@@ -17,7 +17,7 @@
 
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
-import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
+import { coldToolCallCount, readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { TOOL } from "../tools/core/builtin-names";
 import type { SessionSpend } from "./agent-session-types";
@@ -59,20 +59,30 @@ function taskToolUsage(details: unknown): Usage | undefined {
 	return usage as Usage;
 }
 
+/** Add an assistant message that made `toolCalls` tool calls and spent `usage`. */
+function addAssistantSpend(spend: SessionSpend, usage: Usage, toolCalls: number): void {
+	spend.totalMessages++;
+	spend.assistantMessages++;
+	spend.toolCalls += toolCalls;
+	addUsage(spend, usage);
+}
+
 /**
  * Add one message to a spend. An assistant message contributes its own usage; a `task` tool result
  * contributes the usage of the agents it ran, which no assistant message of this session records.
  */
 export function addMessageSpend(spend: SessionSpend, message: AgentMessage): void {
+	if (message.role === "assistant") {
+		let toolCalls = 0;
+		for (const block of message.content) {
+			if (block.type === "toolCall") toolCalls++;
+		}
+		addAssistantSpend(spend, message.usage, toolCalls);
+		return;
+	}
 	spend.totalMessages++;
 	if (message.role === "user") {
 		spend.userMessages++;
-	} else if (message.role === "assistant") {
-		spend.assistantMessages++;
-		for (const block of message.content) {
-			if (block.type === "toolCall") spend.toolCalls++;
-		}
-		addUsage(spend, message.usage);
 	} else if (message.role === "toolResult") {
 		spend.toolResults++;
 		if (message.toolName === TOOL.task) {
@@ -83,8 +93,9 @@ export function addMessageSpend(spend: SessionSpend, message: AgentMessage): voi
 }
 
 /**
- * Add the message entries of `branch` from `from` to `to`. An assistant message and a `task` result
- * spend what their large fields hold, which a cold entry reads back from the session file: read
+ * Add the message entries of `branch` from `from` to `to`. A cold assistant message's stand-in holds
+ * its usage and the number of its tool calls, so the tally reads no assistant line back. A `task`
+ * result spends what its details hold, which a cold entry reads back from the session file: read
  * through {@link readColdEntry}, the tally leaves the summarized history on disk.
  */
 function addEntrySpend(spend: SessionSpend, branch: readonly SessionEntry[], from: number, to: number): void {
@@ -92,7 +103,11 @@ function addEntrySpend(spend: SessionSpend, branch: readonly SessionEntry[], fro
 		const entry = branch[index];
 		if (entry.type !== "message") continue;
 		const { message } = entry;
-		if (message.role === "assistant" || (message.role === "toolResult" && message.toolName === TOOL.task)) {
+		if (message.role === "assistant") {
+			const toolCalls = coldToolCallCount(entry);
+			if (toolCalls === undefined) addMessageSpend(spend, message);
+			else addAssistantSpend(spend, message.usage, toolCalls);
+		} else if (message.role === "toolResult" && message.toolName === TOOL.task) {
 			const restored = readColdEntry(entry);
 			addMessageSpend(spend, restored?.type === "message" ? restored.message : message);
 		} else addMessageSpend(spend, message);

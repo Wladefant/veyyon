@@ -1,13 +1,10 @@
 /**
  * Test helper: a project plugin registry that names `installPaths`, approved under the operator's trust record.
  *
- * Project scope loads only the `installPath` entries of a trusted registry, so a fixture that wants a project plugin
- * loaded must write the registry and record its exact bytes as approved. This mirrors what `veyyon trust` records.
+ * Project scope loads only the `installPath` entries of a trusted registry. Approval goes through the production trust command.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { describeProjectExecutable, ProjectTrust } from "@veyyon/coding-agent/config/project-trust";
-import { projectTrustKey } from "@veyyon/coding-agent/discovery/helpers";
+import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
 import {
 	addInstalledPlugin,
 	buildPluginId,
@@ -27,7 +24,7 @@ export interface TrustProjectRegistryOptions {
 	installPaths: string[];
 }
 
-/** Write `<pluginsRoot>/installed_plugins.json` naming `installPaths`, then trust its exact bytes. Returns its path. */
+/** Write the registry, then approve it through the production trust command. */
 export async function trustProjectRegistry(opts: TrustProjectRegistryOptions): Promise<string> {
 	const registryPath = path.join(opts.pluginsRoot, "installed_plugins.json");
 	const when = "2025-01-01T00:00:00.000Z";
@@ -43,12 +40,6 @@ export async function trustProjectRegistry(opts: TrustProjectRegistryOptions): P
 		registry = addInstalledPlugin(registry, buildPluginId(path.basename(installPath), "test-mkt"), entry);
 	}
 	await writeInstalledPluginsRegistry(registryPath, registry);
-
-	const trustRoot = await projectTrustKey(opts.cwd);
-	const executable = await describeProjectExecutable(registryPath, trustRoot);
-	if (!executable) throw new Error(`project registry is not readable: ${registryPath}`);
-	await fs.mkdir(opts.agentDir, { recursive: true });
-	const trust = await ProjectTrust.load(opts.agentDir);
-	await trust.trust(trustRoot, [executable]);
+	await runTrustCommand({ cwd: opts.cwd, agentDir: opts.agentDir, action: "approve", paths: [registryPath] });
 	return registryPath;
 }

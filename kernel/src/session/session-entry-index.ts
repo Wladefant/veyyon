@@ -18,20 +18,19 @@ export function emptyUsageStatistics(): UsageStatistics {
 	};
 }
 
-function taskUsageFrom(details: unknown): Usage | undefined {
-	if (!isRecord(details)) return undefined;
-	const maybeUsage = details.usage;
+/** A task result's `details.usage`, written by the task tool as the child's `Usage`. */
+function taskUsageFrom(maybeUsage: unknown): Usage | undefined {
 	if (maybeUsage === null || typeof maybeUsage !== "object") return undefined;
-	// A task result's details are written by the task tool, whose `usage` is the child's `Usage`.
-	const usage = maybeUsage as Usage;
-	return usage;
+	return maybeUsage as Usage;
 }
 
 function entryUsage(entry: SessionEntry): Usage | undefined {
 	if (entry.type !== "message") return undefined;
 	const message = entry.message;
 	if (message.role === "assistant") return message.usage;
-	if (message.role === "toolResult" && message.toolName === "task") return taskUsageFrom(message.details);
+	if (message.role === "toolResult" && message.toolName === "task") {
+		return isRecord(message.details) ? taskUsageFrom(message.details.usage) : undefined;
+	}
 	return undefined;
 }
 
@@ -52,6 +51,14 @@ function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
 /** Add what `entry` spent to `target`, as {@link SessionEntryIndex} counts it. */
 export function addEntryUsage(target: UsageStatistics, entry: SessionEntry): void {
 	addUsage(target, entryUsage(entry));
+}
+
+/**
+ * {@link addEntryUsage} for a `task` tool result whose `details` are not in memory, from the
+ * `usage` member those details hold.
+ */
+export function addTaskResultUsage(target: UsageStatistics, detailsUsage: unknown): void {
+	addUsage(target, taskUsageFrom(detailsUsage));
 }
 
 function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {

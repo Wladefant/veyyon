@@ -30,7 +30,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
-import { TRANSIENT_TRANSPORT_PATTERN } from "@veyyon/ai/error/flags";
+import { namesDeadSocket, TRANSIENT_TRANSPORT_PATTERN } from "@veyyon/ai/error/flags";
+import { isProviderRetryableError } from "@veyyon/ai/error/retryable";
 
 /** Every errno the transport layer can hand up for a connection that died. */
 const TRANSPORT_ERRNOS = ["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "EPIPE", "EAI_AGAIN"] as const;
@@ -76,6 +77,15 @@ describe("errno transport failures classify as transient", () => {
 		// would have widened retry onto the one case that must not be retried.
 		const id = AIError.classifyMessage({ errorMessage: "read ECONNRESET" });
 		expect(AIError.retriable(id, { replayUnsafe: true })).toBe(false);
+	});
+
+	it("retries Go's closed-connection error a gateway forwards verbatim", () => {
+		// A Go gateway renders `net.ErrClosed` as prose with no errno and none of the Node phrases, so
+		// the turn ended on its first attempt (oh-my-pi 9d572fad2f5e43920fa458f248e620098608bdaf).
+		const errorMessage = "read tcp 127.0.0.1:9426->127.0.0.1:9050: use of closed network connection";
+		expect(AIError.retriable(AIError.classifyMessage({ errorMessage }))).toBe(true);
+		expect(isProviderRetryableError(new Error(errorMessage))).toBe(true);
+		expect(namesDeadSocket(errorMessage)).toBe(true);
 	});
 
 	it("does not read an errno out of an identifier that contains one", () => {

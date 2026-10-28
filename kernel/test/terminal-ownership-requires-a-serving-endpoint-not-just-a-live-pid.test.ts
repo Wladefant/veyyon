@@ -17,6 +17,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { assertNotTerminalOwned } from "@veyyon/kernel/session/terminal-ownership";
+import { applyOwnerOnlyWindowsAcl } from "@veyyon/utils";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -30,12 +31,39 @@ function endpointFor(root: string, nonce: string): string {
 		: path.join(root, "run", "terminals", `${nonce}.sock`);
 }
 
-async function writeClaim(root: string, sessionFile: string, endpoint: string, pid: number): Promise<void> {
+/**
+ * Writes a claim the way serveTerminalControl does: owner-only. `broad` leaves it readable by other
+ * users (on win32, the inherited ACL that the owner-only check refuses).
+ */
+async function writeRecord(file: string, body: object, broad = false): Promise<void> {
+	const dir = path.dirname(file);
+	await fsp.mkdir(dir, { recursive: true });
+	if (process.platform === "win32") {
+		if (!broad) await applyOwnerOnlyWindowsAcl(dir);
+	} else {
+		await fsp.chmod(dir, broad ? 0o755 : 0o700);
+	}
+	await fsp.writeFile(file, JSON.stringify(body));
+	if (process.platform === "win32") {
+		if (!broad) await applyOwnerOnlyWindowsAcl(file);
+	} else {
+		await fsp.chmod(file, broad ? 0o644 : 0o600);
+	}
+}
+
+async function writeClaim(
+	root: string,
+	sessionFile: string,
+	endpoint: string,
+	pid: number,
+	broad = false,
+): Promise<void> {
 	const directory = path.join(root, "run", "terminals");
 	await fsp.mkdir(directory, { recursive: true });
-	await fsp.writeFile(
+	await writeRecord(
 		path.join(directory, `${pid}-${crypto.randomUUID()}.json`),
-		JSON.stringify({ version: 1, sessionId: "stale", pid, cwd: root, sessionFile, endpoint, token: "t" }),
+		{ version: 1, sessionId: "stale", pid, cwd: root, sessionFile, endpoint, token: "t" },
+		broad,
 	);
 }
 
@@ -93,11 +121,25 @@ describe("terminal ownership claims", () => {
 		await expect(assertNotTerminalOwned(sessionFile, root)).resolves.toBeUndefined();
 		const withoutEndpoint = path.join(root, "dead-no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
-		await fsp.writeFile(
-			path.join(directory, `${deadPid()}-${crypto.randomUUID()}.json`),
-			JSON.stringify({ version: 1, sessionId: "x", pid: deadPid(), cwd: root, sessionFile: withoutEndpoint }),
+		const pid = deadPid();
+		await writeRecord(
+			path.join(directory, `${pid}-${crypto.randomUUID()}.json`),
+			{ version: 1, sessionId: "x", pid, cwd: root, sessionFile: withoutEndpoint },
 		);
 		await expect(assertNotTerminalOwned(withoutEndpoint, root)).resolves.toBeUndefined();
+	});
+
+	/**
+	 * The same dead claim that is ignored when owner-only is refused when another user can read it: an
+	 * unverifiable claim may be a live owner, so it blocks instead of being skipped.
+	 */
+	it("refuses a claim another user can read instead of skipping it", async () => {
+		const root = await tempRoot();
+		const sessionFile = path.join(root, "broad.jsonl");
+		await writeClaim(root, sessionFile, endpointFor(root, "broad-gone"), deadPid(), true);
+		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow(
+			"Cannot establish terminal writer ownership",
+		);
 	});
 
 	it("fails closed for a claim with no usable endpoint", async () => {
@@ -105,9 +147,9 @@ describe("terminal ownership claims", () => {
 		const sessionFile = path.join(root, "no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
 		await fsp.mkdir(directory, { recursive: true });
-		await fsp.writeFile(
+		await writeRecord(
 			path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`),
-			JSON.stringify({ version: 1, sessionId: "x", pid: process.pid, cwd: root, sessionFile }),
+			{ version: 1, sessionId: "x", pid: process.pid, cwd: root, sessionFile },
 		);
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
 	});

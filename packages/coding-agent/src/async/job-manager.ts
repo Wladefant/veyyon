@@ -149,6 +149,8 @@ export class AsyncJobManager {
 	readonly #suppressedDeliveries = new Set<string>();
 	readonly #watchedJobs = new Set<string>();
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
+	/** Jobs whose caller consumed the result itself, evicted as they settle rather than retained. */
+	readonly #released = new Set<string>();
 	readonly #pollEscalation = new Map<string | undefined, PollEscalationState>();
 	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
 	readonly #maxRunningJobs: number;
@@ -251,7 +253,7 @@ export class AsyncJobManager {
 				job.status = "completed";
 				job.resultText = text;
 				this.#enqueueDelivery(id, text);
-				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0) {
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
 					this.#scheduleEviction(id);
 				}
 			} catch (error) {
@@ -264,7 +266,7 @@ export class AsyncJobManager {
 				job.status = "failed";
 				job.errorText = errorText;
 				this.#enqueueDelivery(id, errorText);
-				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0) {
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
 					this.#scheduleEviction(id);
 				}
 			}
@@ -362,7 +364,7 @@ export class AsyncJobManager {
 			if (!this.#watchedJobs.delete(jobId)) continue;
 			removed += 1;
 			this.#requeueSettledDelivery(jobId);
-			if (this.#retentionMs <= 0) {
+			if (this.#evictsOnSettle(jobId)) {
 				this.#scheduleEviction(jobId);
 			}
 		}
@@ -440,6 +442,19 @@ export class AsyncJobManager {
 	}
 
 	/**
+	 * Drop a job whose caller consumed its result itself, such as a foreground `bash` call that
+	 * finished before it moved to the background. The job is acknowledged and evicted as soon as it
+	 * settles instead of being retained for `retentionMs` with its output, abort controller and
+	 * eviction timer.
+	 */
+	release(jobId: string): void {
+		if (!this.#jobs.has(jobId)) return;
+		this.#released.add(jobId);
+		this.acknowledgeDeliveries([jobId]);
+		if (this.#jobs.has(jobId)) this.#scheduleEviction(jobId);
+	}
+
+	/**
 	 * Lift a foreground-wait suppression set via `acknowledgeDeliveries`. If the
 	 * job already finished while suppressed (its delivery enqueue was skipped),
 	 * re-enqueue the completion so the result is still delivered exactly once.
@@ -450,7 +465,7 @@ export class AsyncJobManager {
 			if (!jobId) continue;
 			if (!this.#suppressedDeliveries.delete(jobId)) continue;
 			this.#requeueSettledDelivery(jobId);
-			if (this.#retentionMs <= 0) {
+			if (this.#evictsOnSettle(jobId)) {
 				this.#scheduleEviction(jobId);
 			}
 		}
@@ -552,6 +567,7 @@ export class AsyncJobManager {
 		this.#inFlightDeliveries.length = 0;
 		this.#suppressedDeliveries.clear();
 		this.#watchedJobs.clear();
+		this.#released.clear();
 		this.#pollEscalation.clear();
 		return jobsSettled && drained;
 	}
@@ -585,13 +601,19 @@ export class AsyncJobManager {
 		this.#jobs.delete(jobId);
 		this.#suppressedDeliveries.delete(jobId);
 		this.#watchedJobs.delete(jobId);
+		this.#released.delete(jobId);
+	}
+
+	/** Whether `jobId` is evicted once it settles and nothing holds it, rather than retained. */
+	#evictsOnSettle(jobId: string): boolean {
+		return this.#retentionMs <= 0 || this.#released.has(jobId);
 	}
 
 	#scheduleEviction(jobId: string): void {
 		if (this.#disposed) return;
 		const job = this.#jobs.get(jobId);
 		if (job?.status === "running") return;
-		if (this.#retentionMs <= 0) {
+		if (this.#evictsOnSettle(jobId)) {
 			if (
 				this.#watchedJobs.has(jobId) ||
 				this.#deliveries.some(delivery => delivery.jobId === jobId) ||
@@ -599,6 +621,8 @@ export class AsyncJobManager {
 			) {
 				return;
 			}
+			clearTimeout(this.#evictionTimers.get(jobId));
+			this.#evictionTimers.delete(jobId);
 			this.#purgeJob(jobId);
 			return;
 		}
@@ -761,7 +785,7 @@ export class AsyncJobManager {
 			} finally {
 				const index = this.#inFlightDeliveries.indexOf(delivery);
 				if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
-				if (this.#retentionMs <= 0) {
+				if (this.#evictsOnSettle(delivery.jobId)) {
 					this.#scheduleEviction(delivery.jobId);
 				}
 				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();

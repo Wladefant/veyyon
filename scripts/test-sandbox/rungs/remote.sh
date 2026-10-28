@@ -281,8 +281,9 @@ run_remote() {
 		-e "XDG_STATE_HOME=/sandbox/home/.local/state"
 		-e "BUN_INSTALL_CACHE_DIR=/sandbox/home/.bun/install/cache"
 	)
+	# TERM is not carried in, for the reason given in rungs/docker.sh.
 	local name
-	for name in CI GITHUB_ACTIONS TERM FORCE_COLOR NO_COLOR ${VEYYON_SANDBOX_FORWARD:-}; do
+	for name in CI GITHUB_ACTIONS FORCE_COLOR NO_COLOR ${VEYYON_SANDBOX_FORWARD:-}; do
 		[ -n "${!name:-}" ] && env_args+=(-e "${name}=${!name}")
 	done
 

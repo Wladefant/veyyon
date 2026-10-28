@@ -1320,13 +1320,14 @@ print("PYTHON_BRIDGE_AUTH_OK")
 		resetSettingsForTest();
 		const settings = await Settings.init({ inMemory: true });
 
-		const stockRoles = settings.getModelRoles();
-		for (const [role, model] of Object.entries(stockRoles)) {
-			assert.ok(
-				!/fable|sol|astra|spark|flash/i.test(model ?? ""),
-				`Stock role ${role} contains operator-specific model: ${model}`,
-			);
-		}
+		const stockModels = JSON.stringify({
+			defaultModel: settings.get("defaultModel"),
+			helpers: settings.get("agent.helpers"),
+		});
+		assert.ok(
+			!/fable|sol|astra|spark|flash/i.test(stockModels),
+			`Stock model settings contain operator-specific model: ${stockModels}`,
+		);
 
 		const defaultResolved = topicReplenishmentModule.resolveTopicWorkerModel({ settings });
 		assert.ok(
@@ -1343,7 +1344,7 @@ print("PYTHON_BRIDGE_AUTH_OK")
 			"Must respect explicit request model",
 		);
 
-		settings.setModelRole("default", "custom-provider/configured-default");
+		settings.setDefaultModel("custom-provider/configured-default");
 		assert.equal(
 			topicReplenishmentModule.resolveTopicWorkerModel({ settings }),
 			"custom-provider/configured-default",
