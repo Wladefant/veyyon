@@ -24,6 +24,7 @@ import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { SEARCH_TYPES, SearchTool, type SearchToolDetails } from "@veyyon/coding-agent/tools/search/search";
 import { MULTI_FILE_PER_FILE_MATCHES, type TextSearchDetails } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -31,15 +32,6 @@ import { makeToolSession } from "../helpers/tool-session";
  * draws rather than a renderer module to import, so the suites below reach it through the registry.
  */
 const searchToolRenderer = toolRenderers.search;
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(
-			(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
-		)
-		.map(block => block.text)
-		.join("\n");
-}
 
 /** `path: count` rows, excluding the header and any trailing notes. */
 function pathRows(text: string): Array<{ path: string; count: number }> {
@@ -93,8 +85,10 @@ describe("a locate query can ask for paths instead of match lines", () => {
 			const tool = toolFor(dir);
 
 			const contentResult = await tool.execute("content", { type: "text", input: NEEDLE, path: dir });
-			const lines = textOf(contentResult);
-			const paths = textOf(await tool.execute("paths", { type: "text", input: NEEDLE, path: dir, paths: true }));
+			const lines = toolResultText(contentResult);
+			const paths = toolResultText(
+				await tool.execute("paths", { type: "text", input: NEEDLE, path: dir, paths: true }),
+			);
 			const contentFiles = textDetailsOf(contentResult)?.fileMatches ?? [];
 
 			const rows = pathRows(paths);
@@ -119,8 +113,10 @@ describe("a locate query can ask for paths instead of match lines", () => {
 				);
 			}
 			const tool = toolFor(dir);
-			const lines = textOf(await tool.execute("content", { type: "text", input: NEEDLE, path: dir }));
-			const paths = textOf(await tool.execute("paths", { type: "text", input: NEEDLE, path: dir, paths: true }));
+			const lines = toolResultText(await tool.execute("content", { type: "text", input: NEEDLE, path: dir }));
+			const paths = toolResultText(
+				await tool.execute("paths", { type: "text", input: NEEDLE, path: dir, paths: true }),
+			);
 
 			expect(pathRows(paths).length).toBeGreaterThanOrEqual(20);
 			expect(paths.length * 4).toBeLessThan(lines.length);
@@ -170,14 +166,14 @@ describe("a locate query can ask for paths instead of match lines", () => {
 				path: dir,
 				paths: true,
 			});
-			expect(textDetailsOf(result)?.displayContent).toBe(textOf(result));
+			expect(textDetailsOf(result)?.displayContent).toBe(toolResultText(result));
 		});
 	});
 
 	it("reports absence as absence", async () => {
 		await withWorkspace("paths-absent-", async dir => {
 			await seedWorkspace(dir);
-			const paths = textOf(
+			const paths = toolResultText(
 				await toolFor(dir).execute("paths", { type: "text", input: "nothingMatchesThis", path: dir, paths: true }),
 			);
 			expect(paths).not.toContain("0 files matched");
@@ -190,7 +186,7 @@ describe("a locate query can ask for paths instead of match lines", () => {
 			const hot = `${`${NEEDLE}();\n`.repeat(MULTI_FILE_PER_FILE_MATCHES + 5)}`;
 			await fs.writeFile(path.join(dir, "hot.ts"), hot);
 			await fs.writeFile(path.join(dir, "cold.ts"), `${NEEDLE}();\n`);
-			const paths = textOf(
+			const paths = toolResultText(
 				await toolFor(dir).execute("paths", { type: "text", input: NEEDLE, path: dir, paths: true }),
 			);
 			expect(pathRows(paths).find(row => row.path === "hot.ts")?.count).toBe(MULTI_FILE_PER_FILE_MATCHES);
@@ -209,7 +205,7 @@ describe("a locate query can ask for paths instead of match lines", () => {
 				const input = type === "files" ? "**/*" : NEEDLE;
 				const result = await tool.execute("type-sweep", { type, input, paths: true });
 				if (result.details?.type === "text" && result.details.result.pathsOnly === true) projected.push(type);
-				if (type !== "text") expect(textOf(result)).toContain(`Ignored for a ${type} search: paths.`);
+				if (type !== "text") expect(toolResultText(result)).toContain(`Ignored for a ${type} search: paths.`);
 			}
 			expect(projected).toEqual(["text"]);
 		});

@@ -10,6 +10,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -22,13 +23,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated(),
 		enableLsp: false,
 	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
@@ -70,7 +64,7 @@ describe("write tool hashline header", () => {
 		const content = "export const value = 42;\nexport const flag = true;\n";
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const lines = resultText(result).split("\n");
+		const lines = toolResultText(result).split("\n");
 
 		// First line is the hashline header; subsequent text is the byte count.
 		const match = HASHLINE_HEADER_LINE.exec(lines[0] ?? "");
@@ -93,7 +87,7 @@ describe("write tool hashline header", () => {
 		const content = "export const enabled = false;\n";
 
 		const writeResult = await tool.execute("call-1", { path: filePath, content });
-		const headerLine = resultText(writeResult).split("\n")[0] ?? "";
+		const headerLine = toolResultText(writeResult).split("\n")[0] ?? "";
 		expect(HASHLINE_HEADER_LINE.test(headerLine)).toBe(true);
 
 		// Apply a hashline patch immediately, using only the tag the write tool
@@ -126,7 +120,7 @@ describe("write tool hashline header", () => {
 		const content = "no anchors here\n";
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text.startsWith("[")).toBe(false);
 		expect(text).toBe(`Successfully wrote ${content.length} bytes to ${path.relative(tmpDir, filePath)}`);
 	});
@@ -143,7 +137,7 @@ describe("write tool hashline header", () => {
 		const content = sentinel.repeat(2000); // ~62 KB of distinctive content
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 
 		// Exact summary, and not one byte of the payload leaks into the result.
 		expect(text).toBe(`Successfully wrote ${content.length} bytes to ${path.relative(tmpDir, filePath)}`);
@@ -162,7 +156,7 @@ describe("write tool hashline header", () => {
 		const content = sentinel.repeat(2000);
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 
 		// Header line + summary line only; the payload never appears.
 		expect(text).not.toContain(sentinel);

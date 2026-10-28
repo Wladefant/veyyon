@@ -2,21 +2,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
 
 beforeAll(async () => {
 	// The edit path's auto-generated-file guard reads the global Settings proxy.
@@ -79,7 +71,7 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		await fs.writeFile(outFile, "alpha\nbeta\n");
 
 		const session = createSession(cwdDir);
-		const header = textOutput(await new ReadTool(session).execute("read-out", { path: outFile })).split("\n")[0];
+		const header = toolResultText(await new ReadTool(session).execute("read-out", { path: outFile })).split("\n")[0];
 
 		// The header must carry the directory, not just `settings.json`, or the
 		// edit below would resolve the bare name against cwdDir and miss.
@@ -99,7 +91,7 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		await fs.writeFile(inFile, "alpha\nbeta\n");
 
 		const session = createSession(cwdDir);
-		const header = textOutput(await new ReadTool(session).execute("read-in", { path: inFile })).split("\n")[0];
+		const header = toolResultText(await new ReadTool(session).execute("read-in", { path: inFile })).split("\n")[0];
 
 		expect(header).toMatch(/^\[settings\.json#[0-9A-F]{4}\]$/);
 		expect(header).not.toContain("src");

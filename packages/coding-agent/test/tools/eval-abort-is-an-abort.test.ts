@@ -38,6 +38,7 @@ import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manag
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 function makeSession(): ToolSession {
@@ -48,14 +49,6 @@ function makeSession(): ToolSession {
 		getSessionSpawns: () => null,
 		settings: Settings.isolated(),
 	});
-}
-
-/** The text of every text block in a tool result, joined. */
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((block): block is { type: "text"; text: string } => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
 }
 
 describe("EvalTool cancellation", () => {
@@ -190,7 +183,7 @@ describe("EvalTool cancellation", () => {
 			code: "print(`ran=${globalThis.__preabortRan === true}`);",
 			timeout: 0,
 		});
-		expect(textOf(witness)).toContain("ran=false");
+		expect(toolResultText(witness)).toContain("ran=false");
 	});
 });
 
@@ -211,7 +204,7 @@ describe("EvalTool without a cancellation", () => {
 			timeout: 0,
 		});
 
-		expect(textOf(result)).toContain("finished cleanly");
+		expect(toolResultText(result)).toContain("finished cleanly");
 		expect(result.details?.cells?.[0]?.status).toBe("complete");
 	});
 
@@ -229,7 +222,9 @@ describe("EvalTool without a cancellation", () => {
 			.catch(e => e);
 
 		expect(result).not.toBeInstanceOf(ToolAbortError);
-		expect(textOf(result as { content: Array<{ type: string; text?: string }> })).toContain("deliberate failure");
+		expect(toolResultText(result as { content: Array<{ type: string; text?: string }> })).toContain(
+			"deliberate failure",
+		);
 	});
 });
 
@@ -254,6 +249,6 @@ describe("EvalTool timeout stays a timeout", () => {
 			.catch(e => e);
 
 		expect(result).not.toBeInstanceOf(ToolAbortError);
-		expect(textOf(result as { content: Array<{ type: string; text?: string }> })).toContain("timed out");
+		expect(toolResultText(result as { content: Array<{ type: string; text?: string }> })).toContain("timed out");
 	});
 });

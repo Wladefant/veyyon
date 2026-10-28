@@ -7,13 +7,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { processFileArguments } from "@veyyon/coding-agent/cli/file-processor";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { generateFileMentionMessages } from "@veyyon/coding-agent/utils/file-mentions";
 import { errorMessage, removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
 
 // WHY THIS SUITE EXISTS
@@ -162,13 +161,6 @@ class ExitCalled extends Error {
 	}
 }
 
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
-
 /** Open each pipe's write end and close it, so a reader blocked on it sees end of file. */
 function releasePipes(): void {
 	for (const pipe of pipes) {
@@ -219,7 +211,7 @@ function readWithin(dir: string, readPath: string): Promise<Outcome> {
 	);
 	return settleWithin(
 		tool.execute("call-special", { path: readPath }).then(
-			result => ({ kind: "result", text: textOutput(result) }),
+			result => ({ kind: "result", text: toolResultText(result) }),
 			error => ({ kind: "error", message: errorMessage(error) }),
 		),
 	);

@@ -52,6 +52,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
+import { toolResultText } from "./helpers/tool-result-text";
 
 /** Scripted plain-text assistant turn that ends the loop. */
 function stopReply(text: string): MockResponse {
@@ -67,15 +68,6 @@ function findToolResult(messages: AgentMessage[], callId: string): ToolResultMes
 		if (message.role === "toolResult" && message.toolCallId === callId) return message;
 	}
 	return undefined;
-}
-
-/** Join the text blocks of a tool result for assertion. */
-function toolResultText(message: ToolResultMessage): string {
-	const parts: string[] = [];
-	for (const block of message.content) {
-		if (block.type === "text") parts.push(block.text);
-	}
-	return parts.join("\n");
 }
 
 describe("a failing tool becomes an error tool-result with the message intact", () => {

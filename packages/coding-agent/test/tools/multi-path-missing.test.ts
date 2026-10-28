@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 // A multi-path search that includes an entry which does not exist on disk must
 // not abort the whole lookup. It should skip the missing entry and return
@@ -19,13 +20,6 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		settings: Settings.isolated(),
 		...overrides,
 	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 function searchDetails(result: { details?: unknown }): Record<string, unknown> | undefined {
@@ -58,7 +52,7 @@ describe("multi-path tools tolerate missing entries", () => {
 			path: "src/; tests/",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("shared-needle alpha");
@@ -92,7 +86,7 @@ describe("multi-path tools tolerate missing entries", () => {
 			input: "src/**/*.ts; tests/**/*.ts",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("# src/");

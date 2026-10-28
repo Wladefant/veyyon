@@ -8,18 +8,12 @@ import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * Cross-tool write → bash cat → read chain: all three see the same body.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 function bashSession(cwd: string, settings: Settings) {
 	return makeToolSession({
@@ -96,10 +90,10 @@ describe("write→bash cat→read chain adversarial", () => {
 		expect(await Bun.file(file).text()).toBe(body);
 
 		const bash = new BashTool(bashSession(tmpDir, settings) as never);
-		const bashText = textOf(await bash.execute("b", { command: "cat shared.ts", timeout: 15 }));
+		const bashText = toolResultText(await bash.execute("b", { command: "cat shared.ts", timeout: 15 }));
 		expect(bashText).toContain("shared-payload-xyz");
 
-		const readText = textOf(await new ReadTool(toolSession).execute("r", { path: file }));
+		const readText = toolResultText(await new ReadTool(toolSession).execute("r", { path: file }));
 		expect(readText).toContain("shared-payload-xyz");
 	});
 });

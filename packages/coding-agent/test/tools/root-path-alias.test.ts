@@ -7,6 +7,7 @@ import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveToCwd } from "@veyyon/coding-agent/tools/core/path-utils";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -17,13 +18,6 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		settings: Settings.isolated(),
 		...overrides,
 	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 describe("tool path root alias", () => {
@@ -79,7 +73,7 @@ describe("tool path root alias", () => {
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
 
-		expect(getText(result)).toContain("search.txt");
+		expect(toolResultText(result)).toContain("search.txt");
 		expect(details?.scopePath).toBe(".");
 	});
 
@@ -92,7 +86,7 @@ describe("tool path root alias", () => {
 		const result = await tool.execute("read-root-alias", {
 			path: "/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("search.txt");
 		expect(text).toContain("sample.ts");
 	});
@@ -111,7 +105,7 @@ describe("tool path root alias", () => {
 			result.details && typeof result.details === "object" && "result" in result.details
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(details?.scopePath).toBe(".");
 		expect(text).toContain("search.txt");
@@ -134,7 +128,7 @@ describe("tool path root alias", () => {
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
 
-		expect(getText(result)).toContain("sample.ts");
+		expect(toolResultText(result)).toContain("sample.ts");
 		expect(details?.scopePath).toBe(".");
 	});
 
@@ -157,7 +151,7 @@ describe("tool path root alias", () => {
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 
-		expect(getText(preview)).toContain("sample.ts");
+		expect(toolResultText(preview)).toContain("sample.ts");
 		expect(details?.scopePath).toBe(".");
 		expect(details?.totalReplacements).toBe(1);
 

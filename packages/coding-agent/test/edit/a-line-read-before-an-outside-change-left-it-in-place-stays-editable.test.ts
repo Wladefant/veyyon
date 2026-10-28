@@ -24,6 +24,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -62,13 +63,6 @@ function execOptions(input: string, session: ToolSession): ExecuteHashlineSingle
 	};
 }
 
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
-
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
 	if (!match) throw new Error(`no hashline header for ${file} in:\n${text}`);
@@ -97,7 +91,7 @@ describe("a line read before an outside change left it in place stays editable",
 	async function changeAndReadTail(changed: string): Promise<string> {
 		await fs.writeFile(file, changed);
 		const read = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
-		return tagFromOutput(resultText(read), file);
+		return tagFromOutput(toolResultText(read), file);
 	}
 
 	it("applies an edit under the new tag on a line a read displayed before the change", async () => {

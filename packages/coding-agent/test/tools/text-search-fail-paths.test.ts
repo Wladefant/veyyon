@@ -5,19 +5,13 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * Search (text) tool contracts: match exact lines, no match, empty pattern behavior,
  * and path scoping. Drives SearchTool.execute when the native binding is present.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SearchTool text fail paths and matches", () => {
 	let tmpDir: string;
@@ -51,7 +45,7 @@ describe("SearchTool text fail paths and matches", () => {
 			input: "foo",
 			path: aPath,
 		});
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text).toContain("foo");
 		expect(text).toContain("const foo = 1");
 		// b.ts content must not appear when path is a.ts only
@@ -65,7 +59,7 @@ describe("SearchTool text fail paths and matches", () => {
 			input: "ZZZ_NOT_PRESENT_999",
 			path: tmpDir,
 		});
-		const text = textOf(result).toLowerCase();
+		const text = toolResultText(result).toLowerCase();
 		// Empty result or explicit no-match wording — not a crash, and no false positives.
 		expect(text.includes("const foo = 1")).toBe(false);
 	});
@@ -75,7 +69,7 @@ describe("SearchTool text fail paths and matches", () => {
 		let text = "";
 		try {
 			const result = await tool.execute("g3", { type: "text", input: "", path: tmpDir });
-			text = textOf(result);
+			text = toolResultText(result);
 		} catch (e) {
 			text = String(e);
 		}
@@ -88,7 +82,7 @@ describe("SearchTool text fail paths and matches", () => {
 		await Bun.write(path.join(tmpDir, "c.ts"), "const foo = 99;\n");
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g4", { type: "text", input: "foo", path: tmpDir });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text).toContain("foo");
 		// At least one of the foo-bearing files should be referenced.
 		expect(text.includes("a.ts") || text.includes("c.ts") || text.includes("const foo")).toBe(true);
@@ -103,7 +97,7 @@ describe("SearchTool text fail paths and matches", () => {
 			path: path.join(tmpDir, "case.ts"),
 			case: true,
 		});
-		const text = textOf(result);
+		const text = toolResultText(result);
 		// Sensitive: foobar must not hit FooBar (unless product ignores case flag — then assert flag honored).
 		const hit = text.includes("FooBar");
 		if (hit) {
@@ -125,7 +119,7 @@ describe("SearchTool text fail paths and matches", () => {
 				input: "\\$5\\.00",
 				path: path.join(tmpDir, "special.ts"),
 			});
-			text = textOf(result);
+			text = toolResultText(result);
 		} catch (e) {
 			text = String(e);
 		}
@@ -138,7 +132,7 @@ describe("SearchTool text fail paths and matches", () => {
 		let text = "";
 		let threw = false;
 		try {
-			text = textOf(await tool.execute("g7", { type: "text", input: "foo", path: missing }));
+			text = toolResultText(await tool.execute("g7", { type: "text", input: "foo", path: missing }));
 		} catch (e) {
 			threw = true;
 			text = String(e);
@@ -154,7 +148,7 @@ describe("SearchTool text fail paths and matches", () => {
 		const tool = new SearchTool(session());
 		let text = "";
 		try {
-			text = textOf(await tool.execute("g8", { type: "text", input: "   ", path: tmpDir }));
+			text = toolResultText(await tool.execute("g8", { type: "text", input: "   ", path: tmpDir }));
 		} catch (e) {
 			text = String(e);
 		}

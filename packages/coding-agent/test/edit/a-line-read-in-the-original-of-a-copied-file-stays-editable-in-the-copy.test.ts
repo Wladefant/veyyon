@@ -23,6 +23,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -57,13 +58,6 @@ function execOptions(input: string, session: ToolSession): ExecuteHashlineSingle
 	};
 }
 
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
-
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
 	if (!match) throw new Error(`no hashline header for ${file} in:\n${text}`);
@@ -96,12 +90,12 @@ describe("a line read in the original of a copied file stays editable in the cop
 	async function copyAndReadTail(tag: string): Promise<void> {
 		await fs.copyFile(original, copy);
 		const read = await new ReadTool(session).execute("r2", { path: `${copy}:34-36` });
-		expect(tagFromOutput(resultText(read), copy)).toBe(tag);
+		expect(tagFromOutput(toolResultText(read), copy)).toBe(tag);
 	}
 
 	it("applies an edit of the copy on a line a read of the original displayed", async () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${original}:1-3` });
-		const tag = tagFromOutput(resultText(read), original);
+		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
 		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
@@ -111,7 +105,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 
 	it("applies an edit of the copy on a line a search of the original displayed", async () => {
 		const hit = await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: original });
-		const tag = tagFromOutput(resultText(hit), original);
+		const tag = tagFromOutput(toolResultText(hit), original);
 		await copyAndReadTail(tag);
 
 		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
@@ -120,7 +114,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 
 	it("still rejects an edit of the copy on a line neither file displayed", async () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${original}:1-3` });
-		const tag = tagFromOutput(resultText(read), original);
+		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
 		await expect(

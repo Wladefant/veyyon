@@ -6,6 +6,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -18,13 +19,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated(),
 		enableLsp: false,
 	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 function details(result: { details?: { madeExecutable?: boolean } }): { madeExecutable?: boolean } {
@@ -60,7 +54,7 @@ describe("write tool shebang chmod", () => {
 		expect(stat.mode & 0o111).toBe(0o111);
 		// Notice remains model-facing so callers see that chmod changed the file mode.
 		expect(details(result).madeExecutable).toBe(true);
-		expect(resultText(result)).toContain("[Notice: Made executable via chmod +x]");
+		expect(toolResultText(result)).toContain("[Notice: Made executable via chmod +x]");
 	});
 
 	it("does not chmod files without a shebang", async () => {

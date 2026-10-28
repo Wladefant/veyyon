@@ -5,14 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SearchTool files fail paths and matches", () => {
 	let tmpDir: string;
@@ -42,7 +36,7 @@ describe("SearchTool files fail paths and matches", () => {
 	it("lists ts files for src/**/*.ts path glob", async () => {
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g1", { type: "files", input: "src/**/*.ts" });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text).toContain("a.ts");
 		expect(text).toContain("b.ts");
 		// readme at root must not be listed for src/**/*.ts
@@ -52,7 +46,7 @@ describe("SearchTool files fail paths and matches", () => {
 	it("returns no-match wording or empty list for a pattern with zero hits", async () => {
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g2", { type: "files", input: "src/**/*.zzz" });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		// Must not list a.ts as a match. If a.ts appears only inside "no files
 		// matching" wording, that's fine.
 		if (text.toLowerCase().includes("no files")) {
@@ -68,7 +62,7 @@ describe("SearchTool files fail paths and matches", () => {
 			type: "files",
 			input: path.join(tmpDir, "src", "*.ts"),
 		});
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(typeof text).toBe("string");
 	});
 
@@ -78,7 +72,7 @@ describe("SearchTool files fail paths and matches", () => {
 		}
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g4", { type: "files", input: "src/**/*.ts", limit: 3 });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		const matches = text.split("\n").filter(l => /\.ts\b/.test(l) && !/limit|truncated|more/i.test(l));
 		// Cap is soft if footer mentions more; never explode to 20+ full rows without notice.
 		expect(matches.length <= 25).toBe(true);
@@ -90,7 +84,7 @@ describe("SearchTool files fail paths and matches", () => {
 	it("md-only pattern does not list ts files", async () => {
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g5", { type: "files", input: "**/*.md" });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text).toContain("readme.md");
 		expect(text.includes("a.ts") && !/no files|0 file/i.test(text)).toBe(false);
 	});
@@ -119,7 +113,7 @@ describe("SearchTool files fail paths and matches", () => {
 		await Bun.write(path.join(tmpDir, ".secret.env"), "SECRET=1\n");
 		const tool = new SearchTool(session());
 		const run = async (id: string, args: { type: "files"; input: string; hidden?: boolean }) =>
-			textOf(await tool.execute(id, args));
+			toolResultText(await tool.execute(id, args));
 
 		// Broad listing, hidden off: the dotfile is absent AND ordinary files are still
 		// there, so "absent" cannot be satisfied by a glob that found nothing.
@@ -146,7 +140,7 @@ describe("SearchTool files fail paths and matches", () => {
 	it("semicolon multi-pattern can include both src and root md", async () => {
 		const tool = new SearchTool(session());
 		const result = await tool.execute("g7", { type: "files", input: "src/**/*.ts; *.md" });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text.includes("a.ts") || text.includes("b.ts")).toBe(true);
 		expect(text.includes("readme.md") || text.includes(".md")).toBe(true);
 	});

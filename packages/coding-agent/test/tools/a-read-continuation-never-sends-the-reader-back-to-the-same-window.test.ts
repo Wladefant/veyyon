@@ -40,6 +40,7 @@ import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeWithRetries } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
 import type { ToolView } from "@veyyon/view";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 const LINES = 6;
@@ -160,13 +161,6 @@ interface Chain {
 	repeated: string | undefined;
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}
-
 /** The selector that starts a chain: `line` of the read text, or no selector at all. */
 function selectorFor(target: string, line: number | undefined, mode: Mode, above: number): string {
 	if (mode === "raw") return `${target}:${line ?? 1 + above}:raw`;
@@ -191,7 +185,7 @@ async function follow(read: Tool, target: string, first: string): Promise<Chain>
 			undefined,
 			undefined,
 		)) as Chain["results"][number];
-		const text = textOf(result);
+		const text = toolResultText(result);
 		chain.results.push(result);
 		chain.texts.push(text);
 		const next = [...text.matchAll(/Use (?:\S+?)?:(\d+(?::raw)?) to continue/g)].at(-1)?.[1];

@@ -27,6 +27,7 @@ import { AstEditTool } from "@veyyon/coding-agent/tools/search/ast-edit";
 import { formatDisplayJsonForText } from "@veyyon/coding-agent/tools/shell/eval";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** U+1F600, two UTF-16 code units. Splitting it yields a lone surrogate. */
@@ -51,15 +52,6 @@ function filler(count: number): string {
  */
 function offsetsAround(budget: number): number[] {
 	return [budget - 3, budget - 2, budget - 1, budget, budget + 1];
-}
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(
-			(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
-		)
-		.map(block => block.text)
-		.join("\n");
 }
 
 describe("a truncated preview never splits an astral character", () => {
@@ -167,7 +159,7 @@ describe("a truncated preview never splits an astral character", () => {
 					{ ops: [{ pat: "oldApi($A)", out: "newApi($A)" }], paths: [file] },
 					new AbortController().signal,
 				);
-				const out = textOf(result);
+				const out = toolResultText(result);
 				expect({ offset, at: loneSurrogateOffset(out) }).toEqual({ offset, at: -1 });
 				// The preview really was cut, so the sweep is exercising the boundary.
 				expect(out).not.toContain(literal);

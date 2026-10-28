@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -16,13 +17,6 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		settings: Settings.isolated(),
 		...overrides,
 	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 // A pattern that neither the Rust regex engine nor PCRE2 will compile, so native
@@ -55,7 +49,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 			input: "foo[bar",
 			path: ".",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		// Recall is preserved: the literal text is still found.
 		expect(text).toContain("foo[bar");
@@ -76,7 +70,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 			input: "foo.bar",
 			path: ".",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("foo[bar");
 		expect(text).not.toMatch(/did not compile as a regex/i);

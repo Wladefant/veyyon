@@ -10,6 +10,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { SearchTool } from "../../src/tools/search/search";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -53,13 +54,6 @@ function execOptions(input: string, session: ToolSession): ExecuteHashlineSingle
 
 const HEADER = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/m;
 
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
-
 function tagFromOutput(text: string): string {
 	const match = HEADER.exec(text);
 	if (!match) throw new Error(`no hashline header in read output:\n${text}`);
@@ -89,7 +83,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
 		expect(seen?.has(1)).toBe(true);
@@ -103,7 +97,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		await expect(
 			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
@@ -118,7 +112,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await Bun.file(file).text()).toContain("EDITED");
@@ -132,7 +126,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [1]);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:4-6` });
-		const text = resultText(read);
+		const text = toolResultText(read);
 		expect(text).not.toMatch(HEADER);
 		expect(text).toContain("line 4\nline 5\nline 6");
 		expect(text).not.toContain("4:line 4");
@@ -157,7 +151,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [12]);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:2-3,7-8` });
-		const text = resultText(read);
+		const text = toolResultText(read);
 		expect(text).not.toMatch(HEADER);
 		expect(text).toBe("line 2\nline 3\n\n…\n\nline 7\nline 8");
 
@@ -191,7 +185,7 @@ describe("read → edit seen-line guard", () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:1-1,3-3` });
 		// Line 1 alone is over the budget, so the range shows nothing and says so
 		// rather than returning a silent empty window.
-		const text = resultText(read);
+		const text = toolResultText(read);
 		expect(text).toContain("[Line 1 is 50.0KB, over the 50.0KB output budget; nothing shown for this range]");
 		expect(text).not.toContain("xxx");
 
@@ -214,7 +208,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [12]);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		expect(tagFromOutput(resultText(read))).toBe(tag);
+		expect(tagFromOutput(toolResultText(read))).toBe(tag);
 
 		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
 		expect(seen?.has(2)).toBe(true);
@@ -231,7 +225,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = store.record(canonicalSnapshotKey(file), content, [2]);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:raw:1-1` });
-		const text = resultText(read);
+		const text = toolResultText(read);
 		expect(text).not.toMatch(HEADER);
 		expect(text).not.toContain("1:");
 		expect(text).toBe("");
@@ -258,7 +252,7 @@ describe("read → edit seen-line guard", () => {
 		const tag = store.record(canonicalSnapshotKey(file), content, [1288, 1289, 1290, 1291]);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1118-1126,1284-1292` });
-		const text = resultText(read);
+		const text = toolResultText(read);
 		expect(tagFromOutput(text)).toBe(tag);
 		expect(text).toContain("1122:\tconfigure_gpio();");
 
@@ -281,7 +275,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		let message: string | undefined;
 		try {
@@ -314,7 +308,7 @@ describe("read → edit seen-line guard", () => {
 
 		// Partial read of the head — seenLines = 1..3 only.
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		// Anchor 60 unseen lines — deliberately over the 40-line cap.
 		const dels = Array.from({ length: 60 }, (_, i) => `DEL ${100 + i}`).join("\n");
@@ -348,7 +342,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
 		expect(seen?.has(2)).toBe(false);
@@ -383,7 +377,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag);
 		// The read displayed the row and clipped it: out of `seenLines`, in `clippedLines`.
@@ -419,7 +413,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		let message: string | undefined;
 		try {
@@ -453,7 +447,7 @@ describe("read → edit seen-line guard", () => {
 		// The remedy the message names, run verbatim.
 		await new ReadTool(session).execute("r2", { path: `${file}:2:raw` });
 		const reread = await new ReadTool(session).execute("r3", { path: `${file}:1-3` });
-		const tag = tagFromOutput(resultText(reread));
+		const tag = tagFromOutput(toolResultText(reread));
 
 		await executeHashlineSingle(execOptions(`[wide-recover.txt#${tag}]\nSWAP 2.=2:\n+REPLACED`, session));
 
@@ -478,7 +472,7 @@ describe("read → edit seen-line guard", () => {
 		const session = createSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-5` });
-		const tag = tagFromOutput(resultText(read));
+		const tag = tagFromOutput(toolResultText(read));
 
 		let message: string | undefined;
 		try {
@@ -528,7 +522,7 @@ describe("search → edit seen-line guard", () => {
 		const session = searchSession(tmpDir);
 
 		const search = await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: file });
-		const tag = tagFromOutput(resultText(search));
+		const tag = tagFromOutput(toolResultText(search));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
 		expect(seen?.has(4)).toBe(true);
@@ -546,7 +540,7 @@ describe("search → edit seen-line guard", () => {
 		const session = searchSession(tmpDir);
 
 		const search = await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: file });
-		const tag = tagFromOutput(resultText(search));
+		const tag = tagFromOutput(toolResultText(search));
 
 		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(
 			/never displayed \(it showed/,

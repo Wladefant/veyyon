@@ -33,6 +33,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveStoredPathCase } from "@veyyon/coding-agent/tools/core/path-utils";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -45,13 +46,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated(),
 		enableLsp: false,
 	} as ToolSession;
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 /**
@@ -154,7 +148,7 @@ describe("write tool filename reporting", () => {
 		await fs.writeFile(filePath, "old\n", "utf8");
 
 		const result = await new WriteTool(session).execute("call-1", { path: filePath, content: "new\n" });
-		expect(resultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
+		expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
 	});
 
 	it("reports the stored spelling, not the requested one, when they differ only in case", async () => {
@@ -171,13 +165,13 @@ describe("write tool filename reporting", () => {
 			// volume `Module.ts` is a DIFFERENT file, so the correct report names
 			// it, and the divergence this row exists for cannot occur here. The
 			// assertion still runs, so the case-sensitive behaviour is pinned too.
-			expect(resultText(result)).toBe(`Successfully wrote 4 bytes to Module.ts`);
+			expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to Module.ts`);
 			expect(await fs.readFile(stored, "utf8")).toBe("old\n");
 			return;
 		}
 
 		// The write landed in the existing entry, and the report names that entry.
-		expect(resultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
+		expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
 		expect(await fs.readFile(stored, "utf8")).toBe("new\n");
 		// And the directory still holds exactly one entry: the write updated the
 		// file rather than creating a second one under the other spelling.

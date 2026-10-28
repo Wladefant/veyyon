@@ -14,14 +14,8 @@ import {
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { SearchTool } from "../../src/tools/search/search";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 const EMPTY_ZIP_EOCD = new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
@@ -128,7 +122,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			const tool = new ReadTool(createSession());
 			const result = await tool.execute("read-literal", { path: absolute });
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("test");
 			// The strict split would have opened `test` (which doesn't exist)
@@ -142,7 +136,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			const tool = new ReadTool(createSession());
 			const result = await tool.execute("read-escaped-literal", { path: "dir/a\\ b:1-2" });
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("escaped literal read");
 		});
@@ -155,7 +149,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const result = await tool.execute("read-literal-wins", {
 				path: path.join(tmpDir, "foo:1-2"),
 			});
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("colon file wins");
 			expect(output).not.toContain("line 1");
@@ -172,7 +166,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const result = await tool.execute("read-selector-preserved", {
 				path: `${absolute}:5-10`,
 			});
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("line 5");
 			expect(output).toContain("line 10");
@@ -195,7 +189,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			const tool = new ReadTool(createSession());
 			const result = await tool.execute("read-literal-zip-selector", { path: literal });
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("literal archive-shaped file");
 		});
@@ -214,7 +208,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 
 			const tool = new ReadTool(createSession());
 			const result = await tool.execute("read-literal-db-selector", { path: literal });
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("literal db-shaped file");
 		});
@@ -232,7 +226,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 				input: "needle",
 				path: absolute,
 			});
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("needle");
 			expect(output).not.toMatch(/not found/i);
@@ -248,7 +242,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 				input: "needle",
 				path: "dir/a\\ b:1-2",
 			});
-			const output = getText(result);
+			const output = toolResultText(result);
 
 			expect(output).toContain("escaped literal needle");
 		});
@@ -267,7 +261,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 				path: literal,
 			});
 
-			const output = getText(result);
+			const output = toolResultText(result);
 			expect(output).toContain("delimited literal needle");
 			expect(output).not.toMatch(/not found/i);
 		});
@@ -287,7 +281,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 				path: literal,
 			});
 
-			const output = getText(result);
+			const output = toolResultText(result);
 			expect(output).toContain("literal archive needle");
 		});
 
@@ -301,7 +295,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 				input: ".",
 				path: `${absolute}:1-2`,
 			});
-			const rangedOutput = getText(rangedResult);
+			const rangedOutput = toolResultText(rangedResult);
 
 			expect(rangedOutput).toContain("one");
 			expect(rangedOutput).toContain("two");
@@ -371,7 +365,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		await Bun.write(abs, "test line A\ntest line B\n");
 
 		const result = await new ReadTool(createSession()).execute("read-leading-colon", { path: `:${abs}` });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("test line A");
 		expect(output).not.toMatch(/not found/i);
@@ -381,7 +375,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		await Bun.write(path.join(tmpDir, "rel.txt"), "relative body\n");
 
 		const result = await new ReadTool(createSession()).execute("read-leading-colon-rel", { path: ":./rel.txt" });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("relative body");
 		expect(output).not.toMatch(/not found/i);
@@ -396,7 +390,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 			input: "needle",
 			path: `:${abs}`,
 		});
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("needle");
 		expect(output).not.toMatch(/not found/i);
@@ -412,7 +406,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		});
 
 		expect(result.isError).toBeFalsy();
-		expect(getText(result)).not.toMatch(/not found/i);
+		expect(toolResultText(result)).not.toMatch(/not found/i);
 		expect(await Bun.file(abs).text()).toBe("replaced\nsecond\n");
 	});
 });

@@ -35,14 +35,8 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { resolveFileDisplayMode } from "@veyyon/coding-agent/utils/file-display-mode";
 import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 /** The output before any trailing `[...]` continuation notice. */
 function body(output: string): string {
@@ -133,19 +127,19 @@ describe("the read tool numbers a ranged read of an immutable source", () => {
 	for (const source of sources) {
 		it(`${source.name}: a single-range read prints N| on every row, requested and context alike`, async () => {
 			const result = await new ReadTool(session()).execute("r", { path: `${source.target()}:2-3` });
-			const rows = body(getText(result)).split("\n");
+			const rows = body(toolResultText(result)).split("\n");
 			expect(rows).toContain("2|bravo");
 			expect(rows).toContain("3|charlie");
 			// Context rows are numbered too, so the requested rows are told apart from the padding.
 			for (const row of rows) expect(row).toMatch(/^\d+\|/);
 			// Never a hashline header or a hashline `N:` row: the source cannot be edited.
-			expect(getText(result)).not.toMatch(/^\[[^\]]+#[0-9A-F]{4}\]/m);
-			expect(getText(result)).not.toMatch(/^\d+:/m);
+			expect(toolResultText(result)).not.toMatch(/^\[[^\]]+#[0-9A-F]{4}\]/m);
+			expect(toolResultText(result)).not.toMatch(/^\d+:/m);
 		});
 
 		it(`${source.name}: a multi-range read prints N| on every row`, async () => {
 			const result = await new ReadTool(session()).execute("r", { path: `${source.target()}:1-2,5-6` });
-			const rows = body(getText(result)).split("\n");
+			const rows = body(toolResultText(result)).split("\n");
 			expect(rows).toContain("1|alpha");
 			expect(rows).toContain("5|echo");
 			expect(rows).toContain("6|foxtrot");
@@ -155,12 +149,12 @@ describe("the read tool numbers a ranged read of an immutable source", () => {
 		it(`${source.name}: a raw ranged read stays verbatim`, async () => {
 			const result = await new ReadTool(session()).execute("r", { path: `${source.target()}:raw:2-3` });
 			// Verbatim body; a continuation notice after it is the same one a raw read of a file gets.
-			expect(body(getText(result))).toBe("bravo\ncharlie");
+			expect(body(toolResultText(result))).toBe("bravo\ncharlie");
 		});
 
 		it(`${source.name}: an unranged read stays bare when readLineNumbers is off`, async () => {
 			const result = await new ReadTool(session()).execute("r", { path: source.target() });
-			const rows = body(getText(result)).split("\n");
+			const rows = body(toolResultText(result)).split("\n");
 			expect(rows[0]).toBe("alpha");
 			expect(rows).not.toContain("1|alpha");
 		});

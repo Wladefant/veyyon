@@ -22,6 +22,7 @@ import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/sessi
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { Text } from "@veyyon/tui";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 /**
  * The production `search` entry, which is the card a session draws. `search` is a view the terminal
@@ -51,13 +52,6 @@ const renderOptions: RenderResultOptions = {
 	expanded: false,
 	isPartial: true,
 };
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 function searchDetails(result: { details?: unknown }): Record<string, unknown> | undefined {
 	if (!isRecord(result.details)) return undefined;
@@ -163,7 +157,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: "apps/; packages/; phases/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
@@ -186,7 +180,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: JSON.stringify(["apps/", "packages/", "phases/"]),
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
@@ -213,7 +207,7 @@ describe("tool path arrays", () => {
 				input: "shared-needle",
 				path: entry,
 			});
-			const text = getText(result);
+			const text = toolResultText(result);
 			const details = searchDetails(result);
 
 			expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
@@ -236,7 +230,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: "missing.txt, packages/grep.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^\[packages\/grep\.txt#[0-9A-F]{4}\]/m);
@@ -257,7 +251,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: "apps/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const tag = /^# apps\/\n## grep\.txt#([0-9A-F]{4})/m.exec(text)?.[1];
 		expect(tag).toBeDefined();
 		if (!tag) throw new Error("Missing search snapshot tag");
@@ -286,7 +280,7 @@ describe("tool path arrays", () => {
 			},
 		});
 		const result = await tool.execute("search-single-string-path", args);
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("note.txt");
@@ -310,14 +304,14 @@ describe("tool path arrays", () => {
 			input: "bracket-needle",
 			path: "apps/[id]/page.tsx",
 		});
-		expect(getText(single)).toContain("bracket-needle");
+		expect(toolResultText(single)).toContain("bracket-needle");
 
 		const dir = await tool.execute("search-bracket-literal-dir", {
 			type: "text",
 			input: "bracket-needle",
 			path: "apps/[id]",
 		});
-		expect(getText(dir)).toContain("bracket-needle");
+		expect(toolResultText(dir)).toContain("bracket-needle");
 		await removeWithRetries(tmp);
 	});
 
@@ -475,7 +469,7 @@ describe("tool path arrays", () => {
 			input: "space-needle",
 			path: "folder with spaces/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 		expect(text).toContain("note.txt");
 		expect(details?.fileCount).toBe(1);
@@ -493,7 +487,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: '"packages/"',
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 		expect(text).toContain("grep.txt");
 		expect(text).not.toContain("other");
@@ -513,7 +507,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: absoluteAppsPath,
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
 		expect(text).toContain("shared-needle");
@@ -534,7 +528,7 @@ describe("tool path arrays", () => {
 			path: absoluteTarget,
 			content: "written\n",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("Successfully wrote 8 bytes to written.txt");
 		expect(text).not.toContain(tmp);
@@ -551,7 +545,7 @@ describe("tool path arrays", () => {
 		const result = await tool.execute("read-delimited", {
 			path: "apps/grep.txt, packages/grep.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = result.details as { notes?: string[] } | undefined;
 
 		expect(text).toContain("Note: interpreted as 2 paths: apps/grep.txt, packages/grep.txt");
@@ -569,7 +563,7 @@ describe("tool path arrays", () => {
 		const result = await tool.execute("read-delimited-missing", {
 			path: "missing.txt, packages/grep.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = result.details as { notes?: string[] } | undefined;
 
 		expect(text).toContain("Note: interpreted as 2 paths: missing.txt, packages/grep.txt");
@@ -592,7 +586,7 @@ describe("tool path arrays", () => {
 			input: "providerOptions",
 			path: '"packages/**/*.ts"',
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("ast.ts");
@@ -612,7 +606,7 @@ describe("tool path arrays", () => {
 			input: "providerOptions",
 			path: "apps/**/*.ts; packages/**/*.ts; phases/**/*.ts",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{4}/m);
@@ -639,7 +633,7 @@ describe("tool path arrays", () => {
 				input: "providerOptions",
 				path: entry,
 			});
-			const text = getText(result);
+			const text = toolResultText(result);
 			const details = searchDetails(result);
 
 			expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{4}/m);
@@ -670,7 +664,7 @@ describe("tool path arrays", () => {
 			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 			paths: ["apps/**/*.ts", "packages/**/*.ts", "phases/**/*.ts"],
 		});
-		const text = getText(preview);
+		const text = toolResultText(preview);
 		const details = preview.details as { totalReplacements?: number; scopePath?: string } | undefined;
 
 		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{4} \(\d+ replacement/m);
@@ -703,7 +697,7 @@ describe("tool path arrays", () => {
 			type: "files",
 			input: "apps/; packages/; phases/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# apps\/\n(?:ast\.ts|grep\.txt)\n(?:ast\.ts|grep\.txt)$/m);
@@ -739,7 +733,7 @@ describe("tool path arrays", () => {
 				type: "files",
 				input: entry,
 			});
-			const text = getText(result);
+			const text = toolResultText(result);
 			const details = searchDetails(result);
 
 			expect(text).toMatch(/^# apps\/\ngrep\.txt$/m);
@@ -762,7 +756,7 @@ describe("tool path arrays", () => {
 			type: "files",
 			input: "missing.txt, packages/grep.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# packages\/\ngrep\.txt$/m);
@@ -782,7 +776,7 @@ describe("tool path arrays", () => {
 			type: "files",
 			input: "folder with spaces/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# folder with spaces\/\nnote\.txt$/m);
@@ -800,7 +794,7 @@ describe("tool path arrays", () => {
 			type: "files",
 			input: '"packages/"',
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("ast.ts");
@@ -822,7 +816,7 @@ describe("tool path arrays", () => {
 				type: "files",
 				input: outsideDir,
 			});
-			const text = getText(result);
+			const text = toolResultText(result);
 			const expectedPath = path.join(outsideDir, "outside.txt").replace(/\\/g, "/");
 			const details = searchDetails(result);
 
@@ -847,7 +841,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: "apps; packages; phases",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
@@ -875,7 +869,7 @@ describe("tool path arrays", () => {
 			input: "exact-needle",
 			path: "alpha.txt; beta.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toMatch(/^# alpha\.txt#[0-9A-F]{4}/m);
@@ -898,7 +892,7 @@ describe("tool path arrays", () => {
 			input: "shared-needle",
 			path: "apps/; packages/; phases/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		const lines = text.split("\n");
 
 		for (let index = 0; index < lines.length; index += 1) {
@@ -931,7 +925,7 @@ describe("tool path arrays", () => {
 			input: "needle",
 			path: "context.txt",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toMatch(/ 1:#if FLAG/);
 		expect(text).toMatch(/\*2:needle/);

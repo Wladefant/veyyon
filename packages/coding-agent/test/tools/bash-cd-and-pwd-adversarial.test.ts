@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,13 +42,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool cd and nested pwd adversarial", () => {
 	let tmpDir: string;
 	let child: string;
@@ -69,7 +63,7 @@ describe("BashTool cd and nested pwd adversarial", () => {
 			command: "cd child && cat marker.txt",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("in-child");
+		expect(toolResultText(result, "")).toContain("in-child");
 	});
 
 	it("cd does not permanently change session cwd for the next command", async () => {
@@ -80,7 +74,7 @@ describe("BashTool cd and nested pwd adversarial", () => {
 			command: "test -f child/marker.txt && printf 'still-root\\n'",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("still-root");
+		expect(toolResultText(result, "")).toContain("still-root");
 	});
 
 	it("explicit cwd option runs in the child directory", async () => {
@@ -90,6 +84,6 @@ describe("BashTool cd and nested pwd adversarial", () => {
 			cwd: child,
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("in-child");
+		expect(toolResultText(result, "")).toContain("in-child");
 	});
 });

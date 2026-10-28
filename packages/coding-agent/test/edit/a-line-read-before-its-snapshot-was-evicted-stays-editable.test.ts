@@ -26,6 +26,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 29 ? "NEEDLE line 30" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -66,13 +67,6 @@ function execOptions(input: string, session: ToolSession): ExecuteHashlineSingle
 	};
 }
 
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
-
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`\\[${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
 	if (!match) throw new Error(`no hashline header for ${file} in:\n${text}`);
@@ -103,7 +97,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 
 	async function readFirstLines(): Promise<string> {
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		return tagFromOutput(resultText(read), file);
+		return tagFromOutput(toolResultText(read), file);
 	}
 
 	function expectEvicted(): void {
@@ -117,7 +111,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		}
 		expectEvicted();
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
-		expect(tagFromOutput(resultText(reread), file)).toBe(tag);
+		expect(tagFromOutput(toolResultText(reread), file)).toBe(tag);
 
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
@@ -134,7 +128,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		}
 		expectEvicted();
 		const hit = await new SearchTool(session).execute("s2", { type: "text", input: "NEEDLE", path: file });
-		expect(tagFromOutput(resultText(hit), file)).toBe(tag);
+		expect(tagFromOutput(toolResultText(hit), file)).toBe(tag);
 
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
@@ -160,12 +154,12 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 			await new ReadTool(session).execute(`o${i}`, { path: path.join(tmpDir, otherFile(i)) });
 		}
 		expectEvicted();
-		const edited = resultText(
+		const edited = toolResultText(
 			await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
 		);
 		const editedTag = tagFromOutput(edited, file);
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
-		expect(tagFromOutput(resultText(reread), file)).toBe(editedTag);
+		expect(tagFromOutput(toolResultText(reread), file)).toBe(editedTag);
 
 		await executeHashlineSingle(
 			execOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),

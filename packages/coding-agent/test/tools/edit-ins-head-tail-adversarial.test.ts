@@ -8,14 +8,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("edit INS.HEAD/TAIL through executeHashlineSingle", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -76,7 +70,7 @@ describe("edit INS.HEAD/TAIL through executeHashlineSingle", () => {
 		const file = path.join(tmpDir, "h.ts");
 		await Bun.write(file, "body\n");
 		const sess = session();
-		const header = textOf(await new ReadTool(sess).execute("r", { path: file })).split("\n")[0]!;
+		const header = toolResultText(await new ReadTool(sess).execute("r", { path: file })).split("\n")[0]!;
 		await executeHashlineSingle(editOpts(sess, `${header}\nINS.HEAD:\n+HEAD\n`));
 		expect(await Bun.file(file).text()).toBe("HEAD\nbody\n");
 	});
@@ -85,7 +79,7 @@ describe("edit INS.HEAD/TAIL through executeHashlineSingle", () => {
 		const file = path.join(tmpDir, "t.ts");
 		await Bun.write(file, "body\n");
 		const sess = session();
-		const header = textOf(await new ReadTool(sess).execute("r", { path: file })).split("\n")[0]!;
+		const header = toolResultText(await new ReadTool(sess).execute("r", { path: file })).split("\n")[0]!;
 		await executeHashlineSingle(editOpts(sess, `${header}\nINS.TAIL:\n+TAIL\n`));
 		expect(await Bun.file(file).text()).toBe("body\nTAIL\n");
 	});

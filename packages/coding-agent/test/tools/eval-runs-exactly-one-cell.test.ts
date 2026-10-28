@@ -30,6 +30,7 @@ import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manag
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 function makeSession(): ToolSession {
@@ -40,14 +41,6 @@ function makeSession(): ToolSession {
 		getSessionSpawns: () => null,
 		settings: Settings.isolated(),
 	});
-}
-
-/** The text of every text block in a tool result, joined. */
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((block): block is { type: "text"; text: string } => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
 }
 
 afterAll(() => {
@@ -103,7 +96,7 @@ describe("the details a successful run reports", () => {
 			code: "console.log('one');\nconsole.log('two');",
 		});
 
-		expect(textOf(result)).toBe("one\ntwo");
+		expect(toolResultText(result)).toBe("one\ntwo");
 	});
 });
 
@@ -125,7 +118,7 @@ describe("the details a failing run reports", () => {
 		expect(details.isError).toBe(true);
 		expect(details.cells).toHaveLength(1);
 		expect(details.cells![0]!.status).toBe("error");
-		expect(textOf(result)).toContain("before");
-		expect(textOf(result)).toContain("boom");
+		expect(toolResultText(result)).toContain("before");
+		expect(toolResultText(result)).toContain("boom");
 	});
 });

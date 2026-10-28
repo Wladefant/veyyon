@@ -6,6 +6,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveExplicitSearchPaths } from "@veyyon/coding-agent/tools/core/path-utils";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const isWindows = process.platform === "win32";
 
@@ -18,13 +19,6 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		settings: Settings.isolated(),
 		...overrides,
 	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 function searchDetails(result: { details?: unknown }): Record<string, unknown> | undefined {
@@ -71,7 +65,7 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 		// degrade to a workspace-root scan rather than fail the tool call.
 		const result = await tool.execute("search-default-paths", { type: "text", input: "default-needle" });
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 		expect(text).toContain("default-needle here");
 		expect(details?.fileCount).toBe(1);
@@ -88,7 +82,7 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 			path: "[]",
 		});
 
-		expect(getText(result)).toContain("default-needle here");
+		expect(toolResultText(result)).toContain("default-needle here");
 	});
 });
 
@@ -125,7 +119,7 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 		});
 		const durationMs = performance.now() - start;
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		const details = searchDetails(result);
 
 		expect(text).toContain("shared-needle alpha");
@@ -218,7 +212,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 			path: ".; .git/config",
 		});
 		const details = searchDetails(result);
-		expect(getText(result)).toContain("followTags = true");
+		expect(toolResultText(result)).toContain("followTags = true");
 		expect(details?.matchCount).toBe(1);
 		expect(details?.files).toEqual([".git/config"]);
 	});
