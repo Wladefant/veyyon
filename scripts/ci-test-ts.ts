@@ -545,6 +545,7 @@ export const repoScriptTests = [
 	// The coding-agent test jobs check out one commit deep; this suite proves `--fetch` brings in the
 	// commits their suites read.
 	"scripts/a-shallow-checkout-fetches-only-the-baseline-commits-a-suite-reads.test.ts",
+	"scripts/a-shared-test-module-registers-no-hook-at-module-scope.test.ts",
 ];
 
 /**
