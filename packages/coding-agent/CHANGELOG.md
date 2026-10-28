@@ -78,6 +78,8 @@
 
 ### Fixed
 
+- Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
+- Fixed the settings card cutting its last category tabs off the sidebar on terminals too short to list them all; the sidebar now scrolls to keep the selected tab in view.
 - A bash block's `$ command` header takes the new theme's colours after a theme change.
 - An expanded bash or eval block no longer states `… N more lines` under output it shows in full.
 - `agent://` and `artifact://` completion skips a registered artifacts path that is a file instead of failing, as `history://` completion already did.

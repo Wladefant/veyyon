@@ -1566,7 +1566,9 @@ export class SettingsSelectorComponent implements Component {
 		const sidebarWidth = this.#sidebarWidth(contentWidth);
 		const paneWidth = Math.max(1, contentWidth - sidebarWidth - SIDEBAR_GAP_COLS);
 		const sidebarCursor = this.#sidebarFocused ? `${theme.fg("accent", theme.nav.cursor)} ` : `${theme.nav.cursor} `;
-		const sidebarLines = this.#tabBar.renderVertical(sidebarWidth, sidebarCursor);
+		// A column with more tabs than body rows windows around the active tab, so the last
+		// tabs stay reachable on a short terminal instead of falling off the bottom of the card.
+		const sidebarLines = this.#tabBar.renderVertical(sidebarWidth, sidebarCursor, maxBodyRows);
 		const searching = this.#searchList !== null;
 		const showPreview = !searching && this.#currentTabId === "appearance" && paneWidth >= 40;
 		const requestedPreviewLines = showPreview

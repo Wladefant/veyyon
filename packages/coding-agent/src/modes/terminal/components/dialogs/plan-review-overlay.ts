@@ -32,13 +32,7 @@ import {
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
 import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
-import {
-	type ModalShellGeometry,
-	type ModalShortcut,
-	minModalChromeRows,
-	planModalChrome,
-	renderModalShell,
-} from "../chrome/modal-shell";
+import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
 import { renderSliderLines } from "../chrome/segment-track";
 import type { HookSelectorSlider } from "../selectors/hook-selector";
@@ -56,12 +50,6 @@ const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
 /** Columns spent on the sidebar/body divider: one space, the glyph, one space. */
 const SIDEBAR_DIVIDER_COLS = 3;
-/** Rows ModalShell reserves outside the body budget. Asked of the shell rather
- *  than restated: the hand-rolled `3 + footerLines + vPad` this replaced went
- *  silently wrong the moment the shell started charging `vPad` on BOTH sides of
- *  the body, which it now does — the overlay then sized its body a vPad too tall
- *  and nothing failed, because the copy could not know the shell had changed. */
-const CHROME_ROWS = minModalChromeRows(MODAL_SIZING_LARGE);
 
 type Focus = "toc" | "body" | "actions";
 
@@ -847,11 +835,17 @@ export class PlanReviewOverlay implements Component {
 		const promptLines = this.#promptTitle ? [theme.bold(theme.fg("accent", this.#promptTitle))] : [];
 		const annotateLines = this.#renderAnnotateLines(contentWidth);
 
-		// Region rows: everything below the sidebar/body block (the region rule,
-		// prompt, slider, options, and the annotate mini-editor) plus ModalShell's
-		// own fixed chrome (see CHROME_ROWS).
+		// Region rows: everything the card shows below its chrome, less the rows
+		// under the sidebar/body block (the region rule, prompt, slider, options,
+		// and the annotate mini-editor). The plan is the one painted below, so a
+		// footer whose chips wrap past `footerLines` shortens the region instead of
+		// pushing the options off the end of the card.
+		const chrome = planModalChrome(dims, {
+			shortcuts: this.#buildShortcuts(),
+			hoveredShortcutId: this.#hoveredShortcutId,
+		});
 		const belowRegionRows = 1 + promptLines.length + sliderLines.length + optionLines.length + annotateLines.length;
-		const regionRows = Math.max(MIN_BODY_ROWS, dims.modalHeight - CHROME_ROWS - belowRegionRows);
+		const regionRows = Math.max(MIN_BODY_ROWS, chrome.maxBodyRows - belowRegionRows);
 
 		const bodyLines = this.#buildBody(bodyContentWidth);
 		this.#scrollView.setLines(bodyLines);
@@ -891,17 +885,11 @@ export class PlanReviewOverlay implements Component {
 		}
 		for (const line of annotateLines) content.push(line);
 
-		const shell = renderModalShell(
-			planModalChrome(dims, {
-				shortcuts: this.#buildShortcuts(),
-				hoveredShortcutId: this.#hoveredShortcutId,
-			}),
-			{
-				title: OVERLAY_TITLE,
-				body: content,
-				showClose: true,
-			},
-		);
+		const shell = renderModalShell(chrome, {
+			title: OVERLAY_TITLE,
+			body: content,
+			showClose: true,
+		});
 		this.#shellGeometry = shell.geometry;
 		this.#bodyRowOffset = shell.geometry?.bodyRowStart ?? 0;
 		this.#sidebarClickMaxCol = sidebarShown ? (shell.geometry?.leftPad ?? 0) + 2 + sidebarWidth + 1 : 0;

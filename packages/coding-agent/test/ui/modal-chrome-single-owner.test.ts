@@ -4,7 +4,8 @@
  * `ModalShell` reserves a fixed number of rows outside the body budget — top bar,
  * vertical padding, footer divider, footer band, bottom border — and an overlay
  * that lays out its own content has to subtract them before deciding what fits.
- * `minModalChromeRows(sizing)` is that number's one owner.
+ * `minModalChromeRows(sizing)` is that number's one owner, and the plan returned
+ * by `planModalChrome(card, chrome)` states how many body rows a painted card shows.
  *
  * Both overlays that need it once computed it by hand as `3 + footerLines + vPad`.
  * `ask-dialog` was moved onto the shell's own function; `plan-review-overlay` was
@@ -29,8 +30,15 @@ import { minModalChromeRows } from "@veyyon/coding-agent/modes/terminal/componen
 
 const COMPONENTS = fileURLToPath(new URL("../../src/modes/terminal/components/", import.meta.url));
 
-/** The overlays that subtract modal chrome before laying out their own content. */
-const OVERLAYS = ["dialogs/plan-review-overlay.ts", "dialogs/ask-dialog.ts"] as const;
+/**
+ * The overlays that subtract modal chrome before laying out their own content, and the shell call
+ * each sizes its body from. The plan review reads the plan it paints with, because its footer chips
+ * wrap past `footerLines` on a narrow terminal and the chrome floor does not count them.
+ */
+const OVERLAYS = {
+	"dialogs/plan-review-overlay.ts": "planModalChrome(dims, {",
+	"dialogs/ask-dialog.ts": "minModalChromeRows(MODAL_SIZING_LARGE)",
+} as const;
 
 const sourceOf = (file: string) => readFileSync(join(COMPONENTS, file), "utf8");
 
@@ -48,9 +56,9 @@ describe("modal chrome has one owner", () => {
 		expect(minModalChromeRows(sizing)).toBe(3 + sizing.footerLines + sizing.vPad + sizing.vPad);
 	});
 
-	for (const overlay of OVERLAYS) {
+	for (const [overlay, owner] of Object.entries(OVERLAYS)) {
 		it(`${overlay} derives its chrome rows from the shell`, () => {
-			expect(sourceOf(overlay)).toContain("minModalChromeRows(MODAL_SIZING_LARGE)");
+			expect(sourceOf(overlay)).toContain(owner);
 		});
 
 		it(`${overlay} does not restate the chrome arithmetic`, () => {
