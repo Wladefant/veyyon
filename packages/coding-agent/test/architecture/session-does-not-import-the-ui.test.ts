@@ -28,10 +28,6 @@ const SESSION = path.join(SRC, "session");
  */
 const ALLOWED = new Map<string, string>([
 	[
-		"theme/theme-binding",
-		"The live `theme` binding and nothing else. Imports one type and no values, which `test/theme/theme-binding-stays-live.test.ts` asserts, so it cannot bring the engine back.",
-	],
-	[
 		"modes/keywords/orchestrate-keyword",
 		"Detection half of the `orchestrate` keyword. The gradient that paints it stays in `modes/keywords/orchestrate`.",
 	],
@@ -50,6 +46,9 @@ const ALLOWED = new Map<string, string>([
 	// supposed to become. The `/context` panel that draws the numbers stayed behind
 	// in `modes/terminal/utils/context-usage.ts` and imports them from `session/`, so the
 	// dependency points the way this suite says it should.
+	// `theme/theme-binding` was here for the session's own no-op extension UI context, whose
+	// `theme` getter read the live binding. The session now takes the one no-op context from
+	// `extensibility/extensions/runner`, so no session module imports the theme at all.
 ]);
 
 /*
