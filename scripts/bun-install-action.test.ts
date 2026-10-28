@@ -18,6 +18,11 @@ interface InstallStepResult {
 	attempts: number;
 	stderr: string;
 }
+interface DetectStepResult {
+	setup: boolean;
+	installDir: string;
+	pathOutput: string;
+}
 
 const tempRoots: string[] = [];
 
@@ -37,9 +42,53 @@ function pinnedBunVersion(): string {
 	return match[1];
 }
 
+async function runDetectStep(installedVersion: string, packageManager = `bun@${pinnedBunVersion()}`): Promise<DetectStepResult> {
+	const action = Bun.YAML.parse(await Bun.file(".github/actions/bun-install/action.yml").text()) as CompositeAction;
+	const step = action.runs.steps.find(candidate => candidate.name === "Detect bun");
+	if (!step?.run) throw new Error("bun-install action has no bun detection step");
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "bun-detect-action-"));
+	tempRoots.push(root);
+	await Bun.write(path.join(root, "package.json"), JSON.stringify({ packageManager }));
+	const outputPath = path.join(root, "github-output");
+	const envPath = path.join(root, "github-env");
+	const pathPath = path.join(root, "github-path");
+	const runnerTemp = path.join(root, "runner-temp");
+	fs.mkdirSync(runnerTemp, { recursive: true });
+	const bunPath = path.join(root, "bun");
+	await Bun.write(bunPath, '#!/bin/sh\nprintf "%s\\n" "$FAKE_BUN_VERSION"\n');
+	fs.chmodSync(bunPath, 0o755);
+	const proc = Bun.spawn(["bash", "-c", step.run], {
+		cwd: root,
+		env: {
+			...process.env,
+			PATH: `${root}:${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: runnerTemp,
+			GITHUB_OUTPUT: outputPath,
+			GITHUB_ENV: envPath,
+			GITHUB_PATH: pathPath,
+			FAKE_BUN_VERSION: installedVersion,
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+	if (exitCode !== 0) throw new Error(`bun detection failed: ${stderr}`);
+	const [output, env, pathOutput] = await Promise.all([
+		Bun.file(outputPath).text(),
+		Bun.file(envPath).text().catch(() => ""),
+		Bun.file(pathPath).text().catch(() => ""),
+	]);
+	const match = /^BUN_INSTALL=(.+)$/m.exec(env);
+	return {
+		setup: /setup_bun=true/.test(output),
+		installDir: match?.[1] ?? "",
+		pathOutput: pathOutput.trim(),
+	};
+}
+
 async function runInstallStep(runnerOs: "Linux" | "Windows", failuresBeforeSuccess = 0): Promise<InstallStepResult> {
 	const action = Bun.YAML.parse(await Bun.file(".github/actions/bun-install/action.yml").text()) as CompositeAction;
-	const step = action.runs.steps.find(candidate => candidate.name === "Install bun when absent");
+	const step = action.runs.steps.find(candidate => candidate.name === "Install bun when absent or mismatched");
 	if (!step?.run) throw new Error("bun-install action has no executable install step");
 
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "bun-install-action-"));
@@ -81,6 +130,8 @@ fi
 			...process.env,
 			PATH: `${root}:${process.env.PATH ?? ""}`,
 			HOME: "/home/test-agent",
+			BUN_INSTALL: "/home/test-agent/.bun",
+			RUNNER_TEMP: path.join(root, "runner-temp"),
 			RUNNER_OS: runnerOs,
 			GITHUB_PATH: outputPath,
 			FAKE_CURL_COUNT: countPath,
@@ -105,6 +156,38 @@ fi
 }
 
 describe("bun-install composite action PATH serialization", () => {
+	it("installs when the runner bun does not match the root packageManager pin", async () => {
+		const result = await runDetectStep("1.4.0");
+		const expectedDirName = `bun-bun-v${pinnedBunVersion()}`;
+		expect(result.setup).toBe(true);
+		expect(path.basename(result.installDir)).toBe(expectedDirName);
+		expect(result.pathOutput).toBe(`${result.installDir}/bin`);
+		expect(result.installDir).not.toBe(path.join(os.homedir(), ".bun"));
+	});
+
+	it("keeps a matching runner bun and isolates distinct pinned installs", async () => {
+		const pin = pinnedBunVersion();
+		const matching = await runDetectStep(pin);
+		const first = await runDetectStep("1.4.0");
+		const second = await runDetectStep("1.4.0");
+		expect(matching.setup).toBe(false);
+		expect(matching.installDir).toBe("");
+		expect(first.setup).toBe(true);
+		expect(second.setup).toBe(true);
+		expect(first.installDir).not.toBe(second.installDir);
+		expect(first.installDir).toContain(`bun-bun-v${pin}`);
+		expect(second.installDir).toContain(`bun-bun-v${pin}`);
+	});
+
+	it("uses distinct job-local binaries for different branch pins", async () => {
+		const base = await runDetectStep("1.3.0", "bun@1.4.0");
+		const head = await runDetectStep("1.3.0");
+		expect(base.setup).toBe(true);
+		expect(head.setup).toBe(true);
+		expect(base.installDir).not.toBe(head.installDir);
+		expect(path.basename(base.installDir)).toBe("bun-bun-v1.4.0");
+		expect(path.basename(head.installDir)).toBe(`bun-bun-v${pinnedBunVersion()}`);
+	});
 	/** A native Windows Bun child must receive a Win32 path, not Git Bash's MSYS spelling. */
 	it("writes a native Windows Bun directory to GITHUB_PATH", async () => {
 		const result = await runInstallStep("Windows");

@@ -38,7 +38,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { ses
 		"todo.enabled": false,
 		"todo.reminders": false,
 	});
-	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
+	settings.setDefaultModel(`${mock.provider}/${mock.id}`);
 	const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 	const tools = [failingTool as AgentTool];
 	const agent = new Agent({
@@ -54,6 +54,7 @@ async function createHarness(responses: MockResponse[]): Promise<Harness & { ses
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 	});
+	await sessionManager.ensureOnDisk();
 	const harness = { session, authStorage, tempDir };
 	activeHarnesses.push(harness);
 	return { ...harness, sessionManager };

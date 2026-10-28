@@ -164,18 +164,15 @@ function insertBracketContextRows(
  * re-inserted under its post-edit number: duplicated, out of order, and
  * renumbered incorrectly by the preview.
  */
-function addMatchingBracketContextRows(
+async function addMatchingBracketContextRows(
 	rows: string[],
 	oldText: string,
 	newText: string,
 	source: BlockContextSource,
-): void {
-	// Ask before splitting: each side of a large pair is a whole-file array, and
-	// on a source over the boundary-scan ceiling the lookup below returns
-	// nothing regardless.
+): Promise<void> {
+	// On a source over the boundary-scan ceiling the lookup returns nothing,
+	// so a pair with either side over it skips reading the rows too.
 	if (exceedsBlockContextScanCeiling(oldText) || exceedsBlockContextScanCeiling(newText)) return;
-	const oldLines = oldText.split("\n");
-	const newLines = newText.split("\n");
 	const oldVisible: number[] = [];
 	const newVisible: number[] = [];
 	const seenRows = new Set(rows);
@@ -215,11 +212,11 @@ function addMatchingBracketContextRows(
 		return newLineNumber - shift;
 	};
 
-	// Each side hands its own text down: the lookup joins the line array back
-	// into a source when it is not given one, which is a copy of the whole file
-	// per side per call, and this caller is holding both strings already.
-	const contextRows = findBlockContextLines(oldLines, oldVisible, { ...source, text: oldText });
-	for (const [lineNumber, text] of findBlockContextLines(newLines, newVisible, { ...source, text: newText })) {
+	// Each side hands down its text rather than its lines: the native lookup
+	// reads only the boundary lines it returns, so splitting a 3.5 MB pair into
+	// two whole-file arrays held the event loop 5.5-9 ms per diff for nothing.
+	const contextRows = await findBlockContextLines(oldText, oldVisible, source);
+	for (const [lineNumber, text] of await findBlockContextLines(newText, newVisible, source)) {
 		const oldLineNumber = toOldLineNumber(lineNumber);
 		if (!contextRows.has(oldLineNumber)) contextRows.set(oldLineNumber, text);
 	}
@@ -227,21 +224,134 @@ function addMatchingBracketContextRows(
 	normalizeDiffGapRows(rows);
 }
 
+/** UTF-16 units compared per step while two texts are scanned for the run of text they share. */
+const SHARED_RUN_BLOCK = 4096;
+
+function sharedPrefixLength(a: string, b: string): number {
+	const limit = Math.min(a.length, b.length);
+	let length = 0;
+	while (
+		length + SHARED_RUN_BLOCK <= limit &&
+		a.slice(length, length + SHARED_RUN_BLOCK) === b.slice(length, length + SHARED_RUN_BLOCK)
+	) {
+		length += SHARED_RUN_BLOCK;
+	}
+	while (length < limit && a.charCodeAt(length) === b.charCodeAt(length)) length++;
+	return length;
+}
+
+function sharedSuffixLength(a: string, b: string, limit: number): number {
+	let length = 0;
+	while (
+		length + SHARED_RUN_BLOCK <= limit &&
+		a.slice(a.length - length - SHARED_RUN_BLOCK, a.length - length) ===
+			b.slice(b.length - length - SHARED_RUN_BLOCK, b.length - length)
+	) {
+		length += SHARED_RUN_BLOCK;
+	}
+	while (length < limit && a.charCodeAt(a.length - 1 - length) === b.charCodeAt(b.length - 1 - length)) length++;
+	return length;
+}
+
+/** Two texts cut to the lines they differ in, framed by up to `context` unchanged lines either side. */
+interface ChangeSpan {
+	/** Unchanged lines before the first difference, each ending in a line break. */
+	before: string;
+	/** The old text's lines from the first difference through the last. */
+	oldText: string;
+	/** The new text's lines from the first difference through the last. */
+	newText: string;
+	/** Unchanged lines after the last difference; the last has no line break when the file ends without one. */
+	after: string;
+	/** 1-indexed number, in both files, of the first line of `before`. */
+	firstLine: number;
+}
+
+/** Whether the unit at `index` begins a line of `text`. */
+function startsLine(text: string, index: number): boolean {
+	return index === 0 || text.charCodeAt(index - 1) === 10;
+}
+
+/** The last line start of `text` at or before `index`. */
+function lineStartAtOrBefore(text: string, index: number): number {
+	return index === 0 ? 0 : text.lastIndexOf("\n", index - 1) + 1;
+}
+
+/**
+ * Cut the lines both texts start with and end with, keeping `context` of them either side, as GNU diff
+ * (`find_identical_ends`) and git (`xdl_trim_ends`) do before comparing.
+ *
+ * jsdiff splits and compares every line of both texts, so one changed line in a 3.5 MB file held the
+ * event loop 44-67 ms. Each cut falls on a line boundary of both texts, which is where jsdiff ends a
+ * token, so `oldText` and `newText` hold the tokens a whole-file diff would compare there. The shared
+ * prefix is the one Myers' first snake follows, so the first change is where a whole-file diff puts it.
+ * The shared suffix can move an insertion or deletion within a run of identical lines, as it does in GNU
+ * diff and git. The context lines are framed around the diff rather than diffed, so an alignment cannot
+ * reach into them and shorten a hunk's context.
+ */
+function changeSpan(oldContent: string, newContent: string, context: number): ChangeSpan {
+	const prefix = lineStartAtOrBefore(oldContent, sharedPrefixLength(oldContent, newContent));
+
+	let suffix = sharedSuffixLength(oldContent, newContent, Math.min(oldContent.length, newContent.length) - prefix);
+	while (
+		suffix > 0 &&
+		!(startsLine(oldContent, oldContent.length - suffix) && startsLine(newContent, newContent.length - suffix))
+	) {
+		suffix--;
+	}
+
+	let start = prefix;
+	for (let line = 0; line < context && start > 0; line++) start = lineStartAtOrBefore(oldContent, start - 1);
+	let firstLine = 1;
+	for (let at = oldContent.indexOf("\n"); at !== -1 && at < start; at = oldContent.indexOf("\n", at + 1)) firstLine++;
+
+	const oldSuffixStart = oldContent.length - suffix;
+	let kept = 0;
+	for (let line = 0; line < context && kept < suffix; line++) {
+		const end = oldContent.indexOf("\n", oldSuffixStart + kept);
+		kept = end === -1 ? suffix : Math.min(suffix, end + 1 - oldSuffixStart);
+	}
+
+	return {
+		before: oldContent.slice(start, prefix),
+		oldText: oldContent.slice(prefix, oldSuffixStart),
+		newText: newContent.slice(prefix, newContent.length - suffix),
+		after: oldContent.slice(oldSuffixStart, oldSuffixStart + kept),
+		firstLine,
+	};
+}
+
+type LinePart = Pick<Diff.ChangeObject<string>, "value" | "added" | "removed">;
+
+/** The row jsdiff writes after a hunk line that ends the file without a line break. */
+const NO_NEWLINE_AT_END_OF_FILE = "\\ No newline at end of file";
+
+/** The lines of a span's `before` or `after` text, without their line breaks. */
+function contextRowLines(text: string): string[] {
+	if (!text) return [];
+	const lines = text.split("\n");
+	if (lines[lines.length - 1] === "") lines.pop();
+	return lines;
+}
+
 /**
  * Generate a unified diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateDiffString(
+export async function generateDiffString(
 	oldContent: string,
 	newContent: string,
 	contextLines = 2,
 	source: BlockContextSource = {},
-): DiffResult {
-	const parts = diffPackage.value.diffLines(oldContent, newContent);
+): Promise<DiffResult> {
+	const span = changeSpan(oldContent, newContent, Math.max(0, contextLines));
+	const parts: LinePart[] = diffPackage.value.diffLines(span.oldText, span.newText);
+	if (span.before) parts.unshift({ value: span.before, added: false, removed: false });
+	if (span.after) parts.push({ value: span.after, added: false, removed: false });
 	const output: string[] = [];
 
-	let oldLineNum = 1;
-	let newLineNum = 1;
+	let oldLineNum = span.firstLine;
+	let newLineNum = span.firstLine;
 	let lastWasChange = false;
 	let firstChangedLine: number | undefined;
 
@@ -340,7 +450,7 @@ export function generateDiffString(
 		}
 	}
 
-	addMatchingBracketContextRows(output, oldContent, newContent, source);
+	await addMatchingBracketContextRows(output, oldContent, newContent, source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -374,19 +484,34 @@ export interface ReplaceResult {
  * Generate a unified diff string without file headers.
  * Returns both the diff string and the first changed line number (in the new file).
  */
-export function generateUnifiedDiffString(
+export async function generateUnifiedDiffString(
 	oldContent: string,
 	newContent: string,
 	contextLines = 3,
 	source: BlockContextSource = {},
-): DiffResult {
-	const patch = diffPackage.value.structuredPatch("", "", oldContent, newContent, "", "", { context: contextLines });
+): Promise<DiffResult> {
+	const span = changeSpan(oldContent, newContent, Math.max(0, contextLines));
+	const { hunks } = diffPackage.value.structuredPatch("", "", span.oldText, span.newText, "", "", {
+		context: contextLines,
+	});
+	const before = contextRowLines(span.before);
+	const after = contextRowLines(span.after);
+	const lineOffset = span.firstLine + before.length - 1;
 	const output: string[] = [];
 	let firstChangedLine: number | undefined;
-	for (const hunk of patch.hunks) {
-		output.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
-		let oldLine = hunk.oldStart;
-		let newLine = hunk.newStart;
+	for (let index = 0; index < hunks.length; index++) {
+		const hunk = hunks[index];
+		const lead = index === 0 ? before : [];
+		const trail = index === hunks.length - 1 ? after : [];
+		let oldLine = hunk.oldStart + lineOffset - lead.length;
+		let newLine = hunk.newStart + lineOffset - lead.length;
+		const framed = lead.length + trail.length;
+		output.push(`@@ -${oldLine},${hunk.oldLines + framed} +${newLine},${hunk.newLines + framed} @@`);
+		for (const line of lead) {
+			output.push(formatNumberedDiffLine(" ", oldLine, line));
+			oldLine++;
+			newLine++;
+		}
 		for (const line of hunk.lines) {
 			if (line.startsWith("-")) {
 				if (firstChangedLine === undefined) firstChangedLine = newLine;
@@ -408,9 +533,14 @@ export function generateUnifiedDiffString(
 			}
 			output.push(line);
 		}
+		for (const line of trail) {
+			output.push(formatNumberedDiffLine(" ", oldLine, line));
+			oldLine++;
+		}
+		if (trail.length > 0 && !span.after.endsWith("\n")) output.push(NO_NEWLINE_AT_END_OF_FILE);
 	}
 
-	addMatchingBracketContextRows(output, oldContent, newContent, source);
+	await addMatchingBracketContextRows(output, oldContent, newContent, source);
 
 	return { diff: output.join("\n"), firstChangedLine };
 }
@@ -983,7 +1113,7 @@ export async function computeEditDiff(
 			};
 		}
 
-		return generateDiffString(normalizedContent, result.content, undefined, { path });
+		return await generateDiffString(normalizedContent, result.content, undefined, { path });
 	} catch (err) {
 		return { error: errorMessage(err) };
 	}

@@ -195,6 +195,23 @@ DEL 20
     fresh tag; a plain re-read just folds the same lines again.
   - A tag minted by `write` carries every line as displayed, because the model produced the whole file, so a post-write edit can
     anchor anywhere without an intervening read.
+  - A tag minted by `edit` carries the lines displayed under the tag the edit applied to, at their new positions, every line
+    the edit wrote, and every line of the edited file its diff preview shows; when that tag displayed every line, or the
+    snapshot store no longer holds the edited version, so does the new one. When the file changed outside the session after
+    the tagged read and the edit was recovered onto the changed file, only the lines the read displayed that the change left
+    in place carry: a line the change rewrote, added or moved is not displayed under the new tag. A later ranged read of the
+    edited file adds its range to these lines rather than replacing them.
+  - The displayed lines belong to the file's content, not to one retained copy of it: when the snapshot store evicts a file's
+    version and a later read or search records the same content, the lines displayed before the eviction count as displayed
+    under the tag again.
+  - A line displayed in one version of a file counts as displayed in another version the snapshot store still holds when
+    the change between the two left the line at the same line number, such as a version a formatter or a shell command
+    wrote after the read. A line the change rewrote, added or moved is not displayed under the other version's tag. When
+    the change rewrote too much of a large file to compare in about 12 ms, only the lines before its first and after its
+    last rewritten line count.
+  - A line displayed in one file counts as displayed in every other file with byte-identical content, such as a copy made
+    after the read, whether or not the snapshot store still holds the original. A file with different content that shares
+    the 4-hex tag contributes nothing.
 - Stale snapshot tag: the `Patcher` first attempts snapshot-based recovery. When recovery cannot prove a valid result it throws `MismatchError`, which distinguishes recognized-but-drifted hashes from never-recorded hashes. The error includes the current file hash plus context around each anchor.
 - No-op edit:
   - `Edits to <path> parsed and applied cleanly, but produced no change: your body row(s) are byte-identical to the file at the targeted lines. The bug is somewhere else — re-read the file before issuing another edit. Do NOT widen the payload or add lines; verify the anchor first.`

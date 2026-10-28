@@ -36,6 +36,7 @@ export type UiHelpersContext = Pick<
 	| "lastAssistantUsage"
 	| "lastStatusSpacer"
 	| "lastStatusText"
+	| "noteDisplayableThinkingContent"
 	| "pendingBashComponents"
 	| "pendingMessagesContainer"
 	| "pendingPythonComponents"
@@ -62,7 +63,6 @@ export type UiHelpersContext = Pick<
 >;
 
 interface RenderInitialMessagesOptions {
-	preserveExistingChat?: boolean;
 	clearTerminalHistory?: boolean;
 }
 
@@ -193,55 +193,84 @@ export class UiHelpers {
 	renderInitialMessages(options: RenderInitialMessagesOptions = {}): void {
 		// This path is used to rebuild the visible chat transcript (e.g. after custom/debug UI).
 		// Clear existing rendered chat first to avoid duplicating the full session in the container.
-		// On a non-preserving rebuild the existing blocks are discarded for good, so
-		// dispose them (stopping any live timers/subscriptions) before clearing. When
-		// preserving, the same instances are re-added below, so detach without dispose.
-		const preservedChatChildren = options.preserveExistingChat ? this.ctx.chatContainer.children : undefined;
+		// The existing blocks are discarded for good, so dispose them (stopping any live
+		// timers/subscriptions) before clearing.
 		this.ctx.initialChatRendered = true;
-		if (preservedChatChildren) {
-			this.ctx.chatContainer.clear();
-		} else {
-			this.ctx.resetTranscript();
-		}
-		this.ctx.pendingMessagesContainer.disposeChildren();
-		this.ctx.pendingBashComponents = [];
-		this.ctx.pendingPythonComponents = [];
-
-		// Live display collapses to the compacted transcript tail unless the
-		// user opted into the full inline history; export/resume callers can
-		// still request either mode. Mid-turn rebuilds
-		// (focus attach/unfocus while a tool executes) keep dangling toolCalls so
-		// the in-flight call re-renders as pending instead of vanishing;
-		// renderSessionContext then keeps it in `pendingTools` for live routing.
-		const context = this.ctx.viewSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: settings.get("display.collapseCompacted"),
-			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
-		});
-		this.ctx.renderSessionContext(context, {
+		this.ctx.resetTranscript();
+		this.#discardPendingRows();
+		this.ctx.renderSessionContext(this.#transcriptContext(), {
 			updateFooter: true,
 			populateHistory: !this.ctx.focusedAgentId,
 		});
+		this.#showCompactionCount();
+		if (options.clearTerminalHistory) {
+			this.ctx.ui.requestRender(true, { clearScrollback: true });
+		}
+	}
 
-		// Show compaction info if session was compacted
-		const allEntries = this.ctx.viewSession.sessionManager.getEntries();
+	/**
+	 * The cold-launch {@link renderInitialMessages}: the transcript replaces the startup frame, and
+	 * the startup chat (welcome, notices) stays below it. The transcript is built off screen in
+	 * slices ({@link ChatTranscriptBuilder.rebuildInSlices}), so the composer echoes keystrokes
+	 * while a long session replays, and the chat shows the startup frame until the transcript
+	 * replaces it in one step. A session already streaming replays synchronously: its live rows are
+	 * being routed through the transcript as it is rebuilt.
+	 */
+	async replayInitialMessages(options: RenderInitialMessagesOptions = {}): Promise<void> {
+		this.ctx.initialChatRendered = true;
+		this.#discardPendingRows();
+		const context = this.#transcriptContext();
+		for (const message of context.messages) this.ctx.noteDisplayableThinkingContent(message);
+		this.ctx.statusLine.invalidate();
+		this.ctx.updateEditorBorderColor();
+		this.#builder.setExpanded(this.ctx.toolOutputExpanded);
+		const replay = this.#builder.rebuildInSlices(
+			context,
+			{ populateHistory: !this.ctx.focusedAgentId },
+			transcript => {
+				const chat = this.ctx.chatContainer;
+				const startup = chat.children;
+				chat.clear();
+				for (const row of transcript) chat.addChild(row);
+				this.#showCompactionCount();
+				if (options.clearTerminalHistory) {
+					this.ctx.ui.requestRender(true, { clearScrollback: true });
+				}
+				for (const row of startup) chat.addChild(row);
+				this.ctx.ui.requestRender();
+			},
+		);
+		if (this.ctx.viewSession.isStreaming) this.#builder.settle();
+		await replay;
+	}
+
+	/**
+	 * The collapsed live display transcript unless the user opted into the full inline history.
+	 * Mid-turn rebuilds (focus attach/unfocus while a tool executes) keep dangling toolCalls so the
+	 * in-flight call re-renders as pending instead of vanishing; renderSessionContext then keeps it
+	 * in `pendingTools` for live routing.
+	 */
+	#transcriptContext(): SessionContext {
+		return this.ctx.viewSession.buildTranscriptSessionContext({
+			collapseCompactedHistory: settings.get("display.collapseCompacted"),
+			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
+		});
+	}
+
+	#discardPendingRows(): void {
+		this.ctx.pendingMessagesContainer.disposeChildren();
+		this.ctx.pendingBashComponents = [];
+		this.ctx.pendingPythonComponents = [];
+	}
+
+	#showCompactionCount(): void {
 		let compactionCount = 0;
-		for (const entry of allEntries) {
-			if (entry.type === "compaction") {
-				compactionCount++;
-			}
+		for (const entry of this.ctx.viewSession.sessionManager.getEntries()) {
+			if (entry.type === "compaction") compactionCount++;
 		}
 		if (compactionCount > 0) {
 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
 			this.ctx.showStatus(`Session compacted ${times}`);
-		}
-		if (options.clearTerminalHistory) {
-			this.ctx.ui.requestRender(true, { clearScrollback: true });
-		}
-		if (preservedChatChildren && preservedChatChildren.length > 0) {
-			for (const child of preservedChatChildren) {
-				this.ctx.chatContainer.addChild(child);
-			}
-			this.ctx.ui.requestRender();
 		}
 	}
 

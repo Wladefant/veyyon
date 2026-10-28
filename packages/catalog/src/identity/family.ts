@@ -352,6 +352,15 @@ export const isAnthropicOpus55Model = (modelId: string): boolean => {
 	);
 };
 
+/**
+ * Anthropic Opus/Sonnet 5.5+ and Fable/Mythos reject forced tool selection.
+ * This applies to both message requests and token-counting requests.
+ */
+export const rejectsForcedToolChoice = (modelId: string): boolean => {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return parsed !== null && (isFableOrMythos(parsed.kind) || semverGte(parsed.version, "5.5"));
+};
+
 /** Thinking-variant token location inside a model id. */
 export interface ThinkingVariantToken {
 	index: number;

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, Snowflake } from "@veyyon/utils";
+import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
 import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
@@ -635,7 +635,6 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#shutdownConfirmed = false;
 	#exitedPromise: Promise<number> | null = null;
 	#pending = new Map<string, PendingExecution>();
-	#readBuffer = "";
 	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
 
 	constructor(id: string, options: BaseKernelOptions<TExecuteOptions>) {
@@ -890,28 +889,20 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	}
 
 	#startReader(stream: ReadableStream<Uint8Array>): void {
-		const reader = stream.getReader();
 		const decoder = new TextDecoder();
 		const loop = async () => {
 			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					this.#readBuffer += decoder.decode(value, { stream: true });
-					await this.#flushFrames();
+				// Each chunk is scanned once for its newline, so a frame that arrives in a thousand
+				// chunks costs one pass rather than one pass over everything received so far per chunk.
+				for await (const line of readLines(stream)) {
+					await this.#handleLine(decoder.decode(line));
 				}
-				this.#readBuffer += decoder.decode();
-				await this.#flushFrames();
 			} catch (err) {
-				logger.warn(`${this.#options.languageName} kernel reader failed`, {
-					error: errorMessage(err),
-				});
-			} finally {
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
+				const reason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
+				logger.warn(reason);
+				// No later frame can arrive, so nothing pending can finish and nothing new can run.
+				this.#abortPendingExecutions(reason, { kernelKilled: true });
+				void this.shutdown();
 			}
 		};
 		void loop();
@@ -943,28 +934,22 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		void loop();
 	}
 
-	async #flushFrames(): Promise<void> {
-		while (true) {
-			const nl = this.#readBuffer.indexOf("\n");
-			if (nl < 0) return;
-			const line = this.#readBuffer.slice(0, nl);
-			this.#readBuffer = this.#readBuffer.slice(nl + 1);
-			if (!line.trim()) continue;
-			let frame: Frame;
-			try {
-				frame = JSON.parse(line) as Frame;
-			} catch (err) {
-				logger.warn(`${this.#options.languageName} runner emitted invalid JSON`, {
-					line: line.slice(0, 200),
-					error: errorMessage(err),
-				});
-				continue;
-			}
-			if (this.#options.traceIpc) {
-				logger.debug(`${this.#options.languageName}Kernel recv`, { type: frame.type, id: frame.id });
-			}
-			await this.#handleFrame(frame);
+	async #handleLine(line: string): Promise<void> {
+		if (!line.trim()) return;
+		let frame: Frame;
+		try {
+			frame = JSON.parse(line) as Frame;
+		} catch (err) {
+			logger.warn(`${this.#options.languageName} runner emitted invalid JSON`, {
+				line: line.slice(0, 200),
+				error: errorMessage(err),
+			});
+			return;
 		}
+		if (this.#options.traceIpc) {
+			logger.debug(`${this.#options.languageName}Kernel recv`, { type: frame.type, id: frame.id });
+		}
+		await this.#handleFrame(frame);
 	}
 
 	async #handleFrame(frame: Frame): Promise<void> {

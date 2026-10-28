@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Effort } from "@veyyon/catalog/effort";
 import {
 	statesOpenAIWireGeneration,
@@ -5,7 +6,7 @@ import {
 	supportsCodexReasoningSummary,
 } from "@veyyon/catalog/identity";
 import { requireSupportedEffort } from "@veyyon/catalog/model-thinking";
-import type { Model } from "../../types";
+import type { CyberAccessProgram, Model } from "../../types";
 import { mapOpenAIReasoningEffort, repairResponsesToolPairs } from "../openai-shared";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
@@ -99,6 +100,7 @@ export interface RequestBody {
 	max_output_tokens?: number;
 	max_completion_tokens?: number;
 	service_tier?: "auto" | "default" | "flex" | "scale" | "priority" | null;
+	access_programs?: CodexAccessPrograms;
 	[key: string]: unknown;
 }
 
@@ -149,6 +151,37 @@ export function resolveCodexResponsesLite(model: CodexReasoningContextModel, req
 	if (env === "1" || env === "true") return true;
 	if (env === "0" || env === "false") return false;
 	return model.useResponsesLite === true;
+}
+
+/** The `access_programs` request field (codex-rs `AccessPrograms`). */
+export interface CodexAccessPrograms {
+	cyber: CyberAccessProgram;
+}
+
+/**
+ * The `access_programs` a Codex request carries for this model, or undefined to omit the field.
+ *
+ * Mirrors codex-rs `program_for_turn` for a ChatGPT account with Daybreak on, which is the codex-rs
+ * default from 0.163.0: the model's preferred Daybreak program, `daybreak_blue` before `daybreak_red`,
+ * when discovery advertises one for the signed-in account. The server judges a security request
+ * sent without the field under its automatic treatment, and its `cyber_policy` refusal message
+ * states that `access_programs.cyber` must be set to the appropriate tier.
+ *
+ * A model with no discovery metadata, or with no Daybreak program in it, omits the field and keeps
+ * the automatic treatment. codex-rs fails such a turn while Daybreak is on; omitting it lets a model
+ * that only offers `standard`, such as GPT-6 Astra, keep working.
+ *
+ * The turn body, its websocket frame and the server-side compaction body all read this, because
+ * codex-rs sends one program on every request of a turn, compaction included.
+ */
+export function resolveCodexAccessPrograms(
+	model: Pick<Model<"openai-codex-responses">, "accessPrograms">,
+): CodexAccessPrograms | undefined {
+	const offered = model.accessPrograms?.cyber;
+	if (offered === undefined) return undefined;
+	if (offered.includes("daybreak_blue")) return { cyber: "daybreak_blue" };
+	if (offered.includes("daybreak_red")) return { cyber: "daybreak_red" };
+	return undefined;
 }
 
 /**
@@ -276,6 +309,7 @@ export interface CodexLiteShapedBody {
 export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 	const input = Array.isArray(body.input) ? body.input : [];
 	stripImageDetails(input);
+	sanitizeInputCallIds(input);
 	body.parallel_tool_calls = false;
 	body.reasoning = { ...body.reasoning, context: "all_turns" };
 	const prefix: InputItem[] = [
@@ -296,9 +330,43 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 	delete body.tools;
 }
 
+const CODEX_CALL_ID_MAX_LENGTH = 64;
+const CODEX_CALL_ID_INVALID_CHAR = /[^a-zA-Z0-9_-]/g;
+
+/**
+ * The `call_id` Codex accepts: at most 64 characters of `[a-zA-Z0-9_-]`. A composite id joined by `|` or a
+ * newline (Cursor) keeps only its call half. A valid id is returned unchanged, so ids already on the wire keep
+ * matching; any other id gets a digest of its call half, which keeps a call and its output paired and keeps
+ * two distinct ids from colliding after the lossy rewrite.
+ */
+export function sanitizeCodexCallId(rawCallId: string): string {
+	const separator = rawCallId.search(/[\n|]/);
+	const base = separator > 0 ? rawCallId.slice(0, separator) : separator === 0 ? rawCallId.slice(1) : rawCallId;
+	const sanitized = base.replace(CODEX_CALL_ID_INVALID_CHAR, "_");
+	if (sanitized.length > 0 && sanitized.length <= CODEX_CALL_ID_MAX_LENGTH && sanitized === base) return base;
+	const digest = createHash("sha256")
+		.update(base || rawCallId)
+		.digest("base64url")
+		.slice(0, 11);
+	const prefix = (sanitized.replace(/_+$/, "") || "call").slice(0, CODEX_CALL_ID_MAX_LENGTH - digest.length - 1);
+	return `${prefix}_${digest}`;
+}
+
+/** Rewrites every input item's `call_id` to one Codex accepts (see {@link sanitizeCodexCallId}). */
+function sanitizeInputCallIds(input: readonly unknown[]): void {
+	for (const item of input) {
+		if (!item || typeof item !== "object" || !("call_id" in item) || typeof item.call_id !== "string") continue;
+		item.call_id = sanitizeCodexCallId(item.call_id);
+	}
+}
+
 /** The input with references and item ids dropped, every tool call paired, and the prompt's developer messages first. */
 function prepareInput(body: RequestBody, developerMessages: readonly string[] | undefined): void {
-	if (Array.isArray(body.input)) body.input = repairResponsesToolPairs(filterInput(body.input));
+	if (Array.isArray(body.input)) {
+		const input = filterInput(body.input);
+		sanitizeInputCallIds(input);
+		body.input = repairResponsesToolPairs(input);
+	}
 	if (developerMessages === undefined || developerMessages.length === 0) return;
 	const input = Array.isArray(body.input) ? body.input : [];
 	const prefix = developerMessages.map(
@@ -421,6 +489,13 @@ export async function transformRequestBody(
 	const include = Array.isArray(options.include) ? options.include.slice() : [];
 	include.push("reasoning.encrypted_content");
 	body.include = Array.from(new Set(include));
+
+	const accessPrograms = resolveCodexAccessPrograms(model);
+	if (accessPrograms) {
+		body.access_programs = accessPrograms;
+	} else {
+		delete body.access_programs;
+	}
 
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;

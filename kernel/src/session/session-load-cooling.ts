@@ -8,7 +8,8 @@
  * A compaction entry states what it summarized: every entry on its branch before its keep
  * boundary. When the load reads one, it moves those entries out of memory, so the load holds the
  * entries read since the last compaction and the stubs of the ones before it. Entry kinds every
- * context build reads ({@link BRANCH_SETTINGS_ENTRY_TYPES}) stay in memory, and every
+ * context build reads ({@link RESIDENT_SETTINGS_ENTRY_TYPES}) stay in memory, a summarized
+ * compaction moves its summary and its server-side window alone, and every
  * {@link RECORD_ONLY_ENTRY_TYPES} entry moves as it is read.
  *
  * Which branch the session resumes on is known only after the last line. An entry moved here that
@@ -22,10 +23,25 @@
 import { KEEP_NOTHING_ENTRY_ID } from "@veyyon/agent-core/compaction/entries";
 import { hasLegacyProviderNativeCompaction } from "@veyyon/agent-core/compaction/legacy-provider-native";
 import { ColdEntryPayloads, type ColdLineRestore, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
-import { BRANCH_SETTINGS_ENTRY_TYPES } from "./session-context";
+import { RESIDENT_SETTINGS_ENTRY_TYPES } from "./session-context";
 import { CURRENT_SESSION_VERSION, type FileEntry, type SessionEntry, type UsageStatistics } from "./session-entries";
-import { addEntryUsage, emptyUsageStatistics } from "./session-entry-index";
+import { addEntryUsage, addTaskResultUsage, emptyUsageStatistics } from "./session-entry-index";
 import type { PinnedSessionReader } from "./session-storage";
+
+/**
+ * One line of `skimSessionFile` that projects its record: the line's length, the record with each
+ * value {@link ColdEntryPayloads.cool} moves replaced by an empty placeholder, the masks of the
+ * entry's and its stand-in's moved members, the `toolCall` blocks of moved assistant content or -1,
+ * and the `usage` member of a `task` result's moved details, or 0 when no such details moved.
+ */
+export type SkimmedProjection = readonly [
+	byteLength: number,
+	record: FileEntry,
+	keys: number,
+	standInKeys: number,
+	toolCalls: number,
+	taskUsage: unknown,
+];
 
 /** What a load that moved history to disk hands the session that adopts its entries. */
 export interface LoadedColdHistory {
@@ -48,6 +64,8 @@ export class LoadCooling {
 	readonly #entries: SessionEntry[] = [];
 	readonly #offsets: number[] = [];
 	readonly #lengths: number[] = [];
+	/** The skim of each record taken from one, at the record's index; empty for a full load. */
+	readonly #projections: (SkimmedProjection | undefined)[] = [];
 	/**
 	 * Index of each record by id, filled with every record taken so far only when a parent walk
 	 * meets a parent other than the record in front, which a file appended turn by turn never has.
@@ -67,8 +85,11 @@ export class LoadCooling {
 		this.#restore = restore;
 	}
 
-	/** Take the record the load accepted, whose line is `length` bytes at byte `offset`. */
-	add(record: FileEntry, offset: number, length: number): void {
+	/**
+	 * Take the record the load accepted, whose line is `length` bytes at byte `offset`. `projection`
+	 * is the skim `record` was parsed from, when its large values are placeholders.
+	 */
+	add(record: FileEntry, offset: number, length: number, projection?: SkimmedProjection): void {
 		if (this.#state === "off") return;
 		if (this.#state === "header") {
 			// A file an older version wrote is migrated after the load, and a moved entry reads back unmigrated.
@@ -81,14 +102,21 @@ export class LoadCooling {
 		this.#entries.push(record);
 		this.#offsets.push(offset);
 		this.#lengths.push(length);
+		if (projection !== undefined) this.#projections[index] = projection;
 		if (index >= this.#walked.length) {
 			const grown = new Uint8Array(this.#walked.length * 2);
 			grown.set(this.#walked);
 			this.#walked = grown;
 		}
-		addEntryUsage(this.#usage, record);
+		if (projection === undefined || projection[5] === 0) addEntryUsage(this.#usage, record);
+		else addTaskResultUsage(this.#usage, projection[5]);
 		if (RECORD_ONLY_ENTRY_TYPES.has(record.type)) this.#cool(index);
 		else if (record.type === "compaction") this.#coolSummarizedBy(index);
+	}
+
+	/** Whether the load moves entries: the header it read is current, and no handle failed to pin. */
+	get active(): boolean {
+		return this.#state === "active";
 	}
 
 	/**
@@ -98,6 +126,12 @@ export class LoadCooling {
 	finish(): LoadedColdHistory | undefined {
 		if (!this.#pinned) this.#reader.close();
 		return this.#state === "active" ? { payloads: this.#payloads, usage: this.#usage } : undefined;
+	}
+
+	/** Release the handle for a load that keeps none of the entries it took. */
+	abandon(): void {
+		this.#state = "off";
+		this.#reader.close();
 	}
 
 	/** Move the entries the compaction at `index` summarized, back to where an earlier walk stopped. */
@@ -119,7 +153,7 @@ export class LoadCooling {
 		}
 		for (; at >= 0 && this.#walked[at] !== 1; at = this.#parentIndex(at)) {
 			this.#walked[at] = 1;
-			if (BRANCH_SETTINGS_ENTRY_TYPES.has(this.#entries[at]!.type)) continue;
+			if (RESIDENT_SETTINGS_ENTRY_TYPES.has(this.#entries[at]!.type)) continue;
 			this.#cool(at);
 			if (this.#state === "off") return;
 		}
@@ -150,6 +184,11 @@ export class LoadCooling {
 			}
 			this.#pinned = true;
 		}
-		this.#payloads.cool(this.#entries[index]!, this.#offsets[index]!, this.#lengths[index]!);
+		const entry = this.#entries[index]!;
+		const offset = this.#offsets[index]!;
+		const length = this.#lengths[index]!;
+		const projection = this.#projections[index];
+		if (projection === undefined) this.#payloads.cool(entry, offset, length);
+		else this.#payloads.adopt(entry, offset, length, projection[2], projection[3], projection[4]);
 	}
 }

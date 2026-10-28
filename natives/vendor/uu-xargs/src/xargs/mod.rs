@@ -11,7 +11,6 @@ use std::{
 	fmt::Display,
 	fs,
 	io::{self, BufRead, BufReader, Read, Write},
-	process::{Command, ExitStatus, Stdio},
 };
 
 use clap::{Arg, ArgAction, crate_version, error::ErrorKind};
@@ -315,7 +314,6 @@ enum ExecAction {
 
 struct CommandBuilderOptions {
 	action:   ExecAction,
-	env:      HashMap<OsString, OsString>,
 	limiters: LimiterCollection,
 	verbose:  bool,
 	replace:  Option<String>,
@@ -323,7 +321,6 @@ struct CommandBuilderOptions {
 impl CommandBuilderOptions {
 	fn new(
 		action: ExecAction,
-		env: HashMap<OsString, OsString>,
 		mut limiters: LimiterCollection,
 		replace: Option<String>,
 	) -> Result<Self, ExhaustedCommandSpace> {
@@ -336,7 +333,7 @@ impl CommandBuilderOptions {
 			limiters.try_arg(Argument { arg: arg.to_owned(), kind: ArgumentKind::Initial })?;
 		}
 
-		Ok(Self { action, env, limiters, verbose: false, replace })
+		Ok(Self { action, limiters, verbose: false, replace })
 	}
 }
 
@@ -408,17 +405,15 @@ impl CommandBuilder<'_> {
 
 		match &self.options.action {
 			ExecAction::Command(_) => {
-				// Children must run in the scope's working directory (the
-				// host process cwd belongs to the host shell, not this
-				// command) and see the shell's exported environment, which
-				// `do_xargs` snapshots into `self.options.env`.
-				let mut command = Command::new(entry_point);
-				command
-					.args(&final_args)
-					.current_dir(veyyon_uutils_ctx::cwd())
-					.env_clear()
-					.envs(&self.options.env);
-				match run_command_captured(&mut command) {
+				// Children run the way the shell runs them: from the scope's
+				// working directory, looked up on and given the shell's exported
+				// environment, with stdio kept away from the host's.
+				let status = veyyon_uutils_ctx::child_command(entry_point, veyyon_uutils_ctx::cwd())
+					.and_then(|mut command| {
+						command.args(&final_args);
+						veyyon_uutils_ctx::run_child(&mut command)
+					});
+				match status {
 					Ok(status) => {
 						if status.success() {
 							Ok(CommandResult::Success)
@@ -464,42 +459,6 @@ impl CommandBuilder<'_> {
 			},
 		}
 	}
-}
-
-/// Runs `command` with stdin from the null device and stdout/stderr piped
-/// back into the context streams, returning the child's exit status.
-///
-/// The context streams are in-process `Write` handles (pipes or in-memory
-/// buffers), not inheritable file descriptors, and the host process's own
-/// fd 0/1/2 belong to the TUI — a child must never inherit stdio. Child
-/// stdout streams into the context stdout on the calling thread while a
-/// helper thread drains stderr into a buffer (the context streams are
-/// thread-local to the scope thread, so the helper cannot write directly);
-/// the buffered stderr is forwarded once the child exits.
-fn run_command_captured(command: &mut Command) -> io::Result<ExitStatus> {
-	command
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped());
-	let mut child = command.spawn()?;
-
-	let mut child_err = child.stderr.take();
-	let stderr_thread = std::thread::spawn(move || {
-		let mut buf = Vec::new();
-		if let Some(err) = child_err.as_mut() {
-			let _ = err.read_to_end(&mut buf);
-		}
-		buf
-	});
-
-	if let Some(mut out) = child.stdout.take() {
-		let _ = io::copy(&mut out, &mut veyyon_uutils_ctx::stdout());
-	}
-	let status = child.wait();
-	if let Ok(buf) = stderr_thread.join() {
-		let _ = veyyon_uutils_ctx::stderr().write_all(&buf);
-	}
-	status
 }
 
 trait ArgumentReader {
@@ -1061,7 +1020,7 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
 		_ => ExecAction::Echo,
 	};
 	// The shell's exported environment lives in the ctx scope, not the host
-	// process environment.
+	// process environment; it counts toward the system command-size limit.
 	let env: HashMap<OsString, OsString> = veyyon_uutils_ctx::env_snapshot()
 		.into_iter()
 		.map(|(k, v)| (OsString::from(k), OsString::from(v)))
@@ -1079,7 +1038,7 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
 	}
 	limiters.add(MaxCharsCommandSizeLimiter::new_system(&env));
 
-	let mut builder_options = CommandBuilderOptions::new(action, env, limiters, replace.clone())
+	let mut builder_options = CommandBuilderOptions::new(action, limiters, replace.clone())
 		.map_err(|_| {
 			"Base command and environment are too large to fit into one command execution"
 		})?;

@@ -2730,7 +2730,7 @@ export class AuthStorage {
 		// mid-session causes account switches that cold-start the server-side prompt cache. New sessions
 		// (no preference) and sessions whose preferred is blocked still rank, so we pick the account
 		// with the most headroom proactively and fall back intelligently when rate-limited.
-		const movementAllowed = this.#loadBalancingEnabled();
+		const movementAllowed = this.isLoadBalancingEnabled();
 		// A plan refusal on record steers selection only when the session may move: with movement off
 		// the home account keeps leading for every model, and its refusal reaches the caller.
 		const excludesModel = (index: number): boolean =>
@@ -2745,7 +2745,6 @@ export class AuthStorage {
 		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
 		// a record of what served last rather than anything anybody asked for.
 		let chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
-		const movementAllowed = this.isLoadBalancingEnabled();
 		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
 			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
@@ -2768,7 +2767,6 @@ export class AuthStorage {
 			checkUsage && movementAllowed && !rankDespitePin && !sessionPinIsExplicit && sessionPreferredCredential
 				? await this.#usage.reportFor(provider, sessionPreferredCredential, {
 						...options,
-						timeoutMs: options?.timeoutMs,
 					})
 				: undefined;
 		const sessionPreferredAllowanceSpent =
@@ -2803,7 +2801,7 @@ export class AuthStorage {
 					providerKey,
 					order.map(idx => credentials[idx]),
 					blockScope,
-				).map(selection => ({ selection, usage: null, usageChecked: false }));
+				).map(selection => ({ selection, usage: null, usageChecked: false, allowanceSpent: undefined }));
 		// An account whose plan was refused this model sorts last, in both modes, like a refused grant:
 		// the provider has already answered for it, so it is reached only when no other account is left.
 		const candidates = [

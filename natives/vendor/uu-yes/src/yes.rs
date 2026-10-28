@@ -217,7 +217,7 @@ mod tests {
 
 		let io = ScopeIo {
 			stdin:                 Box::new(std::io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(FailingWriter {
 				buf: stdout_buf.clone(),

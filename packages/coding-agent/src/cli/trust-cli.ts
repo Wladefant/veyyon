@@ -26,6 +26,7 @@ import {
 	type ProjectTrustVerdict,
 	realProjectPath,
 } from "../config/project-trust";
+import { describeProjectPluginRegistry } from "../config/project-plugin-registry-trust";
 import { describeProjectSkill } from "../config/project-skill-trust";
 import { findRepoRoot } from "../discovery/capability/fs";
 import { clearClaudePluginRootsCache, projectTrustKey, resolveActiveProjectRegistryPath } from "../discovery/helpers";
@@ -107,9 +108,11 @@ export async function runTrustCommand(args: TrustCommandArgs): Promise<TrustComm
 		const isSkill =
 			path.basename(absolutePath).toLowerCase() === "skill.md" ||
 			(await pathExists(path.join(absolutePath, "SKILL.md"), "a skill directory containing SKILL.md"));
-		const executable = isSkill
-			? await describeProjectSkill(absolutePath, root)
-			: await describeProjectExecutable(absolutePath, root);
+		const executable = isRegistry
+			? await describeProjectPluginRegistry(absolutePath, root)
+			: isSkill
+				? await describeProjectSkill(absolutePath, root)
+				: await describeProjectExecutable(absolutePath, root);
 		if (executable) {
 			described.push({ root, executable });
 			continue;

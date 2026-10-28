@@ -93,8 +93,6 @@ pub struct ShellEnvironment {
 	scopes: Vec<(EnvironmentScope, ShellVariableMap)>,
 	/// Whether or not to auto-export variables on creation or modification.
 	export_variables_on_modification: bool,
-	/// Count of total entries (may include duplicates with shadowed variables).
-	entry_count: usize,
 }
 
 impl Default for ShellEnvironment {
@@ -109,7 +107,6 @@ impl ShellEnvironment {
 		Self {
 			scopes: vec![(EnvironmentScope::Global, ShellVariableMap::default())],
 			export_variables_on_modification: false,
-			entry_count: 0,
 		}
 	}
 
@@ -144,6 +141,16 @@ impl ShellEnvironment {
 		}
 	}
 
+	/// Returns how many variables the scopes hold, shadowed duplicates included.
+	///
+	/// Counted from the scopes rather than kept in a running total: a total that
+	/// a popped scope did not decrement grew by every per-command environment
+	/// for the life of the shell, and every `iter_exported` and `iter` allocated
+	/// a map of that size.
+	fn variable_count(&self) -> usize {
+		self.scopes.iter().map(|(_, map)| map.variables.len()).sum()
+	}
+
 	//
 	// Iterators/Getters
 	//
@@ -153,7 +160,7 @@ impl ShellEnvironment {
 		// We won't actually need to store all entries, but we expect it should be
 		// within the same order.
 		let mut visible_vars: HashMap<&String, &ShellVariable> =
-			HashMap::with_capacity(self.entry_count);
+			HashMap::with_capacity(self.variable_count());
 
 		for (_, var_map) in self.scopes.iter().rev() {
 			for (name, var) in var_map.iter().filter(|(_, v)| v.is_exported()) {
@@ -185,7 +192,7 @@ impl ShellEnvironment {
 		// We won't actually need to store all entries, but we expect it should be
 		// within the same order.
 		let mut visible_vars: HashMap<&String, &ShellVariable> =
-			HashMap::with_capacity(self.entry_count);
+			HashMap::with_capacity(self.variable_count());
 
 		let mut local_count = 0;
 		for (scope_type, var_map) in self.scopes.iter().rev() {
@@ -320,9 +327,6 @@ impl ShellEnvironment {
 				// it with a placeholder.
 				if matches!(scope_type, EnvironmentScope::Local) && local_count == 1 {
 					map.set(name, ShellVariable::new(ShellValue::Unset(ShellValueUnsetType::Untyped)));
-				} else if self.entry_count > 0 {
-					// Entry count should never be 0 here, but we're being defensive.
-					self.entry_count -= 1;
 				}
 
 				return Ok(unset_result);
@@ -563,10 +567,7 @@ impl ShellEnvironment {
 
 		for (scope_type, map) in self.scopes.iter_mut().rev() {
 			if *scope_type == target_scope {
-				let prev_var = map.set(name, var);
-				if prev_var.is_none() {
-					self.entry_count += 1;
-				}
+				map.set(name, var);
 
 				return Ok(());
 			}

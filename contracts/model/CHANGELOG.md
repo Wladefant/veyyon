@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `CacheRequestTtl`, `CacheRequestRecord`, and optional `Usage.cacheRequests` for per-request prompt-cache telemetry records ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
@@ -20,6 +24,10 @@
 ### Fixed
 
 - Included native generated images in the assistant content contract used by Responses providers.
+### Added
+
+- `Model.accessPrograms` lists the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) model discovery offers the signed-in account for a model.
+
 ## [1.5.6] - 2026-10-13
 
 ### Changed

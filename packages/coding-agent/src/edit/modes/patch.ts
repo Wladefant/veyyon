@@ -1605,7 +1605,7 @@ export async function computePatchDiff(
 		if (!normalizedOld && !normalizedNew) {
 			return { diff: "", firstChangedLine: undefined };
 		}
-		return generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
+		return await generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
 			path: result.change.newPath ?? result.change.path,
 		});
 	} catch (err) {

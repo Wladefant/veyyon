@@ -8,5 +8,4 @@ export {
 	raceWithTimeout,
 	scopedTimeoutSignal,
 	withScopedTimeoutSignal,
-	withTimeoutSignal,
 } from "@veyyon/utils/scoped-timeout";

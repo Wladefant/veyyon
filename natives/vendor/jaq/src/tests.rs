@@ -44,7 +44,7 @@ fn run_jq_in(
 	let err = Buf::default();
 	let io_ = veyyon_uutils_ctx::ScopeIo {
 		stdin: Box::new(io::Cursor::new(stdin.as_bytes().to_vec())),
-		stdin_fd: None,
+		fds: Vec::new(),
 		stdin_is_search_input: false,
 		stdout: Box::new(out.clone()),
 		// A capture buffer is not a terminal.

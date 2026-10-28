@@ -74,6 +74,7 @@ export const releaseEmbeddedModulePages = lazyNativeFn("releaseEmbeddedModulePag
 export const releaseFreeHeapPages = lazyNativeFn("releaseFreeHeapPages");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");
+export const skimSessionFile = lazyNativeFn("skimSessionFile");
 export const sliceWithWidth = lazyNativeFn("sliceWithWidth");
 export const summarizeCode = lazyNativeFn("summarizeCode");
 export const supportsLanguage = lazyNativeFn("supportsLanguage");

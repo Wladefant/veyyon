@@ -20,6 +20,8 @@ import type {
 	JsonRpcResponse,
 	MCPHttpServerConfig,
 	MCPRequestOptions,
+	MCPStreamRequest,
+	MCPStreamRequestOptions,
 	MCPSseServerConfig,
 	MCPTransport,
 	ServerRequestResponse,
@@ -95,6 +97,7 @@ export class HttpTransport implements MCPTransport {
 	#connected = false;
 	#sessionId: string | null = null;
 	#sseConnection: AbortController | null = null;
+	#streamRequests = new Map<string | number, AbortController>();
 	#requestController = new AbortController();
 
 	onClose?: () => void;
@@ -239,12 +242,126 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
+	streamRequest(
+		method: string,
+		params: Record<string, unknown> | undefined,
+		onNotification: (notification: JsonRpcMessage) => void,
+		options?: MCPStreamRequestOptions,
+	): MCPStreamRequest {
+		if (!this.#connected) {
+			throw new Error(mcpNotConnectedMessage({ url: this.config.url }, `stream request "${method}"`));
+		}
+		const id = Snowflake.next();
+		options?.onRequestId?.(id);
+		const controller = new AbortController();
+		const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+		this.#streamRequests.set(id, controller);
+		const { promise: done, resolve, reject } = Promise.withResolvers<void>();
+		const requestParams = {
+			...(params ?? {}),
+			_meta: {
+				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta)
+					? params._meta
+					: {}),
+				"io.modelcontextprotocol/subscriptionId": id,
+			},
+		};
+		void (async () => {
+			try {
+				const headers: Record<string, string> = {
+					"Content-Type": "application/json",
+					Accept: "text/event-stream",
+					...this.config.headers,
+				};
+				if (this.#sessionId) headers["Mcp-Session-Id"] = this.#sessionId;
+				const body = JSON.stringify({ jsonrpc: "2.0", id, method, params: requestParams });
+				let response = await fetch(this.config.url, {
+					method: "POST",
+					headers,
+					body,
+					signal,
+				});
+				if (this.onAuthError && (response.status === 401 || response.status === 403)) {
+					await response.body?.cancel();
+					const refreshedHeaders = await untilAborted(signal, this.onAuthError());
+					if (refreshedHeaders) {
+						this.config = { ...this.config, headers: refreshedHeaders };
+						response = await fetch(this.config.url, {
+							method: "POST",
+							headers: { ...headers, ...refreshedHeaders },
+							body,
+							signal,
+						});
+					}
+				}
+				const sessionId = response.headers.get("Mcp-Session-Id");
+				if (sessionId) this.#sessionId = sessionId;
+				if (response.ok && response.headers.get("Content-Type")?.includes("application/json")) {
+					const frame = (await untilAborted(signal, response.json())) as JsonRpcResponse;
+					if (frame.id !== id) throw new Error("MCP event stream response id does not match its request");
+					if (frame.error) {
+						throw Object.assign(new Error(`MCP error ${frame.error.code}: ${frame.error.message}`), {
+							code: frame.error.code,
+							data: frame.error.data,
+						});
+					}
+					if (!("result" in frame)) throw new Error("MCP event stream response has no result");
+					resolve();
+					return;
+				}
+				if (!response.ok || !response.body || !response.headers.get("Content-Type")?.includes("text/event-stream")) {
+					await response.body?.cancel();
+					throw new Error(mcpHttpFailureMessage(this.config.url, response.status, "Event stream response required"));
+				}
+				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body, signal)) {
+					const messages = Array.isArray(raw) ? raw : [raw];
+					for (const message of messages) {
+						if ("id" in message && message.id === id && ("result" in message || "error" in message)) {
+							if (message.error) {
+								throw Object.assign(new Error(`MCP error ${message.error.code}: ${message.error.message}`), {
+									code: message.error.code,
+									data: message.error.data,
+								});
+							}
+							resolve();
+							return;
+						}
+						if ("method" in message && !("id" in message)) {
+							const params = message.params;
+							const meta = params && typeof params === "object" && "_meta" in params ? params._meta : undefined;
+							const subscriptionId =
+								meta && typeof meta === "object" && "io.modelcontextprotocol/subscriptionId" in meta
+									? meta["io.modelcontextprotocol/subscriptionId"]
+									: undefined;
+							if (subscriptionId === id) {
+								onNotification(message);
+							} else if (subscriptionId === undefined && message.method === "notifications/events/list_changed") {
+								this.onNotification?.(message.method, message.params);
+							}
+						}
+					}
+				}
+				resolve();
+			} catch (error) {
+				if (!signal.aborted) reject(error instanceof Error ? error : new Error(String(error)));
+				else resolve();
+			} finally {
+				this.#streamRequests.delete(id);
+			}
+		})();
+		return {
+			id,
+			done,
+			cancel: () => controller.abort(),
+		};
+	}
+
 	async request<T = unknown>(
 		method: string,
 		params?: Record<string, unknown>,
 		options?: MCPRequestOptions,
 	): Promise<T> {
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const timeout = options?.timeoutMs ?? resolveMCPTimeoutMs(this.config.timeout);
 		const signal = options?.signal
 			? AbortSignal.any([options.signal, this.#requestController.signal])
 			: this.#requestController.signal;
@@ -291,6 +408,7 @@ export class HttpTransport implements MCPTransport {
 		}
 
 		const id = Snowflake.next();
+		_options?.onRequestId?.(id);
 		const body = {
 			jsonrpc: "2.0" as const,
 			id,
@@ -549,6 +667,8 @@ export class HttpTransport implements MCPTransport {
 		if (!this.#connected) return;
 		this.#connected = false;
 		this.#requestController.abort(new DOMException("MCP transport was closed by this client", "AbortError"));
+		for (const controller of this.#streamRequests.values()) controller.abort();
+		this.#streamRequests.clear();
 
 		// Abort SSE listener
 		if (this.#sseConnection) {

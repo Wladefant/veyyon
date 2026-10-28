@@ -39,10 +39,15 @@ export interface IdleTrimOptions {
  * engine's heaps, then returns the free pages of the C allocator's arenas, which `Bun.shrink()`
  * leaves mapped: native work on the addon's worker threads leaves its peak resident there.
  * `Bun.shrink()` has no `node:*` equivalent: V8 exposes no call that discards compiled code.
+ *
+ * The arena walk runs on libuv's thread pool and is not awaited: in a 6 GiB session it held the
+ * event loop 250 to 1127 ms. A walk that fails is logged; the next quiet stretch walks again.
  */
 export function trimEngine(): void {
 	Bun.shrink();
-	releaseFreeHeapPages();
+	releaseFreeHeapPages().catch((error: unknown) => {
+		logger.warn("Releasing the C allocator's free pages failed", { error: errorMessage(error) });
+	});
 }
 
 /** Timer handle the trim arms. `cancel`, when present, is invoked on stop(). */

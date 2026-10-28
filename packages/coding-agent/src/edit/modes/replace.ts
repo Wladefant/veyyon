@@ -157,13 +157,13 @@ export async function executeReplaceSingle(
 	if (await routeWriteThroughBridge(session, path, absolutePath, finalContent, signal)) {
 		// bridge handled the write; diagnostics not available via writethrough
 	} else {
-		diagnostics = await writethrough(absolutePath, finalContent, signal, Bun.file(absolutePath), batchRequest, dst =>
+		diagnostics = await writethrough(absolutePath, finalContent, signal, batchRequest, dst =>
 			dst === absolutePath ? beginDeferredDiagnosticsForPath(absolutePath) : undefined,
 		);
 		invalidateFsScanAfterWrite(absolutePath);
 	}
 
-	const diffResult = generateDiffString(normalizedContent, result.content, undefined, { path });
+	const diffResult = await generateDiffString(normalizedContent, result.content, undefined, { path });
 	const resultText =
 		result.count > 1
 			? `Successfully replaced ${result.count} occurrences in ${path}.`

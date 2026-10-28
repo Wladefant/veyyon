@@ -79,7 +79,8 @@ export interface SessionSwitchHost {
 	): Promise<void>;
 	setModelWithProviderSessionReset(model: Model): void;
 	resetMemoryContextForNewTranscript(): void;
-	rescopeAgentRegistry(): Promise<void>;
+	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
+	endConversation(): Promise<void>;
 	resetAllAdvisorRuntimes(): void;
 }
 
@@ -334,7 +335,7 @@ export class SessionSwitch {
 
 		if (switchingToDifferentSession) {
 			host.resetMemoryContextForNewTranscript();
-			await host.rescopeAgentRegistry();
+			await host.endConversation();
 		}
 	}
 

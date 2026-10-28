@@ -119,6 +119,7 @@ Options are strictly validated per `type`; cross-type fields are rejected with a
   - **`skip`** specifies match offset for pagination (default limit `50` matches).
   - Metavariable syntax supports `$NAME` (single node), `$_` (anonymous node), `$$$NAME` (multi-node sequence), and `$$$` (anonymous sequence). Each match lists its bindings on a `meta:` line; a value over 60 bytes (`META_VALUE_MAX_BYTES`) or containing a newline renders as `KEY=…`, because the binding is a range inside the match the result has already printed line by line.
   - A capped result states how many matches were found and returned, and states the `skip` value that continues them. `limit` is a file-search field and a structure search rejects it.
+  - A file is parsed only when it contains the literal text of every named leaf in at least one pattern, such as `unserialize` in `unserialize($_COOKIE[$KEY])`; metavariables and punctuation require nothing. Parse issues are reported for parsed files only, so a malformed file that cannot hold a match is skipped without a diagnostic. A file that is not valid UTF-8 is still reported.
 
 ### Unified result contract and settings
 

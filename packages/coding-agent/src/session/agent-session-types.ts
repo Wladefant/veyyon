@@ -159,6 +159,8 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** The explicit spawn list's fallback key; does not enable global fallback chains. */
+	modelPatternFallbackKey?: string;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
 	/**
@@ -718,7 +720,8 @@ export type AgentContinueSkipReason =
 	| PostPromptSkipReason
 	| "session-unavailable"
 	| "should-continue-false"
-	| "post-restore-unavailable";
+	| "post-restore-unavailable"
+	| "agent-busy";
 
 export type ScheduledAgentContinueOptions = {
 	delayMs?: number;

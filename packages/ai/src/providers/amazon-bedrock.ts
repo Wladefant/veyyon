@@ -9,6 +9,7 @@
 
 import type { Effort } from "@veyyon/catalog/effort";
 import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
+import { rejectsForcedToolChoice } from "@veyyon/catalog/identity";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
 import { $env, $flag } from "@veyyon/utils/env";
@@ -450,7 +451,11 @@ class BedrockTurn {
 		const options = this.#options;
 		const cacheRetention = resolveCacheRetention(options.cacheRetention);
 		const messages = convertMessages(context, model, cacheRetention);
-		const { toolConfig: rawToolConfig, sentinelInjected } = planToolConfig(context.tools, options.toolChoice, messages);
+		const { toolConfig: rawToolConfig, sentinelInjected } = planToolConfig(
+			context.tools,
+			resolveBedrockToolChoice(options.toolChoice, model.id),
+			messages,
+		);
 		this.#sentinelInjected = sentinelInjected;
 		let toolConfig = rawToolConfig;
 		let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
@@ -900,12 +905,11 @@ function convertMessages(
 ): WireMessage[] {
 	const result: WireMessage[] = [];
 	const messages = transformMessages(context.messages, model, normalizeToolCallId);
-	const signsThinking = supportsThinkingSignature(model);
 
 	for (let i = 0; i < messages.length; i++) {
 		const message = messages[i];
 		if (message.role !== "toolResult") {
-			const converted = convertMessage(message, model.id, signsThinking);
+			const converted = convertMessage(message, model.id);
 			if (converted) result.push(converted);
 			continue;
 		}
@@ -942,14 +946,13 @@ function convertMessages(
 function convertMessage(
 	message: Exclude<Message, ToolResultMessage>,
 	modelId: string,
-	signsThinking: boolean,
 ): WireMessage | undefined {
 	switch (message.role) {
 		case "developer":
 		case "user":
 			return convertUserMessage(message.content);
 		case "assistant":
-			return convertAssistantMessage(message.content, modelId, signsThinking);
+			return convertAssistantMessage(message.content, modelId);
 		default:
 			throw new AIError.ValidationError("Unknown message role");
 	}
@@ -970,11 +973,10 @@ function convertUserMessage(content: UserMessage["content"]): WireMessage | unde
 function convertAssistantMessage(
 	content: AssistantMessage["content"],
 	modelId: string,
-	signsThinking: boolean,
 ): WireMessage | undefined {
 	const blocks: AssistantContent[] = [];
 	for (const block of content) {
-		const converted = convertAssistantBlock(block, modelId, signsThinking);
+		const converted = convertAssistantBlock(block, modelId);
 		if (converted) blocks.push(converted);
 	}
 	return blocks.length > 0 ? { role: "assistant", content: blocks } : undefined;
@@ -1000,7 +1002,6 @@ function convertUserBlock(block: TextContent | ImageContent | VideoContent): Use
 function convertAssistantBlock(
 	block: AssistantMessage["content"][number],
 	modelId: string,
-	signsThinking: boolean,
 ): AssistantContent | undefined {
 	switch (block.type) {
 		case "text":
@@ -1053,6 +1054,18 @@ function convertToolSpec(tool: Tool): WireToolSpec {
 			inputSchema: { json: toolWireSchema(tool) },
 		},
 	};
+}
+
+/**
+ * A Claude model that rejects forced tool use rejects Bedrock's `any` and `tool` choices the same as
+ * the messages API's, so a forced choice goes out as `auto` and the tool stays available.
+ */
+function resolveBedrockToolChoice(
+	toolChoice: BedrockOptions["toolChoice"],
+	modelId: string,
+): BedrockOptions["toolChoice"] {
+	const forced = toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool");
+	return forced && rejectsForcedToolChoice(modelId) ? "auto" : toolChoice;
 }
 
 function planToolConfig(

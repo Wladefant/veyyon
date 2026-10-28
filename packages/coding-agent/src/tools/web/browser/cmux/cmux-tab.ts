@@ -651,7 +651,7 @@ export class CmuxTab {
 					)
 				: (returnedPath ?? path.join(os.tmpdir(), `veyyon-sshots-${Snowflake.next()}.${ext}`)));
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-		await Bun.write(dest, savedBuffer);
+		await fs.promises.writeFile(dest, savedBuffer);
 		const info: ScreenshotResult = {
 			dest,
 			mimeType: savedMimeType,
@@ -777,9 +777,9 @@ export class CmuxTab {
 		const files: FilePayload[] = [];
 		for (const filePath of filePaths) {
 			const absolute = resolveToCwd(filePath, this.#requireRunContext("tab.uploadFile()").session.cwd);
-			const file = Bun.file(absolute);
-			const data = Buffer.from(await file.arrayBuffer()).toString("base64");
-			files.push({ name: path.basename(absolute), type: file.type || "application/octet-stream", data });
+			const data = (await fs.promises.readFile(absolute)).toString("base64");
+			const type = Bun.file(absolute).type || "application/octet-stream";
+			files.push({ name: path.basename(absolute), type, data });
 		}
 		await this.#selectorAction(selector, "uploadFile", { files });
 	}
