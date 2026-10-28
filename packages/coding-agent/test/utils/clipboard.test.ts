@@ -7,6 +7,7 @@ import {
 } from "@veyyon/coding-agent/utils/clipboard";
 import * as native from "@veyyon/natives";
 import type { Subprocess } from "bun";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 
 type SpawnOptions = Bun.SpawnOptions.SpawnOptions<
 	Bun.SpawnOptions.Writable,
@@ -43,16 +44,6 @@ function spyPowershell(calls: SpawnCall[], stdout: string, exitCode = 0) {
 		return fakeProcess(stdout, exitCode);
 	}
 	return vi.spyOn(Bun, "spawn").mockImplementation(mockSpawn);
-}
-
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
-function setPlatform(value: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", { value, configurable: true });
-}
-
-function restorePlatform(): void {
-	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 }
 
 const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "DISPLAY", "WAYLAND_DISPLAY", "TERMUX_VERSION", "TMUX"] as const;

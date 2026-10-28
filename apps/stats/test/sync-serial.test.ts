@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { syncAllSessions } from "@veyyon/stats/aggregator";
 import { getOverallStats } from "@veyyon/stats/db";
 import { getSessionsDir } from "@veyyon/utils";
+import { restorePlatform, setPlatform } from "../../../packages/utils/test/helpers/platform-override";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
 import { installWorkerStandIn } from "./helpers/worker-stand-in";
 
@@ -72,8 +73,7 @@ describe("stats sync serial mode", () => {
 
 	it("uses the serial parser by default on macOS", async () => {
 		await writeSessionFile();
-		const platform = Object.getOwnPropertyDescriptor(process, "platform");
-		Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+		setPlatform("darwin");
 		const workers = installWorkerStandIn(new Error("macOS must parse serially"));
 		try {
 			const synced = await syncAllSessions();
@@ -84,7 +84,7 @@ describe("stats sync serial mode", () => {
 			expect(workers.constructed).toBe(0);
 		} finally {
 			workers.restore();
-			if (platform) Object.defineProperty(process, "platform", platform);
+			restorePlatform();
 		}
 	});
 

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { openPath } from "@veyyon/coding-agent/utils/open";
 import * as piUtils from "@veyyon/utils";
 import type { Subprocess } from "bun";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 
 type SpawnOptions = Bun.SpawnOptions.SpawnOptions<
 	Bun.SpawnOptions.Writable,
@@ -17,17 +18,8 @@ type SpawnSyncOptions = Bun.SpawnOptions.SpawnSyncOptions<"ignore", "pipe", "ign
 const existingLinuxPath = "/mnt/c/Users/example/Downloads/session.html";
 const windowsPath = "C:\\Users\\example\\Downloads\\session.html";
 
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP"] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
-
-function setPlatform(value: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", { value, configurable: true });
-}
-
-function restorePlatform(): void {
-	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
-}
 
 function fakeProcess(): Subprocess {
 	return {

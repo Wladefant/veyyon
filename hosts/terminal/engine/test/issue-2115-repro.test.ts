@@ -1,6 +1,7 @@
 import "./warm-natives"; // load the native addon under the real platform before any process.platform mock
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@veyyon/tui";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2115
@@ -12,8 +13,6 @@ import { VirtualTerminal } from "./virtual-terminal";
 // row in one DEC 2026 frame. Legacy conhost/ConPTY byte parsing could park the
 // viewport mid-conversation, and even ASCII sessions became sluggish once the
 // replay crossed ~1-2 MiB.
-
-const PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, "platform");
 
 class LargeCjkContent implements Component {
 	#lines: string[];
@@ -88,12 +87,12 @@ class ManualRenderScheduler implements RenderScheduler {
 
 describe("issue #2115: ConPTY large-session resume truncates at logical lines", () => {
 	afterEach(() => {
-		if (PLATFORM_DESCRIPTOR) Object.defineProperty(process, "platform", PLATFORM_DESCRIPTOR);
+		restorePlatform();
 		vi.restoreAllMocks();
 	});
 
 	it("bounds a Windows CJK resume paint while preserving the visible tail", async () => {
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		setPlatform("win32");
 		const term = new VirtualTerminal(80, 24, 12_000);
 		const writes: string[] = [];
 		const realWrite = term.write.bind(term);
@@ -124,7 +123,7 @@ describe("issue #2115: ConPTY large-session resume truncates at logical lines", 
 	});
 
 	it("keeps later tail appends on the cheap append path", async () => {
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		setPlatform("win32");
 		const term = new VirtualTerminal(80, 24, 12_000);
 		const writes: string[] = [];
 		const realWrite = term.write.bind(term);

@@ -1,6 +1,7 @@
 import "./warm-natives"; // load the native addon under the real platform before any process.platform mock
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@veyyon/tui";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 import { settleFrames } from "./helpers/settle-frames";
 import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -21,16 +22,6 @@ import { VirtualTerminal } from "./virtual-terminal";
 // render that fires once the window expires, letting the host fully drain the
 // big paint before any new bytes touch the buffer. The gate is keyed on
 // `isConPTYHosted()` so non-Windows terminals stay on the immediate path.
-
-const PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, "platform");
-
-function setPlatform(value: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", { value, configurable: true });
-}
-
-function restorePlatform(): void {
-	if (PLATFORM_DESCRIPTOR) Object.defineProperty(process, "platform", PLATFORM_DESCRIPTOR);
-}
 
 class TallContent implements Component {
 	#lines: string[];

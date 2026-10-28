@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { restorePlatform, setPlatform } from "../../utils/test/helpers/platform-override";
 
 interface SuspendCtx {
 	ctx: InteractiveModeContext;
@@ -35,14 +36,8 @@ function createCtx(): SuspendCtx {
 	return { ctx, ui, showStatus, showError };
 }
 
-const originalPlatform = process.platform;
-
-function setPlatform(value: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", { value, configurable: true, writable: true });
-}
-
 afterEach(() => {
-	Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+	restorePlatform();
 	vi.restoreAllMocks();
 	// Drop any SIGCONT listener a passing test left behind so a later test
 	// (or the next file) doesn't get spurious callbacks.

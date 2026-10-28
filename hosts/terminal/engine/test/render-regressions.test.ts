@@ -10,6 +10,7 @@ import {
 	TERMINAL,
 	TUI,
 } from "@veyyon/tui";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { captureWrites, viewportRows } from "./helpers/terminal-output";
@@ -649,8 +650,7 @@ describe("TUI terminal-state regressions", () => {
 			// clean reset: the renderer clears scrollback (ED3) and redraws the
 			// transcript at the new width, so committed history rewraps even when the
 			// host scroll position is unobservable.
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			setPlatform("linux");
 			try {
 				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					// Each logical line is 36 cols: wraps to 20+16 at width 20, fits on one row at width 40.
@@ -679,7 +679,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 
@@ -2442,8 +2442,7 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 		it("treats unknown Windows viewport state as scrolled", async () => {
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			setPlatform("win32");
 			const term = new UnknownViewportTerminal(32, 5);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(rows("line-", 12));
@@ -2465,7 +2464,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(viewportRows(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
 				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 				tui.stop();
 			}
 		});
@@ -2732,8 +2731,7 @@ describe("TUI terminal-state regressions", () => {
 		});
 
 		it("renders streaming row inserts on WSL Windows Terminal even when viewport probe is unavailable", async () => {
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			setPlatform("linux");
 			try {
 				await withEnv({ WT_SESSION: "wt-test", WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: undefined }, async () => {
 					// Simulate WSL: native viewport probe returns undefined unconditionally
@@ -2778,7 +2776,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 
@@ -2787,8 +2785,7 @@ describe("TUI terminal-state regressions", () => {
 			// is undefined. Before the fix the planner optimistically treated "unknown" as
 			// "at bottom" and rebuilt native scrollback (clear + replay) on every offscreen
 			// streaming insert, wiping history and yanking a scrolled-up reader to the tail.
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			setPlatform("linux");
 			try {
 				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const term = new UnknownViewportTerminal(32, 5);
@@ -2846,13 +2843,12 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 
 		it("does not trust a single stale at-bottom probe for live rebuilds", async () => {
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			setPlatform("win32");
 			try {
 				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined, WT_SESSION: undefined }, async () => {
 					const term = new StaleBottomViewportTerminal(32, 5, 200);
@@ -2882,7 +2878,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 		it("keeps scroll-off rows reachable when a streaming block re-lays-out past the viewport (ED3-risk, unknown viewport)", async () => {
@@ -2895,8 +2891,7 @@ describe("TUI terminal-state regressions", () => {
 			// "only half" until a resize forced a full rebuild. Rows that scroll off the
 			// viewport MUST reach native scrollback so the reader can scroll up to them,
 			// and the commit must stay non-destructive (no ED3 saved-lines erase).
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			setPlatform("linux");
 			try {
 				await withEnv({ TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const height = 8;
@@ -2959,7 +2954,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 		it("keeps offscreen streaming growth incremental when the viewport is unknown", async () => {
@@ -2967,8 +2962,7 @@ describe("TUI terminal-state regressions", () => {
 			// a foreground tool is active, same-size/growing offscreen edits must keep
 			// using append/repaint primitives instead of clearing scrollback once per
 			// streaming tick after the transcript fills the viewport.
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+			setPlatform("linux");
 			try {
 				await withEnv(
 					{
@@ -3011,7 +3005,7 @@ describe("TUI terminal-state regressions", () => {
 					},
 				);
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 
@@ -3022,8 +3016,7 @@ describe("TUI terminal-state regressions", () => {
 			// `deferredMutation` here, which is a literal no-op. That froze the editor
 			// on the very keystroke that grows `lines.length` past the viewport (the
 			// wrap keystroke) until the next prompt-submit checkpoint flushed.
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			setPlatform("win32");
 			try {
 				await withEnv({ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const term = new UnknownViewportTerminal(32, 5);
@@ -3063,7 +3056,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 
@@ -3073,8 +3066,7 @@ describe("TUI terminal-state regressions", () => {
 			// `deferredMutation` under WT, so the toggle never painted until the next
 			// checkpoint. After the fix the planner falls back to `viewportRepaint`
 			// instead, painting the visible window without emitting `\x1b[3J`.
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			setPlatform("win32");
 			try {
 				await withEnv({ WT_SESSION: "wt-test", TMUX: undefined, STY: undefined, ZELLIJ: undefined }, async () => {
 					const term = new UnknownViewportTerminal(32, 5);
@@ -3114,7 +3106,7 @@ describe("TUI terminal-state regressions", () => {
 					}
 				});
 			} finally {
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 		});
 

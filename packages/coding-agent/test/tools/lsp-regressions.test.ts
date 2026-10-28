@@ -71,6 +71,7 @@ import { clampTimeout } from "@veyyon/coding-agent/tools/core/tool-timeouts";
 import * as piUtils from "@veyyon/utils";
 import { sanitizeText, TempDir } from "@veyyon/utils";
 import type { Subprocess } from "bun";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 import { installFakeLsp, type RpcMessage } from "../helpers/fake-lsp";
@@ -1292,8 +1293,7 @@ describe("lsp regressions", () => {
 	});
 
 	it("detects Ruff in Windows virtualenv Scripts directories", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+		setPlatform("win32");
 
 		const tempDir = TempDir.createSync("@veyyon-lsp-win32-ruff-");
 		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
@@ -1309,15 +1309,14 @@ describe("lsp regressions", () => {
 			expect(config.servers.ruff?.resolvedCommand).toBe(localRuff);
 			expect(whichSpy).not.toHaveBeenCalledWith("ruff");
 		} finally {
-			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			restorePlatform();
 			vi.restoreAllMocks();
 			tempDir.removeSync();
 		}
 	});
 
 	it("detects Ruff in Windows virtualenv Scripts directories for Ruff-only roots", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+		setPlatform("win32");
 		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
 
 		try {
@@ -1338,14 +1337,13 @@ describe("lsp regressions", () => {
 			}
 			expect(whichSpy).not.toHaveBeenCalledWith("ruff");
 		} finally {
-			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			restorePlatform();
 			vi.restoreAllMocks();
 		}
 	});
 
 	it("detects pyright and pylsp in Windows virtualenv Scripts for Python-only roots", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+		setPlatform("win32");
 		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
 
 		try {
@@ -1371,7 +1369,7 @@ describe("lsp regressions", () => {
 			expect(whichSpy).not.toHaveBeenCalledWith("pyright-langserver");
 			expect(whichSpy).not.toHaveBeenCalledWith("pylsp");
 		} finally {
-			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			restorePlatform();
 			vi.restoreAllMocks();
 		}
 	});

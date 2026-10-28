@@ -15,6 +15,7 @@ import type {
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { DebugTool } from "@veyyon/coding-agent/tools/shell/debug";
 import { removeWithRetries } from "@veyyon/utils";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 import { makeToolSession } from "../helpers/tool-session";
 
 const TEST_ADAPTER: DapResolvedAdapter = {
@@ -574,8 +575,7 @@ describe("DAP launch failure handling", () => {
 	});
 
 	it("kills the detached adapter process when it never dials back on the TCP client-addr path", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+		setPlatform("darwin");
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-debug-tcp-leak-"));
 			try {
@@ -610,7 +610,7 @@ describe("DAP launch failure handling", () => {
 				await removeWithRetries(cwd);
 			}
 		} finally {
-			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+			restorePlatform();
 		}
 	});
 });
@@ -660,8 +660,7 @@ describe("a socket adapter that dies before it is reachable", () => {
 		for (const { lands, script } of STDERR_TIMINGS) {
 			it(`reports the adapter's own exit on the ${platform} socket path when stderr lands ${lands}`, async () => {
 				if (!runsHere) return;
-				const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-				Object.defineProperty(process, "platform", { value: platform, configurable: true });
+				restorePlatform();
 				const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-debug-socket-exit-"));
 				try {
 					const adapterPath = path.join(cwd, "dying-socket-adapter.mjs");
@@ -683,7 +682,7 @@ describe("a socket adapter that dies before it is reachable", () => {
 					// Reported when the exit lands, not when the readiness wait gives up.
 					expect(Date.now() - started).toBeLessThan(2_000);
 				} finally {
-					if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+					restorePlatform();
 					await removeWithRetries(cwd);
 				}
 			}, 10_000);

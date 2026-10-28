@@ -11,6 +11,7 @@ import {
 } from "../src/atomic-write";
 import { type FsError, isFsError } from "../src/fs-error";
 import { TempDir } from "../src/temp";
+import { restorePlatform, setPlatform } from "./helpers/platform-override";
 import { collectPackageSources } from "./support/package-sources";
 
 /** The `FsError` a writer threw, or a failure naming what it threw instead. */
@@ -460,8 +461,7 @@ describe("atomicWriteFile", () => {
 	it("restores the previous file when the Windows rename retry also fails", async () => {
 		const target = path.join(dir.path(), "windows-recovery.txt");
 		await atomicWriteFile(target, "ORIGINAL");
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		setPlatform("win32");
 		const realRename = fsp.rename;
 		let installAttempts = 0;
 		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
@@ -480,7 +480,7 @@ describe("atomicWriteFile", () => {
 			await expect(atomicWriteFile(target, "NEW")).rejects.toThrow("replacement failed");
 		} finally {
 			renameSpy.mockRestore();
-			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			restorePlatform();
 		}
 
 		expect(installAttempts).toBe(2);
@@ -668,8 +668,7 @@ describe("atomicWriteFile", () => {
 		it("restores the previous file when the sync Windows retry fails", () => {
 			const target = path.join(dir.path(), "sync-windows-recovery.txt");
 			atomicWriteFileSync(target, "ORIGINAL");
-			const originalPlatform = process.platform;
-			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			setPlatform("win32");
 			const realRename = fs.renameSync;
 			let installAttempts = 0;
 			const renameSpy = spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
@@ -688,7 +687,7 @@ describe("atomicWriteFile", () => {
 				expect(() => atomicWriteFileSync(target, "NEW")).toThrow("sync replacement failed");
 			} finally {
 				renameSpy.mockRestore();
-				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+				restorePlatform();
 			}
 
 			expect(installAttempts).toBe(2);
