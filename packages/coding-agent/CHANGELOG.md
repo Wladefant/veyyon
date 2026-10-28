@@ -7,6 +7,7 @@
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
 
 ### Fixed
+- A lazily created session with no file yet no longer fails the first prompt with ENOENT when its checkpoint ownership marker is checked ([Refs #716](https://github.com/Wladefant/veyyon/issues/716)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
