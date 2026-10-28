@@ -18,6 +18,7 @@ class SlowVirtualSocket extends EventEmitter {
 	writableLength = 0;
 	peakWritableLength = 0;
 	writeHook: (() => void) | undefined;
+	#drainTimer: NodeJS.Timeout | undefined;
 	readonly frames: Array<{
 		id?: string;
 		ok?: boolean;
@@ -38,6 +39,7 @@ class SlowVirtualSocket extends EventEmitter {
 	}
 
 	write(chunk: string): boolean {
+		const previousLength = this.writableLength;
 		this.writableLength += Buffer.byteLength(chunk);
 		this.peakWritableLength = Math.max(this.peakWritableLength, this.writableLength);
 		for (const line of chunk.split("\n")) {
@@ -52,11 +54,26 @@ class SlowVirtualSocket extends EventEmitter {
 				hook();
 			}
 		}
-		return true;
+		if (!this.#drainTimer) this.#scheduleDrain();
+		return this.writableLength < 256 * 1024;
+	}
+
+	#scheduleDrain(): void {
+		// The real timer models a slow pipe drain while production polls writableLength.
+		this.#drainTimer = setTimeout(() => {
+			this.#drainTimer = undefined;
+			const previousLength = this.writableLength;
+			this.writableLength = Math.max(0, previousLength - 64 * 1024);
+			if (previousLength > 256 * 1024 && this.writableLength <= 256 * 1024) this.emit("drain");
+			if (this.writableLength > 0) this.#scheduleDrain();
+		}, 15);
 	}
 
 	destroy(): this {
 		if (this.destroyed) return this;
+		if (this.#drainTimer) clearTimeout(this.#drainTimer);
+		this.#drainTimer = undefined;
+		this.writableLength = 0;
 		this.destroyed = true;
 		this.replied.resolve();
 		this.emit("close");

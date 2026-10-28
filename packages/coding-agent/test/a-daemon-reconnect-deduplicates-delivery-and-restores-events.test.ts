@@ -751,9 +751,9 @@ test("a long-lived subscriber bounds history receipt memory when more than 1000 
 	client.send({ id: "ping-bounded-history", op: "ping" });
 	await client.next(frame => frame.id === "ping-bounded-history");
 
-	const receivedHistoryEntries = client.frames.flatMap(frame => frame.event?.kind === "history" ? (frame.event.entries ?? []) : []);
-	expect(receivedHistoryEntries).toHaveLength(appendCount);
-	expect(receivedHistoryEntries.at(-1)?.entryId).toBe(`e-${appendCount}`);
+	const receivedAppendedEntries = client.frames.flatMap(frame => frame.event?.kind === "appended" ? (frame.event.entries ?? []) : []);
+	expect(receivedAppendedEntries).toHaveLength(appendCount);
+	expect(receivedAppendedEntries.at(-1)?.entryId).toBe(`e-${appendCount}`);
 	expect(historySizes.length).toBeGreaterThan(1000);
 	expect(Math.max(...historySizes)).toBeLessThanOrEqual(1000);
 	expect(historySizes[historySizes.length - 1]).toBe(1000);
