@@ -456,20 +456,40 @@ describe("antigravity usage provider", () => {
 		expect(claude?.scope.windowId).toBe("5h");
 	});
 
-	it("does not fetch the model listing for a complete summary", async () => {
-		let calls = 0;
-		const fetch: FetchImpl = async () => {
-			calls++;
-			return new Response(JSON.stringify({ groups: [
-				{ displayName: "Gemini Models", buckets: [{ bucketId: "gemini-5h", window: "5h", remainingFraction: 0.7 }] },
-				{ displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }] },
-			] }), { status: 200, headers: { "content-type": "application/json" } });
+	// Synthetic endpoint shapes exercise merge precedence. No daily listing was captured
+	// for the reported incident, so these cases do not backtest that account's refusal.
+	it.each([
+		{ counter: "google", label: "Gemini Models", provider: "MODEL_PROVIDER_GOOGLE" },
+		{ counter: "claude-gpt", label: "Claude and GPT models", provider: "MODEL_PROVIDER_ANTHROPIC" },
+	])("retains missing daily windows without replacing summary windows ($counter)", async ({ counter, label, provider }) => {
+		const dailyReset = "2030-01-02T00:00:00Z";
+		const fetch: FetchImpl = async input => {
+			const data = String(input).includes("retrieveUserQuotaSummary")
+				? { groups: [
+						{ displayName: "Gemini Models", buckets: [{ bucketId: "gemini-5h", window: "5h", remainingFraction: 0.7 }] },
+						{ displayName: "Claude and GPT models", buckets: [{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 }] },
+					] }
+				: { models: { model: {
+						modelProvider: provider,
+						quotaInfos: [
+							{ remainingFraction: 0.1, windowId: "5h" },
+							{ remainingFraction: 0, windowId: "daily", resetTime: dailyReset },
+						],
+					} } };
+			return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
 		};
-		await antigravityUsageProvider.fetchUsage!(
+		const report = await antigravityUsageProvider.fetchUsage!(
 			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
 			makeCtx(fetch),
 		);
-		expect(calls).toBe(1);
+		const family = report?.limits.filter(limit => limit.label === label);
+		expect(family?.map(limit => limit.scope.windowId).sort()).toEqual(["5h", "daily"]);
+		expect(family?.find(limit => limit.scope.windowId === "5h")?.amount.remainingFraction).toBe(counter === "google" ? 0.7 : 0.8);
+		expect(family?.find(limit => limit.scope.windowId === "daily")).toMatchObject({
+			status: "exhausted",
+			amount: { remainingFraction: 0 },
+			window: { resetsAt: Date.parse(dailyReset) },
+		});
 	});
 
 	it("returns the partial summary when its supplementary listing fails", async () => {
