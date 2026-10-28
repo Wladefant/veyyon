@@ -25,7 +25,7 @@
 - No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
 - No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
 - No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
-- No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` instead of restating the zero usage record.
+- No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` from `session/session-entries.ts` instead of restating the zero usage record, so the status row evaluates no session-context or compaction module.
 - The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
@@ -109,6 +109,7 @@
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
+- `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
