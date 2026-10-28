@@ -26,6 +26,7 @@ import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extens
 import * as git from "@veyyon/coding-agent/utils/git";
 import { TempDir } from "@veyyon/utils";
 import { $ } from "bun";
+import { dashboardStub } from "./helpers/autoresearch-session";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";
 
 // The experiment tools persist runs through `AgentStorage`, which opens
@@ -45,16 +46,6 @@ function firstTextBlockText(content: Array<TextContent | ImageContent>): string 
 
 function makeTempDir(prefix = "@pi-autoresearch-tools-"): TempDir {
 	return TempDir.createSync(prefix);
-}
-
-function dashboardStub(): DashboardController {
-	return {
-		clear(): void {},
-		requestRender(): void {},
-		showScreen: async (): Promise<void> => {},
-		showLauncher: async (): Promise<void> => {},
-		update(): void {},
-	};
 }
 
 // A run is attributed to the session that started it: `run_experiment` reads the
