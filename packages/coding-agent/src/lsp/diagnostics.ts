@@ -5,7 +5,7 @@
 
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { throwIfAborted } from "../tools/core/tool-errors";
-import { getOrCreateClient, waitForProjectLoaded } from "./client";
+import { getOrCreateClient, LspResponseError, sendRequest, waitForProjectLoaded } from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { isProjectAwareLspServer } from "./servers";
@@ -17,6 +17,11 @@ export const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 export const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
 const DIAGNOSTICS_POLL_MS = 100;
 const DIAGNOSTICS_SETTLE_MS = 250;
+/**
+ * JSON-RPC error codes a server answers `textDocument/diagnostic` with when the pull should be sent again:
+ * ServerCancelled (-32802) and ContentModified (-32801).
+ */
+const RETRIGGER_PULL_ERROR_CODES: ReadonlySet<number> = new Set([-32802, -32801]);
 
 export function limitDiagnosticMessages(messages: string[]): string[] {
 	if (messages.length <= DIAGNOSTIC_MESSAGE_LIMIT) {
@@ -60,6 +65,55 @@ function filterOrphanProjectDiagnostics(
 	return diagnostics.filter(diagnostic => !isTypeScriptProjectDiagnostic(serverName, diagnostic));
 }
 
+/** The answer to `textDocument/diagnostic`; `unchanged` only answers a pull that sent a `previousResultId`. */
+interface DocumentDiagnosticReport {
+	kind: "full" | "unchanged";
+	items?: Diagnostic[];
+}
+
+/** Waits `ms`, or less when `wake` settles first, and leaves no timer armed either way. */
+async function pollDelay(ms: number, wake?: Promise<unknown>): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const timer = setTimeout(resolve, ms);
+	try {
+		await (wake ? Promise.race([promise, wake]) : promise);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Pulls the diagnostics of one open document (`textDocument/diagnostic`, LSP 3.17). The server answers
+ * after every change sent before the request, so the result needs no settle window. A server that only
+ * pulls (tsgo) never publishes, and waiting for a publish from it lasted the whole timeout and reported no
+ * diagnostics. Resolves undefined when no full report arrives before `deadline`; never rejects.
+ */
+async function pullDocumentDiagnostics(
+	client: LspClient,
+	uri: string,
+	deadline: number,
+	signal: AbortSignal | undefined,
+): Promise<Diagnostic[] | undefined> {
+	while (Date.now() < deadline) {
+		try {
+			const report = (await sendRequest(
+				client,
+				"textDocument/diagnostic",
+				{ textDocument: { uri } },
+				signal,
+				Math.max(1, deadline - Date.now()),
+			)) as DocumentDiagnosticReport | null;
+			return report?.kind === "full" && Array.isArray(report.items) ? report.items : undefined;
+		} catch (error) {
+			if (signal?.aborted || !(error instanceof LspResponseError) || !RETRIGGER_PULL_ERROR_CODES.has(error.code)) {
+				return undefined;
+			}
+		}
+		await pollDelay(DIAGNOSTICS_POLL_MS);
+	}
+	return undefined;
+}
+
 interface WaitForDiagnosticsOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
@@ -85,8 +139,22 @@ export async function waitForDiagnostics(
 	const start = Date.now();
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
-	while (Date.now() - start < timeoutMs) {
+	// A server that offers pulls answers with every change applied, so the first full report is accepted
+	// as soon as it lands; a version-matched publish that lands first is accepted the same way.
+	const pull: { items?: Diagnostic[]; pending?: Promise<void> } = {};
+	if (client.serverCapabilities?.diagnosticProvider) {
+		pull.pending = pullDocumentDiagnostics(client, uri, start + timeoutMs, signal).then(items => {
+			pull.items = items;
+			pull.pending = undefined;
+		});
+	}
+	for (;;) {
 		throwIfAborted(signal);
+		if (pull.items) {
+			client.diagnostics.set(uri, { diagnostics: pull.items, version: expectedDocumentVersion ?? null });
+			return pull.items;
+		}
+		if (Date.now() - start >= timeoutMs) break;
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 		const published = client.diagnostics.get(uri);
 		if (published && versionOk) {
@@ -103,7 +171,7 @@ export async function waitForDiagnostics(
 				return published.diagnostics;
 			}
 		}
-		await Bun.sleep(DIAGNOSTICS_POLL_MS);
+		await pollDelay(DIAGNOSTICS_POLL_MS, pull.pending);
 	}
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 	if (!versionOk) {
