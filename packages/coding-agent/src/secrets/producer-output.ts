@@ -4,7 +4,8 @@ import { sanitizeText } from "@veyyon/utils/sanitize-text";
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
-const CREDENTIAL_RECORD = /(?:^|[\s\"'{,])(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*[\"']?\s*(?:[=:]|\s{2,})/i;
+const CREDENTIAL_RECORD = /(?:^|[\s\"'{,.?\-])(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*[\"']?\s*(?:[=:]|\s{2,})/i;
+const CREDENTIAL_KEY_PREFIX = /(?:^|\s+export\s+|[?.,{\"'\-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
@@ -64,6 +65,7 @@ export class ProducerOutputGuard {
 
 	finish(): string {
 		if (this.#withholding) return "";
+		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) return "";
 		const text = this.#dropping ? BLOCKED_OUTPUT_RECORD : this.sanitize(this.#pending);
 		this.#pending = "";
 		this.#dropping = false;

@@ -62,8 +62,8 @@ test("unterminated oversized records never leak their suffix and memory stays bo
 
 test("bounded benign assignments and lookups retain exact output", async () => {
 	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
-	for (const character of "MODE=test\n/bin:/usr/bin\nready") sink.push(character);
-	expect((await sink.dump()).output).toBe("MODE=test\n/bin:/usr/bin\nready");
+	for (const character of "MODE=test\n/bin:/usr/bin\nan access token\nready") sink.push(character);
+	expect((await sink.dump()).output).toBe("MODE=test\n/bin:/usr/bin\nan access token\nready");
 });
 
 test("redactor failure withholds the record instead of falling back to raw output", () => {
@@ -106,4 +106,50 @@ test("ANSI within a known value cannot bypass its secret owner", () => {
 	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
 	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe("<redacted>");
 	expect(guard.sanitize("\x1b[32mordinary output\x1b[0m")).toBe("\x1b[32mordinary output\x1b[0m");
+});
+
+test("credential labels split by a dump cannot be reassembled in output", () => {
+	const guard = new ProducerOutputGuard();
+	const output = [
+		guard.push("API_KE"),
+		guard.finish(),
+		guard.push("Y=fake-credential-123\n"),
+		guard.finish(),
+	].join("");
+	expect(output).not.toContain("API_KEY=fake-credential-123");
+	expect(output).not.toContain("fake-credential-123");
+});
+
+for (const record of [
+	"--token=fake-credential-123",
+	"?access_token=fake-credential-123",
+	"config.api_key: fake-credential-123",
+]) {
+	test(`recognizes credential label form: ${record.split(/[=:]/)[0]}`, () => {
+		const guard = new ProducerOutputGuard();
+		expect(guard.push(`${record}\n`)).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+		expect(guard.finish()).toBe("");
+	});
+}
+
+test("dump between credential label chunks keeps the credential out of artifacts", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+	directories.push(directory);
+	const artifactPath = path.join(directory, "output.txt");
+	const live: string[] = [];
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(),
+		artifactPath,
+		artifactId: "fake-output",
+		spillThreshold: 1,
+		onChunk: chunk => live.push(chunk),
+	});
+	sink.push("API_KE");
+	expect((await sink.dump()).output).toBe("");
+	sink.push("Y=fake-credential-123\n");
+	const result = await sink.dumpWithArtifactStatus();
+	const persisted = await fs.readFile(artifactPath, "utf8");
+	expect(live.join("")).not.toContain("fake-credential-123");
+	expect(persisted).not.toContain("fake-credential-123");
+	expect(result.output).not.toContain("fake-credential-123");
 });
