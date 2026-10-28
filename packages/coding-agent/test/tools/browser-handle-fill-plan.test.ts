@@ -102,7 +102,12 @@ function makeFixture(options: StubOptions) {
 			}),
 		},
 	} as unknown as ElementHandle;
-	return { fill: (value: string) => fillViaHandle(handle, value, undefined, null), events, inserted, value: () => storedValue };
+	return {
+		fill: (value: string) => fillViaHandle(handle, value, undefined, null),
+		events,
+		inserted,
+		value: () => storedValue,
+	};
 }
 
 describe("handle fill — text fields get one selected-contents insertion", () => {

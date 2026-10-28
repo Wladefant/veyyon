@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -10,8 +12,6 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { type } from "arktype";
 import { persistNativeHandoffIdentity } from "../src/checkpoints/native-recovery";
 
@@ -50,15 +50,17 @@ afterEach(async () => {
 	}
 });
 
-async function createCheckpointHarness(
-	streamResponder: (streamCount: number, model: Model<Api>) => AssistantMessage,
-) {
+async function createCheckpointHarness(streamResponder: (streamCount: number, model: Model<Api>) => AssistantMessage) {
 	tempDir = TempDir.createSync("@checkpoint-admission-");
 	authStorage = await AuthStorage.create(join(tempDir.path(), "auth.db"));
 	authStorage.setRuntimeApiKey("openai", "test-key");
 	const model = createMockModel({ provider: "openai", id: "gpt-test" }).model;
 	const modelRegistry = new ModelRegistry(authStorage);
-	const settings = Settings.isolated({ "checkpoints.enabled": true, "compaction.enabled": false, "todo.enabled": false });
+	const settings = Settings.isolated({
+		"checkpoints.enabled": true,
+		"compaction.enabled": false,
+		"todo.enabled": false,
+	});
 	settings.setDefaultModel(`${model.provider}/${model.id}`);
 	const sessionManager = SessionManager.create(tempDir.path(), join(tempDir.path(), "sessions"));
 	const sessionFile = sessionManager.getSessionFile();
@@ -88,28 +90,37 @@ async function createCheckpointHarness(
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test-token";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32, 9).toString("base64");
 	let renewals = 0;
-	globalThis.fetch = Object.assign(async (input, init) => {
-		const action = new URL(String(input)).pathname.split("/").pop();
-		const parsed: unknown = init?.body ? JSON.parse(String(init.body)) : undefined;
-		const ownerNode =
-			parsed && typeof parsed === "object" && "ownerNode" in parsed && typeof parsed.ownerNode === "string"
-				? parsed.ownerNode
-				: "";
-		if (action === "claim")
-			return Response.json({
-				ownerNode,
-				epoch: 8,
-				expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0,
-				manifestHash: "",
-				resumeToken: "a-rotated-resume-capability",
-			});
-		if (action === "finalize") return Response.json({ ok: true });
-		if (action === "renew" && ++renewals > 1) return Response.json({ error: "lease lost" }, { status: 409 });
-		if (action === "renew")
-			return Response.json({ ownerNode, epoch: 8, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "" });
-		return Response.json({ error: "unexpected checkpoint operation" }, { status: 404 });
-	}, { preconnect: originalFetch.preconnect });
+	globalThis.fetch = Object.assign(
+		async (input, init) => {
+			const action = new URL(String(input)).pathname.split("/").pop();
+			const parsed: unknown = init?.body ? JSON.parse(String(init.body)) : undefined;
+			const ownerNode =
+				parsed && typeof parsed === "object" && "ownerNode" in parsed && typeof parsed.ownerNode === "string"
+					? parsed.ownerNode
+					: "";
+			if (action === "claim")
+				return Response.json({
+					ownerNode,
+					epoch: 8,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+					resumeToken: "a-rotated-resume-capability",
+				});
+			if (action === "finalize") return Response.json({ ok: true });
+			if (action === "renew" && ++renewals > 1) return Response.json({ error: "lease lost" }, { status: 409 });
+			if (action === "renew")
+				return Response.json({
+					ownerNode,
+					epoch: 8,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+				});
+			return Response.json({ error: "unexpected checkpoint operation" }, { status: 404 });
+		},
+		{ preconnect: originalFetch.preconnect },
+	);
 	let executions = 0;
 	const tool: AgentTool = {
 		name: "probe",
@@ -137,7 +148,13 @@ async function createCheckpointHarness(
 			return events;
 		},
 	});
-	session = new AgentSession({ agent, sessionManager, settings, modelRegistry, toolRegistry: new Map([[tool.name, tool]]) });
+	session = new AgentSession({
+		agent,
+		sessionManager,
+		settings,
+		modelRegistry,
+		toolRegistry: new Map([[tool.name, tool]]),
+	});
 	return {
 		session,
 		getExecutions: () => executions,
@@ -183,41 +200,37 @@ test("fenced tool never executes after lease loss", async () => {
 // Class: every `beforeToolCall` admission failure of a synchronized session. Gap: a plain (non-fatal) hook throw is
 // still a recoverable tool error and is covered by agent-loop tests, not here.
 // SAFETY: cap the mock at 25 calls before returning plaintext stop to prevent runaway loops.
-test(
-	"production prompt and tool admission both stop when the cloud lease is lost",
-	async () => {
-		const { session, getExecutions, getRenewals, getStreamCount } = await createCheckpointHarness(
-			(streamCount, model) => {
-				if (streamCount <= 25) {
-					return {
-						role: "assistant",
-						content: [{ type: "toolCall", id: `probe-call-${streamCount}`, name: "probe", arguments: {} }],
-						api: model.api,
-						provider: model.provider,
-						model: model.id,
-						usage: zeroUsage,
-						stopReason: "toolUse",
-						timestamp: Date.now(),
-					};
-				}
+test("production prompt and tool admission both stop when the cloud lease is lost", async () => {
+	const { session, getExecutions, getRenewals, getStreamCount } = await createCheckpointHarness(
+		(streamCount, model) => {
+			if (streamCount <= 25) {
 				return {
 					role: "assistant",
-					content: [{ type: "text", text: "safety capped" }],
+					content: [{ type: "toolCall", id: `probe-call-${streamCount}`, name: "probe", arguments: {} }],
 					api: model.api,
 					provider: model.provider,
 					model: model.id,
 					usage: zeroUsage,
-					stopReason: "stop",
+					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
-			},
-		);
+			}
+			return {
+				role: "assistant",
+				content: [{ type: "text", text: "safety capped" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: zeroUsage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+		},
+	);
 
-		await session.prompt("exercise fenced admission");
-		await session.waitForIdle();
-		expect(getStreamCount()).toBe(1);
-		expect(getRenewals()).toBeGreaterThanOrEqual(2);
-		expect(getExecutions()).toBe(0);
-	},
-	5000,
-);
+	await session.prompt("exercise fenced admission");
+	await session.waitForIdle();
+	expect(getStreamCount()).toBe(1);
+	expect(getRenewals()).toBeGreaterThanOrEqual(2);
+	expect(getExecutions()).toBe(0);
+}, 5000);

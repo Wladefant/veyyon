@@ -29,8 +29,8 @@ import type {
 	ClientBridgeTerminalExitStatus,
 	ClientBridgeTerminalHandle,
 } from "@veyyon/kernel/session/client-bridge";
-import type { ShellConfig } from "@veyyon/utils/procmgr";
 import { removeWithRetries } from "@veyyon/utils";
+import type { ShellConfig } from "@veyyon/utils/procmgr";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 

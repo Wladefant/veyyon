@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../src/checkpoints/session-ownership-marker";
+import {
+	persistSessionResumeCapability,
+	readSessionOwnershipMarker,
+} from "../src/checkpoints/session-ownership-marker";
 
 const roots: string[] = [];
 const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "transfer-uuid", transferEpoch: 7 };
@@ -22,7 +25,10 @@ test("native handoff identity fails closed without matching recovery marker and 
 	const sessions = join(root, "sessions");
 	await mkdir(sessions);
 	const sessionFile = join(sessions, "session.jsonl");
-	await writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`);
+	await writeFile(
+		sessionFile,
+		`${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`,
+	);
 	await writeFile(join(root, "recovery.json"), JSON.stringify({ sessionId: "transfer", checkpointTransfer: true }));
 	const markerPath = join(sessions, "checkpoint-ownership.json");
 	await writeFile(markerPath, JSON.stringify(marker), { mode: 0o600 });
@@ -47,7 +53,10 @@ test("a copied native journal without sidecars never resumes as an ordinary chec
 	const root = await mkdtemp(join(tmpdir(), "session-ownership-copy-"));
 	roots.push(root);
 	const file = join(root, "copied.jsonl");
-	await writeFile(file, `${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`);
+	await writeFile(
+		file,
+		`${JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity })}\n`,
+	);
 	await expect(readSessionOwnershipMarker(file, "transfer")).rejects.toThrow(/marker is missing/i);
 });
 

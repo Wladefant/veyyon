@@ -7,7 +7,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { groupSettingPaths } from "@veyyon/kernel/settings/store";
 import { resolveEffort } from "../src/config/effort-resolver";
 import type { ModelRegistry } from "../src/config/model-registry";
-import { type SettingPath, type SettingValue, Settings } from "../src/config/settings";
+import { type SettingPath, Settings, type SettingValue } from "../src/config/settings";
 import { InputController, type InputControllerContext } from "../src/modes/terminal/controllers/input-controller";
 import { AgentSession } from "../src/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";

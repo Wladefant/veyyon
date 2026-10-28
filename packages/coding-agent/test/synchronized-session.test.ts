@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { CheckpointClient, type CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
 import { SynchronizedSession } from "../src/checkpoints/synchronized-session";
+
 const SECOND_RUNTIME_ID = "00000000-0000-4000-8000-000000000002";
 
 test("server epoch loss blocks admission and does not reacquire silently", async () => {
@@ -49,8 +50,7 @@ test("a second device cannot admit the same cloud session while its owner lease 
 		const action = new URL(String(input)).pathname.split("/").pop();
 		const body = init?.body ? (JSON.parse(String(init.body)) as { ownerNode: string; epoch?: number }) : undefined;
 		if (action === "lease") {
-			if (owner && owner !== body?.ownerNode)
-				return Response.json({ error: "owned" }, { status: 409 });
+			if (owner && owner !== body?.ownerNode) return Response.json({ error: "owned" }, { status: 409 });
 			owner = body?.ownerNode;
 			return Response.json({
 				ownerNode: owner,

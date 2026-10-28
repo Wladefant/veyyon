@@ -1,5 +1,5 @@
-import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "bun:test";
+import { createHmac } from "node:crypto";
 import { MCPManager } from "../src/mcp/manager";
 import type { MCPEventOccurrence, MCPServerConfig, MCPServerEventSubscriptionConfig } from "../src/mcp/types";
 
@@ -20,7 +20,11 @@ type FakeServerOptions = {
 	eventsList?: (params: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>;
 	poll?: (params: Record<string, unknown>) => Record<string, unknown>;
 	webhookSubscribe?: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-	onStream?: (controller: ReadableStreamDefaultController<Uint8Array>, streamId: string | number, ordinal: number) => void;
+	onStream?: (
+		controller: ReadableStreamDefaultController<Uint8Array>,
+		streamId: string | number,
+		ordinal: number,
+	) => void;
 };
 
 async function advanceTimers(ms: number): Promise<void> {
@@ -58,7 +62,18 @@ function fakeMcpServer(options: FakeServerOptions): FakeServer {
 				case "events/list":
 					result = options.eventsList
 						? await options.eventsList(params)
-						: { events: [{ name: EVENT_NAME, description: "order changes", inputSchema: { type: "object" }, delivery: Array.isArray(options.delivery) ? options.delivery : [options.delivery ?? "poll"] }] };
+						: {
+								events: [
+									{
+										name: EVENT_NAME,
+										description: "order changes",
+										inputSchema: { type: "object" },
+										delivery: Array.isArray(options.delivery)
+											? options.delivery
+											: [options.delivery ?? "poll"],
+									},
+								],
+							};
 					break;
 				case "events/poll":
 					result = options.poll?.(params) ?? { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
@@ -95,7 +110,13 @@ function fakeMcpServer(options: FakeServerOptions): FakeServer {
 			return Response.json({ jsonrpc: "2.0", id: message.id, result });
 		},
 	});
-	return { url: `http://127.0.0.1:${server.port}/mcp`, requests, streamControllers, streamCancellations, stop: () => server.stop(true) };
+	return {
+		url: `http://127.0.0.1:${server.port}/mcp`,
+		requests,
+		streamControllers,
+		streamCancellations,
+		stop: () => server.stop(true),
+	};
 }
 
 function event(eventId: string, cursor?: string): MCPEventOccurrence {
@@ -127,14 +148,16 @@ function emitStreamBatch(
 	streamId: string | number,
 	messages: Array<{ method: string; params: Record<string, unknown> | MCPEventOccurrence }>,
 ): void {
-	const frame = messages.map(({ method, params }) => {
-		const payload = JSON.stringify({
-			jsonrpc: "2.0",
-			method,
-			params: { ...params, _meta: { "io.modelcontextprotocol/subscriptionId": streamId } },
-		});
-		return `data: ${payload}\n\n`;
-	}).join("");
+	const frame = messages
+		.map(({ method, params }) => {
+			const payload = JSON.stringify({
+				jsonrpc: "2.0",
+				method,
+				params: { ...params, _meta: { "io.modelcontextprotocol/subscriptionId": streamId } },
+			});
+			return `data: ${payload}\n\n`;
+		})
+		.join("");
 	controller.enqueue(new TextEncoder().encode(frame));
 }
 
@@ -159,7 +182,8 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: params => {
 				pollRequests.push(params);
-				if (pollRequests.length === 1) return { events: [event("evt-1", "cursor-1")], cursor: "cursor-1", hasMore: true, nextPollMs: 0 };
+				if (pollRequests.length === 1)
+					return { events: [event("evt-1", "cursor-1")], cursor: "cursor-1", hasMore: true, nextPollMs: 0 };
 				if (pollRequests.length === 2) {
 					secondPoll.resolve();
 					return { events: [event("evt-2", "cursor-2")], cursor: "cursor-2", hasMore: false, nextPollMs: 0 };
@@ -175,10 +199,16 @@ describe("MCPManager event subscription contracts", () => {
 			if (delivered.size === 2) bothDelivered.resolve();
 		});
 		manager.setEventCursorProvider(() => "resume-here");
-		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "poll-server", managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }));
+			await connect(
+				manager,
+				"poll-server",
+				managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+			);
 			await firstDelivered.promise;
 			await secondPoll.promise;
 			expect(pollRequests).toHaveLength(2);
@@ -229,10 +259,16 @@ describe("MCPManager event subscription contracts", () => {
 			return "queued";
 		});
 		manager.setEventCursorProvider(() => "prior-cursor");
-		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "poll-batch-server", managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }));
+			await connect(
+				manager,
+				"poll-batch-server",
+				managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+			);
 			await secondDeliveryFailed.promise;
 			await advanceTimers(0);
 			expect(cursors).not.toContain("batch-final-cursor");
@@ -249,7 +285,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	});
 
-
 	it("routes push events by stream id, reconnects after heartbeat idle timeout, and stops on termination", async () => {
 		const firstStreamOpened = Promise.withResolvers<void>();
 		const secondStreamOpened = Promise.withResolvers<void>();
@@ -265,11 +300,21 @@ describe("MCPManager event subscription contracts", () => {
 		const controls: string[] = [];
 		const eventReceived = Promise.withResolvers<void>();
 		const controlReceived = Promise.withResolvers<void>();
-		manager.setOnEvent((_name, occurrence) => { received.push(occurrence.eventId); eventReceived.resolve(); });
-		manager.setOnEventControl((_name, _key, control) => { controls.push(control.type); controlReceived.resolve(); });
+		manager.setOnEvent((_name, occurrence) => {
+			received.push(occurrence.eventId);
+			eventReceived.resolve();
+		});
+		manager.setOnEventControl((_name, _key, control) => {
+			controls.push(control.type);
+			controlReceived.resolve();
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "push-server", managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }));
+			await connect(
+				manager,
+				"push-server",
+				managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }),
+			);
 			await firstStreamOpened.promise;
 			const firstStream = server.requests.find(request => request.method === "events/stream");
 			const firstController = server.streamControllers[0];
@@ -289,7 +334,9 @@ describe("MCPManager event subscription contracts", () => {
 			const nextStream = streams[1];
 			const nextController = server.streamControllers[1];
 			expect(nextStream?.id).toBeDefined();
-			emitStreamNotification(nextController!, nextStream!.id!, "notifications/events/terminated", { error: { code: -32024, message: "subscription ended" } });
+			emitStreamNotification(nextController!, nextStream!.id!, "notifications/events/terminated", {
+				error: { code: -32024, message: "subscription ended" },
+			});
 			await controlReceived.promise;
 			expect(controls).toEqual(["terminated"]);
 			await manager.stopEvents();
@@ -345,7 +392,11 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "duplicate-push-server", managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }));
+			await connect(
+				manager,
+				"duplicate-push-server",
+				managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }),
+			);
 			await firstStreamOpened.promise;
 			const stream = server.requests.find(request => request.method === "events/stream");
 			const controller = server.streamControllers[0];
@@ -399,10 +450,16 @@ describe("MCPManager event subscription contracts", () => {
 			eventStarted.resolve();
 			return eventPersistence.promise;
 		});
-		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "ordered-push-server", managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }));
+			await connect(
+				manager,
+				"ordered-push-server",
+				managerConfig(server, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "push" }] }),
+			);
 			await firstStreamOpened.promise;
 			const stream = server.requests.find(request => request.method === "events/stream");
 			const controller = server.streamControllers[0];
@@ -442,13 +499,19 @@ describe("MCPManager event subscription contracts", () => {
 			received.push(occurrence.eventId);
 			return "queued";
 		});
-		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "malformed-push-server", managerConfig(server, {
-				enabled: true,
-				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
-			}));
+			await connect(
+				manager,
+				"malformed-push-server",
+				managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+				}),
+			);
 			await firstStreamOpened.promise;
 			const firstStream = server.requests.find(request => request.method === "events/stream");
 			emitStreamNotification(server.streamControllers[0]!, firstStream!.id!, "notifications/events/event", {
@@ -492,13 +555,19 @@ describe("MCPManager event subscription contracts", () => {
 			goodDelivered.resolve();
 			return "queued";
 		});
-		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "mismatch-push-server", managerConfig(server, {
-				enabled: true,
-				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
-			}));
+			await connect(
+				manager,
+				"mismatch-push-server",
+				managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+				}),
+			);
 			await firstStreamOpened.promise;
 			const stream = server.requests.find(request => request.method === "events/stream");
 			const controller = server.streamControllers[0]!;
@@ -518,7 +587,6 @@ describe("MCPManager event subscription contracts", () => {
 			vi.useRealTimers();
 		}
 	});
-
 
 	it("answers webhook challenges before subscribing, refreshes, and unsubscribes on stop", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
@@ -540,13 +608,16 @@ describe("MCPManager event subscription contracts", () => {
 				}
 				const callbackUrl = hookConfig.url;
 				const secret = hookConfig.secret;
-				if (typeof callbackUrl !== "string" || typeof secret !== "string") throw new Error("invalid webhook request values");
+				if (typeof callbackUrl !== "string" || typeof secret !== "string")
+					throw new Error("invalid webhook request values");
 				const callbackPath = new URL(callbackUrl).pathname;
 				const challenge = `challenge-${subscriptionCalls.length}`;
 				const messageId = `challenge-id-${subscriptionCalls.length}`;
 				const timestamp = String(Math.floor(Date.now() / 1_000));
 				const body = JSON.stringify({ type: "verification", challenge });
-				const signature = createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64")).update(`${messageId}.${timestamp}.${body}`).digest("base64");
+				const signature = createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64"))
+					.update(`${messageId}.${timestamp}.${body}`)
+					.digest("base64");
 				const response = await fetch(`http://127.0.0.1:${listenPort}${callbackPath}`, {
 					method: "POST",
 					headers: {
@@ -561,7 +632,11 @@ describe("MCPManager event subscription contracts", () => {
 				webhookCalls.push(`${response.status}:${await response.text()}`);
 				if (subscriptionCalls.length === 1) firstChallenge.resolve();
 				if (subscriptionCalls.length === 2) secondChallenge.resolve();
-				return { id: `webhook-${subscriptionCalls.length}`, cursor: `cursor-${subscriptionCalls.length}`, refreshBefore: new Date(Date.now() + 30_000).toISOString() };
+				return {
+					id: `webhook-${subscriptionCalls.length}`,
+					cursor: `cursor-${subscriptionCalls.length}`,
+					refreshBefore: new Date(Date.now() + 30_000).toISOString(),
+				};
 			},
 		});
 		const manager = new MCPManager(process.cwd());
@@ -579,15 +654,17 @@ describe("MCPManager event subscription contracts", () => {
 				url: server.url,
 				events: {
 					enabled: true,
-					subscriptions: [{
-						name: EVENT_NAME,
-						mode: "webhook" as const,
-						webhook: {
-							callbackUrl: "https://callback.example.test/events/orders",
-							secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
-							listenPort,
+					subscriptions: [
+						{
+							name: EVENT_NAME,
+							mode: "webhook" as const,
+							webhook: {
+								callbackUrl: "https://callback.example.test/events/orders",
+								secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
+								listenPort,
+							},
 						},
-					}],
+					],
 				},
 			} satisfies MCPServerConfig;
 			await connect(manager, "webhook-server", webhookConfig);
@@ -630,7 +707,11 @@ describe("MCPManager event subscription contracts", () => {
 		const oldSecret = process.env.MCP_EVENTS_CONTRACT_MISSING_SECRET;
 		delete process.env.MCP_EVENTS_CONTRACT_MISSING_SECRET;
 		try {
-			await connect(manager, serverName, managerConfig(server, { enabled: true, subscriptions: [subscriptionConfig] }));
+			await connect(
+				manager,
+				serverName,
+				managerConfig(server, { enabled: true, subscriptions: [subscriptionConfig] }),
+			);
 			await manager.stopEvents();
 			const status = manager.getEventSubscriptionStatus(serverName, subscriptionConfig);
 			expect(status?.status).toBe("failed");
@@ -682,11 +763,7 @@ describe("MCPManager event subscription contracts", () => {
 		process.env.MCP_EVENTS_DELAYED_SECRET = CALLBACK_SECRET;
 
 		try {
-			await connect(
-				manager,
-				serverName,
-				managerConfig(server, { enabled: true, subscriptions }),
-			);
+			await connect(manager, serverName, managerConfig(server, { enabled: true, subscriptions }));
 
 			manager.setOnEvent(onEvent);
 			manager.setOnEventCursor(onCursor);
@@ -698,13 +775,20 @@ describe("MCPManager event subscription contracts", () => {
 				events: [
 					{ name: "orders/poll", description: "poll", inputSchema: { type: "object" }, delivery: ["poll"] },
 					{ name: "orders/push", description: "push", inputSchema: { type: "object" }, delivery: ["push"] },
-					{ name: "orders/webhook", description: "webhook", inputSchema: { type: "object" }, delivery: ["webhook"] },
+					{
+						name: "orders/webhook",
+						description: "webhook",
+						inputSchema: { type: "object" },
+						delivery: ["webhook"],
+					},
 				],
 			});
 
 			await startupPromise;
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
-			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
+			const subscriptionMethods = server.requests
+				.map(r => r.method)
+				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
 			expect(server.streamControllers).toHaveLength(0);
@@ -754,11 +838,7 @@ describe("MCPManager event subscription contracts", () => {
 		process.env.MCP_EVENTS_DELAYED_SECRET = CALLBACK_SECRET;
 
 		try {
-			await connect(
-				manager,
-				serverName,
-				managerConfig(server, { enabled: true, subscriptions }),
-			);
+			await connect(manager, serverName, managerConfig(server, { enabled: true, subscriptions }));
 
 			manager.setOnEvent(onEvent);
 			manager.setOnEventCursor(onCursor);
@@ -770,13 +850,20 @@ describe("MCPManager event subscription contracts", () => {
 				events: [
 					{ name: "orders/poll", description: "poll", inputSchema: { type: "object" }, delivery: ["poll"] },
 					{ name: "orders/push", description: "push", inputSchema: { type: "object" }, delivery: ["push"] },
-					{ name: "orders/webhook", description: "webhook", inputSchema: { type: "object" }, delivery: ["webhook"] },
+					{
+						name: "orders/webhook",
+						description: "webhook",
+						inputSchema: { type: "object" },
+						delivery: ["webhook"],
+					},
 				],
 			});
 
 			await startupPromise;
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
-			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
+			const subscriptionMethods = server.requests
+				.map(r => r.method)
+				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
 			expect(server.streamControllers).toHaveLength(0);
