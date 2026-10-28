@@ -11,6 +11,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
+import { toolResultText } from "../helpers/tool-result-text";
 
 // Live integration against `ssh localhost`. Skips automatically where key-based
 // localhost SSH is unavailable (CI without sshd). Capability lookup is mocked
@@ -182,10 +183,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/search/write tools (local
 	}
 
 	function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-		return result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text ?? "")
-			.join("\n");
+		return toolResultText(result);
 	}
 
 	beforeAll(async () => {

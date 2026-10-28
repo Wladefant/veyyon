@@ -25,6 +25,7 @@ import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { META_VALUE_MAX_BYTES } from "@veyyon/coding-agent/tools/search/structure-search";
 import { astGrep } from "@veyyon/natives";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const FIXTURE = `export function alpha(one: string, two: number): string {
 	const joined = one + two;
@@ -69,10 +70,7 @@ async function structureText(cwd: string, input: string): Promise<string> {
 	const tool = tools.find(entry => entry.name === "search");
 	if (!tool) throw new Error("search tool missing");
 	const result = await tool.execute(`structure-meta-${input}`, { type: "structure", input, path: "fixture.ts" });
-	return result.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
+	return toolResultText(result);
 }
 
 describe("a structure match never prints its source twice", () => {

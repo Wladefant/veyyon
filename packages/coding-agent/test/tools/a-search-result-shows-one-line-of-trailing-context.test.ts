@@ -10,6 +10,7 @@ import {
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -38,13 +39,6 @@ import { makeToolSession } from "../helpers/tool-session";
 /** A match row is `*<line>:<body>`; a context row is ` <line>:<body>`. */
 const MATCH_ROW = /^\*(\d+):/;
 const CONTEXT_ROW = /^ (\d+):/;
-
-function extractText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(part => part.type === "text")
-		.map(part => part.text ?? "")
-		.join("\n");
-}
 
 interface Window {
 	before: number[];
@@ -137,7 +131,7 @@ describe("a search result shows one line of trailing context", () => {
 
 	async function search(session: ToolSession, args: Record<string, unknown>): Promise<string> {
 		const tool = new SearchTool(session);
-		return extractText(await tool.execute("search-window", args as never));
+		return toolResultText(await tool.execute("search-window", args as never));
 	}
 
 	it("emits one leading and one trailing context line per match at the declared defaults", async () => {

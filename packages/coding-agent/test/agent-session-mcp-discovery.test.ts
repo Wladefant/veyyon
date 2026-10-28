@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent, type AgentTool, type AgentToolContext, type AgentToolResult, ThinkingLevel } from "@veyyon/agent-core";
+import { Agent, type AgentTool, type AgentToolContext, ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
@@ -13,6 +13,7 @@ import type { OutputMeta } from "@veyyon/coding-agent/tools/core/output-notice";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
+import { toolResultText } from "./helpers/tool-result-text";
 
 function createModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -127,13 +128,6 @@ function createSpillContext(sessionManager: SessionManager = SessionManager.inMe
 		hasQueuedMessages: () => false,
 		abort: () => {},
 	} as unknown as AgentToolContext;
-}
-
-function textOf(result: AgentToolResult): string {
-	return result.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
 }
 
 describe("AgentSession MCP discovery", () => {
@@ -1020,7 +1014,7 @@ describe("AgentSession MCP discovery", () => {
 			undefined,
 			createSpillContext(sessionManager),
 		);
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(Buffer.byteLength(text)).toBeLessThan(Buffer.byteLength(big));
 		expect(text).toContain("artifact://");
 		expect(result.isError).toBeFalsy();
@@ -1057,7 +1051,7 @@ describe("AgentSession MCP discovery", () => {
 		const context = createSpillContext(failingManager);
 
 		const result = await registered!.execute("call-fail", {}, undefined, undefined, context);
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(result.isError).toBeFalsy();
 		expect(Buffer.byteLength(text)).toBeLessThan(Buffer.byteLength(big));
 		expect(text).not.toContain("artifact://");

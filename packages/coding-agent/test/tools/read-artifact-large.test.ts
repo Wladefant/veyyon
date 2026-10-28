@@ -10,13 +10,7 @@ import {
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(cwd: string): ToolSession {
 	return {
@@ -64,7 +58,7 @@ describe("read tool large artifact handling", () => {
 
 	it("blocks unbounded raw reads and points to bounded artifact workflows", async () => {
 		const result = await tool.execute("call-raw", { path: "artifact://0:raw" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("Unbounded raw read blocked for artifact://0");
 		expect(output).toContain("artifact://0:raw:1-3000");
@@ -74,7 +68,7 @@ describe("read tool large artifact handling", () => {
 
 	it("streams bounded artifact reads without materializing the whole artifact", async () => {
 		const result = await tool.execute("call-range", { path: "artifact://0:1-3" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("line-001");
 		expect(output).toContain("line-003");
@@ -85,7 +79,7 @@ describe("read tool large artifact handling", () => {
 
 	it("keeps bounded raw artifact chunks verbatim (no workflow notice appended)", async () => {
 		const result = await tool.execute("call-raw-range", { path: "artifact://0:raw:1-2" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toStartWith("line-001");
 		expect(output).toContain("line-002");
@@ -98,7 +92,7 @@ describe("read tool large artifact handling", () => {
 
 	it("returns exactly the requested raw artifact range without context padding", async () => {
 		const result = await tool.execute("call-raw-exact", { path: "artifact://0:raw:31-31" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("line-031");
 		expect(output).not.toContain("line-030");
@@ -109,7 +103,7 @@ describe("read tool large artifact handling", () => {
 		const homeSpy = spyOn(os, "homedir").mockReturnValue(testDir);
 		try {
 			const result = await tool.execute("call-raw-home", { path: "artifact://0:raw" });
-			const output = getTextOutput(result);
+			const output = toolResultText(result);
 			// artifactDir sits under the (mocked) home, so shortenPath rewrites the
 			// prefix to `~` — the notice must NOT leak the absolute artifact path.
 			expect(output).toContain(`~${path.sep}session`);

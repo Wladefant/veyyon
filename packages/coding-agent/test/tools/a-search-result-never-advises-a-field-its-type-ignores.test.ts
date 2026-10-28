@@ -33,6 +33,7 @@ import {
 } from "@veyyon/coding-agent/tools/search/search";
 import { MULTI_FILE_PER_FILE_MATCHES } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const SCHEMA_FIELDS = searchSchema.value.props.map(prop => String(prop.key));
 
@@ -81,10 +82,7 @@ async function searchText(cwd: string, scenario: { callId: string; args: Record<
 	const tool = tools.find(entry => entry.name === "search");
 	if (!tool) throw new Error("search tool missing");
 	const result = await tool.execute(scenario.callId, scenario.args);
-	return result.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
+	return toolResultText(result);
 }
 
 /** Field names the text assigns a value to, outside rendered content lines. */

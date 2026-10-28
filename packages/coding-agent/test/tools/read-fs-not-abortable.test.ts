@@ -7,13 +7,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(cwd: string): ToolSession {
 	return {
@@ -60,7 +54,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
 		const result = await tool.execute("call-range", { path: `${filePath}:20-22` }, abortedSignal());
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(output).toContain("line-20");
@@ -72,7 +66,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
 		const result = await tool.execute("call-multi", { path: `${filePath}:2-3,30-31` }, abortedSignal());
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(output).toContain("line-2");
@@ -85,7 +79,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		}
 
 		const result = await tool.execute("call-dir", { path: testDir }, abortedSignal());
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(result.details?.isDirectory).toBe(true);

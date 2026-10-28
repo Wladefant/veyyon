@@ -7,6 +7,7 @@ import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
 import { SearchTool } from "../../src/tools/search/search";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // TW-9: a single grep query can return a match set that dwarfs the inline floor
@@ -17,13 +18,6 @@ import { makeToolSession } from "../helpers/tool-session";
 
 const HEAD_SENTINEL = "HEADSENTINEL7f3a";
 const TAIL_SENTINEL = "TAILSENTINEL9c2b";
-
-function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text ?? "")
-		.join("\n");
-}
 
 describe("SearchTool (text) oversized-result spill (TW-9)", () => {
 	let tmpDir: string;
@@ -78,7 +72,7 @@ describe("SearchTool (text) oversized-result spill (TW-9)", () => {
 		const tool = new SearchTool(createSession());
 		const result = await tool.execute("call-grep-big", { type: "text", input: "NEEDLE", path: "big.txt" });
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		const textBytes = Buffer.byteLength(text, "utf-8");
 
 		// The inline body is bounded near the budget (plus a small footer), not the
@@ -110,7 +104,7 @@ describe("SearchTool (text) oversized-result spill (TW-9)", () => {
 		const tool = new SearchTool(createSession());
 		const result = await tool.execute("call-grep-small", { type: "text", input: "NEEDLE", path: "small.txt" });
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("small-marker-4d1e");
 		expect(text).not.toContain("artifact://");
 		expect(text).not.toContain("elided");

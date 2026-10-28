@@ -3,6 +3,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 function makeSession(): ToolSession {
@@ -51,10 +52,7 @@ describe("EvalTool timeout semantics", () => {
 			timeout: 1,
 		});
 
-		const text = result.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("timed out after 1 seconds");
 		// The new wording is a plain wall-clock timeout, not an inactivity stall.
 		expect(text).not.toContain("inactivity");
@@ -109,10 +107,7 @@ describe("EvalTool timeout semantics", () => {
 			timeout: 1,
 		});
 
-		const text = result.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("JS eval worker exited");
 		expect(text).not.toContain("timed out");
 

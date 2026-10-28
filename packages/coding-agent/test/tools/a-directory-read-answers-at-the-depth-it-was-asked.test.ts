@@ -30,13 +30,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(cwd: string): ToolSession {
 	return {
@@ -86,7 +80,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("lists a directory at its top level with per-subdirectory entry counts", async () => {
 		const result = await tool.execute("call-root", { path: "." });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.details?.isDirectory).toBe(true);
 		// Top-level entries are present, subdirectories annotated with their
@@ -106,7 +100,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("lists an absolute path at its top level too", async () => {
 		const result = await tool.execute("call-root-absolute", { path: testDir });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain(TOP_LEVEL_FOOTER);
 		expect(output).not.toContain("alpha-deep.txt");
@@ -114,7 +108,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("honors an explicit depth at the root", async () => {
 		const result = await tool.execute("call-root-depth", { path: ".", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// The recursive listing returns (two levels below the read directory),
 		// and the concise footer is gone.
@@ -125,12 +119,12 @@ describe("a directory read answers at the depth it was asked", () => {
 		expect(output).not.toContain("alpha-deep.txt");
 
 		const deeper = await tool.execute("call-root-depth3", { path: ".", depth: 3 });
-		expect(getTextOutput(deeper)).toContain("alpha-deep.txt");
+		expect(toolResultText(deeper)).toContain("alpha-deep.txt");
 	});
 
 	it("honors depth: 1 on a subdirectory", async () => {
 		const result = await tool.execute("call-sub-depth1", { path: "alpha", depth: 1 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("a1.txt");
 		expect(output).toContain("nested/");
@@ -139,7 +133,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("lists any directory at its top level when the caller named no depth", async () => {
 		const result = await tool.execute("call-sub-default", { path: "alpha" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// A selector-free read is orientation, whichever directory it names: the
 		// top level with per-subdirectory counts, and nothing below it.
@@ -153,7 +147,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("recurses into a subdirectory only when depth: 2 asks it to", async () => {
 		const result = await tool.execute("call-sub-depth2", { path: "alpha", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("alpha-deep.txt");
 		expect(output).not.toContain(TOP_LEVEL_FOOTER);
@@ -163,7 +157,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("truncates at limit with a notice naming the omission and the remedy", async () => {
 		const result = await tool.execute("call-limit", { path: "many", limit: 3 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		const shownEntries = output.split("\n").filter(line => /- m\d\d\.txt/.test(line));
 		expect(shownEntries).toHaveLength(3);
@@ -177,7 +171,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("applies directory params per entry in a multi-path read", async () => {
 		const result = await tool.execute("call-multi-depth", { path: "alpha; beta", depth: 1 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("interpreted as 2 paths");
 		// Both entries honor depth: 1 — their nested files stay hidden.
@@ -189,7 +183,7 @@ describe("a directory read answers at the depth it was asked", () => {
 
 	it("applies the concise default per entry across a multi-path read", async () => {
 		const result = await tool.execute("call-multi-default", { path: ".; beta" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// Both entries are concise: neither named a depth.
 		expect(output).toContain(TOP_LEVEL_FOOTER);
@@ -218,7 +212,7 @@ describe("a concise listing caps top-level entries and says how to see more", ()
 
 	it("caps the concise listing and names the omitted count and the revealing arguments", async () => {
 		const result = await tool.execute("call-root-cap", { path: "." });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("5 more top-level entries not shown (capped at 100)");
 		// The cheap remedy first: a flat listing of every entry, then the
@@ -248,32 +242,32 @@ describe("explicit limit and traversal bounds", () => {
 	});
 
 	it("bounds deep traversal to the requested depth", async () => {
-		const depth1 = getTextOutput(await tool.execute("d1", { path: "lvl1", depth: 1 }));
+		const depth1 = toolResultText(await tool.execute("d1", { path: "lvl1", depth: 1 }));
 		expect(depth1).toContain("f1.txt");
 		expect(depth1).toContain("lvl2/");
 		expect(depth1).not.toContain("f2.txt");
 		expect(depth1).not.toContain("f3.txt");
 		expect(depth1).not.toContain("f4.txt");
 
-		const depth2 = getTextOutput(await tool.execute("d2", { path: "lvl1", depth: 2 }));
+		const depth2 = toolResultText(await tool.execute("d2", { path: "lvl1", depth: 2 }));
 		expect(depth2).toContain("f1.txt");
 		expect(depth2).toContain("f2.txt");
 		expect(depth2).toContain("lvl3/");
 		expect(depth2).not.toContain("f3.txt");
 		expect(depth2).not.toContain("f4.txt");
 
-		const depth3 = getTextOutput(await tool.execute("d3", { path: "lvl1", depth: 3 }));
+		const depth3 = toolResultText(await tool.execute("d3", { path: "lvl1", depth: 3 }));
 		expect(depth3).toContain("f3.txt");
 		expect(depth3).toContain("lvl4/");
 		expect(depth3).not.toContain("f4.txt");
 
-		const depth4 = getTextOutput(await tool.execute("d4", { path: "lvl1", depth: 4 }));
+		const depth4 = toolResultText(await tool.execute("d4", { path: "lvl1", depth: 4 }));
 		expect(depth4).toContain("f4.txt");
 	});
 
 	it("honors limit: 1 and states the exact omission count", async () => {
 		const result = await tool.execute("lim1", { path: "lvl1", limit: 1 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		const [rootLine, ...entryLines] = output.split("\n").filter(l => l.trim().length > 0 && !l.startsWith("["));
 		expect(rootLine).toBe(".");
@@ -283,7 +277,7 @@ describe("explicit limit and traversal bounds", () => {
 
 	it("does not emit omission notice when limit equals or exceeds total entries", async () => {
 		const result = await tool.execute("lim-exact", { path: "lvl1", depth: 1, limit: 10 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("f1.txt");
 		expect(output).toContain("lvl2/");
@@ -293,7 +287,7 @@ describe("explicit limit and traversal bounds", () => {
 
 	it("combines explicit depth and limit simultaneously", async () => {
 		const result = await tool.execute("depth-and-limit", { path: "lvl1", depth: 2, limit: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// Depth 2 visits f1.txt, lvl2, f2.txt, lvl3 (4 items total). Limit 2 cuts after 2 items.
 		expect(output).not.toContain("f3.txt");
@@ -320,7 +314,7 @@ describe("huge fanout and per-directory child limit", () => {
 
 	it("caps nested subdirectory fanout at 12 entries with a summary ellipsis marker", async () => {
 		const result = await tool.execute("call-fanout", { path: "wide", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// 30 files in nested sub/ directory: 12 entries shown (11 newest + 1 oldest) with '… 18 more'
 		expect(output).toContain("… 18 more");
@@ -330,7 +324,7 @@ describe("huge fanout and per-directory child limit", () => {
 
 	it("applies entryLimit on top of fanout-capped directory trees", async () => {
 		const result = await tool.execute("call-fanout-limit", { path: "wide", depth: 2, limit: 4 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// The rendered tree has 14 lines (root + sub/ + 12 files + 1 omission line). Limit 4 cuts after 4 lines.
 		expect(output).toContain("entries omitted (limit: 4)");
@@ -361,7 +355,7 @@ describe("deterministic ordering and recency tie-breaking", () => {
 
 	it("breaks ties alphabetically when file modification times are identical", async () => {
 		const result = await tool.execute("call-order", { path: ".", depth: 1 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		const fileLines = output
 			.split("\n")
@@ -372,8 +366,8 @@ describe("deterministic ordering and recency tie-breaking", () => {
 	});
 
 	it("produces byte-identical output across repeated runs", async () => {
-		const run1 = getTextOutput(await tool.execute("r1", { path: ".", depth: 1 }));
-		const run2 = getTextOutput(await tool.execute("r2", { path: ".", depth: 1 }));
+		const run1 = toolResultText(await tool.execute("r1", { path: ".", depth: 1 }));
+		const run2 = toolResultText(await tool.execute("r2", { path: ".", depth: 1 }));
 		expect(run1).toBe(run2);
 	});
 });
@@ -410,7 +404,7 @@ describe("symlinks and loop prevention", () => {
 	it("reads a symlinked directory directly by resolving its target", async () => {
 		if (!fs.existsSync(path.join(testDir, "link_dir"))) return;
 		const result = await tool.execute("call-symlink-dir", { path: "link_dir" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.details?.isDirectory).toBe(true);
 		expect(output).toContain("target.txt");
@@ -420,7 +414,7 @@ describe("symlinks and loop prevention", () => {
 		if (!fs.existsSync(path.join(testDir, "real_dir", "loop_to_root"))) return;
 		// Recursive walk on root should complete without hanging in an infinite cycle
 		const result = await tool.execute("call-cycle", { path: ".", depth: 3 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("target.txt");
 	});
@@ -453,7 +447,7 @@ describe("hidden and gitignored entries", () => {
 
 	it("includes dotfiles and non-standard folders, but prunes standard EXCLUDED_DIRS", async () => {
 		const result = await tool.execute("call-hidden", { path: ".", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// Dotfiles and dotdirs are included
 		expect(output).toContain(".env");
@@ -500,7 +494,7 @@ describe("permission errors and unreadable directories", () => {
 	it("skips unreadable subdirectories gracefully during walk without failing the whole read", async () => {
 		if (process.platform === "win32") return;
 		const result = await tool.execute("call-perm-walk", { path: ".", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("accessible");
 		expect(output).toContain("ok.txt");
@@ -531,7 +525,7 @@ describe("Unicode, accents, and special characters", () => {
 
 	it("formats Unicode paths, brackets, spaces, and punctuation correctly", async () => {
 		const result = await tool.execute("call-unicode", { path: ".", depth: 2 });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("café");
 		expect(output).toContain("résumé.txt");
@@ -566,7 +560,7 @@ describe("cancellation and AbortSignal contract", () => {
 		// Plain directory reads are non-abortable so instant disk reads don't fail
 		const result = await tool.execute("call-aborted", { path: "." }, controller.signal);
 		expect(result.details?.isDirectory).toBe(true);
-		expect(getTextOutput(result)).toContain("sub/");
+		expect(toolResultText(result)).toContain("sub/");
 	});
 });
 
@@ -586,14 +580,14 @@ describe("empty directories and path boundaries", () => {
 
 	it("returns (empty directory) for an empty subdirectory", async () => {
 		const result = await tool.execute("call-empty-sub", { path: "empty_sub" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("(empty directory)");
 	});
 
 	it("normalizes relative dot segments like alpha/..", async () => {
 		const result = await tool.execute("call-rel-norm", { path: "empty_sub/.." });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		// Should resolve back to root and use concise root listing
 		expect(output).toContain(TOP_LEVEL_FOOTER);
@@ -623,7 +617,7 @@ describe("line selector slicing on directory listings", () => {
 
 	it("slices concise root listing and preserves concise root footer", async () => {
 		const result = await tool.execute("call-slice-root", { path: ".:1-5" });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("item-01.txt");
 		expect(output).toContain(TOP_LEVEL_FOOTER);

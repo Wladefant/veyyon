@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	captureRegistryForTests,
@@ -28,7 +27,6 @@ import type {
 	DeleteFile,
 	Diagnostic,
 	LspClient,
-	LspToolDetails,
 	RenameFile,
 	ServerConfig,
 	SymbolInformation,
@@ -77,6 +75,7 @@ import type { Subprocess } from "bun";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 import { installFakeLsp, type RpcMessage } from "../helpers/fake-lsp";
+import { toolResultText } from "../helpers/tool-result-text";
 
 type BunSpawnOptions = Bun.SpawnOptions.SpawnOptions<
 	Bun.SpawnOptions.Writable,
@@ -123,13 +122,6 @@ function recordBunSpawn(calls: BunSpawnCall[], outputForCommand: (cmd: string[])
 		const output = outputForCommand(recordedCmd);
 		return completedProcess(output.stdout, output.stderr, output.exitCode);
 	}) as typeof Bun.spawn);
-}
-
-function textResult(result: AgentToolResult<LspToolDetails>): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
 }
 
 describe("lsp regressions", () => {
@@ -692,10 +684,7 @@ describe("lsp regressions", () => {
 				symbol: "greet",
 				timeout: 10,
 			});
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 
 			expect(output).toContain("Found 1 definition(s)");
 			expect(events[0]).toBe("open");
@@ -762,10 +751,7 @@ describe("lsp regressions", () => {
 				symbol: "greet",
 				timeout: 10,
 			});
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 
 			// Standalone .rs (no Cargo workspace ancestor): the file is opened but the
 			// analyzerStatus readiness poll is skipped entirely. The direct
@@ -1113,10 +1099,7 @@ describe("lsp regressions", () => {
 				file: targetFile,
 				timeout: 5,
 			});
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 
 			expect(output).toBe("OK");
 		} finally {
@@ -1151,7 +1134,7 @@ describe("lsp regressions", () => {
 			expect(buildCalls).toHaveLength(1);
 			expect(buildCalls[0]?.cmd).toEqual(["go", "build", "./service/..."]);
 			expect(buildCalls[0]?.options?.cwd).toBe(tempDir.path());
-			const output = textResult(result);
+			const output = toolResultText(result);
 			expect(output).toContain("Workspace diagnostics (");
 			expect(output).toContain("go build");
 			expect(output).toContain("No issues found");
@@ -1198,8 +1181,8 @@ describe("lsp regressions", () => {
 			expect(buildCalls).toHaveLength(1);
 			expect(buildCalls[0]?.cmd.slice(0, 2)).toEqual(["go", "build"]);
 			expect(buildCalls[0]?.cmd.slice(2).sort()).toEqual(["./...", "./service/...", "./tools/helper/..."]);
-			expect(textResult(result)).toContain("Workspace diagnostics (");
-			expect(textResult(result)).toContain("go build");
+			expect(toolResultText(result)).toContain("Workspace diagnostics (");
+			expect(toolResultText(result)).toContain("go build");
 		} finally {
 			tempDir.removeSync();
 		}
@@ -1219,7 +1202,7 @@ describe("lsp regressions", () => {
 			await Bun.write(path.join(tempDir.path(), "Cargo.toml"), '[package]\nname = "fixture"\nversion = "0.0.0"\n');
 
 			const tool = new LspTool(makeLspSession(tempDir.path()));
-			const output = textResult(await tool.execute("cargo-stderr", { action: "diagnostics", file: "*" }));
+			const output = toolResultText(await tool.execute("cargo-stderr", { action: "diagnostics", file: "*" }));
 
 			expect(spawnCalls.map(call => call.cmd)).toEqual([["cargo", "check", "--message-format=short"]]);
 			expect(output).toContain(line(1));
@@ -1618,10 +1601,7 @@ describe("lsp regressions", () => {
 				files: [{ oldUri: sourceUri, newUri: destUri }],
 			});
 
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 			expect(output).toContain("Renamed");
 		} finally {
 			vi.restoreAllMocks();
@@ -1748,7 +1728,7 @@ describe("lsp regressions", () => {
 					timeout: 10,
 				});
 
-				expect(textResult(result).split("\n")).toEqual([
+				expect(toolResultText(result).split("\n")).toEqual([
 					"Rename preview: old.ts → new.ts",
 					"  No LSP edits would be applied",
 					...notes,
@@ -1897,10 +1877,7 @@ describe("lsp regressions", () => {
 				position: { line: 1, character: 4 },
 			});
 
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 			expect(output).toContain("rust-analyzer/expandMacro");
 			expect(output).toContain('"expansion"');
 			expect(output).toContain("macro_rules!");
@@ -2014,10 +1991,7 @@ describe("lsp regressions", () => {
 				timeout: 5,
 			});
 
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 			expect(output).toContain("test-lsp:");
 			expect(output).toContain("hoverProvider");
 			expect(output).toContain("_typescript.organizeImports");
@@ -2441,10 +2415,7 @@ describe("lsp regressions", () => {
 			expect(getClientSpy).not.toHaveBeenCalled();
 			expect(fs.existsSync(sourceFile)).toBe(false);
 			expect(fs.existsSync(destFile)).toBe(true);
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const output = toolResultText(result);
 			expect(output).toContain("Renamed");
 		} finally {
 			vi.restoreAllMocks();
@@ -2474,23 +2445,14 @@ describe("lsp regressions", () => {
 
 			const tool = new LspTool(makeLspSession(tempDir.path()));
 			const initial = await tool.execute("reload-redetect-status", { action: "status" });
-			const initialOutput = initial.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const initialOutput = toolResultText(initial);
 			expect(initialOutput).toContain("No language servers configured for this project");
 
 			const starResult = await tool.execute("reload-redetect-star", { action: "reload", file: "*" });
-			const starOutput = starResult.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const starOutput = toolResultText(starResult);
 
 			const omittedResult = await tool.execute("reload-redetect-omitted", { action: "reload" });
-			const omittedOutput = omittedResult.content
-				.filter(block => block.type === "text")
-				.map(block => block.text)
-				.join("\n");
+			const omittedOutput = toolResultText(omittedResult);
 
 			expect(loadConfigSpy).toHaveBeenCalledTimes(3);
 			expect(starOutput).toContain("Reloaded test-lsp");
@@ -2525,10 +2487,7 @@ describe("lsp regressions", () => {
 
 		const tool = new LspTool(makeLspSession(process.cwd()));
 		const result = await tool.execute("status-test", { action: "status" });
-		const output = result.content
-			.filter(block => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const output = toolResultText(result);
 
 		expect(output).toContain("rust-analyzer (configured, not started)");
 		expect(output).toContain("typescript-language-server (ready)");
@@ -2568,10 +2527,7 @@ describe("lsp regressions", () => {
 			const tool = new LspTool(makeLspSession(cwd));
 
 			const status1 = await tool.execute("cache-1", { action: "status" });
-			const text1 = status1.content
-				.filter(b => b.type === "text")
-				.map(b => b.text)
-				.join("\n");
+			const text1 = toolResultText(status1);
 			expect(text1).toContain("No language servers configured");
 			expect(loadConfigSpy).toHaveBeenCalledTimes(1);
 
@@ -2583,10 +2539,7 @@ describe("lsp regressions", () => {
 			// `reload *` MUST drop the cached empty config and re-read from disk.
 			const reload = await tool.execute("cache-3", { action: "reload", file: "*" });
 			expect(loadConfigSpy).toHaveBeenCalledTimes(2);
-			const reloadText = reload.content
-				.filter(b => b.type === "text")
-				.map(b => b.text)
-				.join("\n");
+			const reloadText = toolResultText(reload);
 			// Spawn was suppressed, so the per-server output is the failure line —
 			// the contract under test is that the fresh server was even considered.
 			expect(reloadText).toContain("fake-pylsp");
@@ -2594,10 +2547,7 @@ describe("lsp regressions", () => {
 			// The refreshed config now sits in the cache; status sees the new
 			// server without another disk read.
 			const status3 = await tool.execute("cache-4", { action: "status" });
-			const text3 = status3.content
-				.filter(b => b.type === "text")
-				.map(b => b.text)
-				.join("\n");
+			const text3 = toolResultText(status3);
 			expect(text3).toContain("fake-pylsp (configured, not started)");
 			expect(loadConfigSpy).toHaveBeenCalledTimes(2);
 		} finally {
