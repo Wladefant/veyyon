@@ -35,6 +35,7 @@ import { compactionDeadEndWarning } from "@veyyon/kernel/session/agent-session-c
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { highUsageAssistant } from "./helpers/compaction-session";
 
 const NOTICE_SOURCE = "compaction";
 const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
@@ -101,19 +102,6 @@ describe("a failed compaction parks the run instead of looping", () => {
 			});
 			manager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
 		}
-	}
-
-	function highUsageAssistant() {
-		return {
-			role: "assistant" as const,
-			content: [{ type: "text" as const, text: "Done." }],
-			api: "anthropic-messages" as const,
-			provider: "anthropic" as const,
-			model: "claude-sonnet-4-5",
-			stopReason: "stop" as const,
-			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
-			timestamp: Date.now(),
-		};
 	}
 
 	function overflowAssistant() {
