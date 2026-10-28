@@ -4,6 +4,7 @@ import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { collapseWhitespace, NON_ALNUM_RUN_RE } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
+import { clamp } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -104,6 +105,16 @@ class HistoryResultsList implements Component {
 
 	setSelectedIndex(selectedIndex: number): void {
 		this.#selectedIndex = selectedIndex;
+	}
+
+	/** Rows the list fills on a card with room: every result up to {@link MAX_VISIBLE}, or the one empty-state row. */
+	preferredRows(): number {
+		return clamp(this.#results.length, 1, MAX_VISIBLE);
+	}
+
+	/** Show at most `rows` results, so a card shorter than the list shows the rows around the cursor. */
+	setRowBudget(rows: number): void {
+		this.#maxVisible = clamp(Math.floor(rows), 1, MAX_VISIBLE);
 	}
 
 	/** Resolve a rendered line (0-based within this list) to a result index. */
@@ -380,20 +391,19 @@ export class HistorySearchComponent implements Component {
 		}
 
 		const searchLine = this.#searchInput.render(dims.contentWidth)[0] ?? "";
-		const body = [...this.#resultsList.render(dims.contentWidth)];
-
-		const shell = renderModalShell(
-			planModalChrome(dims, {
-				shortcuts: SELECT_LIST_SHORTCUTS,
-				hoveredShortcutId: this.#hoveredShortcutId,
-				searchLine,
-			}),
-			{
-				title: "Search History",
-				body,
-				showClose: true,
-			},
-		);
+		// A short card sheds its padding before the list shows fewer results.
+		const chrome = planModalChrome(dims, {
+			shortcuts: SELECT_LIST_SHORTCUTS,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			searchLine,
+			minBodyRows: this.#resultsList.preferredRows(),
+		});
+		this.#resultsList.setRowBudget(chrome.maxBodyRows);
+		const shell = renderModalShell(chrome, {
+			title: "Search History",
+			body: this.#resultsList.render(dims.contentWidth),
+			showClose: true,
+		});
 		this.#shellGeometry = shell.geometry;
 		this.#listRowStart = shell.geometry?.bodyRowStart ?? 0;
 		return shell.lines;

@@ -289,25 +289,27 @@ export class CopySelectorComponent implements Component {
 		const selected = flat[cursorIdx]?.target;
 
 		// Tree + one blank separator + preview, so the two panes share the body
-		// budget minus that separator. `modalHeight - 8` put the body TWO rows over
-		// what the card shows (it reserves nine at this sizing, and the separator is
-		// a tenth), and the shell truncates the overrun silently — the bottom of the
-		// preview, which is the pane you are reading before you copy.
+		// rows the plan shows minus that separator. `modalHeight - 8` put the body
+		// TWO rows over what the card shows, and the shell truncates the overrun
+		// silently — the bottom of the preview, which is the pane you are reading
+		// before you copy. A short card sheds its padding before it shows fewer tree
+		// rows, and a card too short for a line under the preview heading gives
+		// every row to the tree rather than draw a heading with nothing under it.
 		const chrome = planModalChrome(dims, {
 			shortcuts: COPY_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: MIN_TREE_ROWS + 2,
 		});
-		const available = Math.max(MIN_TREE_ROWS + 1, chrome.maxBodyRows - 1);
-		const treeRows = clampLow(flat.length, 1, Math.floor(available / 2));
+		const rows = chrome.maxBodyRows;
+		const splitTreeRows = clampLow(flat.length, 1, Math.floor((rows - 1) / 2));
+		const previewRows = rows - 1 - splitTreeRows;
+		const showPreview = previewRows >= 2;
+		const treeRows = showPreview ? splitTreeRows : clampLow(flat.length, 1, rows);
 		this.#treeRows = treeRows;
-		const previewRows = Math.max(1, available - treeRows);
 		const inner = dims.contentWidth;
 
-		const body = [
-			...this.#renderTree(inner, flat, cursorIdx, treeRows),
-			"",
-			...this.#renderPreview(inner, selected, previewRows),
-		];
+		const tree = this.#renderTree(inner, flat, cursorIdx, treeRows);
+		const body = showPreview ? [...tree, "", ...this.#renderPreview(inner, selected, previewRows)] : tree;
 
 		const shell = renderModalShell(chrome, {
 			title: "Copy to clipboard",

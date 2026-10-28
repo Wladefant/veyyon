@@ -48,7 +48,7 @@ export interface ModelPickerOptions {
 
 /** Rows the browser renders around its list window (search + blank, blank + two detail rows). */
 const BROWSER_FRAME_ROWS = 5;
-/** Minimum rows for the browser list window on short terminals. */
+/** List rows the picker asks the card for on a short terminal; it sheds its padding before it shows fewer. */
 const MIN_VISIBLE = 5;
 
 const STATUS_HINT = "Interactive model — role / agent / compaction slots stay unchanged";
@@ -272,28 +272,37 @@ export class ModelPickerComponent implements Component {
 		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: 2 + BROWSER_FRAME_ROWS + MIN_VISIBLE,
 		});
-		const listBudget = Math.max(MIN_VISIBLE, chrome.maxBodyRows - 2 - BROWSER_FRAME_ROWS);
+		// A card too short for both bracketing lines around one list row drops the
+		// refresh hint (the ctrl+r chip says the same), then the status line.
+		const spareRows = chrome.maxBodyRows - BROWSER_FRAME_ROWS - 1;
+		const showStatus = spareRows >= 1;
+		const showHint = spareRows >= 2;
+		const listBudget = Math.max(1, chrome.maxBodyRows - BROWSER_FRAME_ROWS - Number(showStatus) - Number(showHint));
 		this.#browser.setMaxVisible(listBudget);
 
-		const status = this.#configError
-			? theme.fg("error", this.#configError)
-			: theme.fg("muted", this.#refreshing ? REFRESHING_HINT : STATUS_HINT);
-
-		const hint = REFRESH_HINT.length <= dims.contentWidth ? REFRESH_HINT : REFRESH_HINT_SHORT;
-		const body = [
-			status,
-			...this.#browser.render(dims.contentWidth),
-			theme.fg("muted", truncateToWidth(hint, dims.contentWidth)),
-		];
+		const body: string[] = [];
+		if (showStatus) {
+			body.push(
+				this.#configError
+					? theme.fg("error", this.#configError)
+					: theme.fg("muted", this.#refreshing ? REFRESHING_HINT : STATUS_HINT),
+			);
+		}
+		body.push(...this.#browser.render(dims.contentWidth));
+		if (showHint) {
+			const hint = REFRESH_HINT.length <= dims.contentWidth ? REFRESH_HINT : REFRESH_HINT_SHORT;
+			body.push(theme.fg("muted", truncateToWidth(hint, dims.contentWidth)));
+		}
 		const shell = renderModalShell(chrome, {
 			title: "Switch Model",
 			body,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;
-		// The body leads with the status line; the browser starts one row later.
-		this.#browserRowStart = (shell.geometry?.bodyRowStart ?? 0) + 1;
+		// The browser starts below the status line when the card shows one.
+		this.#browserRowStart = shell.geometry.bodyRowStart + Number(showStatus);
 		return shell.lines;
 	}
 }

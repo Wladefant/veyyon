@@ -596,10 +596,13 @@ export class MCPAddWizard implements Component {
 			}
 		}
 
+		// The step's content does not scroll, so the card sheds its padding and
+		// reserved footer rows before it drops a row of it.
 		const shell = renderModalShell(
 			planModalChrome(dims, {
 				shortcuts,
 				hoveredShortcutId: this.#hoveredShortcutId,
+				minBodyRows: body.length,
 			}),
 			{
 				title: "Add MCP Server",

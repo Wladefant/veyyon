@@ -1101,6 +1101,8 @@ const SETTINGS_TIPS: readonly string[] = [
 
 const SIDEBAR_GAP_COLS = 3;
 const MIN_SETTINGS_CONTENT_WIDTH = 32;
+/** List rows the settings card asks for on a short terminal; it sheds the tip and padding before it shows fewer. */
+const MIN_SETTINGS_BODY_ROWS = 4;
 
 const SETTINGS_SIDEBAR_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "up/down category" },
@@ -1559,6 +1561,7 @@ export class SettingsSelectorComponent implements Component {
 			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates,
 			searchLine: this.#searchChromeLine(contentWidth),
+			minBodyRows: MIN_SETTINGS_BODY_ROWS,
 		});
 		const maxBodyRows = chrome.maxBodyRows;
 		if (maxBodyRows < 1) return this.#renderTooSmall(width, termHeight);
@@ -1585,13 +1588,23 @@ export class SettingsSelectorComponent implements Component {
 		const previewLines = estimatedBody >= 8 ? requestedPreviewLines : [];
 		let listLines: readonly string[] = [];
 		if (list) {
-			list.setMaxVisible(Math.max(1, estimatedBody - previewLines.length));
+			// The list draws its group headings on top of the items it shows, so it is fitted by the
+			// lines it renders: fewer items until they fit the pane, and a pane that cannot hold one
+			// item under its heading is too small, rather than an active row cut off the card.
+			const paneRows = estimatedBody - previewLines.length;
+			let visibleItems = Math.max(1, paneRows);
+			list.setMaxVisible(visibleItems);
 			list.setOptions({
 				descriptionMode: "expand",
 				expandedIds: this.#expandedIds,
 				layout: "flat",
 			});
 			listLines = list.render(paneWidth);
+			while (listLines.length > paneRows && visibleItems > 1) {
+				list.setMaxVisible(--visibleItems);
+				listLines = list.render(paneWidth);
+			}
+			if (listLines.length > paneRows) return this.#renderTooSmall(width, termHeight);
 		} else if (this.#pluginComponent) {
 			listLines = this.#pluginComponent.render(paneWidth);
 		}

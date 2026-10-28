@@ -41,9 +41,9 @@ import {
 	MODAL_SIZING_LARGE,
 } from "../chrome/modal-geometry";
 import {
+	type ModalChromePlan,
 	type ModalShellGeometry,
 	type ModalShortcut,
-	minModalChromeRows,
 	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
@@ -54,21 +54,14 @@ import { handleTabSwitchKey, hoverBandAt } from "../selectors/selector-helpers";
 const SUBMIT_OPTION = "Submit";
 
 /**
- * Minimum rows kept for the question/submit body on a short terminal.
+ * Rows the question/submit body asks the card for on a short terminal, below the header; the card
+ * sheds its padding and tip before it shows fewer.
  *
- * Higher than the plan overlay's floor, and deliberately so: this body carries
- * the question text and its options together, whereas the plan overlay's floor
- * covers only a scroll region that has its prompt, slider, and options laid out
- * beneath it. (The doc here used to say "plan-body rows", copied from that
- * overlay, which made the two look like one number that disagreed with itself.)
+ * Higher than the plan overlay's floor: this body carries the question text and its options
+ * together, whereas the plan overlay's floor covers only a scroll region that has its prompt,
+ * slider, and options laid out beneath it.
  */
 const MIN_BODY_ROWS = 5;
-/** Rows ModalShell reserves outside the body budget, so the body/list layout
- *  decision (side-by-side preview vs stacked) is made against a realistic budget
- *  without duplicating the whole layout pass. Taken from the shell rather than
- *  restated: this was `3 + footerLines + vPad`, three unnamed rows that happened
- *  to agree with the shell and would not have failed if the shell grew one. */
-const CHROME_ROWS = minModalChromeRows(MODAL_SIZING_LARGE);
 const PREVIEW_MIN_WIDTH = 40;
 const SIDE_BY_SIDE_LIST_MIN_WIDTH = 30;
 const SIDE_BY_SIDE_GAP_WIDTH = 3;
@@ -573,25 +566,36 @@ export class AskDialogComponent implements Component {
 		}
 		const contentWidth = dims.contentWidth;
 		const headerLines = this.#renderHeader(contentWidth);
-		// ModalShell's own chrome (top/close bar, footer divider, bottom border,
-		// vertical padding, footer band) reserves CHROME_ROWS outside the body;
-		// the header rows are part of the body we hand it, so subtract those too.
-		const bodyRows = Math.max(MIN_BODY_ROWS, dims.modalHeight - headerLines.length - CHROME_ROWS);
-		const bodyLines = this.#isSubmitTab()
-			? this.#renderSubmitBody(contentWidth, bodyRows)
-			: this.#renderQuestionBody(contentWidth, bodyRows);
-
-		const shell = renderModalShell(
+		// The header rows are part of the body handed to the shell, so the list gets
+		// what the plan shows below them. The footer carries a scroll chip only while
+		// the list scrolls, and every scroll glyph is one cell wide: plan without it,
+		// and when the list turns out to scroll, plan again with it and re-render the
+		// list if the chip wrapped onto another footer row.
+		const planFor = (indicator: string): ModalChromePlan =>
 			planModalChrome(dims, {
-				shortcuts: this.#buildShortcuts(bodyLines.indicator),
+				shortcuts: this.#buildShortcuts(indicator),
 				hoveredShortcutId: this.#hoveredShortcutId,
-			}),
-			{
-				title: this.#titleText(),
-				body: [...headerLines, ...bodyLines.lines],
-				showClose: true,
-			},
-		);
+				minBodyRows: headerLines.length + MIN_BODY_ROWS,
+			});
+		const renderBody = (plan: ModalChromePlan): RenderedList => {
+			const rows = Math.max(1, plan.maxBodyRows - headerLines.length);
+			return this.#isSubmitTab()
+				? this.#renderSubmitBody(contentWidth, rows)
+				: this.#renderQuestionBody(contentWidth, rows);
+		};
+		let chrome = planFor("");
+		let bodyLines = renderBody(chrome);
+		if (bodyLines.indicator) {
+			const scrolled = planFor(bodyLines.indicator);
+			if (scrolled.maxBodyRows !== chrome.maxBodyRows) bodyLines = renderBody(scrolled);
+			chrome = planFor(bodyLines.indicator);
+		}
+
+		const shell = renderModalShell(chrome, {
+			title: this.#titleText(),
+			body: [...headerLines, ...bodyLines.lines],
+			showClose: true,
+		});
 		this.#shellGeometry = shell.geometry;
 		// Pointer map for the option list: frame row of the list's first rendered
 		// line plus the unclipped row starts from this render. Null on the submit

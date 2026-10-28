@@ -261,6 +261,12 @@ const FUZZY_SCAN_INLINE_COUNT = 100;
  */
 const FUZZY_SCAN_CHUNK_COUNT = 150;
 
+/** Rows a session takes at most: its title, a preview of its first message, its metadata and a blank. */
+const ROWS_PER_SESSION = 4;
+
+/** Rows the list draws above its sessions: the search line and a blank. */
+const LIST_HEAD_ROWS = 2;
+
 /**
  * Custom session list component with multi-line items and search
  */
@@ -280,9 +286,10 @@ class SessionList implements Component {
 	onCancel?: () => void;
 	onExit: () => void = () => {};
 	onToggleScope?: () => void;
-	// Snapshot of the live terminal-row getter; the visible window is derived
-	// from it per render so the picker fits the viewport (and adapts to resize).
-	readonly #getTerminalRows: () => number;
+	/** Sessions the window shows, set by the card from the rows its plan gives the list. */
+	#visibleCount = 1;
+	/** Rows the card gives this list; unbounded until the card sets it. */
+	#rowBudget = Number.POSITIVE_INFINITY;
 
 	onDeleteRequest?: (session: SessionInfo) => void;
 	/** ctrl+x on a row: stop that conversation if it runs off-screen. */
@@ -322,13 +329,7 @@ class SessionList implements Component {
 	 */
 	#selectionMoved = false;
 
-	constructor(
-		sessions: SessionInfo[],
-		showCwd = false,
-		historyMatcher?: SessionHistoryMatcher,
-		getTerminalRows: () => number = () => 24,
-	) {
-		this.#getTerminalRows = getTerminalRows;
+	constructor(sessions: SessionInfo[], showCwd = false, historyMatcher?: SessionHistoryMatcher) {
 		this.#allSessions = sessions;
 		this.#showCwd = showCwd;
 		this.#historyMatcher = historyMatcher;
@@ -345,22 +346,17 @@ class SessionList implements Component {
 	}
 
 	/**
-	 * Number of sessions to show at once, sized so the whole picker fits the
-	 * current viewport instead of pushing its header/search off the top.
+	 * Show only the sessions that fit in `rows` rows, the search line included.
 	 *
-	 * Budget = rows − chrome − reserve, divided by the worst-case per-session
-	 * height. Chrome (12) is the surrounding spacers/borders/header (7) plus the
-	 * list's search line, blank, scroll indicator, blank, and hint (5). A titled
-	 * session is the tallest item at 4 lines (title + preview + metadata +
-	 * blank); budgeting for that guarantees no overflow even when every visible
-	 * entry has a title. The reserve covers below-editor hook widgets / cursor.
+	 * A titled session is the tallest at {@link ROWS_PER_SESSION} rows, so budgeting for it keeps
+	 * the window inside the card even when every visible session has a title. The list used to
+	 * size itself from the terminal height minus a fixed guess at the card's chrome, and the card
+	 * dropped the sessions past its bottom border at every height. The blank after the last
+	 * session is spacing, so a window that fits only without it drops it.
 	 */
-	#visibleCount(): number {
-		const CHROME = 12;
-		const PER_SESSION = 4;
-		const RESERVE = 1;
-		const budget = this.#getTerminalRows() - CHROME - RESERVE;
-		return Math.max(2, Math.floor(budget / PER_SESSION));
+	setRowBudget(rows: number): void {
+		this.#rowBudget = rows;
+		this.#visibleCount = Math.max(1, Math.floor((rows - LIST_HEAD_ROWS + 1) / ROWS_PER_SESSION));
 	}
 
 	/** Replace the visible dataset, e.g. when toggling folder/all-projects scope. */
@@ -600,9 +596,9 @@ class SessionList implements Component {
 			return date.toLocaleDateString();
 		};
 
-		// Calculate visible range with scrolling. The window is sized to the
-		// current viewport so the picker never overflows past the top.
-		const maxVisible = this.#visibleCount();
+		// Calculate visible range with scrolling. The window holds the sessions the card's
+		// row budget fits (see setRowBudget), centred on the cursor.
+		const maxVisible = this.#visibleCount;
 		const startIndex = Math.max(
 			0,
 			Math.min(this.#selectedIndex - Math.floor(maxVisible / 2), this.#filteredSessions.length - maxVisible),
@@ -688,6 +684,7 @@ class SessionList implements Component {
 		// Wrap the rendered window in a ScrollView for a proportional right-edge bar.
 		const visibleCount = endIndex - startIndex;
 		const linesPerItem = visibleCount > 0 ? sessionLines.length / visibleCount : 1;
+		if (lines.length + sessionLines.length > this.#rowBudget && sessionLines.at(-1) === "") sessionLines.pop();
 		const sv = new ScrollView(sessionLines, {
 			height: sessionLines.length,
 			scrollbar: "auto",
@@ -741,13 +738,13 @@ class SessionList implements Component {
 		// Page up - jump up by maxVisible items
 		if (matchesKey(keyData, "pageUp")) {
 			this.#selectionMoved = true;
-			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#visibleCount());
+			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#visibleCount);
 			return;
 		}
 		// Page down - jump down by maxVisible items
 		if (matchesKey(keyData, "pageDown")) {
 			this.#selectionMoved = true;
-			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#visibleCount());
+			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#visibleCount);
 			return;
 		}
 		// Enter
@@ -882,7 +879,7 @@ export class SessionSelectorComponent extends Container {
 		// Create session list in folder scope; the empty-state hint invites the
 		// user to Tab into all-projects rather than silently surfacing other
 		// projects' history (issue #3099).
-		this.#sessionList = new SessionList(sessions, false, options.historyMatcher, options.getTerminalRows);
+		this.#sessionList = new SessionList(sessions, false, options.historyMatcher);
 		// Every exit path cancels the list's pending history merge, so a stale
 		// debounce timer can never run its SQLite lookup after the picker closed.
 		this.#sessionList.onSelect = session => {
@@ -1092,12 +1089,6 @@ export class SessionSelectorComponent extends Container {
 		for (const line of this.#headerText.render(dims.contentWidth)) body.push(line);
 		for (const line of this.#messageContainer.render(dims.contentWidth)) body.push(line);
 		this.#listLineOffset = body.length;
-		for (const line of this.#contentSlot.render(dims.contentWidth)) body.push(line);
-		if (this.#highWaterWidth !== dims.contentWidth) {
-			this.#highWaterWidth = dims.contentWidth;
-			this.#bodyRowsHighWater = 0;
-		}
-		this.#bodyRowsHighWater = Math.max(this.#bodyRowsHighWater, body.length);
 
 		const scopeLabel = this.#scope === "all" ? "current folder" : "all projects";
 		// The confirmation owns the body while it is up, and it takes a different
@@ -1129,19 +1120,27 @@ export class SessionSelectorComponent extends Container {
 		// the list the further up the card went. A folder with one session — the
 		// state `/new` leaves behind — was the worst case, which is what made it
 		// look intermittent rather than monotone in list length.
-		const shell = renderModalShell(
-			planModalChrome(dims, {
-				shortcuts,
-				hoveredShortcutId: this.#hoveredShortcutId,
-			}),
-			{
-				title: "Resume Session",
-				breadcrumb: this.#scope === "all" ? " · all projects" : " · current folder",
-				body,
-				preferredBodyRows: this.#bodyRowsHighWater,
-				showClose: true,
-			},
-		);
+		// A short card sheds its padding to keep one whole session under the header, and the list
+		// shows only the sessions the rest of the body holds.
+		const chrome = planModalChrome(dims, {
+			shortcuts,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: body.length + LIST_HEAD_ROWS + ROWS_PER_SESSION,
+		});
+		this.#sessionList.setRowBudget(chrome.maxBodyRows - body.length);
+		for (const line of this.#contentSlot.render(dims.contentWidth)) body.push(line);
+		if (this.#highWaterWidth !== dims.contentWidth) {
+			this.#highWaterWidth = dims.contentWidth;
+			this.#bodyRowsHighWater = 0;
+		}
+		this.#bodyRowsHighWater = Math.max(this.#bodyRowsHighWater, body.length);
+		const shell = renderModalShell(chrome, {
+			title: "Resume Session",
+			breadcrumb: this.#scope === "all" ? " · all projects" : " · current folder",
+			body,
+			preferredBodyRows: this.#bodyRowsHighWater,
+			showClose: true,
+		});
 
 		this.#shellGeometry = shell.geometry;
 		this.#listLineOffset = (shell.geometry?.bodyRowStart ?? 0) + this.#listLineOffset;

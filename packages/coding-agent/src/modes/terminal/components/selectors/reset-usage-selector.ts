@@ -1,6 +1,6 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow, formatCount } from "@veyyon/utils";
+import { clamp, clampLow, formatCount } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import type { ResetUsageAccount } from "../../../../slash-commands/helpers/reset-usage";
@@ -79,9 +79,15 @@ export class ResetUsageSelectorComponent implements Component {
 		return this.#pendingIndex !== null ? this.#accounts[this.#pendingIndex] : undefined;
 	}
 
-	#buildBody(width: number): string[] {
+	/** Rows the status message takes under the list: a blank and the message. */
+	#statusRows(): number {
+		return this.#statusMessage ? 2 : 0;
+	}
+
+	/** The account rows, at most `listRows` of them around the cursor, then the status message. */
+	#buildBody(width: number, listRows: number): string[] {
 		const total = this.#accounts.length;
-		const maxVisible = RESET_SELECTOR_MAX_VISIBLE;
+		const maxVisible = clamp(Math.floor(listRows), 1, RESET_SELECTOR_MAX_VISIBLE);
 		const startIndex =
 			total <= maxVisible ? 0 : clampLow(this.#selectedIndex - Math.floor(maxVisible / 2), 0, total - maxVisible);
 		const endIndex = Math.min(startIndex + maxVisible, total);
@@ -268,18 +274,24 @@ export class ResetUsageSelectorComponent implements Component {
 			return emptyModalArea(width, height);
 		}
 
-		const shell = renderModalShell(
-			planModalChrome(dims, {
-				shortcuts: this.#pendingIndex !== null ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
-				hoveredShortcutId: this.#hoveredShortcutId,
-				tipCandidates: this.#tipCandidates(),
-			}),
-			{
-				title: "Spend reset",
-				body: this.#buildBody(dims.contentWidth),
-				showClose: true,
-			},
-		);
+		// A short card sheds its padding before the list shows fewer accounts, and the status
+		// message keeps its rows under whatever the list shows. While a spend waits for its second
+		// Enter the tip states what that Enter spends, so the card keeps the tip and asks only for
+		// the cursor row.
+		const statusRows = this.#statusRows();
+		const pending = this.#pendingIndex !== null;
+		const listRows = pending ? 1 : clamp(this.#accounts.length, 1, RESET_SELECTOR_MAX_VISIBLE);
+		const chrome = planModalChrome(dims, {
+			shortcuts: pending ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates: this.#tipCandidates(),
+			minBodyRows: listRows + statusRows,
+		});
+		const shell = renderModalShell(chrome, {
+			title: "Spend reset",
+			body: this.#buildBody(dims.contentWidth, chrome.maxBodyRows - statusRows),
+			showClose: true,
+		});
 		this.#shellGeometry = shell.geometry;
 		this.#listRowStart = shell.geometry?.bodyRowStart ?? 0;
 		return shell.lines;

@@ -16,7 +16,7 @@ import {
 } from "@veyyon/tui";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { type KeyId, matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clamp, clampLow } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { replaceTabs } from "@veyyon/utils/tab-width";
@@ -173,6 +173,11 @@ export class HookSelectorComponent extends Container {
 	#checkedIndices: Set<number>;
 	#markableCount: number;
 	#maxVisible: number;
+	/**
+	 * Option rows the card's plan has room for, the status row aside. Unset for an embedded
+	 * selector, whose host sizes it.
+	 */
+	#rowCap: number | undefined;
 	#filterable: boolean | undefined;
 	#keyShortcuts: Partial<Record<KeyId, number>> | Record<string, number> | undefined;
 	#multi: boolean;
@@ -428,7 +433,7 @@ export class HookSelectorComponent extends Container {
 		// #updateList), so the window is sized to keep as many labels visible as
 		// possible rather than letting one long description swallow the budget.
 		const descMode: number | "full" = compact ? 0 : "full";
-		const rowBudget = Math.max(1, this.#maxVisible);
+		const rowBudget = this.#windowRows();
 		const selectedIndex = clampLow(this.#selectedIndex, 0, total - 1);
 		let startIndex = selectedIndex;
 		let endIndex = selectedIndex + 1;
@@ -507,7 +512,7 @@ export class HookSelectorComponent extends Container {
 			}
 			// Reserve one row for the status line; give the remainder to the
 			// highlighted option's description.
-			selectedDescRows = Math.max(0, Math.max(1, this.#maxVisible) - labelRows - 1);
+			selectedDescRows = Math.max(0, this.#windowRows() - labelRows - 1);
 		}
 
 		for (let i = startIndex; i < endIndex; i++) {
@@ -549,6 +554,11 @@ export class HookSelectorComponent extends Container {
 			this.#listContainer.addChild(child);
 			if (row.option !== undefined) this.#optionRows.set(child, row.option);
 		}
+	}
+
+	/** Option rows the window holds: `#maxVisible`, or fewer when the card has fewer rows. */
+	#windowRows(): number {
+		return this.#rowCap === undefined ? this.#maxVisible : clamp(this.#rowCap, 1, this.#maxVisible);
 	}
 
 	/** Countdown tick: the card shows it in the title bar, an embedded selector
@@ -881,9 +891,8 @@ export class HookSelectorComponent extends Container {
 			if (option !== undefined) this.#hitRows[visibleHead.length + index] = option;
 		}
 		const rows = [...visibleHead, ...tail];
-		// A terminal too short for the option list alone: the list is already windowed
-		// to `#maxVisible` around the cursor, so what a clip here can still take is a
-		// row the cursor is not on.
+		// The card windows the options to the rows its plan has (see `render`), so a clip here
+		// takes a row only when one option is taller than the card.
 		return maxRows === undefined ? rows : rows.slice(0, maxRows);
 	}
 
@@ -940,16 +949,19 @@ export class HookSelectorComponent extends Container {
 			this.#shellGeometry = null;
 			return emptyModalArea(renderWidth, height);
 		}
-		if (this.#lastRenderWidth !== dims.contentWidth) {
-			this.#lastRenderWidth = dims.contentWidth;
-			this.#updateList(dims.contentWidth);
-		}
-
 		const shortcuts = this.#shortcuts();
 		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
+		// The option window takes the rows the card has, less the status row under it, so a short
+		// card shows the options around the cursor rather than the top of a window the card clips.
+		const rowCap = chrome.maxBodyRows - 1;
+		if (this.#lastRenderWidth !== dims.contentWidth || this.#rowCap !== rowCap) {
+			this.#lastRenderWidth = dims.contentWidth;
+			this.#rowCap = rowCap;
+			this.#updateList(dims.contentWidth);
+		}
 
 		const body = this.#assembleBody(dims.contentWidth, chrome.maxBodyRows);
 

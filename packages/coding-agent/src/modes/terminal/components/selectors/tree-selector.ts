@@ -888,7 +888,7 @@ const TREE_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "esc close", clickable: true, id: "close" },
 ];
 
-/** Rows the tree keeps even on a short terminal. */
+/** Tree rows a short card sheds its spare chrome to show. */
 const MIN_TREE_ROWS = 3;
 
 /** Label input component shown when editing a label */
@@ -1064,6 +1064,7 @@ export class TreeSelectorComponent implements Component {
 			shortcuts: TREE_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			searchLine,
+			minBodyRows: MIN_TREE_ROWS + 1,
 		});
 
 		let body: readonly string[];
@@ -1073,7 +1074,7 @@ export class TreeSelectorComponent implements Component {
 			// The tree owns the whole body minus the filter footer line the list
 			// appends for a non-default filter; the shell truncates an overrun
 			// silently, and the row it would eat is the one under the cursor.
-			this.#treeList.setMaxVisibleLines(Math.max(MIN_TREE_ROWS, chrome.maxBodyRows - 1));
+			this.#treeList.setMaxVisibleLines(Math.max(1, chrome.maxBodyRows - 1));
 			body = this.#treeList.render(dims.contentWidth);
 		}
 

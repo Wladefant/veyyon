@@ -42,7 +42,7 @@ import { joinPlanSections, parsePlanSections, sectionDeletionSpan } from "./plan
 
 /** Title shown in the ModalShell chrome. */
 const OVERLAY_TITLE = "Plan Review";
-/** Minimum plan-body rows kept visible even on short terminals. */
+/** Plan-body rows the card asks for on a short terminal; it sheds its padding before it shows fewer. */
 const MIN_BODY_ROWS = 3;
 /** Sidebar gates: enough headings, a wide content column, and a usable body column. */
 const SIDEBAR_MIN_HEADINGS = 2;
@@ -839,13 +839,15 @@ export class PlanReviewOverlay implements Component {
 		// under the sidebar/body block (the region rule, prompt, slider, options,
 		// and the annotate mini-editor). The plan is the one painted below, so a
 		// footer whose chips wrap past `footerLines` shortens the region instead of
-		// pushing the options off the end of the card.
+		// pushing the options off the end of the card, and a card too short for
+		// MIN_BODY_ROWS of plan shrinks the region before it loses an option.
+		const belowRegionRows = 1 + promptLines.length + sliderLines.length + optionLines.length + annotateLines.length;
 		const chrome = planModalChrome(dims, {
 			shortcuts: this.#buildShortcuts(),
 			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: belowRegionRows + MIN_BODY_ROWS,
 		});
-		const belowRegionRows = 1 + promptLines.length + sliderLines.length + optionLines.length + annotateLines.length;
-		const regionRows = Math.max(MIN_BODY_ROWS, chrome.maxBodyRows - belowRegionRows);
+		const regionRows = Math.max(1, chrome.maxBodyRows - belowRegionRows);
 
 		const bodyLines = this.#buildBody(bodyContentWidth);
 		this.#scrollView.setLines(bodyLines);

@@ -29,7 +29,6 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import {
 	type ModalShellResult,
-	minModalChromeRows,
 	SELECT_LIST_SHORTCUTS,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -89,15 +88,14 @@ describe("without preferredBodyRows", () => {
 
 describe("with preferredBodyRows", () => {
 	it("draws a card sized for the rows asked for", () => {
-		const full = shell().geometry.modalHeight;
+		const full = shell().geometry;
 		const sized = shell({ preferredBodyRows: 7 }).geometry.modalHeight;
 
-		expect(sized).toBeLessThan(full);
-		// Chrome is the top border, a vPad row above AND below the body, the footer
-		// divider, the two footer lines and the bottom border, around seven rows of
-		// content. `minModalChromeRows` owns that sum; restating it here would be
-		// the second copy the shell's own doc warns about.
-		expect(sized).toBe(7 + minModalChromeRows(MODAL_SIZING_MEDIUM));
+		expect(sized).toBeLessThan(full.modalHeight);
+		// The card keeps every chrome row it spends at full height (the top border, a vPad row above
+		// AND below the body, the footer divider, the two footer lines and the bottom border) around
+		// seven rows of content, measured from the full card rather than restated here.
+		expect(sized).toBe(7 + full.modalHeight - full.bodyRowCount);
 	});
 
 	it("leaves no blank filler below the content", () => {

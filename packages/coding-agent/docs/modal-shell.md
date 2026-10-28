@@ -21,10 +21,10 @@ Source: `src/modes/terminal/components/chrome/modal-shell.ts` (rendering, footer
 ## Rendering a card
 
 1. `layoutModalCard(areaWidth, areaHeight, sizing)` lays the card out on the area. It returns null when `w < 20` or `h < 6`; the caller then paints `emptyModalArea(areaWidth, areaHeight)` and clears its hit rectangles.
-2. `planModalChrome(card, { shortcuts, hoveredShortcutId, tipCandidates, searchLine })` reserves the chrome, shrinking the tip gap, the tip, `v_pad` and the footer padding in that order on a short card. `maxBodyRows` is the number of body rows the card shows.
+2. `planModalChrome(card, { shortcuts, hoveredShortcutId, tipCandidates, searchLine, minBodyRows })` reserves the chrome. When the card is too short for its chrome plus `minBodyRows` body rows, it sheds the tip gap, the tip, `v_pad` and the footer padding, in that order; chip rows are never shed. `maxBodyRows` is the number of body rows the card shows.
 3. `renderModalShell(plan, content)` paints that plan. A body row past `maxBodyRows` is dropped.
 
-A caller that sizes its body reads `maxBodyRows` from the plan it paints, so the body is sized against the chrome the card draws.
+A caller that sizes its body reads `maxBodyRows` from the plan it paints, so the body is sized against the chrome the card draws. A card with a body floor passes it as `minBodyRows` and fits its body to `maxBodyRows`, down to one row, instead of keeping the floor and losing the rows below it.
 
 ## Chrome anatomy
 

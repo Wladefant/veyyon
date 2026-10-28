@@ -46,6 +46,8 @@ import { type AgentDisplayState, agentDisplayState, agentStatusWord } from "./ag
 // viewer's chrome rows pad to the same rail so title, body, editor, and
 // footer share one gutter.
 const RAIL_PAD = " ".repeat(COMPOSER_INSET_COLS);
+/** Transcript rows the viewer asks the card for on a short terminal; it sheds its padding before it shows fewer. */
+const MIN_VIEWPORT_ROWS = 3;
 
 /** Result of one host-backed transcript read. */
 export interface AgentTranscriptRemoteRead {
@@ -636,14 +638,17 @@ export class AgentTranscriptViewer implements Component {
 
 		// One owner for "how many rows do I get": the shell truncates a body that
 		// runs long, so the scroll viewport is sized from the same plan the card
-		// paints with, minus the rows this body spends on its own chrome.
+		// paints with, minus the rows this body spends on its own chrome. A short
+		// card sheds its padding for three viewport rows, then shrinks the viewport
+		// rather than push the notice and the editor off its bottom.
+		const bodyChrome = headerLines.length + 1 + editorLines.length + (noticeLine ? 1 : 0);
 		const plan = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates: statsLine ? [statsLine] : undefined,
+			minBodyRows: bodyChrome + MIN_VIEWPORT_ROWS,
 		});
-		const bodyChrome = headerLines.length + 1 + editorLines.length + (noticeLine ? 1 : 0);
-		const viewportHeight = Math.max(3, plan.maxBodyRows - bodyChrome);
+		const viewportHeight = Math.max(1, plan.maxBodyRows - bodyChrome);
 
 		const contentLines = this.#builder.isEmpty
 			? [`${RAIL_PAD}${theme.fg("dim", this.#placeholder(Math.max(10, contentWidth - 1)))}`]

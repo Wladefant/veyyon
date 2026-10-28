@@ -20,37 +20,11 @@ import { transitionsEnabled } from "../../../../theme/shimmer";
 import { theme, visibleGroundHex } from "../../../../theme/theme";
 import { keyHint } from "../../utils/key-hint";
 import { emberTick } from "../composer/composer-chrome";
-import type { ModalCardLayout, ModalSizing } from "./modal-geometry";
+import type { ModalCardLayout } from "./modal-geometry";
 import { bottomBorder, divider, fit, row, topBorder } from "./overlay-box";
 
 /** Fold indicator always occupies two columns (Grok FoldInfo parity). */
 export const FOLD_COLS = 2;
-
-/**
- * Rows {@link renderModalShell} reserves outside the body when nothing is
- * droppable: the top border, the caller's vertical padding ABOVE AND BELOW the
- * body, the footer divider, the reserved footer band, and the bottom border.
- *
- * A caller that decides its own layout before rendering (side-by-side preview
- * versus stacked, say) needs the body budget, and the only alternative to this is
- * to restate the arithmetic. `ask-dialog.ts` did restate it, as
- * `3 + footerLines + vPad`, with a comment admitting it "mirrors the arithmetic
- * renderModalShell uses internally". That is the same number by coincidence of
- * three unnamed `1`s, and nothing would have failed if the shell had grown a row.
- * The terms live here now, next to the loop that shrinks them.
- *
- * This is the MINIMUM. The real reservation grows with a search line (two more
- * rows) and with shortcut chips that wrap past `footerLines`, and shrinks again
- * when the card is too short: the tip gap goes, then the tip, then `vPad`, then
- * the caller's reserved footer padding down to the chip rows. A caller sizing a
- * layout wants the floor, which is what this returns.
- */
-export function minModalChromeRows(sizing: ModalSizing): number {
-	const topBorder = 1;
-	const footerDivider = 1;
-	const bottomBorder = 1;
-	return topBorder + 2 * sizing.vPad + footerDivider + sizing.footerLines + bottomBorder;
-}
 
 /** What {@link renderModalShell} will reserve outside the body of one laid-out card. */
 export interface ModalChromePlan {
@@ -81,20 +55,28 @@ export interface ModalChromeInput {
 	tipCandidates?: readonly string[];
 	/** The text of a search row above the body; a card without one has no search row. */
 	searchLine?: string;
+	/**
+	 * Body rows the card needs to stay usable. The tip gap, the tip, the vertical padding and the
+	 * footer's reserved blank rows are shed, in that order, before the plan shows fewer. Chip rows
+	 * are never shed, so a card shorter than its chrome plus this shows fewer body rows.
+	 */
+	minBodyRows?: number;
 }
 
 /**
  * Reserve a card's chrome, including the shrink order that applies when it is too short.
  *
- * {@link minModalChromeRows} answers the static question (what does this sizing cost at minimum).
- * This answers the real one: given these shortcuts, this tip and this card, how many body rows the
- * card shows. A caller that sizes its body reads `maxBodyRows` from the plan and hands the same plan
- * to {@link renderModalShell}, which paints it without planning again, so the rows the body was sized
+ * The plan states the rows the card spends outside its body (`nonBody`: the top border, a search
+ * row and its divider, `vPad` above AND below the body, the footer divider, the footer band and the
+ * bottom border) and the body rows it shows (`maxBodyRows`) for these shortcuts, this tip and this
+ * card. A caller that sizes its body reads `maxBodyRows` from the plan and hands the same plan to
+ * {@link renderModalShell}, which paints it without planning again, so the rows the body was sized
  * for are the rows the card shows. The card drops a body row past `maxBodyRows` with no error.
  *
- * `model-hub.ts` sized its split pane against a restated `3 + footerLines + vPad`, which charges
- * `vPad` once where the card charges it twice, so its body ran two rows long and the shell dropped
- * the tail: the hub's strip row, which holds the hint line and every chip strip.
+ * Three callers restated this arithmetic as `3 + footerLines + vPad`, which charges `vPad` once
+ * where the card charges it twice, and missed the chip rows that wrap past `footerLines` on a
+ * narrow card: `model-hub.ts` lost its strip row (the hint line and every chip strip), and the ask
+ * dialog and the plan review lost the bottom of their bodies.
  */
 export function planModalChrome(card: ModalCardLayout, chrome: ModalChromeInput = {}): ModalChromePlan {
 	const { sizing, modalHeight, contentWidth } = card;
@@ -104,10 +86,12 @@ export function planModalChrome(card: ModalCardLayout, chrome: ModalChromeInput 
 
 	// Chips (or the caller's reserved footer lines) plus the top border, footer
 	// divider, and bottom border are mandatory chrome — they must never be
-	// clipped. The tip line, its gap, and the vertical padding are droppable, in
-	// that order, when the card is too short (e.g. a search+tip overlay on a
-	// 24-row terminal, where a naive slice would shear off the bottom border).
+	// clipped. The tip line, its gap, the vertical padding and the reserved
+	// footer rows are droppable, in that order, when the card is too short for
+	// its chrome and the body rows the caller needs (e.g. a search+tip overlay on
+	// a 24-row terminal, where a naive slice would shear off the bottom border).
 	const shortcutRows = layoutRows.length;
+	const minBodyRows = Math.max(0, chrome.minBodyRows ?? 0);
 	let vPad = sizing.vPad;
 	let tipRows = tipText ? 1 : 0;
 	let tipGap = tipRows > 0 && modalHeight >= 6 ? 1 : 0;
@@ -117,21 +101,22 @@ export function planModalChrome(card: ModalCardLayout, chrome: ModalChromeInput 
 	// padded with filler rows, but a card that hugs its content shows the last
 	// row resting directly on the footer divider.
 	const nonBody = () => 1 + searchChrome + 2 * vPad + 1 + footerBand + 1;
+	const tooShort = () => nonBody() + minBodyRows > modalHeight;
 	const refreshFooterBand = () => {
 		footerBand = Math.max(sizing.footerLines, shortcutRows + tipRows + tipGap);
 	};
-	if (nonBody() > modalHeight && tipGap > 0) {
+	if (tooShort() && tipGap > 0) {
 		tipGap = 0;
 		refreshFooterBand();
 	}
-	if (nonBody() > modalHeight && tipRows > 0) {
+	if (tooShort() && tipRows > 0) {
 		tipRows = 0;
 		refreshFooterBand();
 	}
-	while (nonBody() > modalHeight && vPad > 0) vPad--;
+	while (tooShort() && vPad > 0) vPad--;
 	// Last resort: give up the caller's reserved footer padding, but keep every
 	// shortcut chip row.
-	while (nonBody() > modalHeight && footerBand > shortcutRows) footerBand--;
+	while (tooShort() && footerBand > shortcutRows) footerBand--;
 
 	return {
 		card,
