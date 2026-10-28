@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- An MCP transport that closes while the reconnection that produced it is still settling, such as a streamable-HTTP event stream that ends while the tool list is in flight, starts a new reconnection or trips the crash breaker instead of staying listed as connected, and the close of a connection a manual reconnect already replaced no longer tears down the live one.
 - A write, an edit or `lsp diagnostics` against a language server that answers `textDocument/diagnostic` pulls returns the pulled diagnostics instead of waiting for a publish, so a tsgo write that broke the types reports the error in 38-123 ms instead of reporting no issues after 3,004 ms, and a warm rust-analyzer or Ruff write drops from 101 ms to 2-16 ms.
 - Python, Ruby and Julia eval kernels cache their runner script in `cache/<language>-runner` under the veyyon config root (or `$XDG_CACHE_HOME/veyyon`) instead of `<tmpdir>/veyyon-<language>-runner`, where another account on the host could create the script first and have every kernel run it; a kernel start writes the script again when it is missing, instead of every later start in the process returning an empty cancelled cell, and writes it with the shared atomic writer so another process never runs a partly written one.
 - An eval kernel whose runner exits during startup fails with `<Language> kernel init failed: <Language> kernel exited with code N` instead of returning an empty cancelled cell.

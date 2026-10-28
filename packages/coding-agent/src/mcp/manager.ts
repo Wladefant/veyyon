@@ -535,7 +535,7 @@ export class MCPManager {
 					// network interruption).
 					connection.transport.onClose = () => {
 						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-						void this.reconnectServer(name);
+						void this.#reconnectAfterClose(name, connection);
 					};
 
 					return connection;
@@ -989,6 +989,22 @@ export class MCPManager {
 	}
 
 	/**
+	 * Reconnect after the transport of `connection` closed. A close that lands while a
+	 * reconnection is still settling can belong to the connection that reconnection is
+	 * about to return, as when the event stream of a streamable-HTTP server ends while
+	 * the tool list is in flight. Joining the pending reconnection drops that close and
+	 * leaves the closed connection registered as connected, so this waits for the
+	 * reconnection to settle and reconnects only when the closed connection is still the
+	 * registered one. The close of a superseded or torn-down connection starts nothing.
+	 */
+	async #reconnectAfterClose(name: string, connection: MCPServerConnection): Promise<void> {
+		const pending = this.#pendingReconnections.get(name);
+		if (pending) await pending;
+		if (this.#connections.get(name) !== connection) return;
+		await this.reconnectServer(name);
+	}
+
+	/**
 	 * Record a reconnect attempt against the per-server crash window and report
 	 * whether the circuit breaker is now open. Sliding window: entries older
 	 * than {@link RECONNECT_BURST_WINDOW_MS} are pruned before the new
@@ -1162,7 +1178,7 @@ export class MCPManager {
 		}
 		connection.transport.onClose = () => {
 			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-			void this.reconnectServer(name);
+			void this.#reconnectAfterClose(name, connection);
 		};
 		try {
 			const serverTools = await listTools(connection);
