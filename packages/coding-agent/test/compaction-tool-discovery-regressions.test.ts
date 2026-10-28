@@ -270,6 +270,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		harness.queueReply(assistantMessage(model, ALPHA_REPLY.repeat(1000), 100, 10));
 		harness.queueReply(assistantMessage(model, "continued after compaction", 120, 10));
 		harness.queueSummary("LOCAL-SUMMARY: earlier work condensed");
+		harness.queueSummary("LOCAL-SUMMARY: oversized turn prefix condensed");
 		await session.prompt(ALPHA_REQUEST);
 
 		session.settings.set("agent.helpers", {
