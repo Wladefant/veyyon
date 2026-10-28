@@ -20,6 +20,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agen
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { sgrMotion, sgrPress } from "../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -106,16 +107,6 @@ function positionOf(component: RenderedComponent, needle: string): { row: number
 	const row = lines.findIndex(line => line.includes(needle));
 	if (row < 0) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return { row, col: lines[row]!.indexOf(needle) };
-}
-
-/** Standard SGR no-button motion at a 0-based terminal cell. */
-function hover(row: number, col: number): string {
-	return `\x1b[<35;${col + 1};${row + 1}M`;
-}
-
-/** Standard SGR left-button press at a 0-based terminal cell. */
-function leftClick(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
 }
 
 /** A live session double that records exactly when and why its turn is aborted. */
@@ -222,7 +213,7 @@ describe("Agent dashboard termination confirmation", () => {
 
 		dashboard.handleInput("x");
 		const dismiss = positionOf(overlays.overlay, "esc dismiss");
-		overlays.handleInput(leftClick(dismiss.row, dismiss.col));
+		overlays.handleInput(sgrPress(dismiss.row, dismiss.col));
 		expect(overlays.visible).toBe(false);
 		expect(events).toEqual([]);
 	});
@@ -261,7 +252,7 @@ describe("Agent dashboard termination confirmation", () => {
 		dashboard.handleInput("x");
 		const dialog = overlays.overlay;
 		const confirm = positionOf(dialog, "enter yes, terminate");
-		const click = leftClick(confirm.row, confirm.col);
+		const click = sgrPress(confirm.row, confirm.col);
 		dialog.handleInput(click);
 		dialog.handleInput(click);
 		await lifecycle.firstRelease;
@@ -314,24 +305,24 @@ describe("Agent dashboard termination confirmation", () => {
 		);
 
 		const main = positionOf(dashboard, "Main");
-		dashboard.handleInput(hover(main.row, main.col));
+		dashboard.handleInput(sgrMotion(main.row, main.col));
 		expect(renderedLines(dashboard)[main.row]).not.toContain("[x]");
 		const advisor = positionOf(dashboard, "Advisor");
-		dashboard.handleInput(hover(advisor.row, advisor.col));
+		dashboard.handleInput(sgrMotion(advisor.row, advisor.col));
 		expect(renderedLines(dashboard)[advisor.row]).not.toContain("[x]");
 
 		const scout = positionOf(dashboard, "scout");
-		dashboard.handleInput(hover(scout.row, scout.col));
+		dashboard.handleInput(sgrMotion(scout.row, scout.col));
 		const hoveredScoutRow = renderedLines(dashboard)[scout.row]!;
 		expect(hoveredScoutRow).toContain("[x]");
 		const terminateCol = hoveredScoutRow.lastIndexOf("[x]");
-		dashboard.handleInput(leftClick(scout.row, terminateCol));
+		dashboard.handleInput(sgrPress(scout.row, terminateCol));
 		expect(frameOf(overlays.overlay)).toContain("Terminate agent?");
 		expect(events).toEqual([]);
 
 		overlays.handleInput("\x1b");
 		const ordinaryRowTarget = positionOf(dashboard, "scout");
-		dashboard.handleInput(leftClick(ordinaryRowTarget.row, ordinaryRowTarget.col));
+		dashboard.handleInput(sgrPress(ordinaryRowTarget.row, ordinaryRowTarget.col));
 		expect(opened).toEqual(["Worker"]);
 		expect(overlays.visible).toBe(false);
 		expect(events).toEqual([]);

@@ -17,6 +17,7 @@
 import { describe, expect, it } from "bun:test";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { type Component, type Focusable, TUI } from "../src";
+import { sgrPress } from "./helpers/sgr-mouse";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -121,10 +122,6 @@ function cardTop(term: VirtualTerminal): number {
 	return row;
 }
 
-function leftClickAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
 function wheelAt(row: number, col: number, direction: -1 | 1): string {
 	return `\x1b[<${direction === -1 ? 64 : 65};${col + 1};${row + 1}M`;
 }
@@ -158,7 +155,7 @@ describe("a click on a card over the transcript reaches the card", () => {
 			await scheduler.drain(term);
 			const top = cardTop(term);
 			// The card is full width, so its column 0 is the screen's.
-			term.sendInput(leftClickAt(top + 1, 2));
+			term.sendInput(sgrPress(top + 1, 2));
 			term.sendInput(wheelAt(top + 1, 3, 1));
 			expect(card.routed).toEqual([
 				{ line: 1, col: 2, wheel: null, leftClick: true },
@@ -222,7 +219,7 @@ describe("a click on a card over the transcript reaches the card", () => {
 			await scheduler.drain(term);
 			const row = term.getViewport().findIndex(line => line.includes("│ row  │"));
 			expect(row).toBe(0);
-			term.sendInput(leftClickAt(0, 2));
+			term.sendInput(sgrPress(0, 2));
 			expect(card.routed).toEqual([{ line: 1, col: 2, wheel: null, leftClick: true }]);
 		} finally {
 			stop();
@@ -238,7 +235,7 @@ describe("a click on a card over the transcript reaches the card", () => {
 			const top = cardTop(term);
 			handle.hide();
 			await scheduler.drain(term);
-			term.sendInput(leftClickAt(top + 1, 2));
+			term.sendInput(sgrPress(top + 1, 2));
 			expect(card.routed).toEqual([]);
 		} finally {
 			stop();

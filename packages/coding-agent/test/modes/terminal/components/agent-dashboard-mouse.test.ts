@@ -23,6 +23,7 @@ import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/d
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { sgrPress } from "../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -54,11 +55,6 @@ function registerSub(id: string, type: string): void {
 		sessionFile: null,
 		status: "running",
 	});
-}
-
-/** An SGR left button press at a 0-based screen cell (the reports are 1-based). */
-function leftClick(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
 }
 
 /** An SGR wheel report: button 64 is wheel-up, 65 is wheel-down. */
@@ -98,7 +94,7 @@ describe("Clicking a roster row", () => {
 			},
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "scout"), 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "scout"), 20));
 		await focused.promise;
 
 		expect(opened).toEqual(["1-Sub"]);
@@ -111,7 +107,7 @@ describe("Clicking a roster row", () => {
 		registerSub("1-Sub", "scout");
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "scout"), 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "scout"), 20));
 
 		const cursorRow = dashboard
 			.render(WIDTH)
@@ -134,7 +130,7 @@ describe("Clicking a roster row", () => {
 			focusAgent: async id => void opened.push(id),
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "reviewer") + 5, 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "reviewer") + 5, 20));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -149,7 +145,7 @@ describe("Clicking a roster row", () => {
 			focusAgent: async id => void opened.push(id),
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "Agent Dashboard"), 30));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "Agent Dashboard"), 30));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -166,7 +162,7 @@ describe("Clicking a roster row", () => {
 		const rosterRow = rowOf(dashboard, "reviewer");
 
 		dashboard.handleInput("\x1b[C"); // right arrow: Live -> Comms
-		dashboard.handleInput(leftClick(rosterRow, 20));
+		dashboard.handleInput(sgrPress(rosterRow, 20));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -180,7 +176,7 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, colOf(dashboard, "Comms (0)")));
+		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Comms (0)")));
 
 		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("No agent traffic yet.");
 		dashboard.dispose();
@@ -192,7 +188,7 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, colOf(dashboard, "Live (1)")));
+		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Live (1)")));
 
 		const shown = dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "");
 		expect(shown).toContain("reviewer");
@@ -206,7 +202,7 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, WIDTH - 12));
+		dashboard.handleInput(sgrPress(stripRow, WIDTH - 12));
 
 		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("reviewer");
 		dashboard.dispose();
@@ -224,7 +220,7 @@ describe("Chrome clicks still belong to the shell", () => {
 		};
 		dashboard.render(WIDTH);
 
-		dashboard.handleInput(leftClick(0, 0));
+		dashboard.handleInput(sgrPress(0, 0));
 
 		expect(closed).toBe(1);
 		dashboard.dispose();

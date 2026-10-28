@@ -28,6 +28,7 @@ import { Editor } from "@veyyon/tui/components/editor";
 import { type Component, Container, TUI } from "@veyyon/tui/tui";
 import { CombinedAutocompleteProvider } from "@veyyon/utils/autocomplete";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
+import { sgrMotion, sgrPress, sgrRelease } from "./helpers/sgr-mouse";
 import { defaultEditorTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -47,21 +48,6 @@ class PadRow implements Component {
 	render(): string[] {
 		return [""];
 	}
-}
-
-/** SGR left-button press at 0-based (row, col). */
-function clickAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
-/** SGR left-button release at 0-based (row, col). */
-function releaseAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}m`;
-}
-
-/** SGR motion report at 0-based (row, col). */
-function motionAt(row: number, col: number): string {
-	return `\x1b[<35;${col + 1};${row + 1}M`;
 }
 
 /** SGR wheel-down notch at 0-based (row, col). */
@@ -161,7 +147,7 @@ describe("a click on a composer suggestion", () => {
 
 		// `/memory` is neither the first nor the last row, so a routing bug that
 		// lands on the selection or on an edge row cannot pass by accident.
-		h.term.sendInput(clickAt(h.rowOf("memory"), 6));
+		h.term.sendInput(sgrPress(h.rowOf("memory"), 6));
 		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/memory ");
@@ -176,7 +162,7 @@ describe("a click on a composer suggestion", () => {
 		// Same gesture, three extra rows between the container's top and the
 		// editor: a container that forwarded the raw line would land three rows
 		// further down the popup, or off it.
-		h.term.sendInput(clickAt(h.rowOf("memory"), 6));
+		h.term.sendInput(sgrPress(h.rowOf("memory"), 6));
 		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/memory ");
@@ -186,7 +172,7 @@ describe("a click on a composer suggestion", () => {
 		const clicked = await mountComposer();
 		stop = () => clicked.tui.stop();
 		await openPopup(clicked);
-		clicked.term.sendInput(clickAt(clicked.rowOf("mcp"), 4));
+		clicked.term.sendInput(sgrPress(clicked.rowOf("mcp"), 4));
 		await clicked.term.waitForRender(clicked.tui);
 		const byClick = clicked.editor.getText();
 		clicked.tui.stop();
@@ -214,7 +200,7 @@ describe("a click on a composer suggestion", () => {
 
 		// The prompt row carries the typed text, so it is above the popup. Column
 		// 3 is the first text cell of the framed variant (border plus padding).
-		h.term.sendInput(clickAt(h.rowOf("/m"), 3));
+		h.term.sendInput(sgrPress(h.rowOf("/m"), 3));
 		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/m");
@@ -230,7 +216,7 @@ describe("a click on a composer suggestion", () => {
 		// screen, so this row exists only in the routing arithmetic, and a hit
 		// test that clamped instead of missing would accept the last item.
 		const line = h.localRowOf("memory") + 1;
-		const press = parseSgrMouse(clickAt(line, 4));
+		const press = parseSgrMouse(sgrPress(line, 4));
 		if (!press) throw new Error("unparsed press");
 		h.editor.routeMouse(press, line, 4);
 
@@ -247,7 +233,7 @@ describe("a click on a composer suggestion", () => {
 		// Motion and wheel never reach the footer through the engine, so they are
 		// injected at the component the engine would route to: a pointer that only
 		// passes over a suggestion must never rewrite the buffer.
-		for (const bytes of [motionAt(line, 6), wheelDownAt(line, 6), releaseAt(line, 6)]) {
+		for (const bytes of [sgrMotion(line, 6), wheelDownAt(line, 6), sgrRelease(line, 6)]) {
 			const event = parseSgrMouse(bytes);
 			if (!event) throw new Error(`unparsed report ${JSON.stringify(bytes)}`);
 			h.editor.routeMouse(event, line, 6);
@@ -267,7 +253,7 @@ describe("a click on a composer suggestion", () => {
 		// the popup refresh: accepting now would splice the completion
 		// into a span the user is no longer typing.
 		h.editor.setText("unrelated text");
-		const press = parseSgrMouse(clickAt(line, 6));
+		const press = parseSgrMouse(sgrPress(line, 6));
 		if (!press) throw new Error("unparsed press");
 		h.editor.routeMouse(press, line, 6);
 
@@ -287,7 +273,7 @@ describe("a click on a composer suggestion", () => {
 		expect(h.editor.isShowingAutocomplete()).toBe(true);
 		await h.term.waitForRender(h.tui);
 
-		h.term.sendInput(clickAt(h.rowOf("sonnet-4"), 4));
+		h.term.sendInput(sgrPress(h.rowOf("sonnet-4"), 4));
 		await h.term.waitForRender(h.tui);
 
 		expect(h.editor.getText()).toBe("/model sonnet-4");

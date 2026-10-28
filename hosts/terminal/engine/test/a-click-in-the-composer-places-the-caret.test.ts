@@ -30,17 +30,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Editor } from "@veyyon/tui/components/editor";
 import { type Component, Container, TUI } from "@veyyon/tui/tui";
 import { CombinedAutocompleteProvider } from "@veyyon/utils/autocomplete";
+import { sgrPress } from "./helpers/sgr-mouse";
 import { defaultEditorTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
 
 const COLS = 60;
 const ROWS = 24;
 const GUTTER = "  > ";
-
-/** SGR left-button press at 0-based (row, col). */
-function clickAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
 
 /** Transcript filler: taller than the screen, which is what arms wheel tracking. */
 class Filler implements Component {
@@ -244,7 +240,7 @@ describe("a click on the composer text", () => {
 			expect(row).toBeGreaterThanOrEqual(0);
 			const col = (viewport[row] ?? "").indexOf("at");
 
-			term.sendInput(clickAt(row, col));
+			term.sendInput(sgrPress(row, col));
 			await term.waitForRender(tui);
 
 			expect(editor.getCursor()).toEqual({ line: 0, col: "point ".length });
