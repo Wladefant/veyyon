@@ -21,10 +21,11 @@ import * as path from "node:path";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import { SETTINGS_SCHEMA } from "../../src/config/settings-schema";
-import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
+import { createDaemonBrokerClient } from "../../src/launch/client";
 import { managedDaemonDir, managedDaemonMetaPath } from "../../src/launch/paths";
 import type { DaemonSpec } from "../../src/launch/protocol";
 import { getSettingDef } from "../../src/modes/terminal/components/selectors/settings-defs";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 const cleanupDirs: string[] = [];
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
@@ -42,25 +43,6 @@ async function tempDir(prefix: string): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	cleanupDirs.push(dir);
 	return dir;
-}
-
-// Cross-process integration: fake timers cannot advance a detached broker or OS process table.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await Bun.sleep(50);
-	}
-	return condition();
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// A last-client shutdown may already have closed the broker.
-	}
-	client.close();
 }
 
 afterEach(async () => {
@@ -131,7 +113,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			const statAfterPurge = await fs.stat(daemonDir).catch(() => null);
 			expect(statAfterPurge).toBeNull();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 
@@ -181,7 +163,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			const stat = await fs.stat(daemonDir).catch(() => null);
 			expect(stat).not.toBeNull();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 
@@ -240,7 +222,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			const current = list.daemons.find(d => d.name === "reused-name");
 			expect(current?.state).toBe("ready");
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 
@@ -293,7 +275,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			const stat = await fs.stat(expiredDir).catch(() => null);
 			expect(stat).toBeNull();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 
@@ -387,7 +369,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 			// A name no generation ever ran under is still unknown.
 			await expect(client.request({ op: "describe", name: "never-started" })).rejects.toThrow(/Unknown daemon/);
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 
@@ -426,7 +408,7 @@ describe("an exited launch process is purged after the configured cleanup wait",
 		expect(exited).toBeTrue();
 
 		const shutdownStart = Date.now();
-		await shutdown(client);
+		await shutdownBroker(client);
 		const shutdownElapsed = Date.now() - shutdownStart;
 		// Shutdown should complete promptly and not wait for the 60s cleanup timer.
 		expect(shutdownElapsed).toBeLessThan(3_000);

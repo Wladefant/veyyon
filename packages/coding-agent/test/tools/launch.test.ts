@@ -7,6 +7,7 @@ import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/lau
 import { daemonBrokerEndpoint, daemonBrokerLeasePath } from "../../src/launch/paths";
 import { registerDaemonProjectPresence } from "../../src/launch/presence";
 import type { DaemonSpec } from "../../src/launch/protocol";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 const cleanupDirs: string[] = [];
 
@@ -32,16 +33,6 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-// Cross-process integration: fake timers cannot advance a detached broker or OS process table.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await Bun.sleep(50);
-	}
-	return condition();
-}
-
 function processExists(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -49,15 +40,6 @@ function processExists(pid: number): boolean {
 	} catch {
 		return false;
 	}
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// A last-client shutdown may already have closed the broker.
-	}
-	client.close();
 }
 
 afterEach(async () => {
@@ -146,7 +128,7 @@ setInterval(() => {}, 1000);
 			if (stopped.op !== "stop") throw new Error("unexpected stop result");
 			expect(stopped.daemon.state).toBe("exited");
 		} finally {
-			await shutdown(first);
+			await shutdownBroker(first);
 			second.close();
 		}
 	}, 20_000);
@@ -192,7 +174,7 @@ setInterval(() => {}, 1000);
 			expect(stopped.daemon.signal).toBe("SIGTERM");
 			expect(stopped.daemon.exitCode).toBeUndefined();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 
@@ -252,7 +234,7 @@ setInterval(() => {}, 1000);
 			await presence.close();
 			if (pid !== undefined && processExists(pid)) {
 				const rescue = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 1_000 });
-				await shutdown(rescue);
+				await shutdownBroker(rescue);
 			}
 		}
 	}, 20_000);
@@ -310,7 +292,7 @@ setInterval(() => {}, 1000);
 			const stopped = await recovered.request({ op: "stop", name: "detached", timeoutMs: 2_000 });
 			if (stopped.op !== "stop") throw new Error("detached daemon did not stop");
 			expect(stopped.daemon.state).toBe("exited");
-			await shutdown(recovered);
+			await shutdownBroker(recovered);
 			recovered = undefined;
 		} finally {
 			first.close();
@@ -320,7 +302,7 @@ setInterval(() => {}, 1000);
 				try {
 					await rescue.request({ op: "stop", name: "detached", timeoutMs: 2_000 });
 				} finally {
-					await shutdown(rescue);
+					await shutdownBroker(rescue);
 				}
 			}
 		}
@@ -365,7 +347,7 @@ setInterval(() => {}, 1000);
 			// Terminal states carry no stale readiness noise.
 			expect(stopped.daemon.readyPending).toBeUndefined();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 });

@@ -28,7 +28,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { Process, ProcessStatus } from "@veyyon/natives";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
@@ -52,6 +51,7 @@ import {
 	parseDaemonSnapshot,
 } from "../../src/launch/protocol";
 import { toolContent } from "../../src/tools/shell/launch";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 // The broker worker is the veyyon CLI (inherits this process's env); isolate the
 // config root so a real ~/.veyyon cannot break broker startup, exactly as
@@ -93,18 +93,6 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-// Cross-process integration: the broker, its daemons and the OS process table
-// live outside this process, so fake timers cannot advance them. Progress is
-// observed by polling, exactly as test/tools/launch.test.ts does.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await delay(50);
-	}
-	return condition();
-}
-
 function processExists(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -112,15 +100,6 @@ function processExists(pid: number): boolean {
 	} catch {
 		return false;
 	}
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// A last-client shutdown may already have closed the broker.
-	}
-	client.close();
 }
 
 function idleSpec(name: string, overrides?: Partial<DaemonSpec>): DaemonSpec {
@@ -262,7 +241,7 @@ describe("every termination path records who and why", () => {
 			const reasons = records.map(record => record.exitReason);
 			expect(new Set(reasons).size).toBe(reasons.length);
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 30_000);
 
@@ -294,7 +273,7 @@ describe("every termination path records who and why", () => {
 				expect(described.daemon.terminatedBy).toBe("external-signal");
 				expect(described.daemon.signal).toBe("SIGKILL");
 			} finally {
-				await shutdown(client);
+				await shutdownBroker(client);
 			}
 		}, 30_000);
 	}
@@ -360,7 +339,7 @@ describe("every termination path records who and why", () => {
 
 		const recovered = await connect(projectDir, runtimeDir);
 		recordCoverage(await completionFor(recovered, "shutdown-victim", "broker-shutdown"), "broker-shutdown");
-		await shutdown(recovered);
+		await shutdownBroker(recovered);
 	}, 30_000);
 
 	it("records idle-reaper when the last client and presence leave", async () => {
@@ -377,7 +356,7 @@ describe("every termination path records who and why", () => {
 
 		const recovered = await connect(projectDir, runtimeDir);
 		recordCoverage(await completionFor(recovered, "reaped", "idle-reaper"), "idle-reaper");
-		await shutdown(recovered);
+		await shutdownBroker(recovered);
 	}, 30_000);
 
 	it("records os-signal when the broker process itself is terminated", async () => {
@@ -395,7 +374,7 @@ describe("every termination path records who and why", () => {
 
 		const recovered = await connect(projectDir, runtimeDir);
 		recordCoverage(await completionFor(recovered, "orphaned", "os-signal"), "os-signal");
-		await shutdown(recovered);
+		await shutdownBroker(recovered);
 	}, 30_000);
 
 	it("records broker-recovery when a replacement broker reaps a leftover daemon", async () => {
@@ -433,7 +412,7 @@ describe("every termination path records who and why", () => {
 			expect(described.daemon.terminatedBy).toBe("broker-recovery");
 		} finally {
 			if (processExists(daemonPid)) process.kill(daemonPid, "SIGKILL");
-			await shutdown(recovered);
+			await shutdownBroker(recovered);
 		}
 	}, 30_000);
 
@@ -483,7 +462,7 @@ describe("every termination path records who and why", () => {
 			expect((await listCompletions(recovered)).filter(r => r.name === "outlives-its-broker")).toHaveLength(1);
 		} finally {
 			if (processExists(daemonPid)) process.kill(daemonPid, "SIGKILL");
-			await shutdown(recovered);
+			await shutdownBroker(recovered);
 		}
 	}, 30_000);
 
@@ -530,7 +509,7 @@ describe("a completed finite job stays queryable", () => {
 		expect(listed.completions.some(entry => entry.id === firstId && entry.exitCode === 0)).toBeTrue();
 
 		// Across a broker restart the record comes from the store on disk.
-		await shutdown(client);
+		await shutdownBroker(client);
 		await waitForBrokerExit(runtimeDir);
 		const recovered = await connect(projectDir, runtimeDir);
 		try {
@@ -543,7 +522,7 @@ describe("a completed finite job stays queryable", () => {
 			const onDisk = await readDaemonCompletions(runtimeDir);
 			expect(onDisk.some(entry => entry.id === firstId)).toBeTrue();
 		} finally {
-			await shutdown(recovered);
+			await shutdownBroker(recovered);
 		}
 	}, 30_000);
 
@@ -564,7 +543,7 @@ describe("a completed finite job stays queryable", () => {
 			expect(failedGeneration?.outputTail).toContain("FAILED GENERATION");
 			await client.request({ op: "stop", name: "flapping", timeoutMs: 2_000 });
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 15_000);
 });
@@ -638,7 +617,7 @@ describe("a stale completion store is rejected, not served", () => {
 			expect(stored.map(record => record.name)).toEqual(["fresh"]);
 			expect((await listCompletions(client)).map(record => record.name)).toEqual(["fresh"]);
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 30_000);
 

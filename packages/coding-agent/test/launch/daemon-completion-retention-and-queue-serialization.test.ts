@@ -31,7 +31,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import {
@@ -42,6 +41,7 @@ import {
 	readDaemonCompletions,
 } from "../../src/launch/completions";
 import { DAEMON_TERMINATION_OWNERS, type DaemonCompletionRecord, type DaemonSpec } from "../../src/launch/protocol";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-completions-bounds");
@@ -79,31 +79,10 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-// Cross-process integration: the broker, its daemons and the OS process table
-// live outside this process in separate subprocesses, so fake timers cannot advance
-// external OS process transitions. Progress is observed by polling the IPC channel.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await delay(50);
-	}
-	return condition();
-}
-
 async function connect(projectDir: string, runtimeDir: string, idleGraceMs = 5_000): Promise<DaemonBrokerClient> {
 	const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs });
 	cleanupClients.push(client);
 	return client;
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// Ignore shutdown error if broker already closed
-	}
-	client.close();
 }
 
 async function listCompletions(client: DaemonBrokerClient): Promise<DaemonCompletionRecord[]> {
@@ -164,7 +143,7 @@ describe("daemon completion record retention and queue bounds", () => {
 			expect(completion?.outputTail.startsWith("…")).toBeTrue();
 			expect(completion?.outputTail).toContain("FINAL_COMPLETION_MARKER_TAIL");
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 30_000);
 
@@ -223,7 +202,7 @@ describe("daemon completion record retention and queue bounds", () => {
 				expect(diskNames.has(name)).toBeTrue();
 			}
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 30_000);
 

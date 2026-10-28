@@ -29,11 +29,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import { managedDaemonDir, managedDaemonMetaPath, managedDaemonPreviousLogPath } from "../../src/launch/paths";
 import { toolContent } from "../../src/tools/shell/launch";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-races");
@@ -71,31 +71,10 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-// Cross-process integration: the broker, its daemons and the OS process table
-// live outside this process, so fake timers cannot advance them. Progress is
-// observed by polling, exactly as test/tools/launch.test.ts does.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await delay(50);
-	}
-	return condition();
-}
-
 async function connect(projectDir: string, runtimeDir: string, idleGraceMs = 10_000): Promise<DaemonBrokerClient> {
 	const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs });
 	cleanupClients.push(client);
 	return client;
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// broker may have already closed
-	}
-	client.close();
 }
 
 describe("launch lifecycle backoff, name reuse, and recovery", () => {
@@ -146,7 +125,7 @@ describe("launch lifecycle backoff, name reuse, and recovery", () => {
 				expect(crasher?.state).toBe("exited");
 			}
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 
@@ -188,7 +167,7 @@ describe("launch lifecycle backoff, name reuse, and recovery", () => {
 			// Clean stop
 			await client.request({ op: "stop", name: "flaky", timeoutMs: 2000 });
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 
@@ -271,7 +250,7 @@ describe("launch lifecycle backoff, name reuse, and recovery", () => {
 				expect(rendered).toContain("worker:");
 			}
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 
@@ -292,7 +271,7 @@ describe("launch lifecycle backoff, name reuse, and recovery", () => {
 				expect(listed.daemons.find(d => d.name === "broken-daemon")).toBeUndefined();
 			}
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 });
