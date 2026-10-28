@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [1.6.5] - 2026-10-28
+
 - Spawned agents try configured model candidates in order and stop when no candidate is usable instead of inheriting the parent model ([issue](https://github.com/Wladefant/superboard/issues/1535)).
 - Spawn chains retain supported OpenRouter route-suffixed and Bedrock inference-profile selectors without admitting unavailable providers ([issue](https://github.com/Wladefant/superboard/issues/1536)).
 
