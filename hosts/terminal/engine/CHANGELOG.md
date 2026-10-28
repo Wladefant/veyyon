@@ -6,6 +6,7 @@
 
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
 - `HoverController.set` returns whether the hovered row changed, so a caller repaints only on a change.
+- No user-visible change: `Editor` types an applied completion as `AppliedCompletion`.
 - A height-capped `Editor` scrolls to the row its layout paints the cursor on instead of laying out the draft a second time, so a keystroke and its frame in a 4000-line draft take about 110 µs instead of about 165 µs.
 - An `Editor` undo step copies the draft's line array instead of deep-cloning every line, so a backspace in a 4000-line draft costs about 20 µs instead of about 340 µs and a full undo stack of that draft retains 3.5 MiB instead of 26.7 MiB.
 - No user-visible change: `TabBar.renderVertical` counts its visible rows with `clampLow`.

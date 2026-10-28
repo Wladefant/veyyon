@@ -1,4 +1,5 @@
 import {
+	type AppliedCompletion,
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	type AutocompleteSuggestions,
@@ -72,7 +73,7 @@ function applyGithubRefCompletion(
 	cursorCol: number,
 	item: AutocompleteItem,
 	prefix: string,
-): { lines: string[]; cursorLine: number; cursorCol: number } | null {
+): AppliedCompletion | null {
 	if (!getGithubRefContext(prefix)) return null;
 	const scheme: "pr" | "issue" | null = item.value.startsWith("pr://")
 		? "pr"
@@ -188,12 +189,7 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		cursorCol: number,
 		item: AutocompleteItem,
 		prefix: string,
-	): {
-		lines: string[];
-		cursorLine: number;
-		cursorCol: number;
-		onApplied?: () => void;
-	} {
+	): AppliedCompletion {
 		const githubRefCompletion = applyGithubRefCompletion(lines, cursorLine, cursorCol, item, prefix);
 		if (githubRefCompletion) return githubRefCompletion;
 		if (prefix.startsWith("#") && isPromptActionItem(item)) {

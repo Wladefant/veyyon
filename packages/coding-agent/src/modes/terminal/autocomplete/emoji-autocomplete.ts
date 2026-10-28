@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AutocompleteItem, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
+import type { AppliedCompletion, AutocompleteItem, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
 import emojisAsset from "../data/emojis.json" with { type: "file" };
 
 // Bucket layout: `{ "<first-char>": [["<name>", "<emoji>"], ...] }`, with each
@@ -183,7 +183,7 @@ export function applyEmojiCompletion(
 	cursorCol: number,
 	item: AutocompleteItem,
 	prefix: string,
-): { lines: string[]; cursorLine: number; cursorCol: number } {
+): AppliedCompletion {
 	const currentLine = lines[cursorLine] ?? "";
 	const before = currentLine.slice(0, cursorCol - prefix.length);
 	const after = currentLine.slice(cursorCol);

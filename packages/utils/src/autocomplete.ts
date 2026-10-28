@@ -223,6 +223,15 @@ export interface AutocompleteSuggestions {
 	prefix: string;
 }
 
+/** The draft after a completion is applied, and the cursor inside it. */
+export interface AppliedCompletion {
+	lines: string[];
+	cursorLine: number;
+	cursorCol: number;
+	/** Runs once the editor has taken the new draft (e.g. an action item that executes). */
+	onApplied?: () => void;
+}
+
 export interface AutocompleteProvider {
 	/** Get autocomplete suggestions for current text/cursor position */
 	getSuggestions(lines: string[], cursorLine: number, cursorCol: number): Promise<AutocompleteSuggestions | null>;
@@ -234,12 +243,7 @@ export interface AutocompleteProvider {
 		cursorCol: number,
 		item: AutocompleteItem,
 		prefix: string,
-	): {
-		lines: string[];
-		cursorLine: number;
-		cursorCol: number;
-		onApplied?: () => void;
-	};
+	): AppliedCompletion;
 
 	/** Get inline hint text to show as dim ghost text after the cursor */
 	getInlineHint?(lines: string[], cursorLine: number, cursorCol: number): string | null;
@@ -507,7 +511,7 @@ export function applyAutocompleteCompletion(
 	cursorCol: number,
 	item: AutocompleteItem,
 	prefix: string,
-): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
+): AppliedCompletion {
 	const currentLine = lines[cursorLine] || "";
 	const textBeforeCursor = currentLine.slice(0, cursorCol);
 	const afterCursor = currentLine.slice(cursorCol);
@@ -739,11 +743,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		cursorCol: number,
 		item: AutocompleteItem,
 		prefix: string,
-	): {
-		lines: string[];
-		cursorLine: number;
-		cursorCol: number;
-	} {
+	): AppliedCompletion {
 		return applyAutocompleteCompletion(lines, cursorLine, cursorCol, item, prefix);
 	}
 

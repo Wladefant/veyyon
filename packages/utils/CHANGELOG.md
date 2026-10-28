@@ -6,6 +6,7 @@
 
 ### Added
 
+- `AppliedCompletion` in `@veyyon/utils/autocomplete` is the draft and cursor that `AutocompleteProvider.applyCompletion` and `applyAutocompleteCompletion` return.
 - `wrapIndex(index, count)` in `@veyyon/utils/math` maps `index` onto a ring of `count` slots, so a step past either end of a list lands on the other end.
 - `packageModuleReach(repoRoot, src, namesRelativeTo?)` in `@veyyon/utils/module-reach-workspace` returns one package's `reach`, `reachedNames` and `runtimeImportsOf` over the workspace resolution with one shared memo; no user-facing change.
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.

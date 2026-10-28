@@ -1,5 +1,6 @@
 import { SGR_BG_RESET } from "@veyyon/utils/ansi";
 import {
+	type AppliedCompletion,
 	type AutocompleteProvider,
 	applyAutocompleteCompletion,
 	findLeadingSlashCommandStart,
@@ -3007,7 +3008,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#applyAutocompleteSelection(
 		selected: SelectItem | null,
 		notifyUpdate: boolean = true,
-	): { onApplied?: () => void } | undefined {
+	): AppliedCompletion | undefined {
 		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 		const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 		if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {

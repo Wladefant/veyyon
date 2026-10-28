@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Editor } from "@veyyon/tui/components/editor";
 import {
+	type AppliedCompletion,
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	type AutocompleteSuggestions,
@@ -46,7 +47,7 @@ class HashActionProvider implements AutocompleteProvider {
 		cursorCol: number,
 		_item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		return {
 			lines: [line.slice(0, cursorCol - prefix.length) + line.slice(cursorCol)],
@@ -214,7 +215,7 @@ class SyncSlashProvider implements AutocompleteProvider {
 		cursorCol: number,
 		_item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		const slashStart = findLeadingSlashCommandStart(prefix);
 		// Anchor the replacement at the slash so leading whitespace survives,
@@ -619,7 +620,7 @@ class TodoSubcommandProvider implements AutocompleteProvider {
 		cursorCol: number,
 		item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		// Anchor replacement at the end of the "/todo " literal, so only the query tail
 		// gets rewritten with the selected subcommand value.
