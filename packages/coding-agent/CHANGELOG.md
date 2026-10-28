@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Release preparation can defer local checks for a remote CI gate; the normal release command still runs checks ([#728](https://github.com/Wladefant/veyyon/issues/728)).
+
 ## [1.6.1] - 2026-10-28
 
 ### Changed
