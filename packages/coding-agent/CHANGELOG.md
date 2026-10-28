@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
 - The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
 - `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.
 - The writethrough per-server loop drops a custom-linter check its callers already make; no user-facing change.
