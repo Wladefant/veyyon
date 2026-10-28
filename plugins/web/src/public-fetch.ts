@@ -416,7 +416,7 @@ function readableText(html: string): string {
 		.join("")
 		.replace(/[ \t\f\r]+/g, " ")
 		.replace(/ *\n */g, "\n")
-		.replace(/\n{3,}/g, "\n\n")
+		.replace(/\n{2,}/g, "\n")
 		.trim();
 }
 
