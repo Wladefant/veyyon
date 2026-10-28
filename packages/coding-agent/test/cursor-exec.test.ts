@@ -186,6 +186,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 		const tools = new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]);
 		const handlers = new CursorExecHandlers({
 			cwd,
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools,
 			getEditReplaceTool: createBridgeEditToolProvider(tools, session),
 		});
@@ -213,6 +214,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 		expect(hashline.mode).not.toBe("replace");
 		const handlers = new CursorExecHandlers({
 			cwd,
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map<string, AnyAgentTool>([["edit", hashline]]),
 			getEditReplaceTool: () => createBridgeEditTool(session),
 		});
@@ -237,6 +239,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 		let replaceBuilt = 0;
 		const handlers = new CursorExecHandlers({
 			cwd,
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]),
 			getEditReplaceTool: () => {
 				replaceBuilt++;
@@ -261,6 +264,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 		await Bun.write(target, "alpha\nbeta\n");
 		const handlers = new CursorExecHandlers({
 			cwd,
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
 			tools: new Map<string, AnyAgentTool>(),
 			getEditReplaceTool: () => undefined,
 		});
