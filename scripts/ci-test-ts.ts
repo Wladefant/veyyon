@@ -677,8 +677,8 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-// Per-package bun-test args applied in every mode. hashline's large-base scale
-// suites (`apply-edits-past-6000-*`) do an O(range) operation per sampled anchor
+// Per-package bun-test args applied in every mode. hashline's large-base suites
+// (`*-on-large-bases`, `apply-edits-scale-sampled-lines`) do an O(range) operation per sampled anchor
 // — a `DEL 1.=k` prefix delete expands to k edits — so a single `it` can run a
 // few seconds on a slow CI runner, above bun's 5s per-test default. packages/ai
 // carries several `numRuns: 10_000` fast-check property suites (tool-argument
