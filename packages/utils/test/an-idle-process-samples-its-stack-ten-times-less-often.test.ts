@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { BUSY_CPU_RATIO } from "@veyyon/utils/idle-trim";
 import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
 import { StallSampler } from "@veyyon/utils/stall-sampler";
+import { holdTheLoopForMs } from "./helpers/hold-the-loop";
 
 /**
  * WHY THIS SUITE EXISTS. JSC's sampling profiler thread wakes at its sampling interval whether or
@@ -30,14 +31,6 @@ import { StallSampler } from "@veyyon/utils/stall-sampler";
  * 14 samples in 500ms. The cases therefore pin which interval is in effect, not its value: a busy
  * interval anywhere under about 45ms passes.
  */
-
-/** Holds the loop so the profiler records samples. */
-function holdTheLoopForMs(ms: number): number {
-	const until = performance.now() + ms;
-	let x = 0;
-	while (performance.now() < until) x += Math.sqrt(x + 1);
-	return x;
-}
 
 /** At most this many samples land in a 500ms hold at the 100ms idle interval. */
 const IDLE_MAX = 10;
