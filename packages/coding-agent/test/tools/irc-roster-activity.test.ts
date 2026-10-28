@@ -42,6 +42,32 @@ describe("IRC roster activity", () => {
 		mock.restore();
 	});
 
+	// Ancestors delegate this slice; they are not competing owners. This proves
+	// roster classification, not whether a model follows the ownership guidance.
+	it("separates every ancestor from other lanes for A.B.C", async () => {
+		for (const [id, parentId] of [
+			["A", undefined],
+			["A.B", "A"],
+			["A.B.C", "A.B"],
+			["A.B.Cousin", "A.B"],
+			["A.Peer", "A"],
+		] as const) {
+			registry.register({ id, parentId, displayName: "task", kind: "sub", session: null, status: "running" });
+		}
+		const result = await new IrcTool(sessionForAgent(registry, "A.B.C")).execute("call", { op: "list" });
+		expect(result.details?.peers?.filter(peer => Reflect.get(peer, "ancestor")).map(peer => peer.id)).toEqual([
+			"A",
+			"A.B",
+		]);
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).toContain("Your ancestors (delegating owners, not duplicate lanes):");
+		const otherLanes = text.split("Other lanes:")[1] ?? "";
+		expect(otherLanes).toContain("- A.B.Cousin ");
+		expect(otherLanes).toContain("- A.Peer ");
+		expect(otherLanes).not.toContain("- A ");
+		expect(otherLanes).not.toContain("- A.B ");
+	});
+
 	it("surfaces a peer's role and current activity in the list", async () => {
 		registry.register({ id: "Main", displayName: "main", kind: "main", session: null, status: "running" });
 		registry.register({

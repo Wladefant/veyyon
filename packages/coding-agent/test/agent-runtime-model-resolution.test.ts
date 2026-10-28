@@ -104,6 +104,7 @@ describe("agent runtime model resolution", () => {
 			settings,
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [primary, fallback],
 				getAvailable: () => [primary, fallback],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -120,45 +121,49 @@ describe("agent runtime model resolution", () => {
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});
 
-	it.each([{ tail: [] }, { tail: ["missing/unavailable-model"] }])("keeps the child boundary when no later candidate resolves (%j)", async ({ tail }) => {
-		const primary = model("primary", "only-model");
-		let childFallbackKey: string | undefined;
-		let childFallbackChains: Record<string, string[]> | undefined;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			if (!options) throw new Error("Expected createAgentSession options");
-			childFallbackKey = options.modelPatternFallbackKey;
-			childFallbackChains = options.settings?.get("retry.fallbackChains") as Record<string, string[]> | undefined;
-			return {
-				session: createYieldingSession(),
-				extensionsResult: {},
-				setToolUIContext: () => {},
-				setToolNotifier: () => {},
-			} as never;
-		});
-		const settings = Settings.isolated({
-			"retry.modelFallback": true,
-			"retry.fallbackChains": { "primary/*": ["global/inherited-model"] },
-		});
-		await runSubprocess({
-			cwd: "/tmp",
-			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
-			task: "work",
-			index: 0,
-			id: "closed-child-chain",
-			modelOverride: ["primary/only-model", ...tail],
-			settings,
-			modelRegistry: {
-				refresh: async () => {},
-				getAvailable: () => [primary],
-				getApiKey: async () => "test-key",
-			} as never,
-			enableLsp: false,
-			artifactsDir: isolatedArtifactsDir(),
-		});
-		expect(childFallbackKey).toBe("primary/only-model");
-		expect(childFallbackChains?.["primary/only-model"]).toEqual([]);
-		expect(settings.get("retry.fallbackChains")).toEqual({ "primary/*": ["global/inherited-model"] });
-	});
+	it.each([{ tail: [] }, { tail: ["missing/unavailable-model"] }])(
+		"keeps the child boundary when no later candidate resolves (%j)",
+		async ({ tail }) => {
+			const primary = model("primary", "only-model");
+			let childFallbackKey: string | undefined;
+			let childFallbackChains: Record<string, string[]> | undefined;
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				if (!options) throw new Error("Expected createAgentSession options");
+				childFallbackKey = options.modelPatternFallbackKey;
+				childFallbackChains = options.settings?.get("retry.fallbackChains") as Record<string, string[]> | undefined;
+				return {
+					session: createYieldingSession(),
+					extensionsResult: {},
+					setToolUIContext: () => {},
+					setToolNotifier: () => {},
+				} as never;
+			});
+			const settings = Settings.isolated({
+				"retry.modelFallback": true,
+				"retry.fallbackChains": { "primary/*": ["global/inherited-model"] },
+			});
+			await runSubprocess({
+				cwd: "/tmp",
+				agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+				task: "work",
+				index: 0,
+				id: "closed-child-chain",
+				modelOverride: ["primary/only-model", ...tail],
+				settings,
+				modelRegistry: {
+					refresh: async () => {},
+					getAll: () => [primary],
+					getAvailable: () => [primary],
+					getApiKey: async () => "test-key",
+				} as never,
+				enableLsp: false,
+				artifactsDir: isolatedArtifactsDir(),
+			});
+			expect(childFallbackKey).toBe("primary/only-model");
+			expect(childFallbackChains?.["primary/only-model"]).toEqual([]);
+			expect(settings.get("retry.fallbackChains")).toEqual({ "primary/*": ["global/inherited-model"] });
+		},
+	);
 
 	it("preserves upstream routing selectors in the child retry fallback chain", async () => {
 		const routedModel = model("openrouter", "z-ai/glm-4.7");
@@ -185,6 +190,7 @@ describe("agent runtime model resolution", () => {
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [routedModel],
 				getAvailable: () => [routedModel],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -195,36 +201,36 @@ describe("agent runtime model resolution", () => {
 		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
-	it("defers unresolved explicit agent model selectors instead of picking an available default", async () => {
-		const defaultModel = model("zai", "glm-5.2");
-		let childModel: Model | undefined;
-		let childModelPattern: unknown;
-		let childModelPatternAuthFallback: unknown;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			if (!options) throw new Error("Expected createAgentSession options");
-			childModel = options.model;
-			childModelPattern = options.modelPattern;
-			childModelPatternAuthFallback = options.modelPatternAuthFallback;
-			return {
-				session: createYieldingSession(),
-				extensionsResult: {},
-				setToolUIContext: () => {},
-				setToolNotifier: () => {},
-			} as never;
-		});
+	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
+		const defaultModel = model("anthropic", "claude-opus-5-5");
+		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async () =>
+				({
+					session: createYieldingSession(),
+					extensionsResult: {},
+					setToolUIContext: () => {},
+					setToolNotifier: () => {},
+				}) as never,
+		);
+		const settings = Settings.isolated();
+		settings.setDefaultModel("anthropic/claude-opus-5-5");
 
-		const agent: AgentDefinition = { name: "task", description: "test", systemPrompt: "test", source: "bundled" };
-		await runSubprocess({
+		const result = await runSubprocess({
 			cwd: "/tmp",
-			agent,
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
 			task: "work",
 			index: 0,
-			id: "issue-4421",
-			modelOverride: ["openai-codex/gpt-5.5:auto"],
-			parentActiveModelPattern: "openai-codex/gpt-5.5",
-			settings: Settings.isolated(),
+			id: "missing-chain",
+			modelOverride: [
+				"openai-codex/gpt-6-luna:medium",
+				"google-antigravity/gemini-3.8-flash:high",
+				"anthropic/claude-haiku-5-5:max",
+			],
+			parentActiveModelPattern: "anthropic/claude-opus-5-5",
+			settings,
 			modelRegistry: {
 				refresh: async () => {},
+				getAll: () => [defaultModel],
 				getAvailable: () => [defaultModel],
 				getApiKey: async () => "test-key",
 			} as never,
@@ -232,8 +238,9 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(childModel).toBeUndefined();
-		expect(childModelPattern).toEqual(["openai-codex/gpt-5.5:auto"]);
-		expect(childModelPatternAuthFallback).toBe("openai-codex/gpt-5.5");
+		expect(result.error).toContain("openai-codex/gpt-6-luna:medium: not found in the model catalog");
+		expect(result.error).toContain("google-antigravity/gemini-3.8-flash:high: not found in the model catalog");
+		expect(result.error).toContain("anthropic/claude-haiku-5-5:max: not found in the model catalog");
+		expect(createSessionSpy).not.toHaveBeenCalled();
 	});
 });
