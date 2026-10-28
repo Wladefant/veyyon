@@ -1422,7 +1422,7 @@ export async function gateProjectPluginRegistry(
 	}
 	return {
 		allowed: true,
-		registry: { path: registryPath, content: executable.content },
+		registry: { path: registryPath, content: executable.resolvedContent },
 		state: `${registryPath}\0trusted:${executable.hash}`,
 	};
 }

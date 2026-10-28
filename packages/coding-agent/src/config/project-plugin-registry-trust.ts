@@ -12,7 +12,7 @@ const PLUGIN_REGISTRY_HASH_DOMAIN = "veyyon:project-plugin-registry:v1";
 export async function describeProjectPluginRegistry(
 	registryPath: string,
 	canonicalRoot: string,
-): Promise<ProjectFileSnapshot | null> {
+): Promise<(ProjectFileSnapshot & { resolvedContent: string }) | null> {
 	let realRegistryPath: string;
 	let bytes: Buffer;
 	try {
@@ -25,7 +25,8 @@ export async function describeProjectPluginRegistry(
 	} catch {
 		return null;
 	}
-	// Both production loaders resolve entries from the lexical registry location, not the target of a registry symlink.
+	// Resolve relative entries from the lexical registry location. Consumers use this same
+	// absolute path after the hash gate, so they cannot resolve a different payload from cwd.
 	const registryDir = path.dirname(path.resolve(registryPath));
 	const registry = parseInstalledPluginsRegistry(bytes.toString("utf8"));
 	if (!registry) return null;
@@ -47,6 +48,7 @@ export async function describeProjectPluginRegistry(
 			if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) return null;
 			const scan = await hashBoundedFolder(realPath, canonicalRoot, PROJECT_PLUGIN_LIMITS, "veyyon:plugin-payload:v1");
 			if (!scan) return null;
+			entry.installPath = resolved;
 			payloads.push({ identity: `${relativePath.split(path.sep).join("/")}\0${realPath}`, hash: scan.hash });
 		}
 	}
@@ -63,6 +65,7 @@ export async function describeProjectPluginRegistry(
 	return {
 		absolutePath: path.resolve(registryPath),
 		relativePath: registryRelativePath.split(path.sep).join("/"),
+		resolvedContent: JSON.stringify(registry),
 		hash: hash.digest("hex"),
 		content: bytes.toString("utf8"),
 	};

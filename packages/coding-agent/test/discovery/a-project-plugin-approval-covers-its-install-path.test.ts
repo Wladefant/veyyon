@@ -221,6 +221,55 @@ test("an oversized payload file revokes approval rather than hashing a prefix", 
 	await assertLoaded(f, false);
 }, 5_000);
 
+async function relativeInstallPathFixture(f: Fixture): Promise<string> {
+	const registryPayload = path.join(path.dirname(f.registry), "payload");
+	await fs.mkdir(registryPayload, { recursive: true });
+	await fs.writeFile(path.join(registryPayload, "package.json"), JSON.stringify({ name: "payload", version: "1.0.0" }));
+	await fs.writeFile(path.join(registryPayload, "lsp.json"), JSON.stringify({
+		servers: { "approved-payload": { command: process.execPath, args: ["approved"], fileTypes: ["fixture"], rootMarkers: ["."] } },
+	}));
+	const registry = JSON.parse(await fs.readFile(f.registry, "utf8"));
+	registry.plugins["payload@test"][0].installPath = "payload";
+	await fs.writeFile(f.registry, JSON.stringify(registry));
+	await fs.mkdir(path.join(f.repo, "payload"), { recursive: true });
+	await fs.writeFile(path.join(f.repo, "payload", "lsp.json"), JSON.stringify({
+		servers: { "cwd-decoy": { command: process.execPath, args: ["unapproved"], fileTypes: ["fixture"], rootMarkers: ["."] } },
+	}));
+	return registryPayload;
+}
+
+test("the project catalog resolves relative install paths to absolute registry-directory roots", async () => {
+	const f = await fixture();
+	const registryPayload = await relativeInstallPathFixture(f);
+	const originalCwd = process.cwd();
+	try {
+		process.chdir(f.repo);
+		await decide(f, "approve");
+		const { roots } = await listClaudePluginRoots(f.home, f.repo, f.pluginsRoot, f.agentDir);
+		const root = roots.find(entry => entry.id === "payload@test");
+		expect(root?.path).toBe(registryPayload);
+		expect(root?.scope).toBe("project");
+	} finally {
+		process.chdir(originalCwd);
+	}
+});
+
+test("project-scope LSP loading reads the approved path, not the cwd-relative decoy", async () => {
+	const f = await fixture();
+	await relativeInstallPathFixture(f);
+	const originalCwd = process.cwd();
+	try {
+		process.chdir(f.repo);
+		await decide(f, "approve");
+		const { roots } = await listClaudePluginRoots(f.home, f.repo, f.pluginsRoot, f.agentDir);
+		const config = loadConfig(f.repo, roots);
+		expect(config.servers["approved-payload"]?.args).toEqual(["approved"]);
+		expect(config.servers["cwd-decoy"]).toBeUndefined();
+	} finally {
+		process.chdir(originalCwd);
+	}
+});
+
 test.skipIf(process.platform === "win32")("a relative installPath uses the registry's loader path, not its symlink target directory", async () => {
 	const f = await fixture();
 	const relativePath = path.relative(path.dirname(f.registry), f.installPath);
