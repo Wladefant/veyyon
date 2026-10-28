@@ -150,6 +150,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Preserved native Codex tool results during snapshot replay. Valid tool outputs stay paired with their calls instead of becoming user messages ([Refs #34](https://github.com/Wladefant/veyyon/issues/34)).
 - Rotated pinned Antigravity requests to an available sibling after a confirmed quota failure when load balancing is on. Kept the selected pin, model-scoped holds, and predicted-hold behavior ([Fixes Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Expired Antigravity quota confirmations independently of shared predicted holds, so a later peer prediction cannot displace an explicit pin after the refusal expires ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Preserved the longest confirmed Antigravity refusal when a shorter refusal arrives or completes later. Kept predicted shared deadlines separate ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
