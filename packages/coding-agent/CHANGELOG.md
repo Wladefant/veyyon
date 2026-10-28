@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: the session-compaction-stall and session-tree-nav benches build their usage records from `emptyUsage()` instead of restating its zero fields.
 - No user-visible change: each MCP HTTP request builds its headers through one transport helper instead of five inline copies, and the HTTP transport, the legacy SSE transport and `callMCP` read the JSON-RPC POST headers from one constant in `mcp/json-rpc.ts`.
 - No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
 - No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
