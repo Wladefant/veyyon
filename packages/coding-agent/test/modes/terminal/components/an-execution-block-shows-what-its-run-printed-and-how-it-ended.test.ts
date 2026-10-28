@@ -24,6 +24,7 @@ import {
 import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL, type TUI } from "@veyyon/tui";
 import { formatMoreLines } from "@veyyon/utils/format";
+import { useFullColor } from "../../../helpers/theme-assertions";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 const WIDTH = 120;
@@ -124,6 +125,8 @@ describe.each(BLOCKS)("%s", (_name, open) => {
 });
 
 describe("the bash block under sixel passthrough", () => {
+	useFullColor();
+
 	it("draws every line, the image row unstyled, and states no hidden count", () => {
 		withSixelPassthrough(() => {
 			const total = EXECUTION_PREVIEW_LINES + 10;
