@@ -310,7 +310,7 @@ export class TabBar implements Component {
 		const maxWidth = Math.max(1, width);
 		const cursorW = visibleWidth(cursor);
 		const count = this.#tabs.length;
-		const visible = Math.max(1, Math.min(count, Math.floor(maxRows >= 1 ? maxRows : 1)));
+		const visible = clampLow(maxRows >= count ? count : Math.floor(maxRows), 1, count);
 		if (this.#activeIndex < this.#verticalScroll) this.#verticalScroll = this.#activeIndex;
 		else if (this.#activeIndex >= this.#verticalScroll + visible)
 			this.#verticalScroll = this.#activeIndex - visible + 1;

@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: `TabBar.renderVertical` counts its visible rows with `clampLow`.
 - `TabBar.renderVertical(width, cursor, maxRows)` shows at most `maxRows` tabs, scrolling to keep the active tab in view, and `tabAt` hit-tests the rows shown.
 - `ProcessTerminal.drainInput` ends when the terminal answers a DA1 query written after the keyboard protocols are popped, instead of after a fixed 50 ms with no input, so leaving the TUI on a terminal that answers DA1 returns the shell prompt in about 10 ms instead of about 60 ms.
 - `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.

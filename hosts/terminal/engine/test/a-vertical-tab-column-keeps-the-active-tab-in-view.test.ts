@@ -92,4 +92,9 @@ describe("a vertical tab column keeps the active tab in view", () => {
 			expect(labels(column(bar, 6, maxRows))).toEqual(["Tab 6"]);
 		}
 	});
+
+	it("rounds a fractional budget down to whole rows", () => {
+		const bar = new TabBar("", TABS, PLAIN_THEME);
+		expect(labels(column(bar, 6, 2.9))).toEqual(["Tab 5", "Tab 6"]);
+	});
 });
