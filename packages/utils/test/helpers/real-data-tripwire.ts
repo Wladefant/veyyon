@@ -95,6 +95,7 @@ const unpatchedFs = require("node:fs") as {
 		O_WRONLY: number;
 	};
 	lstatSync(target: string): { isSymbolicLink(): boolean };
+	readdirSync(target: string): string[];
 	readlinkSync(target: string): string;
 	realpathSync: { native(target: string): string };
 };
@@ -145,6 +146,35 @@ const REAL_HOME = ((): string | undefined => {
 	if (declared) return path.dirname(path.resolve(declared));
 	return PRE_REDIRECT_HOME ? path.resolve(PRE_REDIRECT_HOME) : undefined;
 })();
+
+/** The checkout this file is part of: `packages/utils/test/helpers` sits four levels below it. */
+const REPOSITORY_ROOT = path.resolve(import.meta.dirname, "../../../..");
+
+/** The checkout as this file reached it and as the filesystem resolves it; one entry when they agree. */
+const REPOSITORY_ROOTS: ReadonlySet<string> = new Set([REPOSITORY_ROOT, rawRealpathSync(REPOSITORY_ROOT)]);
+
+/**
+ * Every entry at the checkout's top level when this process started, resolved absolute.
+ *
+ * The checkout's gitignored `.internal` is one of them, and it has no copy anywhere: a mutation
+ * that made a scratch-directory factory answer `.internal` itself instead of a fresh directory
+ * under it sent the suite's own cleanup `rmSync` at the whole of it. An entry a test creates at
+ * the top level after the process started is not in this set, so the test can remove it.
+ */
+const TOP_LEVEL_ENTRIES: ReadonlySet<string> = ((): ReadonlySet<string> => {
+	const entries = new Set<string>();
+	for (const root of REPOSITORY_ROOTS) {
+		for (const name of unpatchedFs.readdirSync(root)) entries.add(path.join(root, name));
+	}
+	return entries;
+})();
+
+/** Whether removing `resolved` would remove the checkout, a directory above it, or a top-level entry. */
+function removesTheCheckout(resolved: string): boolean {
+	if (TOP_LEVEL_ENTRIES.has(resolved)) return true;
+	for (const root of REPOSITORY_ROOTS) if (isInside(root, resolved)) return true;
+	return false;
+}
 
 /** True when `candidate` is inside `root` (or is `root` itself). */
 function isInside(candidate: string, root: string): boolean {
@@ -320,6 +350,34 @@ function assertNotRealData(operation: string, target: unknown): void {
 	}
 }
 
+/** Throw if removing `target` would remove the checkout, a directory above it, or a top-level entry. */
+function assertNotRepositoryEntry(operation: string, target: unknown): void {
+	if (!ENABLED) return;
+	let removes: boolean;
+	let resolved: string | undefined;
+	try {
+		resolved = resolveTarget(target);
+		if (!resolved) return;
+		// A removal acts on the entry itself, never on what a symlink there points at: resolve the
+		// directory holding it, so unlinking a link to the checkout stays allowed and a path that
+		// reaches the checkout through a linked parent does not.
+		const entry = path.join(resolveForContainment(path.dirname(resolved)), path.basename(resolved));
+		removes = removesTheCheckout(resolved) || removesTheCheckout(entry);
+	} catch (cause) {
+		throw new Error(
+			`REAL-DATA TRIPWIRE: refusing ${operation} because its target could not be checked against the checkout safely.`,
+			{ cause },
+		);
+	}
+	if (!removes) return;
+	throw new Error(
+		`REAL-DATA TRIPWIRE: refusing ${operation} on "${resolved}".\n` +
+			`That is the repository checkout ("${REPOSITORY_ROOT}"), a directory above it, or an entry at its ` +
+			`top level, and no test may remove one: the checkout's gitignored .internal has no copy anywhere.\n` +
+			`Fix the TEST: remove only the directory it created, below a temp root or below .internal.`,
+	);
+}
+
 /** Mutating `node:fs` functions whose FIRST argument is the path being changed. */
 const FIRST_ARG_MUTATORS = [
 	"writeFile",
@@ -350,6 +408,18 @@ const FIRST_ARG_MUTATORS = [
 /** Operations that mutate or remove both paths. */
 const BOTH_PATH_MUTATORS = ["rename", "renameSync", "link", "linkSync"] as const;
 
+/** Operations that remove their FIRST argument, which no test may aim at the checkout itself. */
+const REMOVALS: ReadonlySet<string> = new Set([
+	"rm",
+	"rmSync",
+	"rmdir",
+	"rmdirSync",
+	"unlink",
+	"unlinkSync",
+	"rename",
+	"renameSync",
+]);
+
 /** Copy/link operations whose source is read-only and only destination mutates. */
 const DESTINATION_MUTATORS = ["copyFile", "copyFileSync", "cp", "cpSync", "symlink", "symlinkSync"] as const;
 
@@ -378,6 +448,7 @@ function wrap(target: Record<string, unknown>, name: string, argIndexes: number[
 	const fn = original as (...args: unknown[]) => unknown;
 	const guarded = function guarded(this: unknown, ...args: unknown[]) {
 		for (const index of argIndexes) assertNotRealData(`fs.${name}`, args[index]);
+		if (REMOVALS.has(name)) assertNotRepositoryEntry(`fs.${name}`, args[0]);
 		return fn.apply(this, args);
 	};
 	(guarded as unknown as Record<string, unknown>)[GUARDED_MARKER] = true;
@@ -639,8 +710,11 @@ if (ENABLED) {
 /** Exported for the tripwire's own tests; the preload path calls it via module load. */
 export const __tripwire = {
 	assertNotRealData,
+	assertNotRepositoryEntry,
 	forbiddenRoots,
 	isInside,
+	REPOSITORY_ROOT,
+	TOP_LEVEL_ENTRIES,
 	resolveTarget,
 	resolveForContainment,
 	isInsideResolved,
