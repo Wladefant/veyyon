@@ -15,6 +15,7 @@ import { SecretAuditLog } from "@veyyon/coding-agent/secrets/audit";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
+import { idleContextActions, idleExtensionActions } from "./helpers/idle-extension-actions";
 import { useIsolatedConfigRoot } from "./helpers/isolated-agent-dir";
 
 useIsolatedConfigRoot();
@@ -53,33 +54,7 @@ const failOAuthRefresh = (): void => {
  */
 const initializeRunnerForTest = (runner: ExtensionRunner | undefined): void => {
 	if (!runner) return;
-	runner.initialize(
-		{
-			sendMessage: () => {},
-			sendUserMessage: () => {},
-			appendEntry: () => {},
-			setLabel: () => {},
-			getActiveTools: () => [],
-			getAllTools: () => [],
-			setActiveTools: async () => {},
-			getCommands: () => [],
-			setModel: async () => false,
-			getThinkingLevel: () => undefined,
-			setThinkingLevel: () => {},
-			getSessionName: () => undefined,
-			setSessionName: async () => {},
-		},
-		{
-			getModel: () => undefined,
-			isIdle: () => true,
-			abort: () => {},
-			hasPendingMessages: () => false,
-			shutdown: () => {},
-			getContextUsage: () => undefined,
-			compact: async () => {},
-			getSystemPrompt: () => [],
-		},
-	);
+	runner.initialize(idleExtensionActions(), idleContextActions());
 };
 
 /**
@@ -526,35 +501,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			await runner.emitCredentialDisabled({ provider: "anthropic", disabledCause: "test" });
 
 			// 2. initialize(); the flush is queued as a microtask.
-			runner.initialize(
-				{
-					sendMessage: () => {},
-					sendUserMessage: () => {},
-					appendEntry: () => {},
-					setLabel: () => {},
-					getActiveTools: () => [],
-					getAllTools: () => [],
-					setActiveTools: async () => {},
-					getCommands: () => [],
-					setModel: async () => false,
-					getThinkingLevel: () => undefined,
-					setThinkingLevel: () => {},
-					getSessionName: () => undefined,
-					setSessionName: async () => {},
-				},
-				{
-					getModel: () => undefined,
-					isIdle: () => true,
-					abort: () => {},
-					hasPendingMessages: () => false,
-					shutdown: () => {},
-					getContextUsage: () => undefined,
-					compact: async () => {},
-					getSystemPrompt: () => [],
-				},
-				undefined,
-				undefined,
-			);
+			runner.initialize(idleExtensionActions(), idleContextActions());
 
 			// 3. Synchronous onError registration — must land before the deferred flush
 			// invokes the throwing handler. This is the contract this test defends.
