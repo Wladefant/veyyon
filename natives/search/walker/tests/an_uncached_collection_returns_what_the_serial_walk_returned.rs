@@ -255,6 +255,23 @@ fn filters() -> Vec<(&'static str, WalkFilter, Box<dyn Fn(&CollectedEntry) -> bo
 	]
 }
 
+/// Entries as the two collectors can be compared.
+///
+/// NTFS refreshes a directory's own timestamp in its parent's listing lazily,
+/// so two reads of one unchanged directory, a millisecond apart, can disagree
+/// by about a millisecond on Windows. A directory entry carries no mtime
+/// there; files and every other field still compare exactly.
+fn comparable(mut entries: Vec<CollectedEntry>) -> Vec<CollectedEntry> {
+	if cfg!(windows) {
+		for entry in &mut entries {
+			if entry.file_type == FileType::Dir {
+				entry.mtime = None;
+			}
+		}
+	}
+	entries
+}
+
 /// What the serial collector returns for `request`, unfiltered, or its error.
 ///
 /// The detail is the request's effective one: a size bound reads metadata for
@@ -265,7 +282,7 @@ fn serial(request: &WalkRequest) -> Result<Vec<CollectedEntry>, String> {
 		.filter(WalkFilter::all())
 		.detail(request.options().detail)
 		.collect_shared_with_heartbeat(|| Ok::<(), Infallible>(()))
-		.map(|walk| walk.iter().cloned().collect())
+		.map(|walk| comparable(walk.iter().cloned().collect()))
 		.map_err(|err| format!("{err:?}"))
 }
 
@@ -289,7 +306,8 @@ fn check(label: &str, request: &WalkRequest) {
 			(Ok(all), Ok(outcome)) => {
 				let expected: Vec<CollectedEntry> =
 					all.iter().filter(|entry| accept(entry)).cloned().collect();
-				assert_eq!(outcome.entries, expected, "{case}: entries");
+				let entries = comparable(outcome.entries);
+				assert_eq!(entries, expected, "{case}: entries");
 				assert_eq!(outcome.stats.scanned_entries, all.len(), "{case}: scanned");
 				assert_eq!(
 					outcome.stats.filtered_entries,
