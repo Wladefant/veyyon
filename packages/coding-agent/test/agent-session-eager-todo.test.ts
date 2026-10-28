@@ -17,6 +17,7 @@ import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
 import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { messageText } from "./helpers/tool-result-text";
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
@@ -80,10 +81,6 @@ function createAssistantMessageWithThinking(text: string, thinking: string): Ass
 			{ type: "text", text },
 		],
 	};
-}
-
-function getMessageText(message: AgentMessage): string {
-	return "content" in message ? contentText(message.content) : "";
 }
 
 /**
@@ -158,15 +155,15 @@ describe("AgentSession eager todo enforcement", () => {
 					throw new Error("Expected prompt context to include a message");
 				}
 				const turnMessages = context.messages.filter(
-					message => !getMessageText(message).startsWith(SESSION_STATE_PREFIX),
+					message => !messageText(message).startsWith(SESSION_STATE_PREFIX),
 				);
 				observedCalls.push({
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 					messageRoles: turnMessages.map(message => message.role),
-					messageTexts: turnMessages.map(message => getMessageText(message)),
+					messageTexts: turnMessages.map(messageText),
 					lastMessageRole: lastMessage.role,
-					lastMessageText: getMessageText(lastMessage),
+					lastMessageText: messageText(lastMessage),
 					sessionState: turnMessages.length !== context.messages.length,
 				});
 				const response = scriptedResponses.shift() ?? createAssistantMessage("done");

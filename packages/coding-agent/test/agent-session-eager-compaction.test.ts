@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import { Agent, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -14,9 +14,9 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool, USER_TODO_EDIT_CUSTOM_TYPE } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { messageText } from "./helpers/tool-result-text";
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
 // oldest messages, so compaction summarizes them away and the agent silently loses
@@ -72,10 +72,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	if (toolChoice.type === "tool") return toolChoice.name;
 	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
 	return undefined;
-}
-
-function getMessageText(message: AgentMessage): string {
-	return "content" in message ? contentText(message.content) : "";
 }
 
 function createAssistantResponse(text: string) {
@@ -230,7 +226,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			streamFn: (_model, context, options) => {
 				const call: ObservedPromptCall = {
 					toolChoice: getToolChoiceName(options?.toolChoice),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageTexts: context.messages.map(messageText),
 				};
 				observedCalls.push(call);
 				for (let i = waiters.length - 1; i >= 0; i--) {

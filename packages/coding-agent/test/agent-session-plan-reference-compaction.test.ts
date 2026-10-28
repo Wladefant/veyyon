@@ -16,19 +16,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { contentText } from "@veyyon/utils/content-text";
 import { requireBundledModel } from "../../agent/test/helpers";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
 import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
+import { messageText } from "./helpers/tool-result-text";
 
 const CONTINUE_MARKER = "Resume work on the user's most recent intent";
 
@@ -40,10 +40,6 @@ type Harness = {
 	observedCalls: ObservedPromptCall[];
 	waitForCall: (predicate: (call: ObservedPromptCall) => boolean) => Promise<ObservedPromptCall>;
 };
-
-function getMessageText(message: AgentMessage): string {
-	return "content" in message ? contentText(message.content) : "";
-}
 
 function createAssistantResponse(text: string) {
 	return {
@@ -153,7 +149,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			convertToLlm,
 			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context) => {
-				observedCalls.push({ messageTexts: context.messages.map(message => getMessageText(message)) });
+				observedCalls.push({ messageTexts: context.messages.map(messageText) });
 				const call = observedCalls[observedCalls.length - 1];
 				for (let i = waiters.length - 1; i >= 0; i--) {
 					const waiter = waiters[i];

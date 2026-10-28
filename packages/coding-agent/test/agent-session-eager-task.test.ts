@@ -11,10 +11,10 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
 import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { messageText } from "./helpers/tool-result-text";
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
@@ -41,10 +41,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	if (toolChoice.type === "tool") return toolChoice.name;
 	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
 	return undefined;
-}
-
-function getMessageText(message: AgentMessage): string {
-	return "content" in message ? contentText(message.content) : "";
 }
 
 /**
@@ -167,10 +163,10 @@ describe("AgentSession eager task prelude", () => {
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 					messageRoles: context.messages.map(message => message.role),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageTexts: context.messages.map(messageText),
 					systemPrompt: context.systemPrompt?.join("\n\n") ?? "",
 					lastMessageRole: lastMessage.role,
-					lastMessageText: getMessageText(lastMessage),
+					lastMessageText: messageText(lastMessage),
 				});
 				const response = createAssistantMessage("done");
 				const stream = new AssistantMessageEventStream();
