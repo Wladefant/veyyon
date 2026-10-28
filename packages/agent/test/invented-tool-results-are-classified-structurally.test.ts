@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { type } from "arktype";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { collectPackageSources, PACKAGES_DIR } from "../../utils/test/support/package-sources";
@@ -205,9 +206,17 @@ describe("invented tool results are classified structurally", () => {
 		expect(missing.error).toContain("missing_tool");
 		expect(missing.error).toContain("read_file");
 		expect(missing.error).toContain("write_file");
-
-		const tool = { name: "read_file", parameters: {} } as never;
-		const call = { id: "call-2", name: "read_file", arguments: {} } as never;
+		const schema = type({ path: "string" });
+		const tool = {
+			name: "read_file",
+			label: "Read file",
+			description: "Reads a file",
+			parameters: schema,
+			async execute() {
+				return { content: [{ type: "text", text: "done" }] };
+			},
+		} as never;
+		const call = { id: "call-2", name: "read_file", arguments: { path: "notes.txt" } } as never;
 		const unrepairable = prepareToolCall(tool, call, {
 			repairToolCallArguments: () => ({ status: "unrepairable", reason: "repair reason", hints: ["repair hint"] }),
 		} as never);
@@ -216,10 +225,14 @@ describe("invented tool results are classified structurally", () => {
 		expect(unrepairable.error).toContain("repair reason");
 		expect(unrepairable.error).toContain("repair hint");
 
-		const invalid = prepareToolCall(tool, call, {});
+		const invalid = prepareToolCall(
+			tool,
+			{ id: "call-3", name: "read_file", arguments: {} } as never,
+			{},
+		);
 		expect(invalid.ok).toBe(false);
 		if (invalid.ok) throw new Error("invalid arguments were prepared for execution");
-		expect(invalid.error.length).toBeGreaterThan(0);
+		expect(invalid.error).toContain("path");
 
 		const transformed = prepareToolCall(tool, call, {
 			transformToolCallArguments: () => {
