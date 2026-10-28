@@ -11,6 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "scripts" / "ovh-process-group.sh"
 TREE = """import os,signal,time,sys
+def publish_pid(path, pids):
+ temp=path+'.tmp.'+str(os.getpid())
+ with open(temp,'w') as file: file.write(' '.join(map(str,pids)))
+ os.replace(temp,path)
+def read_pid(path):
+ try:
+  with open(path) as file: return int(file.read())
+ except (FileNotFoundError, ValueError): return None
 mode=sys.argv[1]
 child=os.fork()
 if child == 0:
@@ -21,14 +29,6 @@ if child == 0:
   time.sleep(60); os._exit(0)
  publish_pid(os.environ['PIDFILE']+'.child',[os.getpid()])
  time.sleep(60); os._exit(0)
-def publish_pid(path, pids):
- temp=path+'.tmp.'+str(os.getpid())
- with open(temp,'w') as file: file.write(' '.join(map(str,pids)))
- os.replace(temp,path)
-def read_pid(path):
- try:
-  with open(path) as file: return int(file.read())
- except (FileNotFoundError, ValueError): return None
 deadline=time.monotonic()+3
 while (read_pid(os.environ['PIDFILE']+'.child') is None or read_pid(os.environ['PIDFILE']+'.grandchild') is None) and time.monotonic()<deadline: time.sleep(.005)
 pids=list(dict.fromkeys([os.getpid(),child,read_pid(os.environ['PIDFILE']+'.child'),read_pid(os.environ['PIDFILE']+'.grandchild')]))
