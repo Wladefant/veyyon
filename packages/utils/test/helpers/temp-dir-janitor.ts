@@ -42,6 +42,7 @@ import type * as nodeFs from "node:fs";
 import type { Dirent } from "node:fs";
 import type * as nodeOs from "node:os";
 import * as path from "node:path";
+import { privateTempDirName } from "../../src/private-temp-dir-name";
 import { REAL_HOME, TEMP_HOME } from "./sandbox-home";
 
 /**
@@ -142,6 +143,22 @@ function isInside(candidate: string, root: string): boolean {
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** The base name of the private temp directory `privateTempDir()` keeps for this user. */
+const PRIVATE_TEMP_DIR_NAME = privateTempDirName(process.getuid?.());
+
+/**
+ * True when `dir` is the private temp directory directly under one of {@link TMP_ROOTS}.
+ *
+ * Every process of the user shares it, and its users hold paths inside it past the call
+ * that made it: a debug adapter listens on a socket there, and the `local://` fallback root
+ * lives there. The chunk process that happened to create it first removed it at the end of
+ * its test file, and a debug adapter in a chunk running beside it exited on a socket path
+ * whose directory was gone.
+ */
+function isPrivateTempDir(dir: string): boolean {
+	return path.basename(dir) === PRIVATE_TEMP_DIR_NAME && TMP_ROOTS.includes(path.dirname(dir));
+}
+
 /**
  * Record `dir` for removal in teardown, if it is a temp path.
  *
@@ -154,6 +171,7 @@ export function recordTempDir(dir: unknown): boolean {
 	if (TMP_ROOTS.includes(resolved)) return false;
 	if (!TMP_ROOTS.some(root => isInside(resolved, root))) return false;
 	if (isInside(resolved, HOME)) return false;
+	if (isPrivateTempDir(resolved)) return false;
 	created.add(resolved);
 	return true;
 }
@@ -173,17 +191,17 @@ export function recordedTempDirs(): string[] {
  * in place.
  *
  * WHY THE RETURN VALUE DECIDES. The janitor must never remove a directory it did not create,
- * because a fixed-name directory under the tmpdir can be shared: the private temp directory
- * `veyyon-<uid>` is created once and used by whatever runs next. `mkdir` says exactly
- * which case happened. With `recursive: true` it returns the topmost directory it created,
- * or `undefined` when everything already existed; without it, the call throws if the target
+ * because a fixed-name directory under the tmpdir can be shared. `mkdir` says exactly which
+ * case happened. With `recursive: true` it returns the topmost directory it created, or
+ * `undefined` when everything already existed; without it, the call throws if the target
  * exists, so returning at all means this process made it. Recording the TOPMOST created path
  * also keeps removal complete: recording the leaf would leave the parents behind.
  *
  * The residual hazard is a directory this process creates and another test file, running in
  * another worker at the same time, expects to still be there. It is bounded to fixed-name
- * directories, since a unique name cannot be shared, and every one of those in this
- * repository is a cache its owner recreates on demand. See `docs/internal/testing.md`.
+ * directories, since a unique name cannot be shared. The private temp directory is never
+ * recorded (see {@link isPrivateTempDir}); every other fixed name in this repository is a
+ * cache its owner recreates on demand. See `docs/internal/testing.md`.
  */
 export function recordCreatedDirectory(target: unknown, options: unknown, result: unknown): boolean {
 	if (typeof result === "string") return recordTempDir(result);
@@ -326,6 +344,9 @@ export function sweepStaleTempDirs(options: { prefix: string; root?: string; old
 		// A directory this process is still recording is live by definition, whatever its
 		// timestamp says: a suite can create its scratch and not touch it again for hours.
 		if (created.has(path.resolve(dir))) continue;
+		// The private temp directory's mtime moves only when a direct child changes, so an old
+		// one can hold a root a live session writes under. It belongs to the user, not a run.
+		if (entry.name === PRIVATE_TEMP_DIR_NAME) continue;
 		try {
 			if (now - fs.statSync(dir).mtimeMs < olderThanMs) continue;
 			removeTree(dir);

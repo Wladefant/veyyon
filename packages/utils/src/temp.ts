@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isEexist } from "./fs-error";
 import * as logger from "./logger";
+import { privateTempDirName } from "./private-temp-dir-name";
 import { sleepSync } from "./sleep";
 import { errorMessage } from "./type-guards";
 
@@ -53,7 +54,7 @@ export async function removeTempPath(target: string, context: string): Promise<v
  */
 export function privateTempDir(): string {
 	const uid = process.getuid?.();
-	const dir = path.join(os.tmpdir(), uid === undefined ? "veyyon" : `veyyon-${uid}`);
+	const dir = path.join(os.tmpdir(), privateTempDirName(uid));
 	try {
 		fs.mkdirSync(dir, { mode: 0o700 });
 	} catch (error) {

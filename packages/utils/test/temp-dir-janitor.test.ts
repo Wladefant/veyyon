@@ -21,6 +21,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { privateTempDirName } from "../src/private-temp-dir-name";
 import {
 	__janitor,
 	janitorCleanupHook,
@@ -46,7 +47,7 @@ const TRIPWIRE = path.join(import.meta.dir, "helpers", "real-data-tripwire.ts");
  * shape asserted here. The divergence itself is filed separately: it means the real-data
  * tripwire does not guard ESM `fs` writes in a `bun run` process either.
  */
-async function runInChild(body: string): Promise<{ stdout: string; exitCode: number }> {
+async function runInChild(body: string, env?: Record<string, string>): Promise<{ stdout: string; exitCode: number }> {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-janitor-script-"));
 	const file = path.join(dir, "child.test.ts");
 	fs.writeFileSync(
@@ -62,6 +63,7 @@ async function runInChild(body: string): Promise<{ stdout: string; exitCode: num
 		stdout: "pipe",
 		stderr: "pipe",
 		cwd: path.join(import.meta.dir, "..", "..", ".."),
+		env: env ? { ...process.env, ...env } : process.env,
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
@@ -496,6 +498,38 @@ describe("what a process leaves behind when it exits", () => {
 		expect(exitCode).not.toBe(0);
 		expect(fs.existsSync(reportedDir(stdout))).toBe(false);
 	}, 30_000);
+
+	/**
+	 * THE SHARED PRIVATE DIRECTORY SURVIVES THE PROCESS THAT MADE IT. `privateTempDir()` makes
+	 * `veyyon-<uid>` with a plain `mkdir`, so the first chunk process to call it had it
+	 * recorded and removed it at the end of its file, while a debug adapter in a chunk running
+	 * beside it was about to listen on a socket inside it. The child gets a fresh TMPDIR so
+	 * its call really creates the directory, and makes a second fixed-name directory as the
+	 * control that proves the janitor was active in that same process.
+	 */
+	it("leaves the private temp directory in place and removes a fixed-name sibling", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-janitor-privateroot-"));
+		const temp = path.join(import.meta.dir, "..", "src", "temp.ts");
+		try {
+			const { stdout, exitCode } = await runInChild(
+				`
+				const { privateTempDir } = await import(${JSON.stringify(temp)});
+				const dir = privateTempDir();
+				fs.writeFileSync(path.join(dir, "held.sock"), "held");
+				fs.mkdirSync(path.join(os.tmpdir(), "veyyon-janitor-fixed"));
+				console.log("TEMPDIR=" + dir);
+			`,
+				{ TMPDIR: root },
+			);
+
+			expect(exitCode).toBe(0);
+			expect(reportedDir(stdout)).toBe(path.join(root, privateTempDirName(process.getuid?.())));
+			expect(fs.readFileSync(path.join(reportedDir(stdout), "held.sock"), "utf-8")).toBe("held");
+			expect(fs.existsSync(path.join(root, "veyyon-janitor-fixed"))).toBe(false);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	}, 30_000);
 });
 
 describe("sweeping directories a dead process left behind", () => {
@@ -590,6 +624,17 @@ describe("sweeping directories a dead process left behind", () => {
 
 		expect(removed).toEqual([]);
 		expect(fs.existsSync(path.join(root, "someone-elses-cache"))).toBe(true);
+	});
+
+	/** The private temp directory belongs to the user, so its age never makes it stranded. */
+	it("never sweeps the private temp directory", () => {
+		const privateName = privateTempDirName(process.getuid?.());
+		const root = rootWithAges({ [privateName]: STALE_TEMP_DIR_AGE_MS * 10, "veyyon-old": STALE_TEMP_DIR_AGE_MS * 2 });
+
+		const { removed } = sweepStaleTempDirs({ prefix: "veyyon-", root });
+
+		expect(removed).toEqual([path.join(root, "veyyon-old")]);
+		expect(fs.existsSync(path.join(root, privateName))).toBe(true);
 	});
 
 	/**
