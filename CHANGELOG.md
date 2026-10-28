@@ -16,6 +16,7 @@
 
 ### Changed
 
+- `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
 - The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
 - A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
 - A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
@@ -63,8 +64,10 @@
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
+- `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
+- `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
