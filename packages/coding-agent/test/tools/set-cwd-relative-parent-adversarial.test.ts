@@ -1,23 +1,13 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SetCwdTool } from "@veyyon/coding-agent/tools/fs/set-cwd";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { useTempDirs } from "../helpers/temp-dirs";
 import { makeToolSession } from "../helpers/tool-session";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(d => d.remove()));
-});
+const makeTempDir = useTempDirs();
 
 describe("SetCwdTool relative and parent adversarial", () => {
 	it("set_cwd .. from a child returns to parent", async () => {

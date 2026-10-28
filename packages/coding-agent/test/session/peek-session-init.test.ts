@@ -1,20 +1,10 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { useTempDirs } from "../helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
+const makeTempDir = useTempDirs();
 
 function assistantMessage(text: string) {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");

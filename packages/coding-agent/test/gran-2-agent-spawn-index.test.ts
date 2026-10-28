@@ -24,26 +24,16 @@
  * If any of these regress, a session's agents become un-enumerable from the
  * record and the suite fails.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import path from "node:path";
 import type { Usage } from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { AgentSpawnEntry, AgentSpawnRecord } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
+const makeTempDir = useTempDirs();
 
 /** A real assistant turn — persistence gates on an assistant message existing. */
 function assistantMessage(text: string) {
