@@ -18,6 +18,7 @@
 
 ### Changed
 
+- The bash and eval blocks run from the composer draw through one execution block that folds streamed chunks at the next draw and builds its header once, so an eval block drawn after each of 5000 streamed chunks takes 47 ms instead of 575 ms.
 - The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
 - The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
 - Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
@@ -101,6 +102,7 @@
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
+- `sgrCarryAfter` reads SGR parameters in place instead of through a regular expression and a split; no user-facing change.
 - `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
 - The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
@@ -114,6 +116,8 @@
 
 ### Fixed
 
+- A bash block's `$ command` header takes the new theme's colours after a theme change.
+- An expanded bash or eval block no longer states `… N more lines` under output it shows in full.
 - `agent://` and `artifact://` completion skips a registered artifacts path that is a file instead of failing, as `history://` completion already did.
 - Aborting LSP workspace diagnostics ends the checker and every process it started and returns within milliseconds; it used to end only the checker and wait for its children to release the output pipes, which took 4.3 s with a child that ran for 5 s and never returned while a child kept running.
 - A socket-mode debug adapter such as dlv that exits before it is reachable fails `debug launch` with `DAP adapter exited (code N): <adapter stderr>` as soon as it exits, instead of `Adapter process exited before socket was ready` on Linux and `<adapter> did not connect within 10000ms` after the whole readiness timeout elsewhere.
