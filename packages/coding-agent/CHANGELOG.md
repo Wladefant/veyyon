@@ -5,6 +5,7 @@
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+- OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
 ## [1.6.6] - 2026-10-28
 
 ### Fixed
