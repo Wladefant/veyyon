@@ -124,9 +124,7 @@ class HistoryResultsList implements Component {
 
 	/** Highlight the row under the pointer (null clears). Returns true on change. */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hover.key === index) return false;
-		this.#hover.set(index);
-		return true;
+		return this.#hover.set(index);
 	}
 
 	/**

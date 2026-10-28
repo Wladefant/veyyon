@@ -546,10 +546,7 @@ export class MCPAddWizard implements Component {
 		}
 		if (event.motion) {
 			const index = this.#hitRows[line] ?? null;
-			if (index !== this.#hover.key) {
-				this.#hover.set(index);
-				this.#requestRender();
-			}
+			if (this.#hover.set(index)) this.#requestRender();
 			return true;
 		}
 		if (event.leftClick) {

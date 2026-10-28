@@ -343,10 +343,7 @@ export class MoveOverlay implements Component, Focusable {
 			onHoverRow: () => {
 				const index = event.row - this.#listRowStart;
 				const hovered = index >= 0 && index < shown ? index : null;
-				if (hovered !== this.#hover.key) {
-					this.#hover.set(hovered);
-					this.#onRequestRender?.();
-				}
+				if (this.#hover.set(hovered)) this.#onRequestRender?.();
 			},
 			onClickRow: () => {
 				const index = event.row - this.#listRowStart;

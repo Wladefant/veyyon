@@ -182,10 +182,7 @@ export class CopySelectorComponent implements Component {
 			listRowStart: this.#listRowStart,
 			hitRows: this.#hitRows,
 			onHoverRow: index => {
-				if (index !== this.#hover.key) {
-					this.#hover.set(index);
-					this.#onRequestRender?.();
-				}
+				if (this.#hover.set(index)) this.#onRequestRender?.();
 			},
 			onClickRow: index => {
 				const node = this.#flatten()[index];

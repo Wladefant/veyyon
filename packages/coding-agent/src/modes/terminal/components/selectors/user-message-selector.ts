@@ -113,9 +113,7 @@ class UserMessageList implements Component {
 	 * suppressing it there left a row nothing could point at.
 	 */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hover.key === index) return false;
-		this.#hover.set(index);
-		return true;
+		return this.#hover.set(index);
 	}
 
 	/**
