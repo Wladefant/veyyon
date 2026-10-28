@@ -14,6 +14,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { NativeScrollbackLiveRegion } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 import { warmNativeTextPath } from "./helpers/warm-native-text";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -240,18 +241,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-hud-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-		session = new AgentSession({
-			agent: new Agent({
-				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
-			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({}),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path()));
 		mode = new InteractiveMode(session, "test");
 	});
 

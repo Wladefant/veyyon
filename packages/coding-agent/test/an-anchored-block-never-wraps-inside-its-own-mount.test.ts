@@ -34,10 +34,7 @@
  * where the region is positioned once its rows are correct.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { renderAgentHudLines } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-hud";
 import { renderTodoBoardLines } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
@@ -45,16 +42,16 @@ import { ANCHORED_BLOCK_PADDING_X } from "@veyyon/coding-agent/modes/terminal/co
 import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { ObservableSession } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type AgentProgressPayload, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Text } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { visibleWidth } from "@veyyon/utils/width";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 import { todoPhase } from "./helpers/todo-phase";
 
 /** The width the mode hands a block, which is what the mount leaves it. */
@@ -222,17 +219,10 @@ describe("the live agent HUD fits the width the mode reports", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@veyyon-anchored-wrap-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "startup.quiet": true } });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 		eventBus = new EventBus();
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true },
+		}));
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, eventBus);
 	});
 

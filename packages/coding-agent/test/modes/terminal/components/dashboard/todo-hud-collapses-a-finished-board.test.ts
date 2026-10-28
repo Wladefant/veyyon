@@ -50,6 +50,7 @@ import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TUI } from "@veyyon/tui"
 import { TempDir } from "@veyyon/utils";
 import { isTodoListDone, TODO_DONE_SUMMARY, TODO_STATUSES, type TodoStatus } from "@veyyon/wire";
 import { VirtualTerminal } from "../../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "../../../../helpers/test-agent-session";
 
 // The card the terminal registry draws for `todo`: the shipped view through the shipped drawer.
 const todoToolRenderer = viewToolRenderer(todoToolView, { mergeCallAndResult: true });
@@ -394,16 +395,9 @@ describe("the collapsed board reaches the screen", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-hud-done-paint-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "display.transitions": "off" } });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true, "display.transitions": "off" }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true, "display.transitions": "off" },
+		}));
 		mode = new InteractiveMode(session, "test");
 		terminal = new VirtualTerminal(COLUMNS, 24);
 		mode.ui = new TUI(terminal);

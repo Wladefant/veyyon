@@ -19,10 +19,7 @@
  * and overflow row).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	AGENT_HUD_VISIBLE_LIMIT,
@@ -35,7 +32,7 @@ import {
 	type ObservableSession,
 	SessionObserverRegistry,
 } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import {
 	type AgentLifecyclePayload,
 	type AgentProgress,
@@ -45,9 +42,9 @@ import {
 } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 function makeSession(overrides: Partial<ObservableSession> & { id: string }): ObservableSession {
 	return {
@@ -527,25 +524,10 @@ describe("InteractiveMode agent observer UI sync", () => {
 			cwd: tempDir.path(),
 			overrides: { "startup.quiet": true },
 		});
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
 		eventBus = new EventBus();
-		session = new AgentSession({
-			agent: new Agent({
-				initialState: {
-					model,
-					systemPrompt: ["Test"],
-					tools: [],
-					messages: [],
-				},
-			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true },
+		}));
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, eventBus);
 	});
 

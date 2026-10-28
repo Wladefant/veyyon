@@ -19,22 +19,19 @@
  * this — the container can hold correct rows no frame ever paints.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { emptyUsage } from "@veyyon/catalog/models";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ANCHORED_BLOCK_PADDING_X } from "@veyyon/coding-agent/modes/terminal/controllers/anchored-blocks";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { ASCII_SYMBOLS, NERD_SYMBOLS, UNICODE_SYMBOLS } from "@veyyon/coding-agent/theme/symbols";
 import { initTheme, stopThemeWatcher, theme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { VirtualTerminal } from "../../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "../../../../helpers/test-agent-session";
 
 const COLUMNS = 100;
 
@@ -89,16 +86,9 @@ describe("the collapsed Todos HUD distinguishes every task state without colour"
 		// The ramp itself is owned by
 		// `test/a-worked-todo-board-moves-and-a-waiting-one-does-not.test.ts`.
 		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "display.transitions": "off" } });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true, "display.transitions": "off" }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true, "display.transitions": "off" },
+		}));
 		mode = new InteractiveMode(session, "test");
 		terminal = new VirtualTerminal(COLUMNS, 24);
 		mode.ui = new TUI(terminal);

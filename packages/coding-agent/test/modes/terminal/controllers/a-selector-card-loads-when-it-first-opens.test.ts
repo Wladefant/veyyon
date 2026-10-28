@@ -23,19 +23,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { SubcommandPickerComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/subcommand-picker";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { SubcommandDef } from "@veyyon/coding-agent/slash-commands/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import { buildStartupImportGraph } from "../../../helpers/startup-import-graph";
+import { createTestAgentSession } from "../../../helpers/test-agent-session";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../../../..");
 const TERMINAL = path.join(REPO_ROOT, "packages/coding-agent/src/modes/terminal");
@@ -133,17 +131,7 @@ describe("a selector card opened from a live session", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@veyyon-selector-card-load-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path()));
 		mode = new InteractiveMode(session, "test");
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});

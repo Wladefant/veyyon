@@ -14,9 +14,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { emptyUsage } from "@veyyon/catalog/models";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -30,6 +29,7 @@ import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 const WIDTH = 120;
 
@@ -56,17 +56,10 @@ describe("focused agent transcript reconstruction", () => {
 		const dir = tempDir.path();
 		await Settings.init({ inMemory: true, cwd: dir, overrides: { "startup.quiet": true } });
 
-		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		mainSession = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Main"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(dir, dir),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session: mainSession } = await createTestAgentSession(dir, {
+			systemPrompt: ["Main"],
+			settings: { "startup.quiet": true },
+		}));
 
 		eventBus = new EventBus();
 		mode = new InteractiveMode(mainSession, "test", undefined, undefined, undefined, eventBus);
