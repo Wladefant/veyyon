@@ -5,6 +5,7 @@
 ### Changed
 
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 
 ### Fixed
 

@@ -56,6 +56,29 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
 }
+/** The `user_messages` table and its indexes, created at init and again when a stale table is dropped. */
+const USER_MESSAGES_SCHEMA = `
+	CREATE TABLE IF NOT EXISTS user_messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_file TEXT NOT NULL,
+		entry_id TEXT NOT NULL,
+		folder TEXT NOT NULL,
+		timestamp INTEGER NOT NULL,
+		model TEXT,
+		provider TEXT,
+		chars INTEGER NOT NULL,
+		words INTEGER NOT NULL,
+		yelling INTEGER NOT NULL,
+		profanity INTEGER NOT NULL,
+		anguish INTEGER NOT NULL,
+		negation INTEGER NOT NULL DEFAULT 0,
+		repetition INTEGER NOT NULL DEFAULT 0,
+		blame INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(session_file, entry_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+`;
 /**
  * Initialize the database and create tables.
  */
@@ -118,27 +141,7 @@ export async function initDb(): Promise<Database> {
 			last_modified INTEGER NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS user_messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_file TEXT NOT NULL,
-			entry_id TEXT NOT NULL,
-			folder TEXT NOT NULL,
-			timestamp INTEGER NOT NULL,
-			model TEXT,
-			provider TEXT,
-			chars INTEGER NOT NULL,
-			words INTEGER NOT NULL,
-			yelling INTEGER NOT NULL,
-			profanity INTEGER NOT NULL,
-			anguish INTEGER NOT NULL,
-			negation INTEGER NOT NULL DEFAULT 0,
-			repetition INTEGER NOT NULL DEFAULT 0,
-			blame INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(session_file, entry_id)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+		${USER_MESSAGES_SCHEMA}
 
 		CREATE TABLE IF NOT EXISTS tool_calls (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,28 +227,7 @@ export async function initDb(): Promise<Database> {
 	const hasOldUserMessages = userMessageColumns.length > 0;
 	if (hasStaleColumn || (hasOldUserMessages && !hasV4Columns)) {
 		db.run("DROP TABLE user_messages");
-		db.run(`
-			CREATE TABLE user_messages (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				session_file TEXT NOT NULL,
-				entry_id TEXT NOT NULL,
-				folder TEXT NOT NULL,
-				timestamp INTEGER NOT NULL,
-				model TEXT,
-				provider TEXT,
-				chars INTEGER NOT NULL,
-				words INTEGER NOT NULL,
-				yelling INTEGER NOT NULL,
-				profanity INTEGER NOT NULL,
-				anguish INTEGER NOT NULL,
-				negation INTEGER NOT NULL DEFAULT 0,
-				repetition INTEGER NOT NULL DEFAULT 0,
-				blame INTEGER NOT NULL DEFAULT 0,
-				UNIQUE(session_file, entry_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
-			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
-		`);
+		db.run(USER_MESSAGES_SCHEMA);
 	}
 	backfillUserMessages(db);
 	backfillToolCalls(db);
@@ -580,14 +562,18 @@ function buildAggregatedStats(rows: AggregateRow[]): AggregatedStats {
 }
 
 /**
- * Get overall aggregated stats.
+ * One AggregateRow per distinct value of the `groupBy` columns among the messages at or after
+ * `cutoff`, most requests first, or one row over all of them when `groupBy` is empty.
  */
-export function getOverallStats(cutoff?: number): AggregatedStats {
-	if (!db) return buildAggregatedStats([]);
-
+function queryAggregateRows<Group>(
+	database: Database,
+	cutoff: number | undefined,
+	groupBy: string,
+): (AggregateRow & Group)[] {
 	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
+	const stmt = database.prepare(`
 		SELECT
+			${groupBy ? `${groupBy},` : ""}
 			COUNT(*) as total_requests,
 			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
 			SUM(input_tokens) as total_input_tokens,
@@ -603,43 +589,24 @@ export function getOverallStats(cutoff?: number): AggregatedStats {
 			MAX(timestamp) as last_timestamp
 		FROM messages
 		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+		${groupBy ? `GROUP BY ${groupBy} ORDER BY total_requests DESC` : ""}
 	`);
-
-	const rows = hasCutoff ? stmt.all(cutoff) : stmt.all();
-	return buildAggregatedStats(rows as AggregateRow[]);
+	return (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & Group)[];
 }
+
+/**
+ * Get overall aggregated stats.
+ */
+export function getOverallStats(cutoff?: number): AggregatedStats {
+	return buildAggregatedStats(db ? queryAggregateRows(db, cutoff, "") : []);
+}
+
 /**
  * Get stats grouped by model.
  */
 export function getStatsByModel(cutoff?: number): ModelStats[] {
 	if (!db) return [];
-
-	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
-		SELECT
-			model,
-			provider,
-			COUNT(*) as total_requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
-			SUM(input_tokens) as total_input_tokens,
-			SUM(output_tokens) as total_output_tokens,
-			SUM(cache_read_tokens) as total_cache_read_tokens,
-			SUM(cache_write_tokens) as total_cache_write_tokens,
-			SUM(premium_requests) as total_premium_requests,
-			SUM(cost_total) as total_cost,
-			AVG(duration) as avg_duration,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
-			MIN(timestamp) as first_timestamp,
-			MAX(timestamp) as last_timestamp
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY model, provider
-		ORDER BY total_requests DESC
-	`);
-
-	const rows = (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & { model: string; provider: string })[];
-	return rows.map(row => ({
+	return queryAggregateRows<{ model: string; provider: string }>(db, cutoff, "model, provider").map(row => ({
 		model: row.model,
 		provider: row.provider,
 		...buildAggregatedStats([row]),
@@ -651,32 +618,7 @@ export function getStatsByModel(cutoff?: number): ModelStats[] {
  */
 export function getStatsByFolder(cutoff?: number): FolderStats[] {
 	if (!db) return [];
-
-	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
-		SELECT
-			folder,
-			COUNT(*) as total_requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
-			SUM(input_tokens) as total_input_tokens,
-			SUM(output_tokens) as total_output_tokens,
-			SUM(cache_read_tokens) as total_cache_read_tokens,
-			SUM(cache_write_tokens) as total_cache_write_tokens,
-			SUM(premium_requests) as total_premium_requests,
-			SUM(cost_total) as total_cost,
-			AVG(duration) as avg_duration,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
-			MIN(timestamp) as first_timestamp,
-			MAX(timestamp) as last_timestamp
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY folder
-		ORDER BY total_requests DESC
-	`);
-
-	const rows = (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & { folder: string })[];
-	return rows.map(row => ({
+	return queryAggregateRows<{ folder: string }>(db, cutoff, "folder").map(row => ({
 		folder: row.folder,
 		...buildAggregatedStats([row]),
 	}));
