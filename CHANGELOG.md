@@ -17,6 +17,7 @@
 
 ### Changed
 
+- The reftable HEAD lookup, the LSP document open and the eval kernel's result each have one implementation shared by their sync and async or success and cancellation paths; no user-facing change.
 - The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
 - `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
 - The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
@@ -92,6 +93,7 @@
 
 ### Fixed
 
+- Aborting LSP workspace diagnostics ends the checker and every process it started and returns within milliseconds; it used to end only the checker and wait for its children to release the output pipes, which took 4.3 s with a child that ran for 5 s and never returned while a child kept running.
 - A socket-mode debug adapter such as dlv that exits before it is reachable fails `debug launch` with `DAP adapter exited (code N): <adapter stderr>` as soon as it exits, instead of `Adapter process exited before socket was ready` on Linux and `<adapter> did not connect within 10000ms` after the whole readiness timeout elsewhere.
 - An MCP transport that closes while the reconnection that produced it is still settling, such as a streamable-HTTP event stream that ends while the tool list is in flight, starts a new reconnection or trips the crash breaker instead of staying listed as connected, and the close of a connection a manual reconnect already replaced no longer tears down the live one.
 - A write, an edit or `lsp diagnostics` against a language server that answers `textDocument/diagnostic` pulls returns the pulled diagnostics instead of waiting for a publish, so a tsgo write that broke the types reports the error in 38-123 ms instead of reporting no issues after 3,004 ms, and a warm rust-analyzer or Ruff write drops from 101 ms to 2-16 ms.
