@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
 - Browser session cleanup continues after one tab release or orphan browser disposal fails.
 - Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
