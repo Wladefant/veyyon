@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: compaction model keys and ACP model option values come from `formatModelString` instead of two private copies of it.
 - The Cursor exec bridge and the commit agent preview read message text through the shared `contentText` owner, and the commit map phase reads observations through the commit analysis reader instead of a second copy; no user-facing change.
 - Transcript, custom-display and rewind-report text now flatten message content through the shared `contentText` owner instead of two local copies; no user-facing change.
 - Hooks and extensions now share one definition of the `tool_result` event types, so a hook's `ToolResultEvent.isError` is typed `boolean`, matching what the extension runner delivers.

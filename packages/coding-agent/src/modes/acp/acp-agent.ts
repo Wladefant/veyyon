@@ -40,13 +40,14 @@ import {
 	type Usage,
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import { BlobStore, resolveImageDataSync } from "@veyyon/kernel/session/blob-store";
 import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clampLow, getBlobsDir, isEnoent, logger, VERSION } from "@veyyon/utils";
+import { formatModelString } from "../../config/model-resolver";
 import { Settings } from "../../config/settings";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../discovery/capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -1423,9 +1424,9 @@ export class AcpAgent implements Agent {
 				name: "Model",
 				category: "model",
 				type: "select",
-				currentValue: currentModel ? toModelId(currentModel) : toModelId(models[0]),
+				currentValue: currentModel ? formatModelString(currentModel) : formatModelString(models[0]),
 				options: models.map(model => ({
-					value: toModelId(model),
+					value: formatModelString(model),
 					name: model.name,
 					description: `${model.provider}/${model.id}`,
 				})),
@@ -1452,7 +1453,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #setModelById(session: AgentSession, modelId: string): Promise<void> {
-		const model = session.getAvailableModels().find(candidate => toModelId(candidate) === modelId);
+		const model = session.getAvailableModels().find(candidate => formatModelString(candidate) === modelId);
 		if (!model) {
 			throw new Error(`Unknown ACP model: ${modelId}`);
 		}
@@ -2434,10 +2435,6 @@ function setThinkingLevelById(session: AgentSession, value: string): void {
 		);
 	}
 	session.setThinkingLevel(thinkingLevel);
-}
-
-function toModelId(model: Model): string {
-	return `${model.provider}/${model.id}`;
 }
 
 function getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {

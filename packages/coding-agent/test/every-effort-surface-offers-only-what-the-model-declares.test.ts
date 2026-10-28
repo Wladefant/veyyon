@@ -44,6 +44,7 @@ import type { Api, Model } from "@veyyon/ai";
 import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolver";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { formatModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { getUi, isSettingPath, SETTINGS_SCHEMA, type SettingPath } from "@veyyon/coding-agent/config/settings-schema";
 import { rpcThinkingLevelRefusal } from "@veyyon/coding-agent/modes/rpc/rpc-commands";
@@ -107,10 +108,6 @@ function effortWordsIn(text: string): string[] {
 	return VOCABULARY.filter(word => new RegExp(`\\b${word}\\b`).test(text));
 }
 
-function selectorOf(model: Model<Api>): string {
-	return `${model.provider}/${model.id}`;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Enumeration 3: the model corpus, by ladder SHAPE, chosen from the catalog.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,8 +161,8 @@ const LADDER_SHAPES: Readonly<Record<LadderShape, (model: Model<Api>) => boolean
  */
 function representatives(): { chosen: Partial<Record<LadderShape, Model<Api>>>; missing: LadderShape[] } {
 	const models = bundledModels()
-		.filter(model => effortWordsIn(selectorOf(model)).length === 0)
-		.sort((a, b) => selectorOf(a).localeCompare(selectorOf(b)));
+		.filter(model => effortWordsIn(formatModelString(model)).length === 0)
+		.sort((a, b) => formatModelString(a).localeCompare(formatModelString(b)));
 	const chosen: Partial<Record<LadderShape, Model<Api>>> = {};
 	const missing: LadderShape[] = [];
 	for (const [shape, matches] of Object.entries(LADDER_SHAPES) as Array<[LadderShape, (m: Model<Api>) => boolean]>) {
@@ -396,7 +393,7 @@ function openAgentEffortRow(model: Model<Api> | undefined, scope?: ReadonlyArray
 
 /** Open Settings → Model → Default Effort on a row already stored for `model`. */
 function openDefaultEffortRow(model: Model<Api>): string {
-	settings.set("defaultEffort", { [selectorOf(model)]: "high" });
+	settings.set("defaultEffort", { [formatModelString(model)]: "high" });
 	const component = buildSelector(model);
 	component.openTab("model");
 	expect(component.selectSetting("defaultEffort")).toBe(true);
@@ -410,7 +407,7 @@ function openEffortStep(model: Model<Api>): string {
 	const container = new Container();
 	renderEffortStep(
 		container,
-		selectorOf(model),
+		formatModelString(model),
 		model,
 		() => {},
 		() => {},
@@ -735,7 +732,7 @@ describe("a surface that has narrowed to nothing says why", () => {
 				thinking.configuredThinkingLevelsForModel(candidate).length > 0,
 		);
 
-		expect(disagreements.map(selectorOf)).toEqual([]);
+		expect(disagreements.map(formatModelString)).toEqual([]);
 		expect(thinking.hasConfigurableThinkingEffort(shapeModel("declares-nothing"))).toBe(false);
 		expect(thinking.hasConfigurableThinkingEffort(shapeModel("declares-a-strict-subset"))).toBe(true);
 	});

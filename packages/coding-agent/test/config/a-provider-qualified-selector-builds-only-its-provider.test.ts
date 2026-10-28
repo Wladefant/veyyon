@@ -36,7 +36,11 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModels } from "@veyyon/catalog/models";
 import { getVariantAliasSources } from "@veyyon/catalog/variant-collapse";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { type ResolveCliModelResult, resolveCliModel } from "@veyyon/coding-agent/config/model-resolver";
+import {
+	formatModelString,
+	type ResolveCliModelResult,
+	resolveCliModel,
+} from "@veyyon/coding-agent/config/model-resolver";
 import { TempDir } from "@veyyon/utils";
 import type { SelectorRetention } from "../fixtures/named-selector-retention";
 
@@ -139,14 +143,10 @@ async function openRegistries(name: string, runtime = false): Promise<Registries
 	};
 }
 
-function key(model: Model<Api>): string {
-	return `${model.provider}/${model.id}`;
-}
-
 /** What a caller reads from a resolution, with the model reduced to its reference. */
 function outcome(result: ResolveCliModelResult) {
 	return {
-		model: result.model && key(result.model),
+		model: result.model && formatModelString(result.model),
 		selector: result.selector,
 		thinkingLevel: result.thinkingLevel,
 		warning: result.warning,
@@ -183,17 +183,17 @@ interface CatalogSelectors {
 function catalogSelectors(catalog: readonly Model<Api>[]): CatalogSelectors {
 	const keyCounts = new Map<string, number>();
 	for (const model of catalog) {
-		const lower = key(model).toLowerCase();
+		const lower = formatModelString(model).toLowerCase();
 		keyCounts.set(lower, (keyCounts.get(lower) ?? 0) + 1);
 	}
 	const out: CatalogSelectors = { named: [], ambiguous: [], deferred: [] };
 	const add = (model: Model<Api>, selector: Selector, answered: boolean) => {
-		if (keyCounts.get(key(model).toLowerCase()) !== 1) out.ambiguous.push(selector);
+		if (keyCounts.get(formatModelString(model).toLowerCase()) !== 1) out.ambiguous.push(selector);
 		else (answered ? out.named : out.deferred).push(selector);
 	};
 	const idAnswered = (model: Model<Api>) => model.id !== "*";
 	for (const model of catalog) {
-		add(model, { cliModel: key(model) }, true);
+		add(model, { cliModel: formatModelString(model) }, true);
 		// A `--provider` id that repeats the provider prefix is stripped to another id.
 		if (!model.id.toLowerCase().startsWith(`${model.provider.toLowerCase()}/`)) {
 			add(model, { cliProvider: model.provider, cliModel: model.id }, idAnswered(model));
@@ -204,8 +204,8 @@ function catalogSelectors(catalog: readonly Model<Api>[]): CatalogSelectors {
 	}
 	for (const [provider, models] of byProvider(catalog)) {
 		for (const model of [models[0], models.at(-1)!]) {
-			add(model, { cliModel: key(model).toUpperCase() }, true);
-			add(model, { cliProvider: provider.toUpperCase(), cliModel: key(model) }, idAnswered(model));
+			add(model, { cliModel: formatModelString(model).toUpperCase() }, true);
+			add(model, { cliProvider: provider.toUpperCase(), cliModel: formatModelString(model) }, idAnswered(model));
 			add(model, { cliProvider: provider.toLowerCase(), cliModel: ` ${model.id} ` }, idAnswered(model));
 		}
 	}
@@ -235,10 +235,10 @@ function missSelectors(catalog: readonly Model<Api>[]): Selector[] {
 			{ cliProvider: provider, cliModel: `${provider}/` },
 			{ cliModel: `${provider}/*` },
 			{ cliProvider: provider, cliModel: "*" },
-			{ cliModel: `${key(first)}:high` },
+			{ cliModel: `${formatModelString(first)}:high` },
 			{ cliProvider: provider, cliModel: `${first.id}:high` },
-			{ cliModel: `${key(first)}:nitro` },
-			{ cliModel: `${key(first)}-20250101` },
+			{ cliModel: `${formatModelString(first)}:nitro` },
+			{ cliModel: `${formatModelString(first)}-20250101` },
 			{ cliModel: first.id.slice(0, Math.max(1, first.id.length - 2)) },
 		);
 	}
@@ -338,7 +338,9 @@ describe("a provider-qualified CLI selector", () => {
 		const registries = await openRegistries("runtime", true);
 		const scoped = new Set([RUNTIME_PROVIDER, ...Object.keys(MODELS_CONFIG.providers)]);
 		const catalog = registries.reference.getAll().filter(model => scoped.has(model.provider));
-		expect(catalog.filter(model => model.provider === RUNTIME_PROVIDER).map(key)).toEqual(["ext-gw/ext-model"]);
+		expect(catalog.filter(model => model.provider === RUNTIME_PROVIDER).map(formatModelString)).toEqual([
+			"ext-gw/ext-model",
+		]);
 		const { named, deferred } = catalogSelectors(catalog);
 
 		expect(listingSelectors(registries, named)).toEqual([]);
@@ -359,14 +361,14 @@ describe("ModelRegistry.getProviderModels", () => {
 		const names = [...new Set(catalog.map(model => model.provider))];
 		const queries = [...names, ...names.map(name => name.toUpperCase()), "no-such-provider"];
 		const expected = (query: string) =>
-			catalog.filter(model => model.provider.toLowerCase() === query.toLowerCase()).map(key);
+			catalog.filter(model => model.provider.toLowerCase() === query.toLowerCase()).map(formatModelString);
 
 		const unlisted = new Map(queries.map(query => [query, registry.getProviderModels(query)]));
 		const listed = registry.getAll();
 		for (const query of queries) {
 			const before = unlisted.get(query)!;
 			const after = registry.getProviderModels(query);
-			expect({ query, models: before.map(key) }).toEqual({ query, models: expected(query) });
+			expect({ query, models: before.map(formatModelString) }).toEqual({ query, models: expected(query) });
 			expect(after).toEqual(listed.filter(model => model.provider.toLowerCase() === query.toLowerCase()));
 			// A provider built on demand is the one the catalog later lists: the same objects, not copies.
 			expect(after.every((model, index) => model === before[index])).toBe(true);
