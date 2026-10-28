@@ -1,15 +1,20 @@
-// WHY: raw backing artifacts and streamed previews previously preceded consumer redaction.
-// These tests cover recognizable records and known values, not encoded data or image content.
+// WHY: Credential inventories with benign labels could leak through live output and raw artifacts.
+// These tests sweep shell, JSON, Python, and PowerShell shapes; they do not cover encoded or arbitrary exfiltration.
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { executeBash } from "@veyyon/coding-agent/exec/bash-executor";
 import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
 import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "@veyyon/coding-agent/secrets/producer-output";
+import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+
 
 const directories: string[] = [];
 afterEach(async () => {
 	for (const directory of directories.splice(0)) await fs.rm(directory, { recursive: true, force: true });
+	resetSettingsForTest();
 });
 
 for (const record of [
@@ -43,14 +48,16 @@ for (const record of [
 
 test("known values redact at EOF and on minimizer replacement without enumerating environment", async () => {
 	const live: string[] = [];
-	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-known-value", origin: "environment" }]);
+	const redacted = secrets.obfuscate("fake-known-value");
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
 	const sink = new OutputSink({ outputGuard: guard, onChunk: chunk => live.push(chunk) });
 	for (const character of "result fake-known-value") sink.push(character);
 	expect(live).toEqual([]);
-	expect((await sink.dump()).output).toBe("result <redacted>");
-	expect(live.join("")).toBe("result <redacted>");
+	expect((await sink.dump()).output).toBe(`result ${redacted}`);
+	expect(live.join("")).toBe(`result ${redacted}`);
 	sink.replace("replacement fake-known-value");
-	expect((await sink.dump()).output).toBe("replacement <redacted>");
+	expect((await sink.dump()).output).toBe(`replacement ${redacted}`);
 });
 
 test("unterminated oversized records never leak their suffix and memory stays bounded", () => {
@@ -62,8 +69,8 @@ test("unterminated oversized records never leak their suffix and memory stays bo
 
 test("bounded benign assignments and lookups retain exact output", async () => {
 	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
-	for (const character of "MODE=test\n/bin:/usr/bin\nan access token\nready") sink.push(character);
-	expect((await sink.dump()).output).toBe("MODE=test\n/bin:/usr/bin\nan access token\nready");
+	for (const character of "MODE=test\nFEATURE_FLAG=enabled\n/bin:/usr/bin\nan access token\nready") sink.push(character);
+	expect((await sink.dump()).output).toBe("MODE=test\nFEATURE_FLAG=enabled\n/bin:/usr/bin\nan access token\nready");
 });
 
 test("redactor failure withholds the record instead of falling back to raw output", () => {
@@ -103,8 +110,10 @@ test("ANSI between a credential key and delimiter cannot hide a record", async (
 });
 
 test("ANSI within a known value cannot bypass its secret owner", () => {
-	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
-	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe("<redacted>");
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-known-value", origin: "environment" }]);
+	const redacted = secrets.obfuscate("fake-known-value");
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
+	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe(redacted);
 	expect(guard.sanitize("\x1b[32mordinary output\x1b[0m")).toBe("\x1b[32mordinary output\x1b[0m");
 });
 
@@ -152,4 +161,59 @@ test("dump between credential label chunks keeps the credential out of artifacts
 	expect(live.join("")).not.toContain("fake-credential-123");
 	expect(persisted).not.toContain("fake-credential-123");
 	expect(result.output).not.toContain("fake-credential-123");
+});
+
+for (const record of [
+	"PATH=ghp_FAKE012345678901234567890123456789\nHOME=/safe/home\nCUSTOM=ordinary-value",
+	'{\n  "PATH": "ghp_FAKE012345678901234567890123456789",\n  "HOME": "/safe/home",\n  "CUSTOM": "ordinary-value"\n}',
+	'{"PATH":"ghp_FAKE012345678901234567890123456789","HOME":"/safe/home","CUSTOM":"ordinary-value"}',
+	"{'PATH': 'ghp_FAKE012345678901234567890123456789', 'HOME': '/safe/home', 'CUSTOM': 'ordinary-value'}",
+	"Name Value\nPATH ghp_FAKE012345678901234567890123456789\nHOME /safe/home\nCUSTOM ordinary-value",
+]) {
+	test(`environment inventory stays out of live output and raw artifacts: ${record.slice(0, 24)}`, async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+		directories.push(directory);
+		const artifactPath = path.join(directory, "output.txt");
+		const live: string[] = [];
+		const sink = new OutputSink({
+			outputGuard: new ProducerOutputGuard(),
+			artifactPath,
+			artifactId: "fake-output",
+			spillThreshold: 1,
+			onChunk: chunk => live.push(chunk),
+		});
+		for (const character of record + "\n") sink.push(character);
+		const result = await sink.dumpWithArtifactStatus();
+		const persisted = await fs.readFile(artifactPath, "utf8");
+		const replay = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+		replay.push(persisted);
+		expect(live.join("")).not.toContain("ghp_FAKE012345678901234567890123456789");
+		expect(persisted).not.toContain("ghp_FAKE012345678901234567890123456789");
+		expect(result.output).not.toContain("ghp_FAKE012345678901234567890123456789");
+		expect((await replay.dump()).output).not.toContain("ghp_FAKE012345678901234567890123456789");
+	});
+}
+
+test("executeBash protects synthetic environment inventory before artifact persistence", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+	directories.push(directory);
+	await Settings.init({ inMemory: true, cwd: directory });
+	const artifactPath = path.join(directory, "bash-output.txt");
+	const inventory = "PATH=ghp_FAKE012345678901234567890123456789\nHOME=/safe/home\nCUSTOM=ordinary-value";
+	const command = `printf '%s\\n' '${inventory.replaceAll("'", "'\\''")}'`;
+	const result = await executeBash(command, {
+		cwd: directory,
+		timeout: 5000,
+		sessionKey: "credential-inventory-regression",
+		artifactPath,
+		artifactId: "fake-bash-output",
+		spillThreshold: 1,
+	});
+	const persisted = await fs.readFile(artifactPath, "utf8");
+	const replay = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+	replay.push(persisted);
+	expect(result.exitCode).toBe(0);
+	expect(result.output).not.toContain("ghp_FAKE012345678901234567890123456789");
+	expect(persisted).not.toContain("ghp_FAKE012345678901234567890123456789");
+	expect((await replay.dump()).output).not.toContain("ghp_FAKE012345678901234567890123456789");
 });
