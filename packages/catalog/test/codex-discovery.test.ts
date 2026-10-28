@@ -190,8 +190,8 @@ describe("Codex model discovery", () => {
 	// model. Listing one account hid every model only another tier is listed, and recorded no fact about
 	// the other accounts. The class closed: discovery lists every account, the catalog is the union, and
 	// every model states for every account whose listing answered whether it is listed and what it is
-	// offered. Not caught: an account whose listing fails, which has no entry on any model and is left
-	// to the request-time listing.
+	// offered. A failed listing returns null, so an authoritative refresh cannot
+	// remove a model merely because one account is temporarily unavailable.
 	describe("listing every signed-in account", () => {
 		const LISTINGS: Record<string, unknown[]> = {
 			acc_standard: [
@@ -282,7 +282,7 @@ describe("Codex model discovery", () => {
 			expect(Object.keys(models?.[0]?.accountAccess ?? {}).toSorted()).toEqual(["acc_blue", "acc_standard"]);
 		});
 
-		it("gives an account whose listing fails no entry, and answers null when no listing answers", async () => {
+		it("keeps the previous authoritative catalog when any account listing fails", async () => {
 			const merged = await fetchCodexAccountModels({
 				accounts: [account("acc_down"), account("acc_red")],
 				baseUrl: "https://codex.example/backend-api",
@@ -294,10 +294,7 @@ describe("Codex model discovery", () => {
 				fetchFn: tiersFetch([]),
 			});
 
-			expect(merged?.map(model => [model.id, model.accountAccess])).toEqual([
-				["gpt-5.6-sol", { acc_red: { listed: true, cyber: ["standard", "daybreak_red"] } }],
-				["gpt-6-astra", { acc_red: { listed: true } }],
-			]);
+			expect(merged).toBeNull();
 			expect(none).toBeNull();
 		});
 	});
@@ -480,7 +477,9 @@ describe("Codex model discovery", () => {
 
 			expect(fetched).toBe(true);
 			expect(result.models.find(model => model.id === "gpt-5.5")?.maxTokens).toBe(refreshedModel.maxTokens);
-			expect(result.models.find(model => model.id === "gpt-5.5")?.accountAccess).toEqual(refreshedModel.accountAccess);
+			expect(result.models.find(model => model.id === "gpt-5.5")?.accountAccess).toEqual(
+				refreshedModel.accountAccess,
+			);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

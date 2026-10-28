@@ -1906,8 +1906,7 @@ export async function buildTransformedCodexRequestBody(
 		model: model.requestModelId ?? model.id,
 		input: convertCodexResponsesMessages(model, context),
 		stream: true,
-		prompt_cache_key:
-			request.promptCacheKey ?? getOpenAIPromptCacheKey(options),
+		prompt_cache_key: request.promptCacheKey ?? getOpenAIPromptCacheKey(options),
 	};
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips

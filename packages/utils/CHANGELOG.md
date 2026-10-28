@@ -4,30 +4,11 @@
 
 ## [Unreleased]
 
-## [1.6.4] - 2026-10-28
 ### Fixed
 
-- `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
+- Parse rate-limit reset windows stated in words.
 
-## [1.5.9] - 2026-10-22
-
-### Breaking Changes
-
-- `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
-
-### Added
-
-- `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
-- `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
-- `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
-- `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
-- `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
-- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`; the package root does not re-export them.
-- `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
-
-### Changed
-
-- `levenshteinDistance` computes the distance bit-parallel, 32 rows per step, and returns the same values 4 to 8 times faster on strings of 32 to 100 characters.
+## [1.6.4] - 2026-10-28
 
 ### Fixed
 

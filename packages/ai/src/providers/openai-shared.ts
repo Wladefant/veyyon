@@ -1954,7 +1954,7 @@ class ResponsesInputBuilder<TApi extends Api> {
 			content:
 				developerText && this.#escapeControlTokens
 					? escapeHarmonyControlTokens(developerText)
-					: (developerText || content),
+					: developerText || content,
 		});
 		return true;
 	}

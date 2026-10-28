@@ -4,7 +4,6 @@ import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
 import { calculateCost, emptyCost } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { $env } from "@veyyon/utils/env";
-import { tryParseJson } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -1849,4 +1848,5 @@ function convertTools(
 			(toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && adaptedTools.some(tool => tool.strict))),
 	};
 }
+
 export { convertMessages as convertOpenAICompletionsMessages };

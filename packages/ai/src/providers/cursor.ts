@@ -6,7 +6,6 @@ import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson, type Un
 import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { McpToolDefinition } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
-import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
@@ -96,6 +95,7 @@ import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { clampLow, logger } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
+import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import * as AIError from "../error";
@@ -1419,7 +1419,10 @@ function handleKvServerMessage(
 		const responseBytes = toBinary(AgentClientMessageSchema, kvClientMessage);
 		h2Request.write(frameConnectMessage(responseBytes));
 
-		void logCursorDiagnostic("kvClient", "getBlobResult", { blobId: blobIdKey.slice(0, 40), hit: blobData !== undefined });
+		void logCursorDiagnostic("kvClient", "getBlobResult", {
+			blobId: blobIdKey.slice(0, 40),
+			hit: blobData !== undefined,
+		});
 	} else if (kvCase === "setBlobArgs") {
 		const { blobId, blobData } = kvMsg.message.value;
 		const blobIdKey = Buffer.from(blobId).toString("hex");

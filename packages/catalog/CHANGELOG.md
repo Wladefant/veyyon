@@ -2,19 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve per-account Codex access in discovery and reject stale schema-14 model cache rows.
+- Honor Kimi Code effort declarations, filter unsupported overlay providers, and avoid rewriting unchanged failed-probe cache rows.
+
 ## [1.6.0] - 2026-10-28
-### Changed
-
-- The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
-- `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
-- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
-
-## [1.5.10] - 2026-10-25
-
-### Added
-
-- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
-- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
 
 ### Changed
 
@@ -31,17 +24,6 @@
 - The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
 
 ## [1.5.6] - 2026-10-10
-### Added
-
-- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
-
-### Fixed
-
-- Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
-- Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
-- A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
-
-## [1.5.9] - 2026-10-22
 
 ### Added
 
@@ -60,7 +42,6 @@
 - Added the GMI Cloud provider (`gmi-cloud`) with dynamic model discovery and bundled default model seed ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getBundledChatModels` and `resolveSessionContextWindow`, which cap a session at the standard-pricing window unless extended context is on ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Codex discovery lists every signed-in ChatGPT account, so the catalog holds the models of every account tier, records in `Model.accountAccess` which account is listed each model and its `available_access_programs`, and caches the list per account set, so a login or logout lists the accounts again; the bundled catalog never contains the field, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
 
 ### Removed
 

@@ -232,18 +232,7 @@ export async function fetchCodexAccountModels(
 		for (const accountId of enumerated) accountAccess[accountId] = entries[accountId] ?? { listed: false };
 		models.push({ ...model, accountAccess });
 	}
-	return models.sort(compareCodexModels);
-}
-
-/** Listing order: the endpoint's priority, then the id. */
-function compareCodexModels(
-	left: Pick<ModelSpec<"openai-codex-responses">, "id" | "priority">,
-	right: Pick<ModelSpec<"openai-codex-responses">, "id" | "priority">,
-): number {
-	const leftPriority = left.priority ?? Number.MAX_SAFE_INTEGER;
-	const rightPriority = right.priority ?? Number.MAX_SAFE_INTEGER;
-	if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-	return left.id.localeCompare(right.id);
+	return models;
 }
 
 function normalizePaths(paths: readonly string[] | undefined): string[] {

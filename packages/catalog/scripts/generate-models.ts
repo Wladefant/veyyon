@@ -407,28 +407,6 @@ function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[]
 	return [...patched, CODEX_IMAGE_MODEL];
 }
 
-/**
- * The Kimi Code subscription endpoint aliases `kimi-for-coding` and
- * `kimi-for-coding-highspeed` to its current flagship (K3) server-side;
- * models.dev declares the alias rows with empty reasoning_options because
- * the alias itself has no distinct surface. The aliases accept the same
- * effort levels as the K3 row they route to (same provider, same host),
- * so they inherit its declared surface; their own subscription limits stay.
- */
-function applyKimiCodingAliasSurface(models: readonly ModelSpec[], modelsDevModels: readonly ModelSpec[]): ModelSpec[] {
-	const k3 = modelsDevModels.find(model => model.provider === "kimi-code" && model.id === "k3");
-	const surface = k3?.reasoningOptions;
-	if (surface === undefined) return [...models];
-	const aliasIds = new Set(["kimi-for-coding", "kimi-for-coding-highspeed"]);
-	return models.map(model => {
-		if (model.provider !== "kimi-code" || !aliasIds.has(model.id)) return model;
-		// models.dev's empty alias declaration normalizes to `noEffortControl`;
-		// that describes the alias row, not the K3 it routes to, so it is
-		// replaced here. A real declared ladder always wins.
-		if (model.reasoning !== true || model.reasoningOptions?.efforts !== undefined) return model;
-		return { ...model, reasoningOptions: surface };
-	});
-}
 
 /**
  * First-party twin providers: same company serving the same models over the
