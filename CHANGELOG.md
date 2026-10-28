@@ -18,6 +18,8 @@
 
 ### Changed
 
+- The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
+- Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
 - `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
 - The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
 - `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.
@@ -79,6 +81,7 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
+- Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
