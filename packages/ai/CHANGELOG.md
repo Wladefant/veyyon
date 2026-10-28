@@ -5,6 +5,7 @@
 ## [1.6.0] - 2026-10-28
 
 ### Breaking Changes
+- Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.

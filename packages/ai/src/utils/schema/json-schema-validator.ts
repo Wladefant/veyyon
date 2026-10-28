@@ -126,7 +126,7 @@ function typeOfJsonValue(value: unknown): string {
 }
 
 /** Decide whether `value` satisfies a single JSON-Schema `type` keyword string. `integer` is a refinement of `number`. */
-function matchesJsonSchemaType(value: unknown, type: string): boolean {
+export function matchesJsonSchemaType(value: unknown, type: string): boolean {
 	switch (type) {
 		case "string":
 			return typeof value === "string";
