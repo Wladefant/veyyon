@@ -28,10 +28,13 @@ permissions:
   contents: read
 
 jobs:
-  ovh-ci:
+  prepare:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, veyyon]
     timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.planner.outputs.matrix }}
+      rust_changed: ${{ steps.selection.outputs.rust_changed || 'false' }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -75,7 +78,7 @@ jobs:
           echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
           echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
           echo "TOUCHED_PACKAGES=$RUNNER_TEMP/ovh-touched-packages" >> "$GITHUB_ENV"
-          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\ntsc-start=0\\ntsc-end=0\\ntsc-elapsed=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');require('fs').writeFileSync(process.env.TOUCHED_PACKAGES,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
           if [[ -n "$FOCUSED_TESTS" ]]; then
             node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -119,8 +122,145 @@ jobs:
             echo "rust_changed=$FOCUSED_NATIVE" >> "$GITHUB_OUTPUT"
             echo "ts_changed=false" >> "$GITHUB_OUTPUT"
           else
-            node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD
+            node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD --typecheck-planned
           fi
+      - name: Biome changed TypeScript and JavaScript
+        id: biome
+        if: steps.install.outcome == 'success' && !inputs.test_files
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
+          if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
+      - name: TypeScript check
+        id: types
+        if: steps.selection.outputs.ts_changed == 'true'
+        shell: bash
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+        run: |
+          set -euo pipefail
+          tsc_start=$(date +%s)
+          record_tsc() {
+            tsc_status=$?
+            tsc_end=$(date +%s)
+            tsc_elapsed=$((tsc_end - tsc_start))
+            sed -i "s/^tsc-start=.*/tsc-start=$tsc_start/;s/^tsc-end=.*/tsc-end=$tsc_end/;s/^tsc-elapsed=.*/tsc-elapsed=$tsc_elapsed/" "$RECEIPT"
+            {
+              echo "### TypeScript Check"
+              echo "- Exit: $tsc_status"
+              echo "- Start: $tsc_start"
+              echo "- End: $tsc_end"
+              echo "- Elapsed: ${tsc_elapsed}s"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          trap record_tsc EXIT
+          while IFS= read -r package; do
+            [[ -n "$package" ]] || continue
+            bun run --filter "$package" check:types
+          done < "$RUNNER_TEMP/ovh-touched-packages"
+      - name: Record skipped TypeScript check summary
+        if: steps.selection.outputs.ts_changed != 'true'
+        shell: bash
+        run: |
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "### TypeScript Check"
+              echo "- Status: skipped"
+              echo "- Start: 0"
+              echo "- End: 0"
+              echo "- Elapsed: 0s"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Plan test shards
+        id: planner
+        shell: bash
+        env:
+          INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
+          OUTPUT_DIR: ${{ runner.temp }}/ovh-shards
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          node scripts/ovh-test-shards.mjs --input "$INPUT_FILE" --output "$OUTPUT_DIR"
+          cp "$INPUT_FILE" "$OUTPUT_DIR/selected-tests.txt"
+          cp "$RECEIPT" "$OUTPUT_DIR/ovh-receipt.txt"
+      - name: Upload selection plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-shards
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload preparation receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-prepare-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  test:
+    name: test (shard ${{ matrix.index }})
+    needs: prepare
+    runs-on: [self-hosted, Linux, X64, veyyon]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+      - name: Record checkout identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha }}
+        run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Download prepared plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-shards
+      - name: Install dependencies and generate code
+        id: install
+        uses: ./.github/actions/bun-install
+      - name: Build native addon when required
+        if: ${{ !cancelled() && needs.prepare.outputs.rust_changed == 'true' }}
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: bun run ci:build:native
+      - name: Run cargo tests
+        id: cargo
+        if: ${{ !cancelled() && inputs.cargo_packages != '' && matrix.index == 0 }}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_PACKAGES: ${{ inputs.cargo_packages }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_names="$(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")"
+          mapfile -t packages <<< "$package_names"
+          args=(); for p in "${packages[@]}"; do args+=(-p "$p"); done
+          log="$RUNNER_TEMP/ovh-cargo-test.log"
+          status=0
+          timeout 840 cargo test --locked "${args[@]}" 2>&1 | tee "$log" || status=1
+          pass="$(sed -nE 's/^test result: [a-z]+\. ([0-9]+) passed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          fail="$(sed -nE 's/^test result: [a-z]+\. [0-9]+ passed; ([0-9]+) failed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          echo "OVH_CARGO_TOTAL packages=${packages[*]} pass=$pass fail=$fail"
+          ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
+          ((fail==0)) || status=1
+          exit "$status"
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'
@@ -134,61 +274,60 @@ jobs:
           echo 'VEYYON_SANDBOX_REMOTE=0' >> "$GITHUB_ENV"
           echo 'VEYYON_SANDBOX_RUNG=bwrap' >> "$GITHUB_ENV"
           echo 'VEYYON_SANDBOX_TIMEOUT=600' >> "$GITHUB_ENV"
-      - name: Build native addon when required
-        if: ${{ !cancelled() && steps.selection.outputs.rust_changed == 'true' }}
-        env:
-          CARGO_BUILD_JOBS: "2"
-        run: bun run ci:build:native
-      - name: Run cargo tests
-        id: cargo
-        if: ${{ !cancelled() && inputs.cargo_packages != '' }}
-        env:
-          CARGO_BUILD_JOBS: "2"
-          CARGO_PACKAGES: ${{ inputs.cargo_packages }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          mapfile -t packages < <(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")
-          ((${#packages[@]})) || { echo '::error::No cargo packages'; exit 1; }
-          args=(); for p in "${packages[@]}"; do args+=(-p "$p"); done
-          log="$RUNNER_TEMP/ovh-cargo-test.log"
-          status=0
-          timeout 840 cargo test --locked "${args[@]}" 2>&1 | tee "$log" || status=1
-          [[ "${PIPESTATUS[0]}" == 0 ]] || status=1
-          pass="$(sed -nE 's/^test result: [a-z]+\. ([0-9]+) passed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
-          fail="$(sed -nE 's/^test result: [a-z]+\. [0-9]+ passed; ([0-9]+) failed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
-          echo "OVH_CARGO_TOTAL packages=${packages[*]} pass=$pass fail=$fail"
-          ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
-          ((fail==0)) || status=1
-          exit "$status"
-      - name: Biome changed TypeScript and JavaScript
-        id: biome
-        if: ${{ !cancelled() && steps.install.outcome == 'success' && !inputs.test_files }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
-          if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
-      - name: TypeScript check
-        id: types
-        if: ${{ !cancelled() && steps.selection.outputs.ts_changed == 'true' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          while IFS= read -r package; do
-            [[ -n "$package" ]] || continue
-            bun run --filter "$package" check:types
-          done < "$RUNNER_TEMP/ovh-touched-packages"
       - name: Run selected tests serially
-        if: ${{ !cancelled() && steps.selection.outcome == 'success' && steps.bwrap.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.bwrap.outcome == 'success' }}
         shell: bash
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          SHARD_FILE: ${{ runner.temp }}/ovh-shards/shard-${{ matrix.index }}.txt
         run: |
           set -uo pipefail
-          if [[ ! -s "$RUNNER_TEMP/ovh-related-tests" ]]; then
+          shard_start=$(date +%s)
+          head_sha="$(git rev-parse HEAD)"
+
+          {
+            echo "sha=$head_sha"
+            echo "run=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "index=${{ matrix.index }}"
+            echo "count=${{ matrix.count }}"
+            echo "selected-tests=${{ matrix.files }}"
+            echo "projected_ms=${{ matrix.projected_ms }}"
+            echo "runner.name=${RUNNER_NAME:-}"
+            echo "shard-start=$shard_start"
+            echo "shard-end=0"
+            echo "shard-elapsed=0"
+            echo "pass=0"
+            echo "fail=0"
+            echo "ran=0"
+          } > "$RECEIPT"
+
+          if ! bun scripts/ovh-test-shards.mjs --verify "$SHARD_FILE" --expected "${{ matrix.files }}"; then
+            echo "::error::Shard ${{ matrix.index }} test list does not match the plan (expected ${{ matrix.files }} tests)"
+            exit 1
+          fi
+
+          if [[ "${{ matrix.files }}" == "0" ]]; then
             echo 'no-related-tests: 0 selected, 0 passed, 0 failed'
+            shard_end=$(date +%s)
+            shard_elapsed=$((shard_end - shard_start))
+            sed -i "s/^shard-end=.*/shard-end=$shard_end/;s/^shard-elapsed=.*/shard-elapsed=$shard_elapsed/" "$RECEIPT"
+            if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+              {
+                echo "### OVH CI Test Shard ${{ matrix.index }} of ${{ matrix.count }}"
+                echo "- Status: no related tests"
+                echo "- Coverage: complete related coverage"
+                echo "- Start: $shard_start"
+                echo "- End: $shard_end"
+                echo "- Elapsed: ${shard_elapsed}s"
+                echo "- Pass: 0"
+                echo "- Fail: 0"
+                echo "- Ran: 0"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 0
           fi
+
           status=0; total_pass=0; total_fail=0; total_ran=0
           while IFS= read -r file; do
             [[ -n "$file" ]] || continue
@@ -203,26 +342,34 @@ jobs:
             total_pass=$((total_pass+pass)); total_fail=$((total_fail+fail)); total_ran=$((total_ran+ran))
             if ((rc!=0||ran==0||fail!=0)); then echo "::error::Test failed or ran zero cases: $file exit=$rc ran=$ran fail=$fail"; status=1; fi
             printf 'test=%s pass=%s fail=%s ran=%s exit=%s\n' "$file" "$pass" "$fail" "$ran" "$rc" >> "$RECEIPT"
-          done < "$RUNNER_TEMP/ovh-related-tests"
+          done < "$SHARD_FILE"
           echo "OVH_TEST_TOTAL pass=$total_pass fail=$total_fail ran=$total_ran"
-          sed -i "s/^pass=.*/pass=$total_pass/;s/^fail=.*/fail=$total_fail/;s/^ran=.*/ran=$total_ran/" "$RECEIPT"
+          shard_end=$(date +%s)
+          shard_elapsed=$((shard_end - shard_start))
+          sed -i "s/^pass=.*/pass=$total_pass/;s/^fail=.*/fail=$total_fail/;s/^ran=.*/ran=$total_ran/;s/^shard-end=.*/shard-end=$shard_end/;s/^shard-elapsed=.*/shard-elapsed=$shard_elapsed/" "$RECEIPT"
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "### OVH CI Test Shard ${{ matrix.index }} of ${{ matrix.count }}"
+              echo "- Coverage: complete related coverage"
+              echo "- Start: $shard_start"
+              echo "- End: $shard_end"
+              echo "- Elapsed: ${shard_elapsed}s"
+              echo "- Selected: ${{ matrix.files }}"
+              echo "- Projected: ${{ matrix.projected_ms }}ms"
+              echo "- Pass: $total_pass"
+              echo "- Fail: $total_fail"
+              echo "- Ran: $total_ran"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           ((total_ran>0)) || { echo '::error::No selected tests ran'; status=1; }
           exit "$status"
       - name: Upload test logs and receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ovh-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ovh-shard-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/ovh-test-*.log
             ${{ runner.temp }}/ovh-receipt.txt
           if-no-files-found: warn
           retention-days: 7
-      - name: Fail if static checks failed
-        if: always()
-        shell: bash
-        run: |
-          if [[ "${{ steps.biome.outcome }}" == failure || "${{ steps.types.outcome }}" == failure ]]; then
-            echo '::error::Biome or TypeScript check failed.'
-            exit 1
-          fi

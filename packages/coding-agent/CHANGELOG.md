@@ -7,10 +7,13 @@
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
 
 ### Fixed
+- MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
+- Tool admission on a synchronized cloud session ends the run when write authority is lost, instead of letting the model re-sample against the fence; every admission throw, including a transient `assertWritable` failure, now ends the run (fail closed) ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
+- `/reload-config` also applies the compaction settings; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
