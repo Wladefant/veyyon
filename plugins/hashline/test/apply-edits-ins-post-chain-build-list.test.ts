@@ -1,29 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { applyEdits, parsePatch } from "@veyyon/hashline";
+import { applyPatch, lineCount, linesText } from "./support/apply-patch";
 
 /**
  * Build a list by repeatedly INS.POST on the last line.
  */
 
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
-
-function apply(src: string, diff: string): string {
-	return applyEdits(src, parsePatch(diff).edits).text;
-}
-
-function count(s: string): number {
-	if (s === "" || s === "\n") return 0;
-	return s.replace(/\n$/, "").split("\n").length;
-}
-
 describe("INS.POST chain build list", () => {
 	it("appending after last line 10 times grows by 10", () => {
-		let cur = text(["start"]);
+		let cur = linesText(["start"]);
 		for (let i = 1; i <= 10; i++) {
-			const last = count(cur);
-			cur = apply(cur, `INS.POST ${last}:\n+item${i}`);
+			const last = lineCount(cur);
+			cur = applyPatch(cur, `INS.POST ${last}:\n+item${i}`);
 		}
 		const lines = cur.split("\n").filter((l, i, a) => i < a.length - 1 || l);
 		expect(lines[0]).toBe("start");

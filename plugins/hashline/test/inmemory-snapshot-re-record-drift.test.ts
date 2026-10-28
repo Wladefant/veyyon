@@ -1,22 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import { computeFileHash, InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Re-record after drift creates new tag; old tag still usable for recovery.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/drift.ts";
 
 describe("snapshot re-record after drift", () => {
 	it("old and new tags differ; old tag recovers early edit", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
+		const v0 = linesText(["A", "B", "C"]);
 		const h0 = store.record(PATH, v0);
-		const v1 = text(["A", "B", "C-DRIFT"]);
+		const v1 = linesText(["A", "B", "C-DRIFT"]);
 		const h1 = store.record(PATH, v1);
 		expect(h0).not.toBe(h1);
 		expect(h1).toBe(computeFileHash(v1));

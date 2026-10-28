@@ -1,25 +1,22 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Independent recovery on two paths in one store with late drift each.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 describe("Recovery multi-path accept", () => {
 	it("recovers SWAP on each path independently", () => {
 		const store = new InMemorySnapshotStore();
 		const a = "a.ts";
 		const b = "b.ts";
-		const va0 = text(["A1", "A2", "A3"]);
-		const vb0 = text(["B1", "B2", "B3"]);
+		const va0 = linesText(["A1", "A2", "A3"]);
+		const vb0 = linesText(["B1", "B2", "B3"]);
 		const ha = store.record(a, va0);
 		const hb = store.record(b, vb0);
-		const va1 = text(["A1", "A2", "A3-DRIFT"]);
-		const vb1 = text(["B1", "B2", "B3-DRIFT"]);
+		const va1 = linesText(["A1", "A2", "A3-DRIFT"]);
+		const vb1 = linesText(["B1", "B2", "B3-DRIFT"]);
 		store.record(a, va1);
 		store.record(b, vb1);
 

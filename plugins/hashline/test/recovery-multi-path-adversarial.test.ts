@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery across multiple paths in one store — isolation of tags and refuse.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 describe("Recovery multi-path isolation", () => {
 	it("tag for path A does not recover path B", () => {
 		const store = new InMemorySnapshotStore();
 		const a = "src/a.ts";
 		const b = "src/b.ts";
-		const va = text(["A1", "A2"]);
-		const vb = text(["B1", "B2"]);
+		const va = linesText(["A1", "A2"]);
+		const vb = linesText(["B1", "B2"]);
 		const ha = store.record(a, va);
 		store.record(b, vb);
 		const { edits } = parsePatch("SWAP 1.=1:\n+A1x");
@@ -33,13 +30,13 @@ describe("Recovery multi-path isolation", () => {
 		const store = new InMemorySnapshotStore();
 		const a = "src/a.ts";
 		const b = "src/b.ts";
-		const va0 = text(["A1", "A2", "A3"]);
-		const vb0 = text(["B1", "B2", "B3"]);
+		const va0 = linesText(["A1", "A2", "A3"]);
+		const vb0 = linesText(["B1", "B2", "B3"]);
 		const ha = store.record(a, va0);
 		const hb = store.record(b, vb0);
 		// Drift later lines on both.
-		const va1 = text(["A1", "A2", "A3-DRIFT"]);
-		const vb1 = text(["B1", "B2", "B3-DRIFT"]);
+		const va1 = linesText(["A1", "A2", "A3-DRIFT"]);
+		const vb1 = linesText(["B1", "B2", "B3-DRIFT"]);
 		store.record(a, va1);
 		store.record(b, vb1);
 		const ra = new Recovery(store).tryRecover({

@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, RECOVERY_SESSION_CHAIN_WARNING, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery session-chain accept: anchors hold, later drift preserved.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/chain.ts";
 
 describe("Recovery session-chain accept", () => {
 	it("preserves trailing drift while applying early SWAP", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D", "E"]);
-		const v1 = text(["A", "B", "C", "D", "E-DRIFT"]);
+		const v0 = linesText(["A", "B", "C", "D", "E"]);
+		const v1 = linesText(["A", "B", "C", "D", "E-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({
@@ -32,8 +29,8 @@ describe("Recovery session-chain accept", () => {
 
 	it("warnings array is non-empty on successful session-chain recovery", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
-		const v1 = text(["A", "B", "C-DRIFT"]);
+		const v0 = linesText(["A", "B", "C"]);
+		const v1 = linesText(["A", "B", "C-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({
@@ -49,7 +46,7 @@ describe("Recovery session-chain accept", () => {
 
 	it("exact tag match with no drift still applies", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B"]);
+		const v0 = linesText(["A", "B"]);
 		const h0 = store.record(PATH, v0);
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
