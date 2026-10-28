@@ -82,7 +82,8 @@ it sits and whether a glob or a literal path declares it:
 `scripts/package-map-coverage.test.ts` fails when a resolved member is missing from
 the table or when `ARCHITECTURE.md` grows a second copy of it,
 `scripts/workspace-test-coverage.test.ts` fails when a member ships tests no bucket runs, and
-`scripts/workspace-typecheck-coverage.test.ts` fails when a member declares no `check:types`.
+`scripts/workspace-typecheck-coverage.test.ts` fails when a member declares no `check:types` or
+holds a tracked TypeScript file no project its `check:types` runs includes.
 
 Import catalog values — bundled models, model-thinking helpers, identity, descriptors, model
 manager and cache — from `@veyyon/catalog/<module>`, never through `@veyyon/ai`. Type-only imports
