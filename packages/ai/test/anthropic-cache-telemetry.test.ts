@@ -320,7 +320,9 @@ describe("Anthropic cache telemetry", () => {
 
 		expect(capturedParams).toBeDefined();
 		expect(capturedOptions?.serializedBody).toBeDefined();
-		expect(serializedInOnPayload).toBeDefined();
+		if (typeof serializedInOnPayload !== "string") {
+			throw new Error("Provider did not serialize the onPayload request");
+		}
 		expect(capturedOptions?.serializedBody).toBe(serializedInOnPayload);
 		expect(JSON.stringify(capturedParams)).toBe(serializedInOnPayload);
 		expect(capturedParams?.model).toBe("claude-sonnet-4-5");
