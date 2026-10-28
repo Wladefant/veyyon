@@ -672,4 +672,79 @@ describe("MCPManager event subscription contracts", () => {
 			delete process.env.MCP_EVENTS_DELAYED_SECRET;
 		}
 	});
+
+	it("aborts delayed event listing during disconnectServer and prevents post-disconnect start across all modes", async () => {
+		const listGate = Promise.withResolvers<Record<string, unknown>>();
+		const listRequested = Promise.withResolvers<void>();
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+
+		const server = fakeMcpServer({
+			delivery: ["poll", "push", "webhook"],
+			eventsList: () => {
+				listRequested.resolve();
+				return listGate.promise;
+			},
+			poll: () => ({ events: [], cursor: "poll-cursor", hasMore: false, nextPollMs: 30_000 }),
+			webhookSubscribe: async () => ({ id: "webhook-delayed", cursor: "wh-cursor", refreshBefore: null }),
+		});
+
+		const manager = new MCPManager(process.cwd());
+		const onEvent = vi.fn();
+		const onCursor = vi.fn();
+		const serverName = "disconnect-delayed-list-server";
+
+		const subscriptions: MCPServerEventSubscriptionConfig[] = [
+			{ name: "orders/poll", mode: "poll" },
+			{ name: "orders/push", mode: "push" },
+			{
+				name: "orders/webhook",
+				mode: "webhook",
+				webhook: {
+					callbackUrl: "https://callback.example.test/events/delayed",
+					secretRef: "$MCP_EVENTS_DELAYED_SECRET",
+					listenPort,
+				},
+			},
+		];
+
+		process.env.MCP_EVENTS_DELAYED_SECRET = CALLBACK_SECRET;
+
+		try {
+			await connect(
+				manager,
+				serverName,
+				managerConfig(server, { enabled: true, subscriptions }),
+			);
+
+			manager.setOnEvent(onEvent);
+			manager.setOnEventCursor(onCursor);
+			await listRequested.promise;
+
+			await manager.disconnectServer(serverName);
+			listGate.resolve({
+				events: [
+					{ name: "orders/poll", description: "poll", inputSchema: { type: "object" }, delivery: ["poll"] },
+					{ name: "orders/push", description: "push", inputSchema: { type: "object" }, delivery: ["push"] },
+					{ name: "orders/webhook", description: "webhook", inputSchema: { type: "object" }, delivery: ["webhook"] },
+				],
+			});
+
+			await fetch(server.url, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "tools/list" }),
+			});
+			for (let i = 0; i < 20; i++) await Promise.resolve();
+			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
+			expect(subscriptionMethods).toEqual([]);
+			expect(onEvent).not.toHaveBeenCalled();
+			expect(server.streamControllers).toHaveLength(0);
+		} finally {
+			await manager.stopEvents();
+			server.stop();
+			delete process.env.MCP_EVENTS_DELAYED_SECRET;
+		}
+	});
 });
