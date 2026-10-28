@@ -71,6 +71,7 @@ export interface DryBalanceAuthStorage {
 
 export interface DryBalanceModelRegistry {
 	authStorage: DryBalanceAuthStorage;
+	getProviders(): string[];
 	getAll(): Model<Api>[];
 	getAvailable(): Model<Api>[];
 	getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined>;

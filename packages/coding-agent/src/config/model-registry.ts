@@ -1797,6 +1797,17 @@ export class ModelRegistry {
 		return models;
 	}
 
+	/**
+	 * Every provider holding at least one model, in {@link getAll} order. Reads provider names
+	 * only, so it does not build a catalog that is not built yet.
+	 */
+	getProviders(): string[] {
+		if (this.#models === undefined) return [...this.#getKnownProviders()];
+		const providers = new Set<string>();
+		for (const model of this.#models) providers.add(model.provider);
+		return [...providers];
+	}
+
 	getAvailable(): Model<Api>[] {
 		const isAvailable = this.#createAvailabilityCheck();
 		if (this.#models !== undefined) return this.#models.filter(model => isAvailable(model.provider));

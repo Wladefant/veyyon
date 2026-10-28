@@ -1406,6 +1406,7 @@ export function resolveCliModel(options: {
 	// failure, and a `Model "x" not found` here blamed the id for it whenever the
 	// selector carried a `:level` suffix or an explicit `--provider`.
 	const failureView: ModelRegistryView = {
+		getProviders: () => [...new Set(availableModels.map(model => model.provider))],
 		getAll: () => availableModels,
 		getAvailable: () =>
 			modelRegistry.getAvailable?.() ??

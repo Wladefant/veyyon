@@ -75,6 +75,7 @@ function namesSlashCommandWithoutSayingWhere(text: string): boolean {
 }
 
 const CATALOG = ["anthropic/claude-opus-4-8", "openai/gpt-5.5", "google/gemini-3.1-pro-preview"];
+const PROVIDERS = ["anthropic", "openai", "google"];
 
 describe("missingCredentialsMessage", () => {
 	it("names the provider's real environment variable, the login command, and the config key", () => {
@@ -254,21 +255,39 @@ describe("describeModelResolutionFailure remedies", () => {
 	}> = [
 		{
 			kind: "registry-error",
-			context: { requested: ["opus"], allModelIds: CATALOG, availableModelIds: [], registryError: "bad yaml" },
+			context: {
+				requested: ["opus"],
+				providers: PROVIDERS,
+				allModelIds: () => CATALOG,
+				availableModelIds: [],
+				registryError: "bad yaml",
+			},
 		},
-		{ kind: "empty-registry", context: { requested: ["opus"], allModelIds: [], availableModelIds: [] } },
-		{ kind: "no-credentials", context: { requested: ["opus"], allModelIds: CATALOG, availableModelIds: [] } },
+		{
+			kind: "empty-registry",
+			context: { requested: ["opus"], providers: [], allModelIds: () => [], availableModelIds: [] },
+		},
+		{
+			kind: "no-credentials",
+			context: { requested: ["opus"], providers: PROVIDERS, allModelIds: () => CATALOG, availableModelIds: [] },
+		},
 		{
 			kind: "provider-unauthenticated",
 			context: {
 				requested: ["claude-opus-4-8"],
-				allModelIds: CATALOG,
+				providers: PROVIDERS,
+				allModelIds: () => CATALOG,
 				availableModelIds: ["openai/gpt-5.5"],
 			},
 		},
 		{
 			kind: "unknown-model",
-			context: { requested: ["totally-made-up"], allModelIds: CATALOG, availableModelIds: CATALOG },
+			context: {
+				requested: ["totally-made-up"],
+				providers: PROVIDERS,
+				allModelIds: () => CATALOG,
+				availableModelIds: CATALOG,
+			},
 		},
 	];
 
@@ -295,7 +314,8 @@ describe("describeModelResolutionFailure remedies", () => {
 	it("tells an unauthenticated provider exactly which login to run", () => {
 		const { message } = describeModelResolutionFailure({
 			requested: ["claude-opus-4-8"],
-			allModelIds: CATALOG,
+			providers: PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: ["openai/gpt-5.5"],
 		});
 		expect(message).toBe(
@@ -308,7 +328,8 @@ describe("describeModelResolutionFailure remedies", () => {
 	it("points an unmatched id at the command that lists what is available", () => {
 		const { message } = describeModelResolutionFailure({
 			requested: ["totally-made-up"],
-			allModelIds: CATALOG,
+			providers: PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 		});
 		expect(message).toBe(
