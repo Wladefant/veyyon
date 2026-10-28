@@ -137,6 +137,32 @@ describe("HookSelectorComponent", () => {
 		expect(afterDown).toContain("(2/4)");
 	});
 
+	it("collapses to labels once a narrower terminal wraps the descriptions past the row cap", () => {
+		const options = [
+			{ label: "Path A", description: "Reuse the credentials already stored for this provider." },
+			{ label: "Path B", description: "Authorize the provider in a browser window on this machine." },
+			{ label: "Path C", description: "Edit the provider keys by hand in the configuration file." },
+		];
+		const component = new HookSelectorComponent(
+			"Which setup path should be used?",
+			options,
+			() => {},
+			() => {},
+			{ initialIndex: 0, maxVisible: 6 },
+		);
+
+		// Each description fits one row of the wide card, so all six rows fit the cap of six.
+		const wide = cardBodyLines(component.render(CARD_AREA)).join("\n");
+		expect(wide).toContain("Authorize the provider in a browser window on this machine.");
+
+		// The narrow card wraps each description to two rows, nine in all, so the list collapses to
+		// its labels and the highlighted option's description.
+		const narrow = cardBodyLines(component.render(60)).join("\n");
+		expect(narrow).toContain("Path C");
+		expect(narrow).toContain("Reuse the credentials");
+		expect(narrow).not.toContain("Authorize");
+	});
+
 	it("counts wrapped outlined rows toward the visible row cap", () => {
 		const options = [
 			"Option A: Use the existing terminal session and preserve the current credentials while the setup prompt remains open for the editor.",

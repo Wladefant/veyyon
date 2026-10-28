@@ -75,6 +75,7 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
+- The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
 
 ### Fixed
 

@@ -179,6 +179,8 @@ export class HookSelectorComponent extends Container {
 	 */
 	#rowCap: number | undefined;
 	#filterable: boolean | undefined;
+	/** Rows every option takes with its description, and the width they were counted at. */
+	#fullRows: { width: number | undefined; rows: number } | undefined;
 	#keyShortcuts: Partial<Record<KeyId, number>> | Record<string, number> | undefined;
 	#multi: boolean;
 	#onSelectValuesCallback: ((values: readonly string[]) => void) | undefined;
@@ -411,12 +413,20 @@ export class HookSelectorComponent extends Container {
 		return rows;
 	}
 
-	#totalOptionRows(options: HookSelectorOption[], renderWidth?: number, mdTheme?: MarkdownTheme): number {
+	/**
+	 * Rows every option takes with its description at `renderWidth`. The options are fixed at
+	 * construction, so the sum is counted once per width: it is read on every key, and counting it
+	 * renders the markdown of every option.
+	 */
+	#fullOptionRows(renderWidth: number | undefined, mdTheme?: MarkdownTheme): number {
+		const cached = this.#fullRows;
+		if (cached !== undefined && cached.width === renderWidth) return cached.rows;
 		const themeForRows = mdTheme ?? getMarkdownTheme();
 		let rows = 0;
-		for (const option of options) {
+		for (const option of this.#options) {
 			rows += this.#optionRowCount(option, renderWidth, false, themeForRows, "full");
 		}
+		this.#fullRows = { width: renderWidth, rows };
 		return rows;
 	}
 
@@ -621,7 +631,7 @@ export class HookSelectorComponent extends Container {
 
 	#isSearchEnabled(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
 		if (this.#filterable !== undefined) return this.#filterable;
-		return this.#totalOptionRows(this.#options, renderWidth, mdTheme) > this.#maxVisible;
+		return this.#fullOptionRows(renderWidth, mdTheme) > this.#maxVisible;
 	}
 
 	#shouldRenderSearchStatus(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
