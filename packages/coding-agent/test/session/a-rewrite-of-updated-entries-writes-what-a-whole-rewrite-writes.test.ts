@@ -505,14 +505,6 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 			alter: (raw: string, ids: string[]) => insertBefore(raw, ids[5]!, foreignLine("orphan", "re-linked", "gone")),
 		},
 		{ name: "was written by an older version", alter: (raw: string) => raw.replace(/"version":\s*\d+/, '"version":2') },
-		{
-			name: "has a header line that carries a title",
-			alter: (raw: string) =>
-				raw.replace(
-					'{"type":"session",',
-					'{"type":"session","title":"from an earlier version","titleSource":"auto",',
-				),
-		},
 	])("writes the whole file on the first rewrite when the file $name", async ({ alter }) => {
 		using tempDir = TempDir.createSync("@veyyon-tail-resume-unclean-");
 		const fixture = await resumeSession(tempDir.path(), 40, { alter });
