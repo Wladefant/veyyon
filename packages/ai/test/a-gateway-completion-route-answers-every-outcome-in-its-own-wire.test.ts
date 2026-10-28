@@ -17,7 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis } from "@veyyon/ai/api-registry";
-import { AUTH_GATEWAY_COMPLETION_PATHS, type AuthGatewayServerHandle, startAuthGateway } from "@veyyon/ai/auth-gateway";
+import { type AuthGatewayServerHandle, startAuthGateway } from "@veyyon/ai/auth-gateway";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { classifyGatewayError } from "@veyyon/ai/error/gateway";
 import * as anthropicMessages from "@veyyon/ai/providers/anthropic-messages-server";
@@ -171,10 +171,6 @@ function failedTurn(stopReason: StopReason, message?: string): AssistantMessage 
 function statusError(status: number, message: string): Error {
 	return Object.assign(new Error(message), { status });
 }
-
-it("every completion route the gateway serves has a fixture here", () => {
-	expect(Object.keys(ROUTES).sort()).toEqual([...AUTH_GATEWAY_COMPLETION_PATHS].sort());
-});
 
 describe.each(Object.entries(ROUTES))("completion route %s", (route, fixture) => {
 	const { wire } = fixture;

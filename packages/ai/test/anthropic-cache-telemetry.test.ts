@@ -1,9 +1,10 @@
-import nodeCrypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import nodeCrypto from "node:crypto";
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import { AnthropicApiError, AnthropicMessages } from "@veyyon/ai/providers/anthropic-client";
-import type { Context, Model, ModelSpec, Tool } from "@veyyon/ai/types";
+import type { CacheRequestRecord, Context, Model, ModelSpec, Tool, Usage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { isRecord } from "@veyyon/utils/type-guards";
 
 const MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",
@@ -26,6 +27,24 @@ const CONTEXT: Context = {
 };
 
 type MockAnthropicEvent = Record<string, unknown>;
+
+function cacheRequestsFor(usage: Usage): CacheRequestRecord[] {
+	if (!usage.cacheRequests) throw new Error("Expected cache request telemetry");
+	return usage.cacheRequests;
+}
+
+function clearMessageCacheControls(payload: unknown): Record<string, unknown> {
+	if (!isRecord(payload) || !Array.isArray(payload.messages)) {
+		throw new Error("Expected an Anthropic message payload");
+	}
+	for (const message of payload.messages) {
+		if (!isRecord(message) || !Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (isRecord(block)) delete block.cache_control;
+		}
+	}
+	return payload;
+}
 
 function createMockRequest(events: MockAnthropicEvent[], requestId = "req_mock") {
 	const response = new Response(null, { status: 200, headers: { "request-id": requestId } });
@@ -90,8 +109,8 @@ afterEach(() => {
 
 describe("Anthropic cache telemetry", () => {
 	it("records 1h requested TTL telemetry for requests with 1h retention", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents({ cacheReadTokens: 10, cacheWriteTokens: 20 }), "req_1h") as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents({ cacheReadTokens: 10, cacheWriteTokens: 20 }), "req_1h") as never,
 		);
 
 		const before = Date.now();
@@ -105,10 +124,9 @@ describe("Anthropic cache telemetry", () => {
 		const result = await s.result();
 		const after = Date.now();
 
-		const usage = result.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		expect(usage.cacheRequests).toHaveLength(1);
-		const req = usage.cacheRequests[0];
+		const requests = cacheRequestsFor(result.usage);
+		expect(requests).toHaveLength(1);
+		const req = requests[0]!;
 		expect(req.requestedTtl).toBe("1h");
 		expect(req.model).toBe("claude-sonnet-4-5");
 		expect(req.requestId).toBe("req_1h");
@@ -121,8 +139,8 @@ describe("Anthropic cache telemetry", () => {
 	});
 
 	it("records none requested TTL when caching is declined", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents(), "req_none") as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents(), "req_none") as never,
 		);
 
 		const s = streamAnthropic(MODEL, CONTEXT, {
@@ -134,25 +152,25 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const result = await s.result();
 
-		const usage = result.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		expect(usage.cacheRequests).toHaveLength(1);
-		const req = usage.cacheRequests[0];
+		const requests = cacheRequestsFor(result.usage);
+		expect(requests).toHaveLength(1);
+		const req = requests[0]!;
 		expect(req.requestedTtl).toBe("none");
 		expect(req.requestedTtls).toBeUndefined();
 		expect(req.requestId).toBe("req_none");
 	});
 
 	it("captures optional split and handles omitted split safely", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(() =>
-			createMockRequest(
-				createEvents({
-					cacheReadTokens: 50,
-					cacheWriteTokens: 300,
-					cacheCreation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 200 },
-				}),
-				"req_split",
-			) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(
+			() =>
+				createMockRequest(
+					createEvents({
+						cacheReadTokens: 50,
+						cacheWriteTokens: 300,
+						cacheCreation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 200 },
+					}),
+					"req_split",
+				) as never,
 		);
 
 		const s1 = streamAnthropic(MODEL, CONTEXT, { apiKey: "sk-ant-test", cacheRetention: "long" });
@@ -160,20 +178,21 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res1 = await s1.result();
-		const req1 = (res1.usage as Record<string, any>).cacheRequests?.[0];
+		const req1 = cacheRequestsFor(res1.usage)[0]!;
 		expect(req1.cacheRead).toBe(50);
 		expect(req1.cacheWrite).toBe(300);
 		expect(req1.cttl).toEqual({ ephemeral5m: 100, ephemeral1h: 200 });
 
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(() =>
-			createMockRequest(
-				createEvents({
-					cacheReadTokens: 40,
-					cacheWriteTokens: 100,
-					cacheCreation: null,
-				}),
-				"req_nosplit",
-			) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(
+			() =>
+				createMockRequest(
+					createEvents({
+						cacheReadTokens: 40,
+						cacheWriteTokens: 100,
+						cacheCreation: null,
+					}),
+					"req_nosplit",
+				) as never,
 		);
 
 		const s2 = streamAnthropic(MODEL, CONTEXT, { apiKey: "sk-ant-test", cacheRetention: "long" });
@@ -181,19 +200,20 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res2 = await s2.result();
-		const req2 = (res2.usage as Record<string, any>).cacheRequests?.[0];
+		const req2 = cacheRequestsFor(res2.usage)[0]!;
 		expect(req2.cacheRead).toBe(40);
 		expect(req2.cacheWrite).toBe(100);
 		expect(req2.cttl).toBeUndefined();
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(() =>
-			createMockRequest(
-				createEvents({
-					cacheReadTokens: 60,
-					cacheWriteTokens: 250,
-					cacheCreation: { ephemeral_5m_input_tokens: 250, ephemeral_1h_input_tokens: 0 },
-				}),
-				"req_zero_split",
-			) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementationOnce(
+			() =>
+				createMockRequest(
+					createEvents({
+						cacheReadTokens: 60,
+						cacheWriteTokens: 250,
+						cacheCreation: { ephemeral_5m_input_tokens: 250, ephemeral_1h_input_tokens: 0 },
+					}),
+					"req_zero_split",
+				) as never,
 		);
 
 		const s3 = streamAnthropic(MODEL, CONTEXT, { apiKey: "sk-ant-test", cacheRetention: "long" });
@@ -201,15 +221,15 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res3 = await s3.result();
-		const req3 = (res3.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
+		const req3 = cacheRequestsFor(res3.usage);
 		expect(req3?.[0]?.cacheRead).toBe(60);
 		expect(req3?.[0]?.cacheWrite).toBe(250);
 		expect(req3?.[0]?.cttl).toEqual({ ephemeral5m: 250, ephemeral1h: 0 });
 	});
 
 	it("produces stable prefixHash on repeat and distinct prefixHash on change", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents()) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents()) as never,
 		);
 
 		const tool1: Tool = {
@@ -233,14 +253,14 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res1 = await s1.result();
-		const hash1 = (res1.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
+		const hash1 = cacheRequestsFor(res1.usage);
 
 		const s2 = streamAnthropic(MODEL, contextWithTools, { apiKey: "sk-ant-test" });
 		for await (const _ of s2) {
 			// drain
 		}
 		const res2 = await s2.result();
-		const hash2 = (res2.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
+		const hash2 = cacheRequestsFor(res2.usage);
 
 		expect(hash1?.[0]?.prefixHash).toBeDefined();
 		expect(hash1?.[0]?.prefixHash).toBe(hash2?.[0]?.prefixHash);
@@ -254,7 +274,7 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res3 = await s3.result();
-		const hash3 = (res3.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
+		const hash3 = cacheRequestsFor(res3.usage);
 
 		expect(hash3?.[0]?.prefixHash).toBeDefined();
 		expect(hash3?.[0]?.prefixHash).not.toBe(hash1?.[0]?.prefixHash);
@@ -268,7 +288,7 @@ describe("Anthropic cache telemetry", () => {
 			// drain
 		}
 		const res4 = await s4.result();
-		const hash4 = (res4.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
+		const hash4 = cacheRequestsFor(res4.usage);
 
 		expect(hash4?.[0]?.prefixHash).toBeDefined();
 		expect(hash4?.[0]?.prefixHash).not.toBe(hash1?.[0]?.prefixHash);
@@ -326,8 +346,7 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const res = await s.result();
 
-		const usage = res.usage as Record<string, unknown>;
-		const req = (usage.cacheRequests as Array<Record<string, unknown>> | undefined)?.[0];
+		const req = cacheRequestsFor(res.usage)[0];
 		expect(req).toBeDefined();
 		expect(typeof req?.prefixHash).toBe("string");
 
@@ -362,8 +381,8 @@ describe("Anthropic cache telemetry", () => {
 			],
 		};
 
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents()) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents()) as never,
 		);
 
 		const s = streamAnthropic(MODEL, sensitiveContext, { apiKey: "sk-ant-test" });
@@ -372,34 +391,27 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const res = await s.result();
 
-		const usage = res.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		const telemetryJson = JSON.stringify(usage.cacheRequests);
+		const requests = cacheRequestsFor(res.usage);
+		const telemetryJson = JSON.stringify(requests);
 		expect(telemetryJson).not.toContain(SECRET_PHRASE);
 		expect(telemetryJson).not.toContain("confidential_tool");
 		expect(telemetryJson).not.toContain("sk-ant-test");
 	});
 
 	it("handles mixed TTLs without silently collapsing to a single TTL", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents()) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents()) as never,
 		);
 
 		const s = streamAnthropic(MODEL, CONTEXT, {
 			apiKey: "sk-ant-test",
 			onPayload: payload => {
-				payload.system = [
+				const request = clearMessageCacheControls(payload);
+				request.system = [
 					{ type: "text", text: "sys1", cache_control: { type: "ephemeral", ttl: "1h" } },
 					{ type: "text", text: "sys2", cache_control: { type: "ephemeral" } },
 				];
-				for (const m of payload.messages ?? []) {
-					if (Array.isArray(m.content)) {
-						for (const b of m.content) {
-							delete b.cache_control;
-						}
-					}
-				}
-				return payload;
+				return request;
 			},
 		});
 		for await (const _ of s) {
@@ -407,36 +419,32 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const res = await s.result();
 
-		const usage = res.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		const req = usage.cacheRequests[0];
+		const requests = cacheRequestsFor(res.usage);
+		expect(requests).toHaveLength(1);
+		const req = requests[0]!;
 		expect(req.requestedTtl).toBe("mixed");
 		expect(req.requestedTtls).toEqual(["1h", "5m"]);
 	});
 	it("observes top-level cache_control in onPayload replacement payload", async () => {
-		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(() =>
-			createMockRequest(createEvents()) as never,
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation(
+			() => createMockRequest(createEvents()) as never,
 		);
 
 		const s = streamAnthropic(MODEL, CONTEXT, {
 			apiKey: "sk-ant-test",
 			cacheRetention: "none",
 			onPayload: payload => {
-				for (const m of payload.messages ?? []) {
-					if (Array.isArray(m.content)) {
-						for (const b of m.content) delete b.cache_control;
-					}
-				}
-				(payload as Record<string, unknown>).cache_control = { type: "ephemeral", ttl: "1h" };
-				return payload;
+				const request = clearMessageCacheControls(payload);
+				request.cache_control = { type: "ephemeral", ttl: "1h" };
+				return request;
 			},
 		});
 		for await (const _ of s) {
 			// drain
 		}
 		const res = await s.result();
-		const reqs = (res.usage as Record<string, unknown>).cacheRequests as Array<Record<string, unknown>> | undefined;
-		const req = reqs?.[0];
+		const reqs = cacheRequestsFor(res.usage);
+		const req = reqs[0];
 		expect(req).toBeDefined();
 		expect(req?.requestedTtl).toBe("1h");
 		expect(req?.requestedTtls).toEqual(["1h"]);
@@ -487,16 +495,15 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const res = await s.result();
 
-		const usage = res.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		expect(usage.cacheRequests.length).toBe(2);
+		const requests = cacheRequestsFor(res.usage);
+		expect(requests).toHaveLength(2);
 
-		const req1 = usage.cacheRequests[0];
+		const req1 = requests[0]!;
 		expect(req1.requestId).toBe("req_attempt_1");
 		expect(req1.cacheRead).toBe(30);
 		expect(req1.cacheWrite).toBe(70);
 
-		const req2 = usage.cacheRequests[1];
+		const req2 = requests[1]!;
 		expect(req2.requestId).toBe("req_attempt_2");
 		expect(req2.cacheRead).toBe(10);
 		expect(req2.cacheWrite).toBe(20);
@@ -528,10 +535,7 @@ describe("Anthropic cache telemetry", () => {
 		}
 		const res = await s.result();
 
-		const usage = res.usage as Record<string, unknown>;
-		const reqs = usage.cacheRequests as Array<Record<string, unknown>> | undefined;
-		expect(reqs).toBeDefined();
-		expect(reqs?.length).toBe(2);
+		const reqs = cacheRequestsFor(res.usage);
 		expect(reqs?.[0]?.requestId).toBe("req_empty_1");
 		expect(reqs?.[0]?.cacheRead).toBe(50);
 		expect(reqs?.[1]?.requestId).toBe("req_success_2");
@@ -566,16 +570,15 @@ describe("Anthropic cache telemetry", () => {
 		const res = await s.result();
 		const afterDispatch = Date.now();
 
-		const usage = res.usage as Record<string, any>;
-		expect(usage.cacheRequests).toBeDefined();
-		expect(usage.cacheRequests).toHaveLength(2);
+		const requests = cacheRequestsFor(res.usage);
+		expect(requests).toHaveLength(2);
 
-		const req1 = usage.cacheRequests[0];
+		const req1 = requests[0]!;
 		expect(req1.requestId).toBe("req_api_err_1");
 		expect(req1.requestStartedAt).toBeGreaterThanOrEqual(beforeDispatch);
 		expect(req1.requestStartedAt).toBeLessThanOrEqual(afterDispatch);
 
-		const req2 = usage.cacheRequests[1];
+		const req2 = requests[1]!;
 		expect(req2.requestId).toBe("req_success_attempt_2");
 		expect(req2.requestStartedAt).toBeGreaterThanOrEqual(req1.requestStartedAt);
 		expect(req2.requestStartedAt).toBeLessThanOrEqual(afterDispatch);

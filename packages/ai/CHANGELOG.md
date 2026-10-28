@@ -5,6 +5,7 @@
 ### Fixed
 
 - Corrected Anthropic cache-control and request-ID types without changing request behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Removed unused upstream Codex transport copies and their stale test; the provider keeps its production transport in `openai-codex-responses.ts` ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 
 ## [1.6.0] - 2026-10-28
 
