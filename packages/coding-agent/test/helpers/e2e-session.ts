@@ -40,36 +40,6 @@ export interface TestSessionContext {
 }
 
 /**
- * Create a minimal user message for testing.
- */
-export function userMsg(text: string) {
-	return { role: "user" as const, content: text, timestamp: Date.now() };
-}
-
-/**
- * Create a minimal assistant message for testing.
- */
-export function assistantMsg(text: string) {
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: "anthropic-messages" as const,
-		provider: "anthropic",
-		model: "test",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
-
-/**
  * Create an AgentSession for testing with proper setup and cleanup.
  * Use this for e2e tests that need real LLM calls.
  */

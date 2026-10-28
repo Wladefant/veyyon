@@ -31,7 +31,7 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
-import { assistantMsg, userMsg } from "./helpers/e2e-session";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 describe("compaction model chain", () => {
 	let tempDir: TempDir;

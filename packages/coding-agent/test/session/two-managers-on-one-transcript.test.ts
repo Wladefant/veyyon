@@ -5,6 +5,7 @@ import { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import { SESSION_TITLE_SLOT_ENTRY_TYPE, TITLE_CHANGE_ENTRY_TYPE } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, SessionManager } from "@veyyon/kernel/session/session-manager";
 import { pathExists, TempDir } from "@veyyon/utils";
+import { userMsg } from "../helpers/session-messages";
 
 /**
  * WHY: two managers can hold one transcript, and a full-file publish used to
@@ -145,10 +146,6 @@ function messageTexts(manager: SessionManager): string[] {
 	return texts;
 }
 
-function userMessage(text: string) {
-	return { role: "user" as const, content: text, timestamp: Date.now() };
-}
-
 describe("two managers on one transcript", () => {
 	it("keeps the entries the other writer appended after this one loaded the file", async () => {
 		using tempDir = TempDir.createSync("@veyyon-two-writers-");
@@ -156,14 +153,14 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("from A one"));
-		a.appendMessage(userMessage("from A two"));
+		a.appendMessage(userMsg("from A one"));
+		a.appendMessage(userMsg("from A two"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
 		expect(messageTexts(b)).toEqual(["from A one", "from A two"]);
 
-		a.appendMessage(userMessage("from A three"));
+		a.appendMessage(userMsg("from A three"));
 		await a.flush();
 
 		await b.rewriteEntries();
@@ -186,14 +183,14 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("shared one"));
+		a.appendMessage(userMsg("shared one"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
-		b.appendMessage(userMessage("from B"));
+		b.appendMessage(userMsg("from B"));
 		await b.flush();
 
-		a.appendMessage(userMessage("from A"));
+		a.appendMessage(userMsg("from A"));
 		await a.flush();
 
 		// A publishes: it has never seen B's entry, and B's entry must survive.
@@ -226,11 +223,11 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("from A one"));
+		a.appendMessage(userMsg("from A one"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("from A two"));
+		a.appendMessage(userMsg("from A two"));
 		await a.flush();
 
 		await b.rewriteEntries();
@@ -256,9 +253,9 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("one"));
-		a.appendMessage(userMessage("two"));
-		a.appendMessage(userMessage("three"));
+		a.appendMessage(userMsg("one"));
+		a.appendMessage(userMsg("two"));
+		a.appendMessage(userMsg("three"));
 		await a.flush();
 		await a.close();
 
@@ -280,13 +277,13 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("solo one"));
-		a.appendMessage(userMessage("solo two"));
+		a.appendMessage(userMsg("solo one"));
+		a.appendMessage(userMsg("solo two"));
 		await a.flush();
 
 		await a.rewriteEntries();
 		const first = await fs.readFile(file, "utf8");
-		a.appendMessage(userMessage("solo three"));
+		a.appendMessage(userMsg("solo three"));
 		await a.flush();
 		await a.rewriteEntries();
 		const second = await fs.readFile(file, "utf8");
@@ -308,14 +305,14 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("from A one"));
+		a.appendMessage(userMsg("from A one"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
 		const raised: Array<{ severity: string; source: string; text: string }> = [];
 		b.setOperatorNotices(new OperatorNotices(notice => raised.push(notice)));
 
-		a.appendMessage(userMessage("from A two"));
+		a.appendMessage(userMsg("from A two"));
 		await a.flush();
 		await b.rewriteEntries();
 
@@ -334,7 +331,7 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("solo one"));
+		a.appendMessage(userMsg("solo one"));
 		await a.flush();
 		// A title change pushes its entry straight into the held list rather than
 		// through the append path, so it is a second producer of ids this manager
@@ -360,12 +357,12 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("shared one"));
-		a.appendMessage(userMessage("shared two"));
+		a.appendMessage(userMsg("shared one"));
+		a.appendMessage(userMsg("shared two"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("only A has this"));
+		a.appendMessage(userMsg("only A has this"));
 		await a.flush();
 		// B learns about A's line here, and must not take it along.
 		await b.rewriteEntries();
@@ -392,7 +389,7 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("before the replace"));
+		a.appendMessage(userMsg("before the replace"));
 		await a.flush();
 
 		// A full-file publish is a temp write plus a rename, so the path now names a
@@ -400,7 +397,7 @@ describe("two managers on one transcript", () => {
 		const b = await SessionManager.open(file, dir);
 		await b.rewriteEntries();
 
-		a.appendMessage(userMessage("after the replace"));
+		a.appendMessage(userMsg("after the replace"));
 		await a.flush();
 
 		// Writing into the unlinked inode is invisible to A: the append reports
@@ -421,19 +418,19 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("before the replace"));
+		a.appendMessage(userMsg("before the replace"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
-		b.appendMessage(userMessage("from the other window"));
+		b.appendMessage(userMsg("from the other window"));
 		await b.flush();
 		await b.rewriteEntries();
 
 		// A whole turn's worth of entries, all landing before the deferred merge has
 		// had a chance to run: each one has to reach the file, and none of them twice.
-		a.appendMessage(userMessage("burst one"));
-		a.appendMessage(userMessage("burst two"));
-		a.appendMessage(userMessage("burst three"));
+		a.appendMessage(userMsg("burst one"));
+		a.appendMessage(userMsg("burst two"));
+		a.appendMessage(userMsg("burst three"));
 		await a.flush();
 
 		const raw = await fs.readFile(file, "utf8");
@@ -462,7 +459,7 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("before the replace"));
+		a.appendMessage(userMsg("before the replace"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
@@ -497,18 +494,18 @@ describe("two managers on one transcript", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const a = await SessionManager.open(file, dir);
-		a.appendMessage(userMessage("shared one"));
+		a.appendMessage(userMsg("shared one"));
 		await a.flush();
 
 		const b = await SessionManager.open(file, dir);
-		b.appendMessage(userMessage("from the other window"));
+		b.appendMessage(userMsg("from the other window"));
 		await b.flush();
 		await b.rewriteEntries();
 
 		// The append detects the replacement and defers to the merging rewrite, and
 		// then the process leaves before that rewrite can run: `flushSync` publishes
 		// the whole file with no chance to await a read.
-		a.appendMessage(userMessage("from this window"));
+		a.appendMessage(userMsg("from this window"));
 		a.flushSync();
 
 		const raw = await fs.readFile(file, "utf8");
@@ -537,7 +534,7 @@ describe("two managers on one transcript", () => {
 		// That file is the newest in the directory, so it is the one another window
 		// resumes. Its turns are real conversation.
 		const b = await SessionManager.open(file, dir);
-		b.appendMessage(userMessage("a real turn from the other window"));
+		b.appendMessage(userMsg("a real turn from the other window"));
 		await b.flush();
 
 		// Clearing the composer removes the draft and leaves the cleanup armed, so
@@ -583,7 +580,7 @@ describe("two managers on one transcript", () => {
 		if (!file) throw new Error("the moved-from session has no file");
 
 		const b = await SessionManager.open(file, dir);
-		b.appendMessage(userMessage("a real turn from the other window"));
+		b.appendMessage(userMsg("a real turn from the other window"));
 		await b.flush();
 
 		await cleanupEmptyMoveSession(a, file);

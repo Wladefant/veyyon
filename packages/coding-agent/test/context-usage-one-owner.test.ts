@@ -34,7 +34,7 @@ import { computeNonMessageTokens } from "@veyyon/coding-agent/session/non-messag
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
-import { assistantMsg, userMsg } from "./helpers/e2e-session";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 /** The tokens a provider claims it billed for the prompt, as one assistant anchor. */
 function anchorWithPromptTokens(text: string, promptTokens: number) {

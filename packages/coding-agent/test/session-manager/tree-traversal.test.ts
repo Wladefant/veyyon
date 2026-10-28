@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { CustomEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { assistantMsg, userMsg } from "../helpers/e2e-session";
+import { assistantMsg, userMsg } from "../helpers/session-messages";
 
 describe("SessionManager append and tree traversal", () => {
 	describe("append operations", () => {
