@@ -40,6 +40,7 @@ export * from "./math";
 // the test runner gives each file its own realm, so that cost is paid per file rather than once:
 // 664 test files import this barrel. Import it as `@veyyon/utils/mermaid-ascii` instead.
 export * from "./mime";
+export * from "./owner-only-read";
 export * from "./path";
 export * from "./path-tree";
 export * from "./peek-file";

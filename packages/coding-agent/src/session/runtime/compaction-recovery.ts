@@ -31,7 +31,7 @@ import {
 	TRUNCATION_KEEP_EDGE_TOKENS,
 	TRUNCATION_MIN_TEXT_TOKENS,
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
-import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { contextCompaction } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types";
 import { errorMessage, formatCount, logger } from "@veyyon/utils";
@@ -61,8 +61,6 @@ export interface CompactionRecoveryHost {
 	estimateStoredContextTokens(): number;
 	/** `config` with the approved plan file added to its protected tools. */
 	withPlanProtection(config: ShakeConfig): ShakeConfig;
-	/** The compaction the next prompt is built from on `branch`. */
-	promptCompaction(branch: readonly SessionEntry[]): CompactionEntry | null;
 	/** Offload `regions` to one recovery artifact and replace each with a placeholder. */
 	offloadAndApplyShakeRegions(regions: ShakeRegion[]): Promise<ElisionOutcome>;
 	rebasePendingContextSnapshotAfterHistoryRewrite(): void;
@@ -319,7 +317,7 @@ export class CompactionRecovery {
 		const branchEntries = this.#session.sessionManager.getBranch();
 		const config = this.#host.withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: this.#host.promptCompaction(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: contextCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectOversizedTextRegions(branchEntries, {
 			excessTokens,

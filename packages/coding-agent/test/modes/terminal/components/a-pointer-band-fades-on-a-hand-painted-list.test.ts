@@ -74,12 +74,11 @@ import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/sessi
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
 const FRAME = 1000 / 60;
-/** MOTION.hover is 90ms; 30 frames is half a second, so a settle loop that runs is a hang. */
-const SETTLE_FRAMES = 30;
 
 /** The card's own repaint gate is `TERMINAL.trueColor`, probed once at load from a real terminal. */
 const terminalCaps: { trueColor: boolean } = TERMINAL;
@@ -89,37 +88,12 @@ let geometry: StubbedStdoutGeometry;
 let originalTrueColor: boolean;
 let originalColorterm: string | undefined;
 let originalTheme: typeof theme | undefined;
-let clockNow = 0;
-let clockAnchored = false;
 
 /**
- * Advance the shared clock by `ms`. The panes take the production clock (their hosts hand them a
- * repaint, not a clock), so the frames are driven through its public `tick` rather than by waiting.
- *
- * The anchor is re-taken every time the ticker restarts. A clock that runs dry forgets its last
- * frame time and re-bases on the real wall clock when the next animation registers, so a harness
- * that kept counting from its own first anchor would hand the next fade a delta of everything it
- * had already spent — clamped to one stalled frame, which lands a 90ms fade in a single step and
- * reads as "the band was never mid-travel".
+ * The panes take the production clock (their hosts hand them a repaint, not a clock), so frames are
+ * driven through its public `tick` rather than by waiting.
  */
-function advance(ms: number): void {
-	if (!clockAnchored) {
-		clockNow = performance.now();
-		clockAnchored = true;
-	}
-	clockNow += ms;
-	motionClock.tick(clockNow);
-	if (motionClock.liveCount === 0) clockAnchored = false;
-}
-
-/** Run frames until nothing is animating. Returns the frames it took. */
-function settle(): number {
-	for (let frame = 1; frame <= SETTLE_FRAMES; frame++) {
-		advance(FRAME);
-		if (motionClock.liveCount === 0) return frame;
-	}
-	throw new Error(`hover fade still live after ${SETTLE_FRAMES} frames`);
-}
+const { advance, settle } = useHandTickedMotion();
 
 /** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
 function bandRgb(row: string): [number, number, number] | null {
@@ -457,7 +431,6 @@ beforeEach(async () => {
 	originalTrueColor = terminalCaps.trueColor;
 	terminalCaps.trueColor = true;
 	geometry = stubStdoutGeometry({ columns: WIDTH, rows: 40 });
-	clockAnchored = false;
 });
 
 afterEach(() => {

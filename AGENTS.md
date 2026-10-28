@@ -58,6 +58,7 @@ operator manual.
 |`natives/testing/scratch`|Scratch directories removed on drop, including on panic (test only)|
 |`natives/text/keys`|Zero-copy parser for the Kitty keyboard protocol and legacy escape sequences|
 |`natives/text/measure`|ANSI-aware width measurement, grapheme segmentation and truncation over UTF-16|
+|`natives/text/session-skim`|Parallel skim of a session file into the records a load keeps for cold entries, so a resume parses kilobytes where a line holds megabytes|
 |`tests/conformance`|Whole-product conformance corpus and harness, on virtual clock, filesystem, terminal and network (test only, issue #877)|
 |`crates/veyyon-desktop`|The desktop front end binary: loads tokens and theme, opens the GPUI window, attaches to a GUI host (private)|
 |`crates/veyyon-desktop-kit`|Token-driven primitive kit for the desktop front end: buttons, fields, rows, cards, badges|
@@ -187,11 +188,11 @@ outside these accounts.
 
 ### A pull request needs an issue first
 
-A bug fix may open with no issue. Everything else — feature, refactor, dependency, migration —
-needs an issue first, and `Refs #N` in the pull request body.
+Every pull request needs an issue first, bug fixes included, and `Refs #N` in the pull request
+body. A bug fix states the observed and the expected behavior on its issue.
 
-Scope is settled on the issue, before the work exists. For a large pull request with no issue
-behind it, request the issue instead of reviewing the diff.
+Scope is settled on the issue, before the work exists. For a pull request with no issue behind
+it, request the issue instead of reviewing the diff.
 
 One concern per pull request. The description covers every change in the diff; an undescribed
 change is itself a finding, per [`review.md`](review.md). Split a fix that includes unrelated work.

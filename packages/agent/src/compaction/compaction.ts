@@ -32,14 +32,14 @@ import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
 import { preferredDialect } from "@veyyon/catalog/identity";
-import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
-import { errorMessage, logger, prompt } from "@veyyon/utils";
+import { errorMessage, isRecord, logger, prompt, TimeSlice } from "@veyyon/utils";
 import { stripReadSelector } from "@veyyon/utils/read-selector";
-import { instrumentedCompleteSimple } from "../instrumented-complete";
+import { clampPassEffort } from "../effort-clamp";
+import { instrumentedCompleteSimple, type OneshotKind } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
-import { countTokens } from "../tokenizer";
+import { countTokens, minTokensForBytes } from "../tokenizer";
 import type { AgentMessage } from "../types";
 import {
 	buildCacheAlignedCompactionContext,
@@ -74,6 +74,7 @@ import {
 	type SummarySegment,
 	stagedSegmentBudget,
 } from "./staged-summary";
+import { measureSummarySource, type SummarySource } from "./summary-source";
 // The trigger decision is in `./threshold` and the estimator in `./token-estimate`. What is left here
 // is the ENGINE: the summarizer, the cut point, the provider round trip.
 import {
@@ -388,44 +389,90 @@ function estimateEntriesTokens(
 	return total;
 }
 
+/** Message roles a kept tail may begin at: user-role context and the assistant turn itself. */
+const CUT_POINT_ROLES: ReadonlySet<string> = new Set([
+	"bashExecution",
+	"hookMessage",
+	"branchSummary",
+	"compactionSummary",
+	"user",
+	"assistant",
+]);
+
 /**
- * Find valid cut points: indices of user, assistant, custom, or bashExecution messages.
- * Never cut at tool results (they must follow their tool call).
- * When we cut at an assistant message with tool calls, its tool results follow it
- * and will be kept.
+ * Marks every index in `[scanStart, endIndex)` that lies inside a tool-call window: a tool result at or
+ * after the index answers a call issued before it. A kept tail that begins at a marked index keeps that
+ * result and summarizes its call away, and every later request then carries a result whose call is
+ * missing from the history, folded into a note until another compaction passes it. A tool that appends
+ * a message while it runs (`set_cwd` appends `cwd_changed` and `prompt_cache_invalidated`) puts that
+ * message inside its own call's window. A result whose call precedes `idsFrom`, or no longer exists,
+ * marks every index from `idsFrom` up to it, so a cut never keeps a result that is already separated
+ * from its call.
+ *
+ * Results are matched to calls by id from `idsFrom` on. Behind it the entries are compacted history
+ * whose message bodies may be on disk, so a result there is matched to the assistant message nearest
+ * before it, reading only an entry's type and its message's role.
+ *
+ * Indexed by entry index; indices before `scanStart` are unmarked.
+ */
+function toolCallWindowInteriors(
+	entries: SessionEntry[],
+	scanStart: number,
+	idsFrom: number,
+	endIndex: number,
+): Uint8Array {
+	const interior = new Uint8Array(endIndex);
+	const awaitingCall = new Set<string>();
+	for (let i = endIndex - 1; i >= idsFrom; i--) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			const message = entry.message;
+			if (message.role === "toolResult") {
+				awaitingCall.add(message.toolCallId);
+			} else if (message.role === "assistant" && awaitingCall.size > 0) {
+				for (const block of message.content) {
+					if (block.type === "toolCall") awaitingCall.delete(block.id);
+				}
+			}
+		}
+		if (awaitingCall.size > 0) interior[i] = 1;
+	}
+	let awaitingResult = awaitingCall.size > 0;
+	for (let i = Math.min(idsFrom, endIndex) - 1; i >= scanStart; i--) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			const role = entry.message.role;
+			if (role === "toolResult") awaitingResult = true;
+			else if (role === "assistant") awaitingResult = false;
+		}
+		if (awaitingResult) interior[i] = 1;
+	}
+	return interior;
+}
+
+/**
+ * Find valid cut points: indices of user, assistant, custom, or bashExecution messages outside every
+ * tool-call window (see {@link toolCallWindowInteriors}). A tool result is never one, and neither is a
+ * message a tool appended while it ran: a cut there separates the result from its call. A cut at the
+ * assistant message that issued the calls keeps the calls and their results together.
  * BashExecutionMessage is treated like a user message (user-initiated context).
  */
-function findValidCutPoints(entries: SessionEntry[], startIndex: number, endIndex: number): number[] {
+function findValidCutPoints(
+	entries: SessionEntry[],
+	startIndex: number,
+	endIndex: number,
+	interior: Uint8Array,
+): number[] {
 	const cutPoints: number[] = [];
 	for (let i = startIndex; i < endIndex; i++) {
+		if (interior[i] === 1) continue;
 		const entry = entries[i];
-		switch (entry.type) {
-			case "message": {
-				const role = entry.message.role as string;
-				switch (role) {
-					case "bashExecution":
-					case "hookMessage":
-					case "branchSummary":
-					case "compactionSummary":
-					case "user":
-					case "assistant":
-						cutPoints.push(i);
-						break;
-					case "toolResult":
-						break;
-				}
-				break;
-			}
-			case "thinking_level_change":
-			case "model_change":
-			case "compaction":
-			case "branch_summary":
-			case "custom":
-			case "custom_message":
-			case "label":
-		}
 		// branch_summary and custom_message are user-role messages, valid cut points
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (
+			entry.type === "branch_summary" ||
+			entry.type === "custom_message" ||
+			(entry.type === "message" && CUT_POINT_ROLES.has(entry.message.role))
+		) {
 			cutPoints.push(i);
 		}
 	}
@@ -434,11 +481,18 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 
 /**
  * Find the user message (or bashExecution) that starts the turn containing the given entry index.
- * Returns -1 if no turn start found before the index.
+ * Returns -1 if no turn start found before the index. An entry inside a tool-call window never starts a
+ * turn: the turn it would start begins between a call and its result.
  * BashExecutionMessage is treated like a user message for turn boundaries.
  */
-export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, startIndex: number): number {
+export function findTurnStartIndex(
+	entries: SessionEntry[],
+	entryIndex: number,
+	startIndex: number,
+	interior: Uint8Array = toolCallWindowInteriors(entries, startIndex, startIndex, entries.length),
+): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
+		if (interior[i] === 1) continue;
 		const entry = entries[i];
 		// branch_summary and custom_message are user-role messages, can start a turn
 		if (entry.type === "branch_summary" || entry.type === "custom_message") {
@@ -495,6 +549,7 @@ function cutIndexAtCrossing(
 	crossedIndex: number,
 	startIndex: number,
 	endIndex: number,
+	interior: Uint8Array,
 ): number {
 	const kept = cutPoints.find(point => point >= crossedIndex);
 	if (kept !== undefined) return kept;
@@ -516,7 +571,7 @@ function cutIndexAtCrossing(
 	// No turn start inside the range means the turn's opening was summarized
 	// by an earlier pass, so no cut here keeps call and result together:
 	// keep nothing and let the summary stand in for the whole range.
-	const turnStart = findTurnStartIndex(entries, crossedIndex, startIndex);
+	const turnStart = findTurnStartIndex(entries, crossedIndex, startIndex, interior);
 	return turnStart === -1 ? endIndex : turnStart;
 }
 
@@ -545,8 +600,9 @@ function includePrecedingNonMessageEntries(
  * Algorithm: Walk backwards from newest, accumulating estimated message sizes.
  * Stop when we've accumulated >= keepRecentTokens. Cut at that point.
  *
- * Can cut at user OR assistant messages (never tool results). When cutting at an
- * assistant message with tool calls, its tool results come after and will be kept.
+ * Can cut at user OR assistant messages, never at a tool result or anywhere else inside a tool-call
+ * window. When cutting at an assistant message with tool calls, its tool results come after and will be
+ * kept.
  *
  * Returns CutPointResult with:
  * - firstKeptEntryIndex: the entry index to start keeping from
@@ -565,7 +621,9 @@ export function findCutPoint(
 	keepRecentTokens: number,
 	turnSearchStart = startIndex,
 ): CutPointResult {
-	const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
+	// Behind `startIndex` the turn search reads compacted history, so ids are read only from it on.
+	const interior = toolCallWindowInteriors(entries, Math.min(turnSearchStart, startIndex), startIndex, endIndex);
+	const cutPoints = findValidCutPoints(entries, startIndex, endIndex, interior);
 
 	// No valid cut point anywhere in the range means nothing can be kept on a
 	// boundary. Fall through with `startIndex` rather than returning: the
@@ -575,7 +633,7 @@ export function findCutPoint(
 	// A range that fits the budget keeps from its first message (not the header).
 	const crossed = crossedIndex !== -1;
 	const budgetCut = crossed
-		? cutIndexAtCrossing(entries, cutPoints, crossedIndex, startIndex, endIndex)
+		? cutIndexAtCrossing(entries, cutPoints, crossedIndex, startIndex, endIndex, interior)
 		: (cutPoints[0] ?? startIndex);
 	let cutIndex = includePrecedingNonMessageEntries(entries, budgetCut, startIndex, endIndex);
 
@@ -602,7 +660,7 @@ export function findCutPoint(
 	// Determine if this is a split turn
 	const cutEntry = entries[cutIndex];
 	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, turnSearchStart);
+	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, turnSearchStart, interior);
 
 	return {
 		firstKeptEntryIndex: cutIndex,
@@ -670,7 +728,8 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
  *   (preserves current behavior for users who never touched the dial).
  * - Explicit effort → respect user choice → clamped per model.
  *
- * The clamp routes through `clampThinkingLevelForModel`, which returns
+ * The clamp routes through `clampPassEffort`, which logs a move once per model, and
+ * `clampThinkingLevelForModel`, which returns
  * `undefined` for reasoning models without a thinking config — the build-time
  * encoding of `compat.supportsReasoningEffort: false` (e.g.
  * `xai-oauth/grok-4.20-0309-reasoning`). That `undefined` then flows through to the
@@ -681,15 +740,7 @@ function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined)
 	if (level === ThinkingLevel.Off) return undefined;
 	const requested: Effort =
 		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);
-	const clamped = clampThinkingLevelForModel(model, requested);
-	if (clamped !== requested) {
-		logger.warn("Compaction effort is not accepted by the model; using the nearest supported level", {
-			model: `${model.provider}/${model.id}`,
-			requested,
-			using: clamped ?? "provider default",
-		});
-	}
-	return clamped;
+	return clampPassEffort(model, requested, "Compaction");
 }
 
 /**
@@ -913,36 +964,70 @@ function summaryOutputBudget(model: Model, reserveTokens: number, share: number)
 	return Math.floor(share * (impossibleForWindow ? proportionalReserve : reserveTokens));
 }
 
-function buildSummaryPrompt(
-	currentMessages: AgentMessage[],
+/** What a history summary request sends after the conversation, and the answer's budget. */
+interface SummaryPromptParts {
+	/** The previous summary, the hook context and the instruction, in that order. */
+	tail: string;
+	maxTokens: number;
+}
+
+function summaryPromptParts(
 	model: Model,
 	reserveTokens: number,
 	customInstructions: string | undefined,
 	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-	cacheAligned: boolean,
-): { promptText: string; maxTokens: number } {
+): SummaryPromptParts {
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (options?.promptOverride) basePrompt = options.promptOverride;
 	if (customInstructions) basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
+	let tail = previousSummary ? `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n` : "";
+	tail += formatAdditionalContext(options?.extraContext);
+	tail += basePrompt;
+	return { tail, maxTokens: summaryOutputBudget(model, reserveTokens, 0.8) };
+}
 
-	// Cache-aligned mode replays the conversation as real messages and hands the
-	// system slot back to the session, so nothing is re-serialized here and the
-	// summarizer framing rides in the appended user turn instead.
-	const conversationText = cacheAligned
-		? undefined
-		: serializeConversationForSummary(
-				transformSummarySourceMessages((options?.convertToLlm ?? defaultConvertToLlm)(currentMessages), options),
-				preferredDialect(model.id),
-			);
-	let promptText =
+/**
+ * The user turn of one summary request over the whole span. Without `conversationText` the
+ * request is cache-aligned: it replays the conversation as real messages and hands the system slot
+ * back to the session, so nothing is re-serialized and the summarizer framing rides in this turn.
+ */
+function summaryPromptText(conversationText: string | undefined, parts: SummaryPromptParts): string {
+	const head =
 		conversationText === undefined
 			? `${SUMMARIZATION_SYSTEM_PROMPT}\n\n`
 			: `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (previousSummary) promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-	promptText += formatAdditionalContext(options?.extraContext);
-	promptText += basePrompt;
-	return { promptText, maxTokens: summaryOutputBudget(model, reserveTokens, 0.8) };
+	return head + parts.tail;
+}
+
+/** The span serialized as the single request carries it, in one synchronous pass. */
+function summaryConversationText(
+	currentMessages: AgentMessage[],
+	model: Model,
+	options: SummaryOptions | undefined,
+): string {
+	return serializeConversationForSummary(
+		transformSummarySourceMessages((options?.convertToLlm ?? defaultConvertToLlm)(currentMessages), options),
+		preferredDialect(model.id),
+	);
+}
+
+/** The span's provider-visible messages, measured one at a time in slices. See `./summary-source`. */
+function measureSpan(
+	currentMessages: AgentMessage[],
+	model: Model,
+	options: SummaryOptions | undefined,
+	slice: TimeSlice,
+): Promise<SummarySource> {
+	const transform = options?.obfuscateProviderText
+		? (text: string) => sanitizeCompactionProviderText(text, options)
+		: undefined;
+	return measureSummarySource(
+		(options?.convertToLlm ?? defaultConvertToLlm)(currentMessages),
+		preferredDialect(model.id),
+		transform,
+		slice,
+	);
 }
 
 /** The text of a completed summarization response, refused when it is unusable. */
@@ -983,20 +1068,39 @@ function usableSummaryText(response: AssistantMessage, what: string): string {
 	return textContent;
 }
 
+/** What one summarization request is: its label in errors, its telemetry kind and its cache. */
+interface SummaryRequest {
+	/** Prefix of the error a failed request raises. */
+	what: string;
+	oneshotKind: OneshotKind;
+	/**
+	 * The context replays the live session's system prompt, tools and messages
+	 * (see `./cache-aligned-context`), so it reads the prefix the live turns cached.
+	 *
+	 * A standalone context opens with `SUMMARIZATION_SYSTEM_PROMPT` and one user
+	 * message that no later request repeats, so it is sent with
+	 * `cacheRetention: "none"`. A cache marker on it buys only the write premium
+	 * (2x for an hour-long Anthropic entry), and on the session's cache key the
+	 * write that is never read is reported as "prompt cache prefix changed".
+	 */
+	replaysSessionPrefix: boolean;
+}
+
 /**
  * One summarization request over `context`, through the session's credential
- * refresh and side-request transport, returning the usable summary text.
+ * refresh and side-request transport. Every local summarization request is sent
+ * here.
  */
-async function requestSummary(
+async function sendSummaryRequest(
 	model: Model,
 	buildContext: () => Context,
 	maxTokens: number,
 	apiKey: ApiKey,
 	signal: AbortSignal | undefined,
 	options: SummaryOptions | undefined,
-	what: string,
-): Promise<string> {
-	const response = await withAuth(
+	request: SummaryRequest,
+): Promise<AssistantMessage> {
+	return withAuth(
 		apiKey,
 		async key => {
 			// Build a fresh context inside the auth-attempt closure. A runtime
@@ -1014,21 +1118,35 @@ async function requestSummary(
 					fetch: options?.fetch,
 					sessionId: options?.sessionId,
 					promptCacheKey: options?.promptCacheKey,
+					cacheRetention: request.replaysSessionPrefix ? undefined : "none",
 					providerSessionState: options?.providerSessionState,
 					codexCompaction: localCodexCompaction(options),
 					serviceTier: options?.serviceTier,
 				},
-				{ telemetry: options?.telemetry, oneshotKind: "compaction_summary", completeImpl: options?.completeImpl },
+				{ telemetry: options?.telemetry, oneshotKind: request.oneshotKind, completeImpl: options?.completeImpl },
 			);
 			throwIfCompactionCancelled(attemptResponse);
 			if (attemptResponse.stopReason === "error") {
-				throw createSummarizationError(`${what} failed`, attemptResponse, options);
+				throw createSummarizationError(`${request.what} failed`, attemptResponse, options);
 			}
 			return attemptResponse;
 		},
 		{ signal },
 	);
-	return usableSummaryText(response, what);
+}
+
+/** A summarization request whose answer replaces history, returning the usable summary text. */
+async function requestSummary(
+	model: Model,
+	buildContext: () => Context,
+	maxTokens: number,
+	apiKey: ApiKey,
+	signal: AbortSignal | undefined,
+	options: SummaryOptions | undefined,
+	request: SummaryRequest,
+): Promise<string> {
+	const response = await sendSummaryRequest(model, buildContext, maxTokens, apiKey, signal, options, request);
+	return usableSummaryText(response, request.what);
 }
 
 /** A history summary and how many segments it was produced from. */
@@ -1106,21 +1224,22 @@ function buildMergePrompt(
 }
 
 /**
- * The largest request a staged summary of `currentMessages` sends: the largest
+ * The largest request a staged summary over `segments` sends: the largest
  * segment request, or the first merge round's largest request. Every later round
  * reads fewer summaries than the first.
  */
-function stagedRequestTokens(
-	currentMessages: AgentMessage[],
+async function stagedRequestTokens(
+	segments: readonly SummarySegment[],
 	model: Model,
 	reserveTokens: number,
 	customInstructions: string | undefined,
 	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-): number {
-	const segments = planStagedSegments(currentMessages, model, options);
+	slice: TimeSlice,
+): Promise<number> {
 	let largest = 0;
 	for (const segment of segments) {
+		if (slice.due) await slice.yield();
 		const tokens = countTokens([SUMMARIZATION_SYSTEM_PROMPT, buildSegmentPrompt(segment, options)]);
 		largest = Math.max(largest, tokens + segmentOutputBudget(model, reserveTokens));
 	}
@@ -1135,16 +1254,78 @@ function stagedRequestTokens(
 	return Math.max(largest, largestMerge + summaryOutputBudget(model, reserveTokens, 0.8));
 }
 
-function planStagedSegments(
+/** One request over the whole span, as it is sent. */
+interface SingleHistoryRequest {
+	kind: "single";
+	promptText: string;
+	maxTokens: number;
+	tokens: number;
+}
+
+/** How a history summary is requested: one request over the whole span, or stages over its segments. */
+type HistoryRequest = SingleHistoryRequest | { kind: "staged"; segments: SummarySegment[]; reason: string };
+
+const EXCEEDS_WINDOW = "the single request exceeds the context window";
+
+/**
+ * The fewest tokens one request over the source's span counts: the system prompt, the user turn
+ * holding at least the source's conversation byte floor, and the output budget. Undefined when the
+ * token count has no byte floor.
+ */
+function singleRequestTokensFloor(source: SummarySource, parts: SummaryPromptParts): number | undefined {
+	const promptBytes = source.conversationBytesFloor + Buffer.byteLength(summaryPromptText("", parts), "utf-8");
+	const promptTokens = minTokensForBytes(promptBytes);
+	return promptTokens === undefined
+		? undefined
+		: countTokens(SUMMARIZATION_SYSTEM_PROMPT) + promptTokens + parts.maxTokens;
+}
+
+/**
+ * Decide how the history summary of `currentMessages` is requested, the way the request is then
+ * sent: staged when the caller asks for stages or when one request cannot fit the window, and one
+ * request otherwise.
+ *
+ * The span is measured in slices (see `./summary-source`). A span whose byte floor already puts
+ * the single request past the window is staged without serializing it whole, so the whole span is
+ * serialized synchronously only when the request it builds can fit the window. A model with no
+ * window bound serializes it whole, as the single request it always sends.
+ */
+async function planHistoryRequest(
 	currentMessages: AgentMessage[],
 	model: Model,
+	reserveTokens: number,
+	customInstructions: string | undefined,
+	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
-): SummarySegment[] {
-	const llmMessages = transformSummarySourceMessages(
-		(options?.convertToLlm ?? defaultConvertToLlm)(currentMessages),
-		options,
-	);
-	return planSummarySegments(llmMessages, preferredDialect(model.id), stagedSegmentBudget(model));
+	cacheAligned: boolean,
+	slice: TimeSlice,
+): Promise<HistoryRequest> {
+	const parts = summaryPromptParts(model, reserveTokens, customInstructions, previousSummary, options);
+	const single = (conversationText: string | undefined): SingleHistoryRequest => {
+		const promptText = summaryPromptText(conversationText, parts);
+		const tokens = singleRequestTokens({ promptText, maxTokens: parts.maxTokens }, options, cacheAligned);
+		return { kind: "single", promptText, maxTokens: parts.maxTokens, tokens };
+	};
+	const staged = async (reason: string, source?: SummarySource): Promise<HistoryRequest> => {
+		const measured = source ?? (await measureSpan(currentMessages, model, options, slice));
+		return {
+			kind: "staged",
+			segments: await planSummarySegments(measured, stagedSegmentBudget(model), slice),
+			reason,
+		};
+	};
+	if (options?.summaryStaging === "staged") return staged("requested");
+	if (cacheAligned) {
+		const request = single(undefined);
+		return singleRequestFitsWindow(model, request.tokens) ? request : staged(EXCEEDS_WINDOW);
+	}
+	const contextWindow = model.contextWindow ?? 0;
+	if (contextWindow <= 0) return single(summaryConversationText(currentMessages, model, options));
+	const source = await measureSpan(currentMessages, model, options, slice);
+	const floor = singleRequestTokensFloor(source, parts);
+	if (floor !== undefined && floor > contextWindow) return staged(EXCEEDS_WINDOW, source);
+	const request = single(serializeConversationForSummary(source.messages, source.dialect));
+	return singleRequestFitsWindow(model, request.tokens) ? request : staged(EXCEEDS_WINDOW, source);
 }
 
 /**
@@ -1176,7 +1357,7 @@ async function generateStagedSummary(
 			apiKey,
 			signal,
 			options,
-			what,
+			{ what, oneshotKind: "compaction_summary", replaysSessionPrefix: false },
 		);
 		if (key !== undefined) checkpoints?.set(key, summary);
 		return summary;
@@ -1230,18 +1411,13 @@ export async function generateSummary(
 	const sessionSystemPrompt = options?.sessionSystemPrompt;
 	const sessionMessages = options?.sessionMessages;
 	const cacheAligned = canUseCacheAlignedCompaction({ model, sessionSystemPrompt, sessionMessages });
-	const built = buildSummaryPrompt(
-		currentMessages,
-		model,
-		reserveTokens,
-		customInstructions,
-		previousSummary,
-		options,
-		cacheAligned,
-	);
-	const { promptText, maxTokens } = built;
 
 	if (options?.remoteEndpoint) {
+		// The remote summarizer reads one prompt over the whole span; it has no stages to fall back to.
+		const promptText = summaryPromptText(
+			cacheAligned ? undefined : summaryConversationText(currentMessages, model, options),
+			summaryPromptParts(model, reserveTokens, customInstructions, previousSummary, options),
+		);
 		const endpoint = options.remoteEndpoint;
 		const remote = await withAuth(
 			apiKey,
@@ -1265,8 +1441,7 @@ export async function generateSummary(
 		return { summary: remote.summary, stages: 1 };
 	}
 
-	const staged = (reason: string): Promise<GeneratedSummary> => {
-		const segments = planStagedSegments(currentMessages, model, options);
+	const staged = (segments: SummarySegment[], reason: string): Promise<GeneratedSummary> => {
 		logger.info("Compaction summary runs in stages", {
 			model: `${model.provider}/${model.id}`,
 			reason,
@@ -1285,19 +1460,29 @@ export async function generateSummary(
 		);
 	};
 
-	if (options?.summaryStaging === "staged") return staged("requested");
-	if (!singleRequestFitsWindow(model, singleRequestTokens(built, options, cacheAligned))) {
-		return staged("the single request exceeds the context window");
-	}
+	const slice = new TimeSlice();
+	const request = await planHistoryRequest(
+		currentMessages,
+		model,
+		reserveTokens,
+		customInstructions,
+		previousSummary,
+		options,
+		cacheAligned,
+		slice,
+	);
+	if (request.kind === "staged") return staged(request.segments, request.reason);
+	const { promptText, maxTokens } = request;
 
+	const sessionPrefix =
+		cacheAligned && sessionSystemPrompt && sessionMessages ? { sessionSystemPrompt, sessionMessages } : undefined;
 	try {
 		const summary = await requestSummary(
 			model,
 			() =>
-				cacheAligned && sessionSystemPrompt && sessionMessages
+				sessionPrefix
 					? buildCacheAlignedCompactionContext({
-							sessionSystemPrompt,
-							sessionMessages,
+							...sessionPrefix,
 							tools: options?.tools,
 							instruction: promptText,
 							sanitize: text => sanitizeCompactionProviderText(text, options),
@@ -1307,19 +1492,30 @@ export async function generateSummary(
 			apiKey,
 			signal,
 			options,
-			"Summarization",
+			{
+				what: "Summarization",
+				oneshotKind: "compaction_summary",
+				replaysSessionPrefix: sessionPrefix !== undefined,
+			},
 		);
 		return { summary, stages: 1 };
 	} catch (error) {
 		if (!isSummaryTimeout(error, model) || signal?.aborted) throw error;
 		// The whole span in one request never answered. A span of one segment
 		// would send the same request again; anything larger is retried in stages.
-		if (planStagedSegments(currentMessages, model, options).length < 2) throw error;
+		// The span is measured again, so the text transform reads the secrets as
+		// they stand after the wait.
+		const segments = await planSummarySegments(
+			await measureSpan(currentMessages, model, options, slice),
+			stagedSegmentBudget(model),
+			slice,
+		);
+		if (segments.length < 2) throw error;
 		logger.warn("Compaction summary timed out as one request, retrying in stages", {
 			model: `${model.provider}/${model.id}`,
 			error: errorMessage(error),
 		});
-		return staged("the single request timed out");
+		return staged(segments, "the single request timed out");
 	}
 }
 
@@ -1357,7 +1553,9 @@ export async function summarizeRemoteCompactionWindow(
 	const windowMessages = (options?.convertToLlm ?? defaultConvertToLlm)([
 		createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp, undefined, providerPayload),
 	]);
-	const { promptText, maxTokens } = buildSummaryPrompt([], model, reserveTokens, undefined, undefined, options, true);
+	const parts = summaryPromptParts(model, reserveTokens, undefined, undefined, options);
+	const { maxTokens } = parts;
+	const promptText = summaryPromptText(undefined, parts);
 	return requestSummary(
 		model,
 		() =>
@@ -1372,7 +1570,13 @@ export async function summarizeRemoteCompactionWindow(
 		apiKey,
 		signal,
 		options,
-		"Compaction port",
+		// Without the session's own system prompt the window is replayed behind
+		// `SUMMARIZATION_SYSTEM_PROMPT`, a prefix no live turn sent.
+		{
+			what: "Compaction port",
+			oneshotKind: "compaction_summary",
+			replaysSessionPrefix: options?.sessionSystemPrompt !== undefined,
+		},
 	);
 }
 
@@ -1803,14 +2007,15 @@ export function assertValidCompactionResult(preparation: CompactionPreparation, 
  * A history request that would not fit the model's window is not the request
  * that is sent: `generateSummary` summarizes such a span in stages, so the
  * estimate is the largest staged request instead, and a candidate whose window
- * holds one segment is admitted for a span of any size.
+ * holds one segment is admitted for a span of any size. The span is measured
+ * in slices that yield to the event loop, as `generateSummary` measures it.
  */
-export function estimateCompactionRequestTokens(
+export async function estimateCompactionRequestTokens(
 	preparation: CompactionPreparation,
 	model: Model,
 	customInstructions?: string,
 	options?: SummaryOptions,
-): number {
+): Promise<number> {
 	const reserveTokens = preparation.settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
 	const previousSummary = previousCompactionSummaryText(preparation);
 	const requests: number[] = [];
@@ -1822,7 +2027,8 @@ export function estimateCompactionRequestTokens(
 	const hasHistoryRequest =
 		preparation.messagesToSummarize.length > 0 || (preparation.isSplitTurn && previousSummary !== undefined);
 	if (hasHistoryRequest) {
-		const built = buildSummaryPrompt(
+		const slice = new TimeSlice();
+		const request = await planHistoryRequest(
 			preparation.messagesToSummarize,
 			model,
 			reserveTokens,
@@ -1830,28 +2036,24 @@ export function estimateCompactionRequestTokens(
 			previousSummary,
 			options,
 			cacheAligned,
+			slice,
 		);
-		const singleRequest = singleRequestTokens(built, options, cacheAligned);
 		requests.push(
-			options?.summaryStaging !== "staged" && singleRequestFitsWindow(model, singleRequest)
-				? singleRequest
-				: stagedRequestTokens(
-						preparation.messagesToSummarize,
+			request.kind === "single"
+				? request.tokens
+				: await stagedRequestTokens(
+						request.segments,
 						model,
 						reserveTokens,
 						customInstructions,
 						previousSummary,
 						options,
+						slice,
 					),
 		);
 	}
 	if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
-		const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(preparation.turnPrefixMessages);
-		const conversationText = serializeConversationForSummary(
-			transformSummarySourceMessages(llmMessages, options),
-			preferredDialect(model.id),
-		);
-		const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+		const promptText = buildTurnPrefixPrompt(preparation.turnPrefixMessages, model, options);
 		requests.push(
 			countTokens([SUMMARIZATION_SYSTEM_PROMPT, promptText]) + summaryOutputBudget(model, reserveTokens, 0.5),
 		);
@@ -2075,6 +2277,10 @@ function keptEntriesStart(pathEntries: SessionEntry[], compactionIndex: number):
  * and api, and the messages the context sends behind them up to `cutIndex`,
  * which lies at or past every window's kept boundary. Undefined when no window
  * can be chained.
+ *
+ * An older window of a provider and api a newer valid window already chains is
+ * passed over before it is validated: validation reads the window, which a
+ * session holds on disk once a newer compaction summarized it.
  */
 function remoteCompactionChain(
 	pathEntries: SessionEntry[],
@@ -2088,11 +2294,12 @@ function remoteCompactionChain(
 	let chainStart = cutIndex;
 	for (let w = 0; w < windowIndices.length; w++) {
 		const preserveData = (pathEntries[windowIndices[w]] as CompactionEntry).preserveData;
+		if (!preserveData) continue;
+		const record = preserveData[REMOTE_COMPACTION_PRESERVE_KEY];
+		if (isRecord(record) && hosts.has(`${record.provider}\u0000${record.api}`)) continue;
 		const data = getRemoteCompactionPreserveData(preserveData);
-		if (!data || !preserveData) continue;
-		const host = `${data.provider}\u0000${data.api}`;
-		if (hosts.has(host)) continue;
-		hosts.add(host);
+		if (!data) continue;
+		hosts.add(`${data.provider}\u0000${data.api}`);
 		const from = windowStarts[w];
 		links.push({ previousPreserveData: preserveData, from });
 		if (from < chainStart) chainStart = from;
@@ -2122,9 +2329,11 @@ function remoteCompactionChain(
 interface CompactionBase {
 	prevCompactionIndex: number;
 	/**
-	 * Server-side entries ahead of that boundary, newest first. The scan walks past them because a local
-	 * pass cannot build on them, and they are exactly the entries a REMOTE pass has to chain rather than
-	 * re-read, so they are picked up on the same walk instead of a second one.
+	 * Entries ahead of that boundary holding a server-side window record, newest first. The scan walks
+	 * past them because a local pass cannot build on them, and they are exactly the entries a REMOTE
+	 * pass has to chain rather than re-read, so they are picked up on the same walk instead of a
+	 * second one. A record is not validated here: validation reads the window, which a session holds
+	 * on disk once a newer compaction summarized it, so each reader validates the ones it uses.
 	 */
 	windowIndices: number[];
 }
@@ -2139,9 +2348,31 @@ function findCompactionBase(pathEntries: SessionEntry[]): CompactionBase {
 		// behind it and summarize them locally rather than stranding that span.
 		const entry = pathEntries[i] as CompactionEntry;
 		if (hasReusableSummary(entry.preserveData)) return { prevCompactionIndex: i, windowIndices };
-		if (getRemoteCompactionPreserveData(entry.preserveData)) windowIndices.push(i);
+		if (isRecord(entry.preserveData?.[REMOTE_COMPACTION_PRESERVE_KEY])) windowIndices.push(i);
 	}
 	return { prevCompactionIndex: -1, windowIndices };
+}
+
+/**
+ * The furthest kept boundary among the valid windows at `windowIndices`, each
+ * keeping from its position on `windowStarts`, or `floor` when none keeps past
+ * it. Windows are validated furthest first and the search stops at the first
+ * valid one, so the windows behind it stay unread.
+ */
+function furthestWindowStart(
+	pathEntries: SessionEntry[],
+	windowIndices: readonly number[],
+	windowStarts: readonly number[],
+	floor: number,
+): number {
+	const order = windowStarts.map((_, w) => w).sort((a, b) => windowStarts[b] - windowStarts[a]);
+	for (const w of order) {
+		if (windowStarts[w] <= floor) break;
+		if (getRemoteCompactionPreserveData((pathEntries[windowIndices[w]] as CompactionEntry).preserveData)) {
+			return windowStarts[w];
+		}
+	}
+	return floor;
 }
 
 /**
@@ -2265,7 +2496,7 @@ export function prepareCompaction(
 	// whole span the window holds. A newer window's boundary sits at or past an
 	// older one's on a branch this pass wrote; an older pass could keep behind it.
 	const windowStarts = windowIndices.map(index => keptEntriesStart(pathEntries, index));
-	const boundaryStart = Math.max(summaryStart, ...windowStarts);
+	const boundaryStart = furthestWindowStart(pathEntries, windowIndices, windowStarts, summaryStart);
 	const boundaryEnd = pathEntries.length;
 
 	const lastUsage = getLastAssistantUsage(pathEntries);
@@ -2509,6 +2740,16 @@ export async function compact(
 	};
 }
 
+/** The user turn of a turn-prefix summary request. */
+function buildTurnPrefixPrompt(messages: AgentMessage[], model: Model, options: SummaryOptions | undefined): string {
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
+	const conversationText = serializeConversationForSummary(
+		transformSummarySourceMessages(llmMessages, options),
+		preferredDialect(model.id),
+	);
+	return `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+}
+
 /**
  * Generate a summary for a turn prefix (when splitting a turn).
  */
@@ -2522,49 +2763,16 @@ async function generateTurnPrefixSummary(
 ): Promise<string> {
 	// Smaller budget for a turn prefix, bounded by the window like the main summary.
 	const maxTokens = summaryOutputBudget(model, reserveTokens, 0.5);
-
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversationForSummary(
-		transformSummarySourceMessages(llmMessages, options),
-		preferredDialect(model.id),
-	);
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-
-	const response = await withAuth(
+	const promptText = buildTurnPrefixPrompt(messages, model, options);
+	const response = await sendSummaryRequest(
+		model,
+		() => buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, promptText, options),
+		maxTokens,
 		apiKey,
-		async key => {
-			const attemptResponse = await instrumentedCompleteSimple(
-				model,
-				buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, promptText, options),
-				{
-					maxTokens,
-					signal,
-					apiKey: key,
-					reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
-					initiatorOverride: options?.initiatorOverride,
-					metadata: options?.metadata,
-					fetch: options?.fetch,
-					sessionId: options?.sessionId,
-					promptCacheKey: options?.promptCacheKey,
-					providerSessionState: options?.providerSessionState,
-					codexCompaction: localCodexCompaction(options),
-					serviceTier: options?.serviceTier,
-				},
-				{
-					telemetry: options?.telemetry,
-					oneshotKind: "compaction_turn_prefix",
-					completeImpl: options?.completeImpl,
-				},
-			);
-			throwIfCompactionCancelled(attemptResponse);
-			if (attemptResponse.stopReason === "error") {
-				throw createSummarizationError("Turn prefix summarization failed", attemptResponse, options);
-			}
-			return attemptResponse;
-		},
-		{ signal },
+		signal,
+		options,
+		{ what: "Turn prefix summarization", oneshotKind: "compaction_turn_prefix", replaysSessionPrefix: false },
 	);
-
 	return response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map(c => c.text)

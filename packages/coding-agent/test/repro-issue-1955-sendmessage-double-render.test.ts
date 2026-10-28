@@ -26,10 +26,10 @@ import { Container } from "@veyyon/tui";
  * - `ExtensionUiController.#applyCustomMessageDisplay` rebuilds the chat from
  *   the freshly-persisted session entry, so the chat container ends up holding
  *   one custom-message component.
- * - `main.ts` then calls `mode.renderInitialMessages({ preserveExistingChat: true })`,
- *   which snapshots the chat children, clears, re-renders from session entries
- *   (adding the same custom message again), and re-appends the snapshot —
- *   leaving two identical custom-message components in the chat.
+ * - `main.ts` then calls `mode.replayInitialMessages()`, which re-renders from
+ *   session entries (adding the same custom message again) and keeps the chat
+ *   it found below the rebuilt transcript — leaving two identical
+ *   custom-message components in the chat.
  */
 beforeAll(async () => {
 	// renderInitialMessages reads the global Settings (display.collapseCompacted).
@@ -111,7 +111,7 @@ function createHarness(): Harness {
 		pendingPythonComponents: [],
 		pendingTools: new Map(),
 		settledToolCalls: new Set<string>(),
-		ui: { requestRender: vi.fn() },
+		ui: { requestRender: vi.fn(), terminal: { columns: 120 } },
 		isBackgrounded: false,
 		initialChatRendered: false,
 		statusLine: { invalidate: vi.fn() },
@@ -135,6 +135,7 @@ function createHarness(): Harness {
 		setToolsExpanded: vi.fn(),
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
+		noteDisplayableThinkingContent: () => false,
 		showError: vi.fn(),
 		editor: {
 			setText: vi.fn(),
@@ -209,12 +210,12 @@ describe("issue #1955 — sendMessage(display:true) during session_start", () =>
 		);
 
 		// Drain the `.then(applyCustomMessageDisplay)` microtask chain queued by
-		// `actions.sendMessage` before the host's renderInitialMessages fires.
+		// `actions.sendMessage` before the host's replay fires.
 		await Bun.sleep(0);
 
-		// Mirror main.ts: after `mode.init()` returns, the host renders the
-		// initial transcript while preserving anything previously added to chat.
-		harness.helpers.renderInitialMessages({ preserveExistingChat: true });
+		// Mirror main.ts: after `mode.init()` returns, the host replays the
+		// initial transcript, keeping anything previously added to chat.
+		await harness.helpers.replayInitialMessages();
 
 		const rendered = Bun.stripANSI(harness.ctx.chatContainer.render(120).join("\n"));
 		const occurrences = countOccurrences(rendered, marker);
@@ -226,9 +227,9 @@ describe("issue #1955 — sendMessage(display:true) during session_start", () =>
 		const harness = createHarness();
 		await harness.controller.initHooksAndCustomTools();
 
-		// Establish the initial render — the host's `renderInitialMessages`
-		// flips `initialChatRendered` so subsequent extension sends can rebuild.
-		harness.helpers.renderInitialMessages({ preserveExistingChat: true });
+		// Establish the initial render — the host's replay flips
+		// `initialChatRendered` so subsequent extension sends can rebuild.
+		await harness.helpers.replayInitialMessages();
 
 		const actions = harness.getActions();
 		actions!.sendMessage(

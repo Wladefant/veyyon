@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { readFileText, writeFileCreatingParents } from "@veyyon/utils/fs-io";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { ToolError } from "../tools/core/tool-errors";
 import type { CreateFile, DeleteFile, Range, RenameFile, TextDocumentEdit, TextEdit, WorkspaceEdit } from "./types";
@@ -129,9 +130,9 @@ export function flattenWorkspaceTextEdits(edit: WorkspaceEdit): Map<string, Text
  * Edits are applied in reverse order (bottom-to-top) to preserve line/character indices.
  */
 export async function applyTextEdits(filePath: string, edits: TextEdit[]): Promise<void> {
-	const content = await Bun.file(filePath).text();
+	const content = await readFileText(filePath);
 	const result = applyTextEditsToString(content, edits);
-	await Bun.write(filePath, result);
+	await fs.writeFile(filePath, result);
 }
 
 // =============================================================================
@@ -237,7 +238,7 @@ export async function applyWorkspaceEdit(edit: WorkspaceEdit, cwd: string): Prom
 				applied.push(`Applied ${op.edits.length} edit(s) to ${formatPathRelativeToCwd(filePath, cwd)}`);
 			} else if (op.kind === "create") {
 				const filePath = uriToFile(op.uri);
-				await Bun.write(filePath, "");
+				await writeFileCreatingParents(filePath, "");
 				applied.push(`Created ${formatPathRelativeToCwd(filePath, cwd)}`);
 			} else if (op.kind === "rename") {
 				const oldPath = uriToFile(op.oldUri);

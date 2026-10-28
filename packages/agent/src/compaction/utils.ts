@@ -2,7 +2,7 @@
  * Shared utilities for compaction and branch summarization.
  */
 
-import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage, VideoContent } from "@veyyon/ai";
 import type { Dialect } from "@veyyon/ai/dialect";
 // The factory declares it; the dialect barrel re-exports every definition alongside it.
 import { getDialectDefinition } from "@veyyon/ai/dialect/factory";
@@ -330,28 +330,29 @@ function transformJsonStringValues(
  * boundary cannot leave a raw fragment behind.
  */
 export function transformMessagesForSummary(messages: Message[], transform: SummaryTextTransform): Message[] {
-	return messages.map(message => {
-		if (message.role === "user" || message.role === "developer") {
-			const content =
-				typeof message.content === "string"
-					? transform(message.content)
-					: message.content.map(block =>
-							block.type === "text" ? { ...block, text: transform(block.text) } : block,
-						);
-			return { ...message, content };
-		}
+	return messages.map(message => transformMessageForSummary(message, transform));
+}
 
-		if (message.role === "assistant") {
-			return { ...message, content: message.content.map(block => transformAssistantBlock(block, transform)) };
-		}
+/** {@link transformMessagesForSummary} for one message. */
+export function transformMessageForSummary(message: Message, transform: SummaryTextTransform): Message {
+	if (message.role === "user" || message.role === "developer") {
+		const content =
+			typeof message.content === "string"
+				? transform(message.content)
+				: message.content.map(block => (block.type === "text" ? { ...block, text: transform(block.text) } : block));
+		return { ...message, content };
+	}
 
-		return {
-			...message,
-			content: message.content.map(block =>
-				block.type === "text" ? { ...block, text: transform(block.text) } : block,
-			),
-		};
-	});
+	if (message.role === "assistant") {
+		return { ...message, content: message.content.map(block => transformAssistantBlock(block, transform)) };
+	}
+
+	return {
+		...message,
+		content: message.content.map(block =>
+			block.type === "text" ? { ...block, text: transform(block.text) } : block,
+		),
+	};
 }
 
 /** `block` with its prose transformed: text, thinking, and a tool call's argument keys, string values and intent. */
@@ -490,7 +491,7 @@ function pushAssistantParts(message: AssistantMessage, uselessCallIds: ReadonlyS
 }
 
 /** The text blocks of `content`, concatenated. */
-function joinedText(content: readonly (TextContent | ImageContent)[]): string {
+function joinedText(content: readonly (TextContent | ImageContent | VideoContent)[]): string {
 	let text = "";
 	for (const block of content) if (block.type === "text") text += block.text;
 	return text;

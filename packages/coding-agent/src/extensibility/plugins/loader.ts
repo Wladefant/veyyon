@@ -219,8 +219,8 @@ export interface GetEnabledPluginsOptions {
  * contributes the union of its `package.json#dependencies` and `veyyon-plugins.lock.json#plugins`; and, when a project
  * registry (`.veyyon/plugins/installed_plugins.json`) resolves from `cwd` and the project trust gate allows it, the
  * plugins that registry names by `installPath`. Project scope reads nothing else from its directory: the trust decision
- * hashes the registry file only. Project entries shadow user entries with the same package name, matching the shadow
- * semantics of `MarketplaceManager.listInstalledPlugins`.
+ * covers both the registry bytes and every named payload. Project entries shadow user entries with the same
+ * package name, matching the shadow semantics of `MarketplaceManager.listInstalledPlugins`.
  */
 export async function getEnabledPlugins(
 	cwd: string,
@@ -275,8 +275,8 @@ async function loadEnabledPlugins(
 }
 
 /**
- * The project plugins a trusted project registry names: one per enabled `installPath` entry. The approval hashes the
- * registry file, so it fixes which directories load. It does not hash plugin content inside those directories.
+ * The project plugins a trusted project registry names: one per enabled `installPath` entry. The approval covers
+ * the registry bytes and every file inside the named directories, including disabled entries.
  * Project overrides are read separately from `.veyyon/plugin-overrides.json`; their bytes are not part of approval.
  */
 async function collectRegistryNamedPlugins(

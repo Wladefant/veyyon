@@ -10,6 +10,7 @@ Repair runs in the agent loop **before** argument validation. Clear malformation
 | --- | --- |
 | Seam | Runs at tool dispatch, before schema validation |
 | Fix-if-clear | Trailing commas, parse sentinels (`__parseError` / `__rawJson`), stringified JSON objects |
+| Leaked markup | A string value holding `</parameter><parameter name="k">` markup is split into its own arguments when every leaked name is declared (or `i`), new, and named once |
 | Refuse-if-ambiguous | Missing required strings with multiple plausible sources → unrepairable |
 | Alias / typo rename | Unknown keys that map unambiguously to a declared property are renamed; ambiguous renames are rejected |
 | Strict unknown keys | Schemas with `additionalProperties: false` reject leftover keys after alias resolution |

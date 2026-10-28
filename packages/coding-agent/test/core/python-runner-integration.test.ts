@@ -290,4 +290,26 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 			await kernel.shutdown();
 		}
 	});
+
+	/** One kernel serves a session in every directory, so the previous project leaves the import path. */
+	it("moves the cwd and the front of sys.path with each cell", async () => {
+		using first = TempDir.createSync("@python-runner-cwd-first-");
+		using second = TempDir.createSync("@python-runner-cwd-second-");
+		const kernel = await PythonKernel.start({ cwd: first.path() });
+		const probe = [
+			"import os, sys",
+			`print(os.path.samefile(os.getcwd(), ${JSON.stringify(second.path())}))`,
+			`print(sys.path[0] == ${JSON.stringify(second.path())})`,
+			`print(${JSON.stringify(first.path())} in sys.path)`,
+		].join("\n");
+		try {
+			await executePythonWithKernel(kernel, "x = 41", { cwd: first.path() });
+			const result = await executePythonWithKernel(kernel, `${probe}\nprint(x + 1)`, { cwd: second.path() });
+
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim().split("\n")).toEqual(["True", "True", "False", "42"]);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
 });

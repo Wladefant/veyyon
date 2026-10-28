@@ -6,6 +6,7 @@ import {
 	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionRequestTokens,
+	measureSummarySource,
 	planMergeGroups,
 	planSummarySegments,
 	stagedSegmentBudget,
@@ -223,7 +224,7 @@ describe("a large span is summarized in stages", () => {
 		const provider = fakeProvider(Number.POSITIVE_INFINITY);
 		const prep = preparation(messages);
 
-		const estimate = estimateCompactionRequestTokens(prep, model(), undefined, {
+		const estimate = await estimateCompactionRequestTokens(prep, model(), undefined, {
 			completeImpl: provider.completeImpl,
 		});
 		expect(estimate).toBeLessThanOrEqual(60_000);
@@ -301,7 +302,7 @@ describe("a large span is summarized in stages", () => {
 	});
 
 	/** A result with no call beside it summarizes as the output of nothing, so a cut never lands before one. */
-	test("a segment never opens on a tool result", () => {
+	test("a segment never opens on a tool result", async () => {
 		const messages: Message[] = [];
 		for (let i = 1; i <= 6; i++) {
 			const user = chunkMessage(i);
@@ -321,7 +322,7 @@ describe("a large span is summarized in stages", () => {
 			});
 		}
 		// One chunk (about 1.1k tokens) fits a budget the result (about 500 tokens) then exceeds.
-		const segments = planSummarySegments(messages, undefined, 1_300);
+		const segments = await planSummarySegments(await measureSummarySource(messages, undefined, undefined), 1_300);
 
 		expect(segments.length).toBeGreaterThanOrEqual(2);
 		for (const segment of segments) {

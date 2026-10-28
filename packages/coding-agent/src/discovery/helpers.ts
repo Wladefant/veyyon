@@ -17,14 +17,15 @@ import {
 	parseFrontmatter,
 	tryParseJson,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import {
 	canonicalProjectRoot,
-	describeProjectExecutable,
 	describeRefusal,
 	isInsideRoot,
 	ProjectTrust,
 	realProjectPath,
 } from "../config/project-trust";
+import { describeProjectPluginRegistry } from "../config/project-plugin-registry-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { isForeignConfigImportEnabled, registerProvider } from "./capability";
@@ -1229,7 +1230,7 @@ function collectRegistryRoots(
 				plugin: pluginName,
 				version: entry.version || "unknown",
 				path: entry.installPath,
-				scope: entry.scope || defaultScope,
+				scope: defaultScope === "project" ? "project" : entry.scope || defaultScope,
 			});
 		}
 	}
@@ -1360,9 +1361,9 @@ const NO_PROJECT_PLUGIN_GATE: ProjectPluginGate = { allowed: true, registry: nul
 /**
  * Gate the project plugin directory `cwd` resolves to. Every consumer of that directory calls this before reading
  * anything from it: the Claude-plugin roots below, and the plugin loader's project route. One decision governs both,
- * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes, and through them the
- * `installPath` entries it names. Plugin content in those directories is not hashed. The loader reads
- * `.veyyon/plugin-overrides.json` separately; those bytes are not part of approval.
+ * keyed by the registry owner's trust root. The approval covers the registry file's exact bytes and every file
+ * under each named `installPath`. The loader reads `.veyyon/plugin-overrides.json` separately; those bytes
+ * are not part of approval.
  *
  * `userPluginsRoot` is the operator's own profile directory. A project that resolves to it has no project registry,
  * and that file is not gated.
@@ -1403,8 +1404,7 @@ export async function gateProjectPluginRegistry(
 			state: `${registryPath}\0escape`,
 		};
 	}
-
-	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
+	const executable = await describeProjectPluginRegistry(registryPath, canonicalRoot);
 	if (!executable) {
 		return {
 			allowed: false,
@@ -1423,7 +1423,7 @@ export async function gateProjectPluginRegistry(
 	}
 	return {
 		allowed: true,
-		registry: { path: registryPath, content: executable.content },
+		registry: { path: registryPath, content: executable.resolvedContent },
 		state: `${registryPath}\0trusted:${executable.hash}`,
 	};
 }
@@ -1519,15 +1519,11 @@ export async function listClaudePluginRoots(
 
 	// ── Project-scoped veyyon registry ────────────────────────────────────────
 	// Loaded from the nearest .veyyon/plugins/installed_plugins.json relative to cwd, and ONLY
-	// once the operator has trusted that file's exact bytes.
+	// once the operator has trusted the registry bytes and every named payload.
 	//
 	// This registry is repository-controlled content that names `installPath` directories, and
-	// those directories then supply extensions, hooks, custom tools, slash commands and MCP
-	// servers — code and spawn commands, loaded during startup, before any tool approval can
-	// apply. `installPath` is arbitrary, so the danger is not that the plugin lives in the
-	// project: a project registry pointing at `/tmp/anything` is the same exploit with the
-	// payload moved. Trusting the REGISTRY FILE is therefore the gate, because it is the one
-	// thing the repository must author to reach any of it.
+	// those directories supply extensions, hooks, custom tools, slash commands and MCP servers.
+	// Approval covers both the registry and its payloads, with realpath containment at each folder.
 	//
 	// Failing closed here is silent by design at this layer — this is a cached discovery helper
 	// with no operator channel — so the refusal is reported as a warning, which every capability
@@ -1664,7 +1660,7 @@ export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: s
 		let pluginName = path.basename(resolved);
 		const manifestPath = path.join(resolved, ".claude-plugin", "plugin.json");
 		try {
-			const content = await Bun.file(manifestPath).text();
+			const content = await readFileText(manifestPath);
 			const manifest = JSON.parse(content);
 			if (typeof manifest.name === "string" && manifest.name) {
 				pluginName = manifest.name;

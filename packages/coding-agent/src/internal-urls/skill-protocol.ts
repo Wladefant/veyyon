@@ -10,8 +10,9 @@
 import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
 // The slot, not the loader: `../extensibility/skills` discovers and parses skills and reaches 365
 // modules, and this handler only reads which ones are active.
 import { getActiveSkills } from "../extensibility/active-skills";
@@ -95,7 +96,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			throw new Error(`skill:// URL must resolve to a file or directory: ${url.href}`);
 		}
 
-		const content = await Bun.file(targetPath).text();
+		const content = await readFileText(targetPath);
 		return {
 			url: url.href,
 			content,

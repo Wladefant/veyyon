@@ -36,6 +36,7 @@ import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal
 import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -50,33 +51,12 @@ let policy: AnsiPolicy;
 let geometry: StubbedStdoutGeometry;
 let originalTrueColor: boolean;
 let originalColorterm: string | undefined;
-let clockNow = 0;
-let clockAnchored = false;
 
 /**
- * Advance the shared clock by `ms`. The list takes the production clock, so the frames are driven
- * through its public `tick` rather than by waiting. The anchor is re-taken every time the ticker
- * restarts: a clock that runs dry re-bases on the wall clock, and a harness that kept counting from
- * its own first anchor would land a 90ms fade in one step.
+ * The list takes the production clock, so the frames are driven through its public `tick` rather
+ * than by waiting.
  */
-function advance(ms: number): void {
-	if (!clockAnchored) {
-		clockNow = performance.now();
-		clockAnchored = true;
-	}
-	clockNow += ms;
-	motionClock.tick(clockNow);
-	if (motionClock.liveCount === 0) clockAnchored = false;
-}
-
-/** Run frames until nothing is animating. Returns the frames it took. */
-function settle(): number {
-	for (let frame = 1; frame <= SETTLE_FRAMES; frame++) {
-		advance(FRAME);
-		if (motionClock.liveCount === 0) return frame;
-	}
-	throw new Error(`hover fade still live after ${SETTLE_FRAMES} frames`);
-}
+const { advance, settle } = useHandTickedMotion();
 
 function skill(name: string): ExtensionRow {
 	return {
@@ -150,7 +130,6 @@ beforeEach(async () => {
 	originalTrueColor = terminalCaps.trueColor;
 	terminalCaps.trueColor = true;
 	geometry = stubStdoutGeometry({ columns: WIDTH, rows: 40 });
-	clockAnchored = false;
 });
 
 afterEach(() => {

@@ -6,7 +6,6 @@
 import { atomicWriteFilePreservingMode, errorMessage, lazy, logger, settleWithin, untilAborted } from "@veyyon/utils";
 import { isTimeoutError } from "@veyyon/utils/abortable";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
-import type { BunFile } from "bun";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 import {
@@ -215,7 +214,6 @@ export type WritethroughCallback = (
 	dst: string,
 	content: string,
 	signal?: AbortSignal,
-	file?: BunFile,
 	batch?: LspWritethroughBatchRequest,
 	getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
 ) => Promise<FileDiagnosticsResult | undefined>;
@@ -272,7 +270,6 @@ export async function writethroughNoop(
 	dst: string,
 	content: string,
 	signal?: AbortSignal,
-	_file?: BunFile,
 	_batch?: LspWritethroughBatchRequest,
 	_getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
 ): Promise<FileDiagnosticsResult | undefined> {
@@ -283,7 +280,6 @@ export async function writethroughNoop(
 interface PendingWritethrough {
 	dst: string;
 	content: string;
-	file?: BunFile;
 	changeType: FileChangeType;
 }
 
@@ -483,7 +479,6 @@ async function runLspWritethrough(
 	options: ResolvedWritethroughOptions,
 	changeType: FileChangeType,
 	signal?: AbortSignal,
-	_file?: BunFile,
 	deferred?: {
 		onDeferredDiagnostics: (diagnostics: FileDiagnosticsResult) => void;
 		signal: AbortSignal;
@@ -665,7 +660,6 @@ async function flushWritethroughBatch(
 			options,
 			entry.changeType,
 			signal,
-			entry.file,
 			deferredInner,
 		);
 		bundle?.finalize(diag);
@@ -685,7 +679,6 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		dst: string,
 		content: string,
 		signal?: AbortSignal,
-		file?: BunFile,
 		batch?: LspWritethroughBatchRequest,
 		getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
 	) => {
@@ -705,7 +698,6 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 				resolvedOptions,
 				changeType,
 				signal,
-				file,
 				deferredInner,
 			);
 			bundle?.finalize(diagnostics);
@@ -713,10 +705,10 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		}
 
 		const state = getOrCreateWritethroughBatch(batch.id, resolvedOptions);
-		state.entries.set(dst, { dst, content, file, changeType });
+		state.entries.set(dst, { dst, content, changeType });
 
 		if (!batch.flush) {
-			await writethroughNoop(dst, content, signal, file);
+			await writethroughNoop(dst, content, signal);
 			return undefined;
 		}
 

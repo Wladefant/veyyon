@@ -1,7 +1,8 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+// Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { formatBytes } from "@veyyon/utils/format";
+import { readFileRange } from "@veyyon/utils/fs-io";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
-// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { clampLow } from "@veyyon/utils/math";
 import { sqlPlaceholders, tableExists } from "@veyyon/utils/sqlite";
 import { replaceTabs, truncateToWidth } from "./render-utils";
@@ -508,7 +509,7 @@ export function parseSqlitePathCandidates(filePath: string): SqlitePathCandidate
 
 export async function isSqliteFile(absolutePath: string): Promise<boolean> {
 	try {
-		return looksLikeSqlite(await Bun.file(absolutePath).slice(0, SQLITE_MAGIC.byteLength).bytes());
+		return looksLikeSqlite(await readFileRange(absolutePath, 0, SQLITE_MAGIC.byteLength));
 	} catch {
 		// A file whose first bytes cannot be read is handled as an ordinary file, and the ordinary read
 		// path then reports why it could not be opened. Claiming it is a database we cannot open would

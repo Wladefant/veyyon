@@ -13,8 +13,11 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-
+import { errorMessage, isEnoent, lazy, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
+import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
+import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
+
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
@@ -793,6 +796,7 @@ export class BashTool
 						timeout: options.timeoutMs ?? 0,
 						signal: runSignal,
 						env: options.resolvedEnv,
+						redactOutput: this.session.obfuscateProviderText,
 						artifactPath,
 						artifactId,
 						spillThreshold: inlineBudgetFor(this.session),
@@ -1229,10 +1233,10 @@ export class BashTool
 		const waitResult = await this.#waitForManagedBashJob(job, { thresholdMs: wallThresholdMs, stallMs, signal });
 		switch (waitResult.kind) {
 			case "completed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				return waitResult.result;
 			case "failed":
-				manager.acknowledgeDeliveries([job.jobId]);
+				manager.release(job.jobId);
 				throw waitResult.error;
 			case "aborted":
 				manager.cancel(job.jobId);
@@ -1388,6 +1392,7 @@ export class BashTool
 					timeout: timeoutMs ?? 0,
 					signal,
 					env: resolvedEnv,
+					redactOutput: this.session.obfuscateProviderText,
 					artifactPath,
 					artifactId,
 					spillThreshold: inlineBudgetFor(this.session),

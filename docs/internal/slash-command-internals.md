@@ -183,6 +183,8 @@ Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands 
 
 `refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
 
+The composer takes keys before `init()` installs the provider: the launch card's editor is live from the first frame. When an editor's first provider attaches, the editor evaluates the text at the cursor once, as the last keystroke would have, so a `/` command, `@` mention, `#` action or shortcode typed before then opens its suggestions or is rewritten. Escape before the attach withdraws that evaluation, and a provider that replaces another evaluates nothing.
+
 ### Refresh lifecycle
 
 Slash command state is refreshed:
@@ -345,4 +347,4 @@ hidden default dressed as one.
   - non-native commands: warning + fallback key/value parse
 - Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
 
-*Verified against `ffec02b67f670d22fded4ad2be9eac0345b75b94` on 2026-09-15.*
+*Verified against `73787e442eacbe1c7771912c6db8d5fa0ae452ec` on 2026-10-18.*

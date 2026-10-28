@@ -21,7 +21,7 @@ use std::{
 	io::{BufWriter, Read, Write},
 	iter,
 	path::PathBuf,
-	process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+	process::{Child, ChildStdin, ChildStdout, Stdio},
 	rc::Rc,
 	thread::{self, JoinHandle},
 };
@@ -498,10 +498,17 @@ impl WriteableTmpFile for WriteableCompressedTmpFile {
 
 	fn create((file, path): (File, PathBuf), compress_prog: Option<&str>) -> UResult<Self> {
 		let compress_prog = compress_prog.unwrap();
-		let mut command = Command::new(compress_prog);
-		command.stdin(Stdio::piped()).stdout(file);
-		let mut child = command
-			.spawn()
+		// The compressor's stderr is discarded rather than inherited, which would
+		// write into the host's terminal; a failure still surfaces through its
+		// exit status in `check_child_success`.
+		let mut child = veyyon_uutils_ctx::child_command(compress_prog, veyyon_uutils_ctx::cwd())
+			.and_then(|mut command| {
+				command
+					.stdin(Stdio::piped())
+					.stdout(file)
+					.stderr(Stdio::null());
+				command.spawn()
+			})
 			.map_err(|err| SortError::CompressProgExecutionFailed {
 				prog:  compress_prog.to_owned(),
 				error: err,
@@ -529,16 +536,22 @@ impl ClosedTmpFile for ClosedCompressedTmpFile {
 	type Reopened = CompressedTmpMergeInput;
 
 	fn reopen(self) -> UResult<Self::Reopened> {
-		let mut command = Command::new(&self.compress_prog);
 		// mirroring what is done for ClosedPlainTmpFile
 		let file = File::open(&self.path).map_err(|error| SortError::OpenTmpFileFailed { error })?;
-		command.stdin(file).stdout(Stdio::piped()).arg("-d");
-		let mut child = command
-			.spawn()
-			.map_err(|err| SortError::CompressProgExecutionFailed {
-				prog:  self.compress_prog.clone(),
-				error: err,
-			})?;
+		let mut child =
+			veyyon_uutils_ctx::child_command(&self.compress_prog, veyyon_uutils_ctx::cwd())
+				.and_then(|mut command| {
+					command
+						.stdin(file)
+						.stdout(Stdio::piped())
+						.stderr(Stdio::null())
+						.arg("-d");
+					command.spawn()
+				})
+				.map_err(|err| SortError::CompressProgExecutionFailed {
+					prog:  self.compress_prog.clone(),
+					error: err,
+				})?;
 		let child_stdout = child.stdout.take().unwrap();
 		Ok(CompressedTmpMergeInput {
 			path: self.path,
