@@ -660,15 +660,20 @@ export async function fetchCodexDiscoveryModels(
 		console.log("Tip: If you are logged in under a specific profile, run with VEYYON_PROFILE=<name>.");
 		return [];
 	}
-	console.log(`Fetching models from Codex API for ${accounts.length} account(s)...`);
-	const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => accounts });
-	const models = await options.fetchDynamicModels?.();
-	if (!models) {
-		console.warn("Codex API fetch failed, keeping previous models.");
+	try {
+		console.log(`Fetching models from Codex API for ${accounts.length} account(s)...`);
+		const options = openaiCodexModelManagerOptions({ resolveAccounts: async () => accounts });
+		const models = await options.fetchDynamicModels?.();
+		if (!models) {
+			console.warn("Codex API fetch failed, keeping previous models.");
+			return [];
+		}
+		console.log(`Fetched ${models.length} models from Codex API`);
+		return models.map(({ accessPrograms: _accessPrograms, ...spec }) => spec);
+	} catch (error) {
+		console.warn("Codex API fetch failed, keeping previous models.", error);
 		return [];
 	}
-	console.log(`Fetched ${models.length} models from Codex API`);
-	return [...models];
 }
 
 async function generateModels() {

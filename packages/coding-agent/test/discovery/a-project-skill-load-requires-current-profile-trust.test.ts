@@ -595,7 +595,7 @@ symlinkTest("a broken symlink makes a project skill unapprovable and unloadable"
 	expect(approval.decision).toBe("undecided");
 	expect(loaded.items.map(skill => skill.name)).toEqual([]);
 	expect(warning).toContain(relativePath);
-	expect(warning).toContain("unsafe or unreadable skill folder");
+	expect(warning).toContain("skill folder is unsafe or unreadable");
 	expect(warning).not.toContain("symlink cycle");
 });
 
@@ -615,7 +615,7 @@ dirSymlinkTest("a directory symlink to the project root makes a skill unapprovab
 	expect(approval.decision).toBe("undecided");
 	expect(loaded.items.map(skill => skill.name)).toEqual([]);
 	expect(warning).toContain(relativePath);
-	expect(warning).toContain("unsafe or unreadable skill folder");
+	expect(warning).toContain("skill folder is unsafe or unreadable");
 	expect(warning).not.toContain("symlink cycle");
 });
 

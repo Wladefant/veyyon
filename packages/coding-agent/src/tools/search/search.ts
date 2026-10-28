@@ -208,6 +208,7 @@ function projectToMatchingPaths(result: AgentToolResult<TextSearchDetails>): Age
 	if ((details?.fileLimitReached ?? 0) > 0) {
 		lines.push("More files matched than are listed; page with `skip`.");
 	}
+	if (details?.timeoutNotice) lines.push(details.timeoutNotice);
 	if (details?.missingPaths?.length) {
 		lines.push(`Paths not found: ${details.missingPaths.join(", ")}`);
 	}

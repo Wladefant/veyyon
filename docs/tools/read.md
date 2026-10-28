@@ -82,7 +82,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/web/fetc
    - `readSqlite()` dispatches on `parseSqliteSelector()`.
 6. Otherwise it treats the input as a local filesystem path.
    - `resolveReadPath()` expands `~`, resolves relative to session cwd, treats bare `/` as session cwd, and retries macOS screenshot/NFD/curly-quote variants.
-   - If the path does not exist, `findUniqueSuffixMatch()` does a workspace glob-based unique suffix lookup (skipped for remote mounts).
+   - If the path does not exist, `findUniqueSuffixMatch()` does a workspace glob-based unique suffix lookup (skipped for remote mounts). The lookups of one `read` call go through one `SuffixSearch`: they share a 5 s limit that starts at the first lookup, a lookup that starts after it passes reports no match, and a path named twice is looked up once.
 7. Directories go through `readDirectory()`.
 8. Non-directories branch by content type:
    - image metadata / inline image
@@ -282,7 +282,7 @@ Notes: ...
   - source bytes cap `20 MiB`
   - post-resize inline output cap `300 KiB`
 - Unique suffix auto-resolution glob timeout: `5000` ms.
-- File snapshot store holds `30` paths with up to `4` versions each (`DEFAULT_MAX_PATHS` / `DEFAULT_MAX_VERSIONS_PER_PATH` in `plugins/hashline/src/snapshots.ts`); files over `4 MiB` (`SNAPSHOT_MAX_BYTES`) are not snapshotted.
+- File snapshot store holds `30` paths with up to `4` versions each (`DEFAULT_MAX_PATHS` / `DEFAULT_MAX_VERSIONS_PER_PATH` in `plugins/hashline/src/snapshots.ts`); files over `4 MiB` (`SNAPSHOT_MAX_BYTES`) are not snapshotted. A version evicted or pushed off a path's ring keeps its displayed lines, without its text, for up to `1024` paths (`DEFAULT_MAX_DROPPED_PATHS`); recording the same text again restores them.
 
 ## Errors
 - Validation and operational failures surface as `ToolError`.

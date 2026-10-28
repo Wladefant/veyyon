@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as evalIndex from "@veyyon/coding-agent/eval";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
+import { LIVE_OUTPUT_INTERVAL_MS } from "@veyyon/coding-agent/session/streaming-output";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 
@@ -53,8 +55,9 @@ describe("EvalTool live stdout streaming", () => {
 			options: { onChunk?: (chunk: string) => void },
 		) => {
 			// Emit a chunk while the cell is still running, mirroring a print()
-			// before a long sleep. The host's onChunk path runs synchronously.
+			// before a long sleep that outlasts one live-update interval.
 			options.onChunk?.("tick 1\n");
+			await sleep(LIVE_OUTPUT_INTERVAL_MS * 3);
 			return baseResult({ output: "tick 1\ntick 2\n" });
 		}) as never);
 

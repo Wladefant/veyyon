@@ -43,6 +43,8 @@ import type {
 	AnthropicFallbackContent,
 	Api,
 	AssistantMessage,
+	CacheRequestRecord,
+	CacheRequestTtl,
 	CacheRetention,
 	Context,
 	FetchImpl,
@@ -421,12 +423,14 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 		fastModeDisabled: false,
 		replayUnsignedThinkingDisabled: false,
 		priorReasoningReplayDisabled: false,
+		forcedToolChoiceDisabled: false,
 		cacheTracker: createCacheTrackerState(),
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
 			state.replayUnsignedThinkingDisabled = false;
 			state.priorReasoningReplayDisabled = false;
+			state.forcedToolChoiceDisabled = false;
 			state.cacheTracker = createCacheTrackerState();
 		},
 	};
@@ -461,6 +465,10 @@ function getAnthropicProviderSessionState(
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	return params.tools?.some(tool => tool.strict === true) ?? false;
+}
+
+function isForcedAnthropicToolChoice(choice: MessageCreateParamsStreaming["tool_choice"]): boolean {
+	return choice?.type === "any" || choice?.type === "tool";
 }
 
 function dropAnthropicFastMode(params: MessageCreateParamsStreaming): void {
@@ -1656,7 +1664,12 @@ function createEmptyUsage(): Usage {
  * as far as `message_start` was billed for the whole prompt, cache write
  * included. One owner means a fifth reason to retry cannot forget it.
  */
-function discardAnthropicAttempt(model: Model<"anthropic-messages">, output: AssistantMessage): void {
+function discardAnthropicAttempt(
+	model: Model<"anthropic-messages">,
+	output: AssistantMessage,
+	cacheRequests?: CacheRequestRecord[],
+): void {
+	const retained = cacheRequests ?? output.usage.cacheRequests;
 	output.content.length = 0;
 	output.model = model.id;
 	output.responseId = undefined;
@@ -1664,6 +1677,9 @@ function discardAnthropicAttempt(model: Model<"anthropic-messages">, output: Ass
 	output.stopDetails = undefined;
 	output.providerPayload = undefined;
 	output.usage = discardAttemptUsage(model, output.usage, createEmptyUsage());
+	if (retained) {
+		output.usage.cacheRequests = retained;
+	}
 	output.stopReason = "stop";
 }
 
@@ -1704,6 +1720,132 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 			delete usage.server;
 		}
 	}
+}
+
+function applyAnthropicAttemptUsage(
+	record: CacheRequestRecord,
+	source: {
+		cache_read_input_tokens?: number | null;
+		cache_creation_input_tokens?: number | null;
+		cache_creation?: { ephemeral_5m_input_tokens?: number | null; ephemeral_1h_input_tokens?: number | null } | null;
+	} | undefined,
+): void {
+	if (!source) return;
+	if (source.cache_read_input_tokens != null) {
+		record.cacheRead = source.cache_read_input_tokens;
+	}
+	if (source.cache_creation_input_tokens != null) {
+		record.cacheWrite = source.cache_creation_input_tokens;
+	}
+	const cacheCreation = source.cache_creation;
+	if (cacheCreation != null) {
+		const fiveMinute = cacheCreation.ephemeral_5m_input_tokens;
+		const oneHour = cacheCreation.ephemeral_1h_input_tokens;
+		if (fiveMinute != null || oneHour != null) {
+			record.cttl = {
+				...(fiveMinute != null ? { ephemeral5m: fiveMinute } : {}),
+				...(oneHour != null ? { ephemeral1h: oneHour } : {}),
+			};
+		}
+	}
+}
+
+function createAnthropicCacheRequestRecord(
+	params: MessageCreateParamsStreaming,
+	body: string,
+	isOAuthToken: boolean,
+	model: Model<"anthropic-messages">,
+): CacheRequestRecord {
+	let finalBody = body;
+	if (isOAuthToken && body.includes(CCH_PLACEHOLDER_STR)) {
+		const encoded = cchEncoder.encode(body);
+		if (patchCch(encoded) === "patched") {
+			finalBody = new TextDecoder().decode(encoded);
+		}
+	}
+
+	let parsed: {
+		model?: string;
+		system?: unknown;
+		tools?: unknown;
+		messages?: unknown[];
+	};
+	try {
+		parsed = JSON.parse(finalBody);
+	} catch {
+		parsed = params as unknown as typeof parsed;
+	}
+
+	const sentModel = typeof parsed.model === "string" ? parsed.model : model.id;
+
+	const prefixData: { system?: unknown; tools?: unknown } = {};
+	if (parsed.system !== undefined) prefixData.system = parsed.system;
+	if (parsed.tools !== undefined) prefixData.tools = parsed.tools;
+	const prefixHash = nodeCrypto.createHash("sha256").update(JSON.stringify(prefixData)).digest("hex");
+
+	const ttls: ("5m" | "1h")[] = [];
+	if (isRecord(parsed) && isRecord(parsed.cache_control)) {
+		ttls.push(parsed.cache_control.ttl === "1h" ? "1h" : "5m");
+	}
+	if (Array.isArray(parsed.tools)) {
+		for (const tool of parsed.tools) {
+			if (isRecord(tool) && isRecord(tool.cache_control)) {
+				ttls.push(tool.cache_control.ttl === "1h" ? "1h" : "5m");
+			}
+		}
+	}
+	if (Array.isArray(parsed.system)) {
+		for (const block of parsed.system) {
+			if (isRecord(block) && isRecord(block.cache_control)) {
+				ttls.push(block.cache_control.ttl === "1h" ? "1h" : "5m");
+			}
+		}
+	} else if (isRecord(parsed.system) && isRecord(parsed.system.cache_control)) {
+		ttls.push(parsed.system.cache_control.ttl === "1h" ? "1h" : "5m");
+	}
+	if (Array.isArray(parsed.messages)) {
+		for (const message of parsed.messages) {
+			if (isRecord(message) && Array.isArray(message.content)) {
+				for (const block of message.content) {
+					if (isRecord(block) && isRecord(block.cache_control)) {
+						ttls.push(block.cache_control.ttl === "1h" ? "1h" : "5m");
+					}
+				}
+			}
+		}
+	}
+
+	let requestedTtl: CacheRequestTtl;
+	let requestedTtls: ("5m" | "1h")[] | undefined;
+
+	if (ttls.length === 0) {
+		requestedTtl = "none";
+	} else {
+		const has5m = ttls.includes("5m");
+		const has1h = ttls.includes("1h");
+		if (has5m && has1h) {
+			requestedTtl = "mixed";
+			requestedTtls = ttls;
+		} else if (has1h) {
+			requestedTtl = "1h";
+			requestedTtls = ttls;
+		} else {
+			requestedTtl = "5m";
+			requestedTtls = ttls;
+		}
+	}
+
+	const record: CacheRequestRecord = {
+		requestStartedAt: Date.now(),
+		requestedTtl,
+		model: sentModel,
+		prefixHash,
+	};
+	if (requestedTtls !== undefined) {
+		record.requestedTtls = requestedTtls;
+	}
+
+	return record;
 }
 
 function parseAnthropicFallbackWireBlock(value: unknown): AnthropicFallbackContent | undefined {
@@ -1870,9 +2012,13 @@ interface AnthropicStreamState {
 	firstTokenTime: number | undefined;
 	closedBlockIndexes: Set<number>;
 	openBlocks: Map<number, AnthropicOpenBlockEntry>;
+	currentAttemptRecord?: CacheRequestRecord;
 }
 
-function createAnthropicStreamState(firstTokenTime: number | undefined): AnthropicStreamState {
+function createAnthropicStreamState(
+	firstTokenTime: number | undefined,
+	currentAttemptRecord?: CacheRequestRecord,
+): AnthropicStreamState {
 	return {
 		sawEvent: false,
 		sawMessageStart: false,
@@ -1883,6 +2029,7 @@ function createAnthropicStreamState(firstTokenTime: number | undefined): Anthrop
 		firstTokenTime,
 		closedBlockIndexes: new Set<number>(),
 		openBlocks: new Map<number, AnthropicOpenBlockEntry>(),
+		currentAttemptRecord,
 	};
 }
 
@@ -1966,6 +2113,12 @@ function handleAnthropicMessageStart(
 		}
 	} else {
 		reportAnthropicEnvelopeAnomaly("message_start missing usage");
+	}
+	if (state.currentAttemptRecord) {
+		if (!state.currentAttemptRecord.requestId && startMessage?.id) {
+			state.currentAttemptRecord.requestId = startMessage.id;
+		}
+		applyAnthropicAttemptUsage(state.currentAttemptRecord, startUsage);
 	}
 }
 
@@ -2238,6 +2391,9 @@ function handleAnthropicMessageDelta(
 			output.usage.cacheWrite = deltaUsage.cache_creation_input_tokens;
 		}
 		applyAnthropicUsageExtras(output.usage, deltaUsage);
+		if (state.currentAttemptRecord) {
+			applyAnthropicAttemptUsage(state.currentAttemptRecord, deltaUsage);
+		}
 		output.usage.totalTokens =
 			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 		if (serverSideFallback) {
@@ -2335,6 +2491,7 @@ interface AnthropicStreamRetryContext {
 	disableStrictTools: boolean;
 	forceDemoteUnsignedThinking: boolean;
 	omitDemotedPriorReasoning: boolean;
+	dropForcedToolChoice: boolean;
 	dropFastMode: boolean;
 	providerRetryAttempt: number;
 }
@@ -2401,6 +2558,25 @@ async function handleAnthropicFeatureFallbackError(
 		});
 		if (providerSessionState) providerSessionState.priorReasoningReplayDisabled = true;
 		retryCtx.omitDemotedPriorReasoning = true;
+		return true;
+	}
+	if (
+		!retryCtx.dropForcedToolChoice &&
+		firstTokenTime === undefined &&
+		isForcedAnthropicToolChoice(params.tool_choice) &&
+		AIError.isToolChoiceRejected(streamFailure)
+	) {
+		logger.warn(
+			"anthropic: forced tool_choice rejected, so the request was retried with tool_choice auto and forced tool choice is off for this model for the rest of this session",
+			{
+				provider: model.provider,
+				model: model.id,
+				baseUrl,
+				error: errorMessage(streamFailure),
+			},
+		);
+		if (providerSessionState) providerSessionState.forcedToolChoiceDisabled = true;
+		retryCtx.dropForcedToolChoice = true;
 		return true;
 	}
 	if (
@@ -2681,16 +2857,7 @@ async function prepareAnthropicStreamParams(
 	rawRequestDump: RawHttpRequestDump;
 	anthropicWireBodyJson: string;
 }> {
-	let nextParams = buildParams(
-		model,
-		preparedContext,
-		isOAuthToken,
-		options,
-		retryCtx.disableStrictTools,
-		hasUmansGatewayWebSearch,
-		retryCtx.forceDemoteUnsignedThinking,
-		retryCtx.omitDemotedPriorReasoning,
-	);
+	let nextParams = buildParams(model, preparedContext, isOAuthToken, options, retryCtx, hasUmansGatewayWebSearch);
 	if (retryCtx.disableStrictTools) {
 		dropAnthropicStrictTools(nextParams);
 	}
@@ -2809,6 +2976,8 @@ const streamAnthropicOnce = (
 			timestamp: Date.now(),
 		};
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		const cacheRequests: CacheRequestRecord[] = [];
+		output.usage.cacheRequests = cacheRequests;
 		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 		let anthropicWireBodyJson: string | undefined;
 		let activeAbortTracker = createAbortSourceTracker(options?.signal);
@@ -2842,6 +3011,7 @@ const streamAnthropicOnce = (
 				dropFastMode: providerSessionState?.fastModeDisabled ?? false,
 				forceDemoteUnsignedThinking: providerSessionState?.replayUnsignedThinkingDisabled ?? false,
 				omitDemotedPriorReasoning: providerSessionState?.priorReasoningReplayDisabled ?? false,
+				dropForcedToolChoice: providerSessionState?.forcedToolChoiceDisabled ?? false,
 				providerRetryAttempt: 0,
 			};
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
@@ -2933,6 +3103,13 @@ const streamAnthropicOnce = (
 					umansGatewayWebSearchHeader || injectedClientEffortHeaders
 						? { ...umansGatewayWebSearchHeader, ...injectedClientEffortHeaders }
 						: undefined;
+				const currentAttemptRecord = createAnthropicCacheRequestRecord(
+					params,
+					body,
+					isOAuthToken,
+					model,
+				);
+				cacheRequests.push(currentAttemptRecord);
 				const anthropicRequest = createAnthropicStreamRequest(
 					client,
 					params,
@@ -2946,7 +3123,7 @@ const streamAnthropicOnce = (
 				// already streamed: the event loop can throw mid-stream, and a retry
 				// decided on a copy taken after a loop that never finished would replay
 				// a turn whose text or tool call already reached the consumer.
-				const streamState = createAnthropicStreamState(firstTokenTime);
+				const streamState = createAnthropicStreamState(firstTokenTime, currentAttemptRecord);
 
 				try {
 					const {
@@ -2963,6 +3140,9 @@ const streamAnthropicOnce = (
 						firstEventTimeoutAbortError,
 					);
 					await notifyProviderResponse(options, response, model, requestId);
+					if (requestId && !currentAttemptRecord.requestId) {
+						currentAttemptRecord.requestId = requestId;
+					}
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
 						idleTimeoutMs,
 						firstItemTimeoutMs: firstEventTimeoutMs,
@@ -3012,8 +3192,33 @@ const streamAnthropicOnce = (
 					// left no anchors at all the verdict correctly becomes
 					// `not-requested`, which the stale count would have hidden.
 					recordAnthropicStreamCacheOutcome(cacheTracker, cacheTracked, cacheEnforcement, params, output, model);
+					if (!currentAttemptRecord.requestId && output.responseId) {
+						currentAttemptRecord.requestId = output.responseId;
+					}
 					break;
 				} catch (streamError) {
+					if (!currentAttemptRecord.requestId && isRecord(streamError)) {
+						if (typeof streamError.requestId === "string" && streamError.requestId.length > 0) {
+							currentAttemptRecord.requestId = streamError.requestId;
+						} else if (typeof streamError.request_id === "string" && streamError.request_id.length > 0) {
+							currentAttemptRecord.requestId = streamError.request_id;
+						} else if (
+							streamError.headers instanceof Headers ||
+							(isRecord(streamError.headers) && typeof (streamError.headers as Headers).get === "function")
+						) {
+							const id =
+								(streamError.headers as Headers).get("request-id") ??
+								(streamError.headers as Headers).get("x-request-id");
+							if (typeof id === "string" && id.length > 0) {
+								currentAttemptRecord.requestId = id;
+							}
+						} else if (isRecord(streamError.headers)) {
+							const id = streamError.headers["request-id"] ?? streamError.headers["x-request-id"];
+							if (typeof id === "string" && id.length > 0) {
+								currentAttemptRecord.requestId = id;
+							}
+						}
+					}
 					firstTokenTime = streamState.firstTokenTime;
 					const retryResult = await handleAnthropicStreamAttemptError(
 						streamError,
@@ -3037,10 +3242,13 @@ const streamAnthropicOnce = (
 							({ params, body } = await prepareParams());
 							retryCtx.providerRetryAttempt = 0;
 						}
-						discardAnthropicAttempt(model, output);
+						discardAnthropicAttempt(model, output, cacheRequests);
 						firstTokenTime = undefined;
 					}
 				}
+			}
+			if (cacheRequests.length > 0) {
+				output.usage.cacheRequests = cacheRequests;
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
@@ -3067,6 +3275,9 @@ const streamAnthropicOnce = (
 				rawRequestDump: materializeDumpBody(rawRequestDump, anthropicWireBodyJson),
 			});
 			AIError.applyFinalizeResult(output, result, maybeAddReplayUnsignedThinkingHint(model, result.message));
+			if (cacheRequests.length > 0) {
+				output.usage.cacheRequests = cacheRequests;
+			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -3424,9 +3635,7 @@ function disableThinkingIfToolChoiceForced(
 	params: MessageCreateParamsStreaming,
 	model: Model<"anthropic-messages">,
 ): void {
-	const toolChoice = params.tool_choice;
-	if (!toolChoice) return;
-	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
+	if (!isForcedAnthropicToolChoice(params.tool_choice)) return;
 
 	delete params.thinking;
 	delete params.context_management;
@@ -3769,10 +3978,15 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 	return "";
 }
 
+/** The session-learned downgrades the request builder applies, a subset of the retry context. */
+type AnthropicRequestDowngrades = Pick<
+	AnthropicStreamRetryContext,
+	"disableStrictTools" | "forceDemoteUnsignedThinking" | "omitDemotedPriorReasoning" | "dropForcedToolChoice"
+>;
+
 function resolveAnthropicEffectiveModel(
 	model: Model<"anthropic-messages">,
-	forceDemoteUnsignedThinking: boolean,
-	omitDemotedPriorReasoning: boolean,
+	downgrades: AnthropicRequestDowngrades,
 ): Model<"anthropic-messages"> {
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
@@ -3780,16 +3994,19 @@ function resolveAnthropicEffectiveModel(
 	// demoted default without mutating the shared `model` reference. A learned
 	// `reasoning_extraction` refusal clears `replayDemotedPriorReasoning` the
 	// same way, which makes the transform drop prior reasoning it would
-	// otherwise hand over as prose.
-	const demoteUnsigned = forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking;
-	const dropPriorReasoning = omitDemotedPriorReasoning && model.compat.replayDemotedPriorReasoning;
-	if (!demoteUnsigned && !dropPriorReasoning) return model;
+	// otherwise hand over as prose, and a learned forced `tool_choice` rejection
+	// clears `supportsForcedToolChoice`.
+	const demoteUnsigned = downgrades.forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking;
+	const dropPriorReasoning = downgrades.omitDemotedPriorReasoning && model.compat.replayDemotedPriorReasoning;
+	const dropForcedToolChoice = downgrades.dropForcedToolChoice && model.compat.supportsForcedToolChoice;
+	if (!demoteUnsigned && !dropPriorReasoning && !dropForcedToolChoice) return model;
 	return {
 		...model,
 		compat: {
 			...model.compat,
 			...(demoteUnsigned ? { replayUnsignedThinking: false } : {}),
 			...(dropPriorReasoning ? { replayDemotedPriorReasoning: false } : {}),
+			...(dropForcedToolChoice ? { supportsForcedToolChoice: false } : {}),
 		},
 	};
 }
@@ -3934,12 +4151,12 @@ function buildAnthropicToolChoiceParam(
 			),
 		};
 	}
-	// Claude Fable/Mythos 5 reject forced tool use outright ("tool_choice forces
-	// tool use is not compatible with this model"). Downgrade any/tool → auto so the
-	// request succeeds; the tool stays available and the caller's prompt steers
-	// the model toward it.
-	const choiceType = choice?.type;
-	if ((choiceType === "any" || choiceType === "tool") && !model.compat.supportsForcedToolChoice) {
+	// Claude Opus/Sonnet 5.5+ and Fable/Mythos reject forced tool use outright
+	// (`tool_choice: type "tool" and "any" are not supported for this model.`),
+	// and an endpoint that answered a forced choice with that 400 is remembered
+	// for the session. Downgrade any/tool → auto so the request succeeds; the
+	// tool stays available and the caller's prompt steers the model toward it.
+	if (isForcedAnthropicToolChoice(choice) && !model.compat.supportsForcedToolChoice) {
 		return { type: "auto" };
 	}
 	return choice;
@@ -3949,13 +4166,11 @@ function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
 	isOAuthToken: boolean,
-	options?: AnthropicOptions,
-	disableStrictTools = false,
-	useUmansGatewayWebSearch = false,
-	forceDemoteUnsignedThinking = false,
-	omitDemotedPriorReasoning = false,
+	options: AnthropicOptions | undefined,
+	downgrades: AnthropicRequestDowngrades,
+	useUmansGatewayWebSearch: boolean,
 ): MessageCreateParamsStreaming {
-	const effectiveModel = resolveAnthropicEffectiveModel(model, forceDemoteUnsignedThinking, omitDemotedPriorReasoning);
+	const effectiveModel = resolveAnthropicEffectiveModel(model, downgrades);
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
 	// Pre-compute system blocks so they occupy the right slot in the serialized body.
@@ -3974,7 +4189,7 @@ function buildParams(
 		tools = convertTools(
 			context.tools,
 			isOAuthToken,
-			disableStrictTools || anthropicWire(model).rejectsBetas === true,
+			downgrades.disableStrictTools || anthropicWire(model).rejectsBetas === true,
 			model.compat.supportsEagerToolInputStreaming,
 			model.compat.escapeBuiltinToolNames,
 			useUmansGatewayWebSearch,
@@ -4027,7 +4242,12 @@ function buildParams(
 		params.speed = "fast";
 	}
 
-	const toolChoice = buildAnthropicToolChoiceParam(options?.toolChoice, model, isOAuthToken, useUmansGatewayWebSearch);
+	const toolChoice = buildAnthropicToolChoiceParam(
+		options?.toolChoice,
+		effectiveModel,
+		isOAuthToken,
+		useUmansGatewayWebSearch,
+	);
 	if (toolChoice) {
 		params.tool_choice = toolChoice;
 	}

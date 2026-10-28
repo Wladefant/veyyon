@@ -2840,7 +2840,7 @@ describe("advisor", () => {
 		const strip = (lines: readonly string[]): string => stripAnsi(lines.join("\n"));
 		const make = (doc: WatchdogConfigDoc, extra?: Partial<AdvisorConfigDeps>): AdvisorConfigOverlayComponent =>
 			new AdvisorConfigOverlayComponent({} as unknown as TUI, { ...deps, ...extra }, "project", doc, callbacks);
-		const fullHeight = Math.max(14, process.stdout.rows || 40);
+		const fullHeight = process.stdout.rows || 40;
 
 		it("paints a split frame sized to its content: roster sidebar + selected-advisor preview", async () => {
 			const uiTheme = await getThemeByName("dark");

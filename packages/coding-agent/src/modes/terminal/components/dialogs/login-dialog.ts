@@ -143,7 +143,7 @@ export class LoginDialogComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const termHeight = Math.max(14, this.#getTerminalRows());
+		const termHeight = this.#getTerminalRows();
 		// LARGE, not MEDIUM: the authorize URL is a copy target and a narrow card
 		// wraps it mid-token, so the card takes the wider sizing to keep a typical
 		// URL on one row.

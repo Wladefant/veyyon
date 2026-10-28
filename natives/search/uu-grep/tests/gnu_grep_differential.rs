@@ -139,7 +139,7 @@ fn run_grep(args: &[&str], stdin: &[u8], cwd: &Path) -> (i32, Vec<u8>, Vec<u8>) 
 	}
 	let io = ScopeIo {
 		stdin: Box::new(std::io::Cursor::new(stdin.to_vec())),
-		stdin_fd: None,
+		fds: Vec::new(),
 		stdin_is_search_input: true,
 		stdout: Box::new(SharedBuf(Arc::clone(&out))),
 		stdout_is_terminal: false,

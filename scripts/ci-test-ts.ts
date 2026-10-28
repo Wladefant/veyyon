@@ -26,6 +26,14 @@ import {
 	sweepStaleTempDirs,
 	TEST_TEMP_DIR_PREFIXES,
 } from "../packages/utils/test/helpers/temp-dir-janitor";
+import {
+	type AffectedWorkspaceInspection,
+	type CiContractTestTarget,
+	ciContractTestsForPaths,
+	headTrackedFiles,
+	inspectAffectedWorkspaceSelection,
+	workingTreeDrift,
+} from "./affected-workspace-tests";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
@@ -50,6 +58,8 @@ export interface TestCommand {
 	cwd: string;
 	command: string[];
 	env?: Record<string, string>;
+	/** Set for `node --test` contract commands, whose totals come from TAP instead of Bun's summary. */
+	runner?: "node";
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
@@ -129,9 +139,61 @@ process.on("exit", () => {
 		);
 	}
 }
+
+// argv carries at most one mode, an optional `--changed-since <sha>` for related selection, and
+// any number of `*.test.ts(x)` paths for an explicit target run. Explicit paths take the place of
+// a mode: only the implicit `all` mode may accompany them, and they never combine with a SHA.
+export interface RunnerArguments {
+	mode: string;
+	changedSince: string | undefined;
+	explicitTestFiles: string[];
+}
+
+function isExplicitTestTarget(argument: string): boolean {
+	return /\.test\.tsx?$/.test(argument);
+}
+
+export function parseRunnerArguments(argv: readonly string[]): RunnerArguments {
+	let changedSince: string | undefined;
+	const positionals: string[] = [];
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index] ?? "";
+		if (argument === "--changed-since") {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
+			const value = argv[++index];
+			if (value === undefined || value.startsWith("--")) {
+				throw new Error("--changed-since requires a full commit SHA");
+			}
+			changedSince = value;
+		} else if (argument.startsWith("--changed-since=")) {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
+			changedSince = argument.slice("--changed-since=".length);
+		} else if (!argument.startsWith("--")) {
+			positionals.push(argument);
+		}
+	}
+	if (changedSince !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(changedSince)) {
+		throw new Error("--changed-since requires a full 40- or 64-character commit SHA");
+	}
+	const explicitTestFiles = positionals.filter(isExplicitTestTarget);
+	const modes = positionals.filter(argument => !isExplicitTestTarget(argument));
+	if (modes.length > 1) throw new Error(`Unexpected positional argument: ${modes[1]}`);
+	const mode = modes[0] ?? "all";
+	if (explicitTestFiles.length > 0) {
+		if (mode !== "all") throw new Error("explicit test files cannot be combined with a mode other than all");
+		if (changedSince !== undefined) throw new Error("explicit test files cannot be combined with --changed-since");
+	} else if (changedSince !== undefined && mode !== "all") {
+		throw new Error("--changed-since is supported only with the all mode");
+	}
+	return { mode, changedSince, explicitTestFiles };
+}
+
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
-const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
+const runnerArguments = import.meta.main ? parseRunnerArguments(args) : parseRunnerArguments([]);
+const requestedMode = runnerArguments.mode;
+const changedSince = runnerArguments.changedSince;
+const explicitTestFiles = runnerArguments.explicitTestFiles;
 const junitReportDirArg = args.find(arg => arg.startsWith("--junit-report-dir="));
 const junitReportDirValue = junitReportDirArg?.slice("--junit-report-dir=".length);
 if (junitReportDirValue === "") {
@@ -323,6 +385,7 @@ export const workspaceTestPackages = [
 export const repoScriptTests = [
 	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+	"scripts/settings-doc-coherence.test.ts",
 	"scripts/a-local-action-is-called-with-everything-it-requires.test.ts",
 	"scripts/a-module-is-imported-at-the-top-of-its-file.test.ts",
 	"scripts/a-package-exports-its-public-surface.test.ts",
@@ -410,8 +473,10 @@ export const repoScriptTests = [
 	"scripts/record-conformance.test.ts",
 	"scripts/ci-test-real-data-guard.test.ts",
 	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
 	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
 	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
+	"scripts/a-file-open-waits-out-a-lease.test.ts",
 	"scripts/release-binaries-bytecode.test.ts",
 	"scripts/fix-changelogs.test.ts",
 	"scripts/require-changelog.test.ts",
@@ -440,6 +505,8 @@ export const repoScriptTests = [
 	"scripts/there-is-only-one-capture-path.test.ts",
 	"scripts/a-recorder-container-can-reach-a-model-served-by-its-host.test.ts",
 	"scripts/a-capture-runs-on-the-bun-the-product-requires.test.ts",
+	"scripts/check-doc-paths.test.ts",
+	"scripts/check-doc-links.test.ts",
 	"scripts/first-party-docs-are-indexed.test.ts",
 	"scripts/script-tests-coverage.test.ts",
 	// The startup benchmark suites (`startup-is-measured-after-the-screen-settles`,
@@ -982,6 +1049,9 @@ const SCRUBBED_ENV_NAMES = new Set([
 	"GOOGLE_APPLICATION_CREDENTIALS",
 	"ANTHROPIC_OAUTH_TOKEN",
 	"XAI_OAUTH_TOKEN",
+	"CLOUDFLARE_API_TOKEN",
+	"VEYYON_NATIVE_CACHE_CREDENTIALS",
+	"VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS",
 ]);
 
 function isScrubbedEnvVar(key: string): boolean {
@@ -1007,7 +1077,7 @@ function commandWithJUnitReport(testCommand: TestCommand): string[] {
 }
 
 /** Run one command with inherited output; returns the failure message, or `undefined` when it passed. */
-async function runTestCommand(testCommand: TestCommand): Promise<string | undefined> {
+async function runTestCommand(testCommand: TestCommand, nodeTotals: NodeTestTotals): Promise<string | undefined> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
 	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
@@ -1017,16 +1087,26 @@ async function runTestCommand(testCommand: TestCommand): Promise<string | undefi
 		return undefined;
 	}
 
+	// Node runs are piped so their TAP summary can be counted; Bun runs keep inherited output.
+	const captured = testCommand.runner === "node";
 	const env = buildChildEnv();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
 		env,
-		stdout: "inherit",
-		stderr: "inherit",
+		stdout: captured ? "pipe" : "inherit",
+		stderr: captured ? "pipe" : "inherit",
 	});
 	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
-	const exitCode = await proc.exited;
+	const output = captured
+		? (await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])).join("")
+		: "";
+	if (captured) process.stdout.write(output);
+	let exitCode = await proc.exited;
 	clearTimeout(killTimer);
+	if (captured && !recordNodeRun(nodeTotals, testCommand.command, output)) {
+		if (exitCode === 0) exitCode = 1;
+		process.stdout.write(NODE_FAIL_CLOSED_NOTE);
+	}
 	if (exitCode === 0) return undefined;
 	const files = chunkTestFiles(renderedCommand);
 	const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
@@ -1040,10 +1120,12 @@ async function runTestCommand(testCommand: TestCommand): Promise<string | undefi
  */
 export async function runTestCommandsInSequence(commands: TestCommand[]): Promise<void> {
 	const failures: string[] = [];
+	const nodeTotals: NodeTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, files: 0, runs: 0 };
 	for (const testCommand of commands) {
-		const failure = await runTestCommand(testCommand);
+		const failure = await runTestCommand(testCommand, nodeTotals);
 		if (failure !== undefined) failures.push(failure);
 	}
+	reportNodeTestTotals(nodeTotals);
 	if (failures.length === 0) return;
 	process.exitCode = 1;
 	const header = `${failures.length} of ${commands.length} test chunk(s) FAILED`;
@@ -1380,6 +1462,68 @@ export function formatBunTestTotals(totals: BunTestTotals): string {
 	return `CLOUDFLARE_CI_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} reported=${totals.reportedTests} files=${totals.files} runs=${totals.runs}`;
 }
 
+export interface NodeTestTotals {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	files: number;
+	runs: number;
+}
+
+// `node --test` argv prefix. TAP is the reporter whose end-of-run summary `parseNodeTapSummary` reads.
+export const NODE_TEST_PREFIX = ["node", "--test", "--test-reporter=tap"];
+
+const NODE_FAIL_CLOSED_NOTE =
+	"[node-tap] TAP summary missing, invalid, or not green; node contract chunk fails closed\n";
+
+interface NodeTapSummary {
+	tests: number;
+	pass: number;
+	fail: number;
+	skipped: number;
+	todo: number;
+	cancelled: number;
+}
+
+// `node --test` ends a run with `# <name> <count>` lines. The last `# tests` block is the run total.
+// A missing field, a zero test count, or counts that do not add up to `tests` returns undefined.
+export function parseNodeTapSummary(output: string): NodeTapSummary | undefined {
+	const last = [...output.matchAll(/^# tests /gm)].at(-1);
+	if (last?.index === undefined) return undefined;
+	const counts = new Map<string, number>();
+	for (const match of output.slice(last.index).matchAll(/^# (tests|pass|fail|skipped|todo|cancelled) (\d+)\s*$/gm)) {
+		counts.set(match[1], Number(match[2]));
+	}
+	const names = ["tests", "pass", "fail", "skipped", "todo", "cancelled"];
+	const values = names.map(name => counts.get(name));
+	if (!values.every((value): value is number => Number.isSafeInteger(value))) return undefined;
+	const [tests, pass, fail, skipped, todo, cancelled] = values;
+	if (tests === 0 || pass + fail + skipped + todo + cancelled !== tests) return undefined;
+	return { tests, pass, fail, skipped, todo, cancelled };
+}
+
+// Adds one node run to `totals`. Returns false when the summary is missing, inconsistent, or not green.
+export function recordNodeRun(totals: NodeTestTotals, command: readonly string[], output: string): boolean {
+	totals.runs += 1;
+	totals.files += command.length - NODE_TEST_PREFIX.length;
+	const summary = parseNodeTapSummary(output);
+	if (summary === undefined) return false;
+	totals.pass += summary.pass;
+	totals.fail += summary.fail + summary.cancelled;
+	totals.skip += summary.skipped;
+	totals.todo += summary.todo;
+	return summary.fail === 0 && summary.cancelled === 0;
+}
+
+export function reportNodeTestTotals(totals: NodeTestTotals): void {
+	if (totals.runs === 0) return;
+	const tests = totals.pass + totals.fail + totals.skip + totals.todo;
+	process.stdout.write(
+		`CLOUDFLARE_CI_NODE_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} files=${totals.files} runs=${totals.runs}\n`,
+	);
+}
+
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
@@ -1405,8 +1549,8 @@ export function formatProgressLine(outcome: ChunkOutcome): string {
 	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}`;
 }
 
-// Closing tally in `bun test` style, but counting test *chunks* (child commands),
-// not individual tests — the runner never parses child summaries. A green
+// Closing tally in `bun test` style, but counting test *chunks* (child commands), not individual tests.
+// Node and Bun test totals print on their own lines, before this footer.
 // `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
 // then the total wall time. Printed after the failure report so a run always
 // ends on an at-a-glance verdict.
@@ -1553,6 +1697,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	const testTotals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
+	const nodeTotals: NodeTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, files: 0, runs: 0 };
 	let completed = 0;
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
@@ -1626,7 +1771,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				timedOut = true;
 				proc.kill("SIGKILL");
 			}, chunkTimeoutMs());
-			const exitCode = await proc.exited;
+			let exitCode = await proc.exited;
 			clearTimeout(killTimer);
 			// Cap the post-exit drain: a leaked grandchild that inherited the
 			// pipes keeps them open indefinitely, and a pending read would keep
@@ -1637,14 +1782,19 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 				await drains;
 			}
 			completed += 1;
+			let output = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
+			if (testCommand.runner === "node" && !recordNodeRun(nodeTotals, testCommand.command, output)) {
+				if (exitCode === 0) exitCode = 1;
+				output += NODE_FAIL_CLOSED_NOTE;
+			}
 			const outcome: ChunkOutcome = {
 				label: testCommand.label,
 				command: renderedCommand,
 				exitCode,
 				seconds: (performance.now() - startedAt) / 1000,
-				output: `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
+				output,
 			};
-			addBunTestTotals(testTotals, outcome.output);
+			if (testCommand.runner !== "node") addBunTestTotals(testTotals, outcome.output);
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n`;
 				if (exitCode !== 0 || timedOut) {
@@ -1675,6 +1825,7 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
+	reportNodeTestTotals(nodeTotals);
 	if (failures.length > 0) {
 		process.exitCode = 1;
 	}
@@ -1982,6 +2133,122 @@ function reportTrackedFileCounts(junitDir: string | null): void {
 	}
 }
 
+// Repo-relative form of a listed explicit target. A missing or escaping path throws, so a listed
+// target that does not exist fails the run instead of falling back to a wider set.
+function normalizeExplicitTarget(file: string): string {
+	const normalized = path.posix.normalize(file.replaceAll("\\", "/")).replace(/^\.\//, "");
+	if (normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+		throw new Error(`Explicit test target is outside the repository: ${file}`);
+	}
+	if (!nodeFs.existsSync(path.join(repoRoot, normalized))) {
+		throw new Error(`Explicit test target not found: ${file}`);
+	}
+	return normalized;
+}
+
+// Explicit paths run as `bun test` commands grouped by their nearest package.json, so bun
+// resolves each file under the same root the matching bucket uses. A missing or escaping path
+// throws: a listed target that does not exist must fail the run, never fall back to a wider set.
+export function explicitTestCommands(files: readonly string[]): TestCommand[] {
+	const targetsByCwd = new Map<string, string[]>();
+	for (const file of files) {
+		const normalized = normalizeExplicitTarget(file);
+		let cwd = path.posix.dirname(normalized);
+		while (cwd !== "." && !nodeFs.existsSync(path.join(repoRoot, cwd, "package.json"))) {
+			cwd = path.posix.dirname(cwd);
+		}
+		targetsByCwd.set(cwd, [...(targetsByCwd.get(cwd) ?? []), path.posix.relative(cwd, normalized)]);
+	}
+	return [...targetsByCwd].map(([cwd, targets]) => ({
+		label: `targets ${cwd}`,
+		cwd,
+		command: ["bun", "test", ...preloadArgs, ...onlyFailuresArgs, ...targets],
+	}));
+}
+
+// Node contract targets run as one `node --test` command at the repository root, so one TAP summary covers the set.
+export function explicitNodeTestCommands(files: readonly string[]): TestCommand[] {
+	if (files.length === 0) return [];
+	const targets = files.map(normalizeExplicitTarget);
+	return [{ label: "node contract tests", cwd: ".", runner: "node", command: [...NODE_TEST_PREFIX, ...targets] }];
+}
+
+// Related selection asks the affected-workspace selector which members a change reaches, then
+// runs each member only through the bucket that already owns it. Every doubt throws: a drifted
+// working tree, a full-mode answer, or an unowned member. An empty selection with no Bun contract
+// target is a green no-op. The selector never widens to a full run here; a full run is the
+// nightly's job (CI_NIGHTLY=1 routes it).
+export interface RelatedSelectionInput {
+	inspection: AffectedWorkspaceInspection;
+	drift: readonly string[];
+	headTrackedPaths: ReadonlySet<string>;
+	ownedCommands: readonly TestCommand[];
+}
+
+export interface RelatedSelection {
+	selectedMembers: readonly string[];
+	contractTargets: readonly CiContractTestTarget[];
+	commands: TestCommand[];
+}
+
+/** Pure composition behind related selection: fail-closed checks, owned buckets, then Bun contract targets. */
+export function composeRelatedSelection(input: RelatedSelectionInput): RelatedSelection {
+	const failClosed = (reason: string): never => {
+		throw new Error(`CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=${reason}`);
+	};
+	if (input.drift.length > 0) failClosed(`working tree differs from HEAD: ${input.drift.join(", ")}`);
+	const { inspection } = input;
+	if (inspection.mode !== "affected") {
+		failClosed(inspection.fallbackReason ?? "selector requested full coverage");
+	}
+	const contractTargets = ciContractTestsForPaths(inspection.changedPaths, input.headTrackedPaths);
+	const workspaceCommands = inspection.selectedMembers.flatMap(member => {
+		const commands = input.ownedCommands.filter(command => command.cwd === member);
+		if (commands.length === 0) failClosed(`selected member has no owning test bucket: ${member}`);
+		return commands;
+	});
+	const bunContractTargets = contractTargets.filter(target => target.runner === "bun").map(target => target.path);
+	const nodeContractTargets = contractTargets.filter(target => target.runner === "node").map(target => target.path);
+	return {
+		selectedMembers: inspection.selectedMembers,
+		contractTargets,
+		commands: [
+			...workspaceCommands,
+			...explicitTestCommands(bunContractTargets),
+			...explicitNodeTestCommands(nodeContractTargets),
+		],
+	};
+}
+
+async function relatedTestCommands(baseSha: string): Promise<TestCommand[]> {
+	const inspection = await inspectAffectedWorkspaceSelection(baseSha);
+	const drift = await workingTreeDrift(["."], isExplicitTestTarget);
+	const headTrackedPaths = await headTrackedFiles(["scripts"]);
+	const ownedCommands = [
+		...(await commandsForMode("workspace")),
+		...(await commandsForMode("native")),
+		...(await commandsForMode("coding-agent-heavy")),
+	];
+	const selection = composeRelatedSelection({ inspection, drift, headTrackedPaths, ownedCommands });
+	console.log(
+		`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify({
+			selectorId: inspection.selectorId,
+			baseSha: inspection.baseSha,
+			headSha: inspection.headSha,
+			selectedMembers: selection.selectedMembers,
+		})}`,
+	);
+	for (const target of selection.contractTargets) {
+		console.log(`CLOUDFLARE_CI_CONTRACT_TEST runner=${target.runner} path=${target.path}`);
+	}
+	if (selection.commands.length === 0) {
+		console.log(
+			`CLOUDFLARE_RELATED_NO_TESTS no related tests: ${inspection.baseSha}..${String(inspection.headSha)} selects no workspace member or contract test`,
+		);
+	}
+	return selection.commands;
+}
+
 // Skipped when imported (e.g. by the runner's own unit tests), where
 // `process.argv` carries test-file paths rather than a mode/flags.
 if (import.meta.main) {
@@ -1992,11 +2259,20 @@ if (import.meta.main) {
 	}
 
 	await ensureToolViewsGenerated();
-	const availableTestCommands = await commandsForMode(requestedMode as Mode);
+	// Explicit targets and related selections are single selections, not shards of a mode, so
+	// the shard split does not apply to them. CI runs an explicit target list on one shard only.
+	const targeted = explicitTestFiles.length > 0 || changedSince !== undefined;
+	const availableTestCommands =
+		explicitTestFiles.length > 0
+			? explicitTestCommands(explicitTestFiles)
+			: changedSince !== undefined
+				? await relatedTestCommands(changedSince)
+				: await commandsForMode(requestedMode as Mode);
 	const testShard = resolveCiTestShard(Bun.env);
-	const testCommands = testShard
-		? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
-		: availableTestCommands;
+	const testCommands =
+		testShard && !targeted
+			? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
+			: availableTestCommands;
 	if (testShard && testCommands.length === 0) {
 		console.log(
 			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +

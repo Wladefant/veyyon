@@ -17,7 +17,7 @@ export {
 	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
 } from "./auth-credential-rows";
 export type * from "./auth-gateway/dispatch";
-export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/server";
+export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/dispatch";
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";

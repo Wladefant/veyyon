@@ -1,6 +1,11 @@
 //! Core implementation of the brush shell. Implements the shell's abstraction,
 //! its interpreter, and various facilities used internally by the shell.
 
+// `CommandExt::setsid` starts a detached child in its own session through
+// `posix_spawn` (`POSIX_SPAWN_SETSID`); a `pre_exec` hook calling setsid(2)
+// forces a fork, whose cost grows with the host process's resident memory.
+#![cfg_attr(unix, feature(process_setsid))]
+
 pub mod arithmetic;
 mod braceexpansion;
 pub mod builtins;

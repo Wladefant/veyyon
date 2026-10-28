@@ -1,15 +1,19 @@
 /**
  * Session spend counts the history behind the compaction the prompt is built from: the newest one
- * the active provider can read. After a provider switch the newest entry can be a server-side
- * window only its minting provider replays, and the context then rebuilds from an earlier summary.
+ * the branch's default model can read. After a provider switch the newest entry can be a
+ * server-side window only its minting provider replays, and the context then rebuilds from an
+ * earlier summary.
  *
  * WHY. Spend adds the messages before the compaction's keep marker to the live context. Reading the
- * marker of the newest compaction regardless of provider counts the span between the two
- * compactions twice, once as summarized history and once in the live context the earlier summary
- * left in place, so `/session` and a goal's token budget over-report after every switch.
+ * marker of a compaction other than the one the context applies counts a span twice, once as
+ * summarized history and once in the live context, or drops it: the newest compaction regardless of
+ * provider after a recorded switch, and the running model's compaction after a resume onto a model
+ * the branch never recorded, whose context is still built from the branch default.
  *
  * WHAT IT DOES NOT CATCH. Which compaction `getEffectiveCompactionEntry` picks for each provider;
- * session-manager/a-provider-switch-rebuilds-from-the-newest-readable-compaction.test.ts sweeps that.
+ * session-manager/a-provider-switch-rebuilds-from-the-newest-readable-compaction.test.ts sweeps that,
+ * and session-manager/every-reader-of-the-sent-context-boundary-agrees-with-the-context-builder.test.ts
+ * sweeps the boundary every other reader takes.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
@@ -85,33 +89,38 @@ describe("session spend counts from the compaction the active provider reads", (
 
 	/**
 	 * An ancient reply of 100 input tokens, a local summary keeping the turn after it, a reply of 10
-	 * input tokens, then a server-side window minted by `MINTING` and a tail. The live context is what
-	 * the rebuild leaves on `active`: everything since the summary on another provider, only the tail
-	 * since the window on the minting one.
+	 * input tokens, then a server-side window minted by `MINTING` and a tail. A recorded switch writes
+	 * a `model_change` the way `setModel` does; the unrecorded resume runs `active` on a branch whose
+	 * default still resolves to `MINTING` through its newest reply. The live context is the one the
+	 * session builds from the branch.
 	 */
 	it.each([
-		["a provider that cannot read the newest window", OTHER, "local"],
-		["the provider that minted the window", MINTING, "remote"],
-	] as const)("on %s, counts each reply once", (_label, active, applies) => {
+		["a provider that cannot read the newest window", OTHER, true],
+		["the provider that minted the window", MINTING, true],
+		["a resume onto a provider that cannot read the window, unrecorded", OTHER, false],
+	] as const)("on %s, counts each reply once", (_label, active, recorded) => {
 		if (!MINTING || !active) throw new Error("Expected bundled openai and anthropic models");
 		const sessionManager = SessionManager.inMemory(dir.path());
-		const between = assistant(MINTING, 10);
 		sessionManager.appendMessage(user("ancient turn"));
 		sessionManager.appendMessage(assistant(MINTING, 100));
 		const keptByLocal = sessionManager.appendMessage(user("kept by local"));
 		sessionManager.appendCompaction("Local summary of the ancient span.", undefined, keptByLocal, 50_000);
 		sessionManager.appendMessage(user("between turn"));
-		sessionManager.appendMessage(between);
+		sessionManager.appendMessage(assistant(MINTING, 10));
 		const keptByRemote = sessionManager.appendMessage(user("kept by remote"));
 		sessionManager.appendCompaction("", undefined, keptByRemote, 200_000, undefined, false, remoteWindow(MINTING));
+		if (recorded) sessionManager.appendModelChange(`${active.provider}/${active.id}`);
 		sessionManager.appendMessage(user("after remote"));
 
-		const live =
-			applies === "local"
-				? [user("kept by local"), user("between turn"), between, user("kept by remote"), user("after remote")]
-				: [user("kept by remote"), user("after remote")];
 		session = new AgentSession({
-			agent: new Agent({ initialState: { model: active, systemPrompt: ["Test"], tools: [], messages: live } }),
+			agent: new Agent({
+				initialState: {
+					model: active,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: sessionManager.buildSessionContext().messages,
+				},
+			}),
 			sessionManager,
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: new ModelRegistry(authStorage, path.join(dir.path(), "models.yml")),

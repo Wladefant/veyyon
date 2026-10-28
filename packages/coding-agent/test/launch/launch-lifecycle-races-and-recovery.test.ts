@@ -99,6 +99,73 @@ async function shutdown(client: DaemonBrokerClient): Promise<void> {
 }
 
 describe("launch lifecycle backoff, name reuse, and recovery", () => {
+	// POSIX signals provide the barrier. Windows termination does not run the child's SIGTERM handler.
+	it.skipIf(process.platform === "win32")("a stop queued during restart stops the replacement generation before returning", async () => {
+		const projectDir = await tempDir("project-restart-stop-");
+		const runtimeDir = await tempDir("runtime-restart-stop-");
+		const client = await connect(projectDir, runtimeDir);
+		const stoppingPath = path.join(projectDir, "stopping");
+		const releasePath = path.join(projectDir, "release");
+		const child = [
+			'const fs = require("node:fs");',
+			`const stopping = ${JSON.stringify(stoppingPath)};`,
+			`const release = ${JSON.stringify(releasePath)};`,
+			'process.on("SIGTERM", () => {',
+			'  fs.writeFileSync(stopping, "stopping");',
+			'  const timer = setInterval(() => { if (fs.existsSync(release)) process.exit(0); }, 10);',
+			'  timer.unref();',
+			"});",
+			"setInterval(() => {}, 1000);",
+			'console.log("restart-stop-ready");',
+		].join("\n");
+
+		try {
+			await client.request({
+				op: "start",
+				spec: {
+					name: "restart-stop",
+					application: process.execPath,
+					args: ["-e", child],
+					env: {},
+					cwd: projectDir,
+					pty: false,
+					restart: "no",
+					persist: false,
+					detached: false,
+					ready: { log: "restart-stop-ready", timeoutMs: 5_000 },
+				},
+			});
+			const restarting = client.request({ op: "restart", name: "restart-stop" });
+			expect(await waitUntil(async () => {
+				try {
+					return (await fs.readFile(stoppingPath, "utf8")) === "stopping";
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+					throw error;
+				}
+			}, 1_000)).toBeTrue();
+
+			// The ping acknowledges the socket line after stop while restart is held inside its old generation.
+			const stopping = client.request({ op: "stop", name: "restart-stop", timeoutMs: 2_000 });
+			await client.request({ op: "ping" });
+			await fs.writeFile(releasePath, "release");
+			const [, stopped] = await Promise.all([restarting, stopping]);
+			expect(stopped.op).toBe("stop");
+			if (stopped.op !== "stop") throw new Error("expected stop response");
+			expect(stopped.daemon.state).toBe("exited");
+			expect(stopped.daemon.terminatedBy).toBe("operator-stop");
+
+			const described = await client.request({ op: "describe", name: "restart-stop" });
+			expect(described.op).toBe("describe");
+			if (described.op !== "describe") throw new Error("expected describe response");
+			expect(described.daemon.state).toBe("exited");
+			expect(described.daemon.terminatedBy).toBe("operator-stop");
+		} finally {
+			await fs.writeFile(releasePath, "release");
+			await shutdown(client);
+		}
+	}, 20_000);
+
 	it("cancels restart timer when operator stops during restart backoff", async () => {
 		const projectDir = await tempDir("project-rapid-fail-");
 		const runtimeDir = await tempDir("runtime-rapid-fail-");

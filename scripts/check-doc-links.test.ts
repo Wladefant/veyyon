@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkDocLinks, collectAnchors, extractLinks, slugify } from "./check-doc-links";
+import { checkDocLinks, collectAnchors, extractLinks, listTrackedMarkdown, slugify } from "./check-doc-links";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "doc-links-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -141,5 +141,13 @@ describe("checkDocLinks", () => {
 		const result = checkDocLinks(root, ["mdbook/src/a.md"]);
 		expect(result.dead).toEqual([]);
 		expect(result.linksChecked).toBe(1);
+	});
+
+	it("checks every tracked repository Markdown file, not only fixture documents", () => {
+		const repoRoot = path.resolve(import.meta.dirname, "..");
+		const files = listTrackedMarkdown(repoRoot);
+		const result = checkDocLinks(repoRoot, files);
+		expect(result.filesChecked).toBeGreaterThan(0);
+		expect(result.dead).toEqual([]);
 	});
 });

@@ -17,15 +17,15 @@
  * ## Fix
  *
  * A recurring `setInterval` keeps the event loop sleeping in `epoll_wait`.
- * The `EventLoopKeepalive` class and `keepaliveWhile()` wrapper provide a
- * clean way to install and clean up this keepalive timer.
+ * The `EventLoopKeepalive` class installs and clears this keepalive timer.
  *
- * The older `yieldIfDue()` and `ExponentialYield` approaches (compensated
- * sleep loops) are retained for the agent-loop hot-path where Promises
- * resolve frequently and the keepalive alone is insufficient.
+ * `yieldIfDue()` hands the event loop a turn from the agent-loop hot path, so a
+ * run of already-settled promises (buffered stream events, back-to-back tool
+ * batches) cannot hold off timers, input and rendering. `ExponentialYield`
+ * backs off the bash executor's long waits.
  */
 
-import { scheduler } from "node:timers/promises";
+import { scheduler, setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { DAY_MS, isAbortError } from "@veyyon/utils";
 
 // ---------------------------------------------------------------------------
@@ -40,10 +40,9 @@ export class EventLoopKeepalive {
 }
 
 // ---------------------------------------------------------------------------
-// yieldIfDue — retained for agent-loop hot-path
+// yieldIfDue — keeps timers, input and rendering serviced on the agent-loop hot path
 // ---------------------------------------------------------------------------
 
-const YIELD_SLEEP_MS = 20;
 const YIELD_INTERVAL_MS = 50;
 
 /**
@@ -70,56 +69,55 @@ async function sleepAtLeast(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /**
- * Cooperative yield gate. Sleeps for at least {@link YieldGateOptions.sleepMs}
- * but at most once every {@link YieldGateOptions.intervalMs}; hot-path callers
- * invoke it freely and only the slow path actually sleeps.
+ * Cooperative yield gate. Hands the event loop a turn at most once every
+ * {@link YieldGateOptions.intervalMs}; hot-path callers invoke it freely and only
+ * the due call yields. A yield costs one event-loop turn, never a wall-clock
+ * sleep: an agent loop calls it on every streamed event, after every tool batch
+ * and at the top of every turn, so a sleep here is added to every one of them.
  *
- * The clock and sleep are injectable so tests drive the gate logic without
- * touching process-global `Date.now`/`scheduler.wait` — globals a concurrent
- * test file can restore mid-run, which previously made the shared gate flake.
+ * The clock and the yield are injectable so tests drive the gate logic without
+ * touching process-global `Date.now` — a global a concurrent test file can
+ * restore mid-run, which previously made the shared gate flake.
  */
 export interface YieldGateOptions {
 	now?: () => number;
-	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	yieldTurn?: () => Promise<unknown>;
 	intervalMs?: number;
-	sleepMs?: number;
 }
 
 export class YieldGate {
 	#lastYieldAt = 0;
 	readonly #now: () => number;
-	readonly #sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+	readonly #yieldTurn: () => Promise<unknown>;
 	readonly #intervalMs: number;
-	readonly #sleepMs: number;
 
 	constructor(opts: YieldGateOptions = {}) {
 		this.#now = opts.now ?? (() => Date.now());
-		this.#sleep = opts.sleep ?? sleepAtLeast;
+		this.#yieldTurn = opts.yieldTurn ?? yieldToEventLoop;
 		this.#intervalMs = opts.intervalMs ?? YIELD_INTERVAL_MS;
-		this.#sleepMs = opts.sleepMs ?? YIELD_SLEEP_MS;
 	}
 
-	async yieldIfDue(signal?: AbortSignal): Promise<void> {
+	async yieldIfDue(): Promise<void> {
 		const now = this.#now();
 		const elapsed = now - this.#lastYieldAt;
 		// `elapsed < 0` means the wall clock moved backward relative to the last
 		// yield (NTP step, fake-timer test, or a stale future timestamp left by
 		// another caller): treat it as due and re-anchor rather than gate forever.
 		if (elapsed >= 0 && elapsed < this.#intervalMs) return;
-		await this.#sleep(this.#sleepMs, signal);
+		await this.#yieldTurn();
 		this.#lastYieldAt = this.#now();
 	}
 }
 
 /**
  * Process-wide gate shared by all hot-path callers so tight loops collectively
- * respect the interval rather than each sleeping independently.
+ * respect the interval rather than each yielding independently.
  */
 const sharedYieldGate = new YieldGate();
 
 /**
- * Yield to the Bun event loop, sleeping for at least 20 ms — but at most once
- * every {@link YIELD_INTERVAL_MS} across all callers.
+ * Hand the event loop a turn, at most once every {@link YIELD_INTERVAL_MS}
+ * across all callers.
  */
 export function yieldIfDue(): Promise<void> {
 	return sharedYieldGate.yieldIfDue();

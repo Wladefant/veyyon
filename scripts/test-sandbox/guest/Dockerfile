@@ -84,7 +84,7 @@
 # under the operator's home. `bash scripts/test-sandbox/run.sh --clean` removes the
 # `docker image rm veyyon-test-guest:<version>` removes the image.
 
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.3
 FROM oven/bun:${BUN_VERSION}-debian
 
 RUN set -eux; \

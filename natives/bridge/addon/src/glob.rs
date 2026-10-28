@@ -14,7 +14,11 @@
 //! // JS: await native.glob({ pattern: "*.rs", path: "." })
 //! ```
 
-use std::{cmp::Ordering, path::Path};
+use std::{
+	cmp::Ordering,
+	path::Path,
+	time::{Duration, Instant},
+};
 
 use napi::{
 	bindgen_prelude::*,
@@ -53,7 +57,8 @@ pub struct GlobOptions<'env> {
 	pub include_node_modules: Option<bool>,
 	/// Abort signal for cancelling the operation.
 	pub signal:               Option<Unknown<'env>>,
-	/// Timeout in milliseconds for the operation.
+	/// Stop walking after this many milliseconds and return the matches found
+	/// by then, with `timedOut` set.
 	pub timeout_ms:           Option<u32>,
 }
 
@@ -64,6 +69,9 @@ pub struct GlobResult {
 	pub matches:       Vec<GlobMatch>,
 	/// Number of returned matches (`matches.len()`), clamped to `u32::MAX`.
 	pub total_matches: u32,
+	/// The walk stopped at `timeoutMs` before it read the whole tree, so
+	/// `matches` holds only what it found by then.
+	pub timed_out:     bool,
 }
 
 /// Internal runtime config for a single glob execution.
@@ -78,6 +86,7 @@ struct GlobConfig {
 	mentions_node_modules: bool,
 	sort_by_mtime:         bool,
 	cache:                 bool,
+	deadline:              Option<Instant>,
 }
 
 fn match_mtime(entry: &GlobMatch) -> f64 {
@@ -125,30 +134,40 @@ fn apply_file_type_filter(entry: &GlobMatch, config: &GlobConfig) -> Option<File
 	}
 }
 
+/// Matches a walk returned, and whether it stopped at the deadline.
+struct Collected {
+	matches:   Vec<GlobMatch>,
+	timed_out: bool,
+}
+
 fn collect_ranked_matches(
 	request: &veyyon_walker::WalkRequest,
 	config: &GlobConfig,
 	ct: &task::CancelToken,
-) -> Result<Vec<GlobMatch>> {
+) -> Result<Collected> {
 	let outcome = request
-		.collect_ranked_with_heartbeat(
+		.collect_ranked_with_deadline(
 			veyyon_walker::WalkRank::MtimeDescPathAsc,
 			config.max_results,
+			config.deadline,
 			|| ct.heartbeat(),
 		)
 		.map_err(iofs::map_walker_error)?;
-	Ok(outcome.entries.into_iter().map(GlobMatch::from).collect())
+	Ok(Collected {
+		matches:   outcome.entries.into_iter().map(GlobMatch::from).collect(),
+		timed_out: outcome.deadline_reached,
+	})
 }
 
 fn collect_native_filtered_matches(
 	request: &veyyon_walker::WalkRequest,
 	config: &GlobConfig,
 	ct: &task::CancelToken,
-) -> Result<Vec<GlobMatch>> {
+) -> Result<Collected> {
 	let outcome = request
-		.collect_with_heartbeat(|| ct.heartbeat())
+		.collect_with_deadline(config.deadline, || ct.heartbeat())
 		.map_err(iofs::map_walker_error)?;
-	let mut collected = Vec::new();
+	let mut matches = Vec::new();
 	for entry in outcome.entries {
 		ct.heartbeat()?;
 		let mut matched_entry = GlobMatch::from(entry);
@@ -156,12 +175,12 @@ fn collect_native_filtered_matches(
 			continue;
 		};
 		matched_entry.file_type = effective_file_type;
-		collected.push(matched_entry);
-		if !config.sort_by_mtime && collected.len() >= config.max_results {
+		matches.push(matched_entry);
+		if !config.sort_by_mtime && matches.len() >= config.max_results {
 			break;
 		}
 	}
-	Ok(collected)
+	Ok(Collected { matches, timed_out: outcome.deadline_reached })
 }
 
 /// Executes walker-owned glob filtering plus optional native file-type
@@ -177,7 +196,7 @@ fn run_glob(
 	// entire subtree under `dir` to match only direct children.
 	let walk_depth_limit = walk_glob.depth_bound();
 	if config.max_results == 0 {
-		return Ok(GlobResult { matches: Vec::new(), total_matches: 0 });
+		return Ok(GlobResult { matches: Vec::new(), total_matches: 0, timed_out: false });
 	}
 
 	let scan_detail = if config.sort_by_mtime {
@@ -204,36 +223,30 @@ fn run_glob(
 				.node_modules_unless_mentioned(config.mentions_node_modules),
 		);
 
-	let mut matches = if config.sort_by_mtime && config.file_type_filter.is_none() {
-		collect_ranked_matches(&base_request, &config, &ct)?
-	} else {
-		let request = if !config.sort_by_mtime && config.file_type_filter.is_none() {
-			base_request.limit(config.max_results)
+	let Collected { mut matches, timed_out } =
+		if config.sort_by_mtime && config.file_type_filter.is_none() {
+			collect_ranked_matches(&base_request, &config, &ct)?
 		} else {
-			base_request
+			let request = if !config.sort_by_mtime && config.file_type_filter.is_none() {
+				base_request.limit(config.max_results)
+			} else {
+				base_request
+			};
+			collect_native_filtered_matches(&request, &config, &ct)?
 		};
-		collect_native_filtered_matches(&request, &config, &ct)?
-	};
 
 	if config.sort_by_mtime {
 		// Sorting mode: rank by mtime descending, then apply max-results truncation.
 		matches.sort_by(compare_matches_by_rank);
 		matches.truncate(config.max_results);
-		if let Some(callback) = on_match {
-			for matched_entry in &matches {
-				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
-			}
-		}
 	}
-	if !config.sort_by_mtime
-		&& let Some(callback) = on_match
-	{
+	if let Some(callback) = on_match {
 		for matched_entry in &matches {
 			callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	}
 	let total_matches = matches.len().min(u32::MAX as usize) as u32;
-	Ok(GlobResult { matches, total_matches })
+	Ok(GlobResult { matches, total_matches, timed_out })
 }
 
 /// Find filesystem entries matching a glob pattern.
@@ -245,10 +258,12 @@ fn run_glob(
 /// native layer applies final symlink-aware file-type filtering and callback
 /// emission.
 ///
+/// Reaching `timeoutMs` is not an error: the result holds the matches found by
+/// then and sets `timedOut`.
+///
 /// # Errors
 /// Returns an error when the search path cannot be resolved, the path is not a
-/// directory, the glob pattern is invalid, or cancellation/timeout is
-/// triggered.
+/// directory, the glob pattern is invalid, or the abort signal fires.
 #[napi]
 pub fn glob(
 	options: GlobOptions<'_>,
@@ -274,7 +289,10 @@ pub fn glob(
 	let pattern = if pattern.is_empty() { "*" } else { pattern };
 	let pattern = pattern.to_string();
 
-	let ct = task::CancelToken::new(timeout_ms, signal);
+	// The deadline starts at the call, as a cancel token's timeout does, and
+	// stops the walk instead of failing it.
+	let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms.into()));
+	let ct = task::CancelToken::new(None, signal);
 
 	task::blocking("glob", ct, move |ct| {
 		run_glob(
@@ -290,6 +308,7 @@ pub fn glob(
 				sort_by_mtime: sort_by_mtime.unwrap_or(false),
 				cache: cache.unwrap_or(false),
 				pattern,
+				deadline,
 			},
 			on_match.as_ref(),
 			ct,
@@ -339,6 +358,7 @@ mod tests {
 				mentions_node_modules: false,
 				sort_by_mtime:         false,
 				cache:                 false,
+				deadline:              None,
 			},
 			None,
 			crate::task::CancelToken::default(),
@@ -382,6 +402,7 @@ mod tests {
 					mentions_node_modules: false,
 					sort_by_mtime:         true,
 					cache:                 false,
+					deadline:              None,
 				},
 				None,
 				crate::task::CancelToken::default(),
@@ -429,6 +450,7 @@ mod tests {
 				mentions_node_modules: false,
 				sort_by_mtime:         false,
 				cache:                 false,
+				deadline:              None,
 			},
 			None,
 			crate::task::CancelToken::default(),
@@ -437,5 +459,50 @@ mod tests {
 
 		assert_eq!(match_paths(&result), ["deep/child.txt"]);
 		assert_eq!(result.total_matches, 1);
+	}
+
+	/// A deadline stops the walk and the result says so instead of failing,
+	/// whether the walker ranks the matches or the native layer filters them;
+	/// a deadline the walk beats leaves the result whole and unflagged.
+	#[test]
+	fn run_glob_reports_a_reached_deadline_in_every_collection_mode() {
+		let root = temp_dir_guard();
+		for name in ["a.txt", "b.txt", "c.txt"] {
+			fs::write(root.path().join(name), name).expect("write file");
+		}
+		let modes = [(true, None), (false, None), (true, Some(super::FileType::File))];
+		for (sort_by_mtime, file_type_filter) in modes {
+			let run = |deadline| {
+				super::run_glob(
+					super::GlobConfig {
+						root: root.path().to_path_buf(),
+						pattern: "*.txt".to_string(),
+						recursive: false,
+						include_hidden: true,
+						file_type_filter,
+						max_results: 100,
+						use_gitignore: true,
+						mentions_node_modules: false,
+						sort_by_mtime,
+						cache: false,
+						deadline: Some(deadline),
+					},
+					None,
+					crate::task::CancelToken::default(),
+				)
+				.expect("a deadline is not an error")
+			};
+			let mode = format!("sort_by_mtime={sort_by_mtime} file_type={file_type_filter:?}");
+
+			let passed = run(std::time::Instant::now());
+			assert!(passed.timed_out, "{mode}");
+			assert_eq!(passed.total_matches, 0, "{mode}");
+
+			let ahead = run(std::time::Instant::now() + std::time::Duration::from_mins(1));
+			assert!(!ahead.timed_out, "{mode}");
+			let mut paths = match_paths(&ahead);
+			paths.sort_unstable();
+			assert_eq!(paths, ["a.txt", "b.txt", "c.txt"], "{mode}");
+		}
 	}
 }

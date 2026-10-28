@@ -16,7 +16,7 @@
  * @property {EmbeddedAddonVariant} variant
  * @property {string} filename
  * @property {number} size
- * @property {string=} filePath
+ * @property {string} sha256
  * @property {EmbeddedAddonArchive=} archive
  */
 

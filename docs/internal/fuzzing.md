@@ -383,7 +383,7 @@ cargo +nightly fuzz tmin <target> tests/fuzz/artifacts/<target>/<file>
 The artifact is not the deliverable. Once you have a minimal input, write a named regression test in
 the crate that owns the code, asserting the real values, and fix the bug. The artifacts directory is
 gitignored on purpose: a binary blob in a directory nobody reads is not coverage, and a test named
-after the bug is. Record the finding in `BACKLOG.md` the moment you have it, before you start on the
+after the bug is. Record the finding in a GitHub issue (or an optional local `BACKLOG.md` scratch note) the moment you have it, before you start on the
 fix.
 
 ## Triaging a pile of artifacts

@@ -22,6 +22,12 @@ import {
 } from "../utils/stream-markup-healing";
 import type { ChatCompletionChunk } from "./openai-chat-wire";
 import type { OpenAICompatPolicy } from "./openai-shared";
+import {
+	type GeminiMessageThoughtSignature,
+	getGeminiMessageThoughtSignature,
+	mergeStoredGeminiSignature,
+	type StoredGeminiSignature,
+} from "./openai-completions";
 
 /** The usage fields an OpenAI-compatible host may send, each read only when it holds a number. */
 export type OpenAICompletionsUsageLike = {
@@ -102,19 +108,6 @@ function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSig
 	return undefined;
 }
 
-function mergeStoredGeminiSignature(existing: string | undefined, perCall: unknown): string {
-	let stored: Record<string, unknown> = {};
-	if (existing) {
-		try {
-			const parsed: unknown = JSON.parse(existing);
-			if (typeof parsed === "object" && parsed !== null) stored = { ...parsed };
-		} catch {
-			// An unrecognized legacy signature is replaced by the structured wire value.
-		}
-	}
-	stored.perCall = perCall;
-	return JSON.stringify(stored);
-}
 
 /** An own key of a streamed argument object that may be copied without touching a prototype. */
 function isArgumentKey(object: Record<string, unknown>, key: string): boolean {
@@ -223,7 +216,7 @@ function applyOpenAIReasoningDetails(delta: OpenAIChunkDelta, output: AssistantM
 		if (detail.type === "reasoning.encrypted" && typeof detail.id === "string" && detail.data) {
 			const matchingToolCall = output.content.find(b => b.type === "toolCall" && b.id === detail.id);
 			if (matchingToolCall && matchingToolCall.type === "toolCall") {
-				matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(matchingToolCall.thoughtSignature, detail);
+				matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(matchingToolCall.thoughtSignature, { perCall: detail });
 			}
 		}
 	}
@@ -365,6 +358,7 @@ export class OpenAICompletionsTurn {
 	 * a choiceless chunk may end the turn while those details are pending.
 	 */
 	#awaitTrailingUsageDetails = false;
+	#messageThoughtSignature: GeminiMessageThoughtSignature | undefined;
 
 	constructor(
 		output: AssistantMessage,
@@ -460,6 +454,20 @@ export class OpenAICompletionsTurn {
 	}
 
 	#applyDelta(delta: OpenAIChunkDelta): void {
+		const incomingMessageThoughtSignature = getGeminiMessageThoughtSignature(delta);
+		if (incomingMessageThoughtSignature) this.#messageThoughtSignature = incomingMessageThoughtSignature;
+		if (this.#messageThoughtSignature) {
+			for (const block of this.#output.content) {
+				if (block.type !== "toolCall") continue;
+				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+					message: {
+						[this.#messageThoughtSignature.field]: this.#messageThoughtSignature.signature,
+					},
+				});
+				this.#messageThoughtSignature = undefined;
+				break;
+			}
+		}
 		this.#applyReasoning(delta);
 		this.#applyContent(delta);
 		if (delta.tool_calls && delta.tool_calls.length > 0) this.#applyToolCalls(delta.tool_calls);
@@ -604,7 +612,17 @@ export class OpenAICompletionsTurn {
 			const block = this.#toolCallBlock(toolCall, offset, toolCalls.length);
 			const extraContent = getGeminiThoughtSignatureExtraContent(Reflect.get(toolCall, "extra_content"));
 			if (extraContent) {
-				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, extraContent);
+				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+					perCall: extraContent,
+				});
+			}
+			if (this.#messageThoughtSignature) {
+				block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+					message: {
+						[this.#messageThoughtSignature.field]: this.#messageThoughtSignature.signature,
+					},
+				});
+				this.#messageThoughtSignature = undefined;
 			}
 
 			if (toolCall.id) block.id = toolCall.id;

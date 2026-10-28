@@ -47,6 +47,7 @@ class CountingStorage extends FileSessionStorage {
 				this.reads += 1;
 				return inner.read(offset, length);
 			},
+			scanLines: (from, headBytes, visit) => inner.scanLines(from, headBytes, visit),
 			close: () => inner.close(),
 		};
 	}

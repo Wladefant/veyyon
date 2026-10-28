@@ -1,14 +1,25 @@
 name: OVH CI
 
 on:
-  pull_request:
-  push:
-    branches: ['ovh-ci/**']
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact source commit to exercise (empty uses workflow commit)
+        type: string
+      base_sha:
+        description: Exact actual PR base commit (required for focused checks)
+        type: string
+      test_files:
+        description: JSON array of related test paths (empty uses dependency selection)
+        type: string
+      native:
+        description: Build native addon for focused tests
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -24,9 +35,16 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha }}
         run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
           echo "checked-out SHA: $(git rev-parse HEAD)"
           echo "runner.name: ${RUNNER_NAME}"
       - name: Detect changed paths
@@ -36,13 +54,46 @@ jobs:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
+          PINNED_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha }}
+          FOCUSED_TESTS: ${{ inputs.test_files }}
         run: |
           set -euo pipefail
-          base="$(git merge-base origin/main HEAD)"
+          [[ -z "$FOCUSED_TESTS" || -n "$PINNED_BASE" ]] || { echo '::error::Focused checks require an exact base SHA'; exit 1; }
+          if [[ -n "$PINNED_BASE" ]]; then
+            [[ "$PINNED_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Base must be a full SHA'; exit 1; }
+            git cat-file -e "$PINNED_BASE^{commit}"
+          else
+            PINNED_BASE="$(git rev-parse origin/main)"
+          fi
+          export PINNED_BASE
+          base="$(git merge-base "$PINNED_BASE" HEAD)"
+          echo "PINNED_BASE=$PINNED_BASE" >> "$GITHUB_ENV"
+          echo "DIFF_BASE=$base" >> "$GITHUB_ENV"
           echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
           echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
           echo "TOUCHED_PACKAGES=$RUNNER_TEMP/ovh-touched-packages" >> "$GITHUB_ENV"
           git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+          if [[ -n "$FOCUSED_TESTS" ]]; then
+            node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const root = fs.realpathSync('.');
+          const files = JSON.parse(process.env.FOCUSED_TESTS);
+          if (!Array.isArray(files) || files.length === 0 || files.length > 30 ||
+              files.some(file => typeof file !== 'string' || !/^[A-Za-z0-9_./-]+\.(test|spec)\.[cm]?[jt]sx?$/.test(file) ||
+                file.split('/').includes('..') || file.startsWith('/') || !fs.statSync(file).isFile())) {
+            throw new Error('Focused checks require 1..30 existing relative test paths');
+          }
+          for (const file of files) {
+            const relative = path.relative(root, fs.realpathSync(file));
+            if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Test escapes repository');
+          }
+          fs.writeFileSync(process.env.RELATED_TESTS, [...new Set(files)].join('\n') + '\n');
+          fs.writeFileSync(process.env.TOUCHED_PACKAGES, '');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'has_code=true\n');
+          fs.appendFileSync(process.env.RECEIPT, `pinned-base=${process.env.PINNED_BASE}\nfocused-tests=${JSON.stringify(files)}\n`);
+          NODE
+          fi
       - name: Install dependencies and generate code
         id: install
         if: steps.changed.outputs.has_code == 'true'
@@ -55,9 +106,18 @@ jobs:
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          FOCUSED_TESTS: ${{ inputs.test_files }}
+          FOCUSED_NATIVE: ${{ inputs.native }}
         run: |
           set -euo pipefail
-          node scripts/ovh-related-tests.mjs --base origin/main --head HEAD
+          if [[ -n "$FOCUSED_TESTS" ]]; then
+            count="$(wc -l < "$RELATED_TESTS")"
+            sed -i "s/^selected-tests=0$/selected-tests=$count/" "$RECEIPT"
+            echo "rust_changed=$FOCUSED_NATIVE" >> "$GITHUB_OUTPUT"
+            echo "ts_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD
+          fi
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'
@@ -70,7 +130,7 @@ jobs:
           echo "VEYYON_SANDBOX_REPO_ROOT=$alias_root/repo" >> "$GITHUB_ENV"
           echo 'VEYYON_SANDBOX_REMOTE=0' >> "$GITHUB_ENV"
           echo 'VEYYON_SANDBOX_RUNG=bwrap' >> "$GITHUB_ENV"
-          echo 'VEYYON_SANDBOX_TIMEOUT=1800' >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_TIMEOUT=600' >> "$GITHUB_ENV"
       - name: Build native addon when required
         if: ${{ !cancelled() && steps.selection.outputs.rust_changed == 'true' }}
         env:
@@ -78,11 +138,11 @@ jobs:
         run: bun run ci:build:native
       - name: Biome changed TypeScript and JavaScript
         id: biome
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && !inputs.test_files }}
         continue-on-error: true
         shell: bash
         run: |
-          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$(git merge-base origin/main HEAD)" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
+          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
           if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
       - name: TypeScript check
         id: types
@@ -110,13 +170,14 @@ jobs:
             log="$RUNNER_TEMP/ovh-test-$(printf '%s' "$file" | sha256sum | cut -c1-16).log"
             sandbox_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
             runtime_bin="$sandbox_root/.ovh-tools/bin"
-            if timeout 1800 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            if timeout 600 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
             summary="$(grep -E '^[[:space:]]*[0-9]+ (pass|fail)([,[:space:]]|$)|Ran [0-9]+' "$log" || true)"; printf '%s\n' "$summary"
             pass="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) pass.*/\1/p' | awk '{s+=$1} END{print s+0}')"
             fail="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) fail.*/\1/p' | awk '{s+=$1} END{print s+0}')"
             ran="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*Ran ([0-9]+).*/\1/p' | awk '{s+=$1} END{print s+0}')"
             total_pass=$((total_pass+pass)); total_fail=$((total_fail+fail)); total_ran=$((total_ran+ran))
             if ((rc!=0||ran==0||fail!=0)); then echo "::error::Test failed or ran zero cases: $file exit=$rc ran=$ran fail=$fail"; status=1; fi
+            printf 'test=%s pass=%s fail=%s ran=%s exit=%s\n' "$file" "$pass" "$fail" "$ran" "$rc" >> "$RECEIPT"
           done < "$RUNNER_TEMP/ovh-related-tests"
           echo "OVH_TEST_TOTAL pass=$total_pass fail=$total_fail ran=$total_ran"
           sed -i "s/^pass=.*/pass=$total_pass/;s/^fail=.*/fail=$total_fail/;s/^ran=.*/ran=$total_ran/" "$RECEIPT"
