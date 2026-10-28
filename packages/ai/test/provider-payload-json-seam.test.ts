@@ -68,6 +68,7 @@ import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/ex
 import { emptyUsage, getBundledModel, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
+import { restoreEnv } from "../../utils/test/helpers/restore-global";
 
 // ---------------------------------------------------------------------------
 // JSON-expressibility walker (test-local mirror of the mapJsonStrings domain)
@@ -821,14 +822,6 @@ afterEach(() => {
 	piUtils.__resetDirsFromEnvForTests();
 	vi.restoreAllMocks();
 });
-
-function restoreEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 describe("provider onPayload JSON seam battery", () => {
 	for (const kase of BATTERY) {

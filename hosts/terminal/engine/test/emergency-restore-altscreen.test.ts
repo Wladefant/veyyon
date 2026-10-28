@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { emergencyTerminalRestore, ProcessTerminal, setAltScreenActive } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
+import { restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 // Regression coverage for the Windows shell-handoff corruption on exit:
 // `emergencyTerminalRestore()` used to write DECRST 1049 ("leave alternate
@@ -22,14 +23,6 @@ const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin,
 // helper) so the blind restore branch — gated on !isTerminalHeadless() — still
 // runs while the test drives emergencyTerminalRestore() after terminal.stop().
 let previousHeadless = false;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 function startCapturedTerminal() {
 	const writes: string[] = [];

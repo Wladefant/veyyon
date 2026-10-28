@@ -14,15 +14,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as markit from "@veyyon/coding-agent/utils/markit";
 import { __resetDirsFromEnvForTests, removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
+import { restoreEnv } from "../../../utils/test/helpers/restore-global";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");

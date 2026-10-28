@@ -9,6 +9,7 @@ import {
 } from "@veyyon/tui/terminal-capabilities";
 import { setTerminalHeadless } from "@veyyon/utils";
 import { extractPrintableText } from "@veyyon/utils/keys";
+import { restoreEnv, restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -24,22 +25,6 @@ const originalTermProgram = Bun.env.TERM_PROGRAM;
 // These suites drive the real ProcessTerminal start()/probe pipeline, so they
 // opt out of the test-default headless suppression and restore it per case.
 let previousHeadless = false;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
-
-function restoreEnv(key: string, original: string | undefined): void {
-	if (original === undefined) {
-		delete Bun.env[key];
-		return;
-	}
-	Bun.env[key] = original;
-}
 
 describe("ProcessTerminal OSC 11 appearance detection", () => {
 	beforeEach(() => {

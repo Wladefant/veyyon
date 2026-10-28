@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ProcessTerminal } from "@veyyon/tui/terminal";
 import { isTerminalHeadless, setTerminalHeadless } from "@veyyon/utils";
+import { restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 // Regression: running `bun test` inside a real TTY used to paint the TUI frame,
 // the start() capability probes (OSC 11 / DA1 / kitty), and the editor/status
@@ -13,14 +14,6 @@ import { isTerminalHeadless, setTerminalHeadless } from "@veyyon/utils";
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 describe("ProcessTerminal headless suppression", () => {
 	let writes: string[];

@@ -14,14 +14,7 @@ import {
 	getProfileRootDir,
 	setAgentDir,
 } from "@veyyon/utils/dirs";
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
+import { restoreEnv } from "./helpers/restore-global";
 
 describe("document conversion cache directory", () => {
 	let tempRoot = "";

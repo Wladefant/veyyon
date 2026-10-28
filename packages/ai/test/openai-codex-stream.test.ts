@@ -20,6 +20,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
+import { restoreEnv } from "../../utils/test/helpers/restore-global";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
@@ -34,14 +35,6 @@ const originalProfileEnv = process.env.VEYYON_PROFILE;
 const originalWebSocket = global.WebSocket;
 const originalCodexWebSocketV2 = Bun.env.VEYYON_CODEX_WEBSOCKET_V2;
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
-
-function restoreEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 beforeEach(() => {
 	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);

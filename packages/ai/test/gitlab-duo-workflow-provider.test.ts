@@ -42,6 +42,7 @@ import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { extractHttpStatusFromError } from "@veyyon/utils";
 import { z } from "zod/v4";
+import { restoreEnv } from "../../utils/test/helpers/restore-global";
 
 const model: Model<"gitlab-duo-agent"> = buildModel({
 	id: "claude_sonnet_4_6_vertex",
@@ -72,14 +73,6 @@ const nativeTools: Tool[] = ["read", "write", "grep", "glob", "bash", "lsp", "to
 	description: `${name} native bridge`,
 	parameters: z.object({}),
 }));
-
-function restoreOptionalEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 describe("GitLab Duo Workflow provider protocol", () => {
 	it("creates inline ambient workflows with MCP-only privileges by default", () => {
@@ -551,9 +544,9 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 				),
 			).toBe("gid://gitlab/Group/discovered");
 		} finally {
-			restoreOptionalEnv("GITLAB_DUO_NAMESPACE_ID", originalNamespaceId);
-			restoreOptionalEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
-			restoreOptionalEnv("GITLAB_DUO_PROJECT_PATH", originalProjectPath);
+			restoreEnv("GITLAB_DUO_NAMESPACE_ID", originalNamespaceId);
+			restoreEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
+			restoreEnv("GITLAB_DUO_PROJECT_PATH", originalProjectPath);
 		}
 
 		expect(requests.some(url => url.includes("/api/v4/groups"))).toBe(true);
@@ -590,7 +583,7 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 
 			expect(resolved).toBe("gid://gitlab/Group/runtime-root");
 		} finally {
-			restoreOptionalEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
+			restoreEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
 		}
 
 		expect(requests.some(url => url.includes("/api/v4/projects/group%2Fproject"))).toBe(true);
@@ -2594,9 +2587,9 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 
 			await stream.result();
 		} finally {
-			restoreOptionalEnv("GITLAB_DUO_NAMESPACE_ID", originalNamespaceId);
-			restoreOptionalEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
-			restoreOptionalEnv("GITLAB_DUO_PROJECT_PATH", originalProjectPath);
+			restoreEnv("GITLAB_DUO_NAMESPACE_ID", originalNamespaceId);
+			restoreEnv("GITLAB_DUO_PROJECT_ID", originalProjectId);
+			restoreEnv("GITLAB_DUO_PROJECT_PATH", originalProjectPath);
 		}
 	});
 

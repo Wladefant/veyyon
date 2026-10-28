@@ -50,6 +50,7 @@ import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/ex
 import { getBundledModel } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
+import { restoreEnv } from "../../utils/test/helpers/restore-global";
 
 const NAMED_INSTRUCTION = "This turn must call the `respond` tool.";
 const ANY_INSTRUCTION = "This turn must call one of the available tools.";
@@ -746,14 +747,6 @@ function occurrences(payload: unknown, text: string): number {
 const originalAgentDir = piUtils.getAgentDir();
 const originalAgentDirEnv = process.env.VEYYON_CODING_AGENT_DIR;
 const originalProfileEnv = process.env.VEYYON_PROFILE;
-
-function restoreEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 beforeEach(() => {
 	vi.spyOn(piUtils, "getInstallId").mockReturnValue("00000000-0000-4000-8000-000000000001");

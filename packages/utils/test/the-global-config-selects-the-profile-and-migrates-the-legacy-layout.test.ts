@@ -16,16 +16,9 @@ import {
 } from "@veyyon/utils/global-config";
 import { writeGlobalDefaultProfile, writeGlobalProfileSharing } from "@veyyon/utils/global-config-write";
 import { Snowflake } from "@veyyon/utils/snowflake";
+import { restoreEnv } from "./helpers/restore-global";
 
 const PROFILE_ENV_KEYS = ["VEYYON_PROFILE"] as const;
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
 
 let tempRoot = "";
 let originalConfigDir: string | undefined;

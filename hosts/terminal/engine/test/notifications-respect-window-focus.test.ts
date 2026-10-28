@@ -50,6 +50,7 @@ import {
 	windowFocusState,
 } from "@veyyon/tui/window-focus";
 import { setTerminalHeadless } from "@veyyon/utils";
+import { restoreEnv, restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -59,22 +60,6 @@ const originalZellij = Bun.env.ZELLIJ;
 const originalNotifications = Bun.env.VEYYON_NOTIFICATIONS;
 const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 const originalNotifyProtocol = mutableTerminal.notifyProtocol;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
-
-function restoreEnv(key: string, original: string | undefined): void {
-	if (original === undefined) {
-		delete Bun.env[key];
-		return;
-	}
-	Bun.env[key] = original;
-}
 
 /** Captured stdout writes plus the libnotify fan-out, the two halves a toast can arrive through. */
 function captureDelivery(): { writes: string[]; dbus: Mock<typeof desktopNotify.sendDesktopNotification> } {

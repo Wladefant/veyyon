@@ -5,19 +5,13 @@ import * as pyKernel from "@veyyon/coding-agent/eval/py/kernel";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { readEvalBackendsAllowance, resolveEvalBackends } from "@veyyon/coding-agent/tools/shell/eval-backends";
+import { restoreEnv } from "../../../utils/test/helpers/restore-global";
 
 let originalPiPy: string | undefined;
 let originalPiJs: string | undefined;
 let originalPiRb: string | undefined;
 let originalPiJl: string | undefined;
 
-function restoreEnv(name: "VEYYON_PY" | "VEYYON_JS" | "VEYYON_RB" | "VEYYON_JL", value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 function makeSession(settings = Settings.isolated()): ToolSession {
 	return {
 		cwd: "/tmp/eval-test",
