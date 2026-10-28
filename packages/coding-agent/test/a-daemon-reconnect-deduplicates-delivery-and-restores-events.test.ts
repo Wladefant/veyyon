@@ -370,7 +370,7 @@ test("message ids and delivery announcements stay within their accepting session
 	expect(accepted.result).toMatchObject({ accepted: true, messageId: "same-id", state: "pending" });
 	gate.resolve();
 	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.event?.messageId === "same-id");
-	expect(newOutcome.event?.sessionId).toBe("sess-after-switch");
+	expect(newOutcome.event).toMatchObject({ sessionId: "sess-after-switch", state: "delivered", outcome: "new-session" });
 });
 
 test("an exhausted terminal-not-ready delivery can retry with the same message id", async () => {
@@ -568,4 +568,81 @@ test("an acked delivery exhausted by not-ready announces failure to watchers bef
 		outcome: "delivered",
 	});
 	expect(attempts).toBe(22);
+});
+
+// WHY: a subscribe that fails must leave nothing behind. Before this, the socket joined the live feed
+// before an oversize history entry made the request fail, so a client that saw `ok:false` still streamed.
+// CLASS: any failure inside subscribe. GAP: it does not cover a socket that dies mid-replay.
+test("a subscribe refused for an oversize history entry leaves the socket out of the live feed", async () => {
+	let listener: ((event: unknown) => void) | undefined;
+	const owner = await serve(
+		async () => "ok",
+		"sess-oversize",
+		() => [{ entryId: "e-huge", text: "x".repeat(600 * 1024) }],
+		undefined,
+		next => {
+			listener = next;
+			return () => {};
+		},
+	);
+	const client = connect(owner);
+	client.send({ id: "sub-huge", op: "subscribe" });
+	const refused = await client.next(frame => frame.id === "sub-huge");
+	expect(refused.ok).toBe(false);
+	listener?.({ kind: "streaming", sessionId: "sess-oversize", active: true });
+	client.send({ id: "after-huge", op: "ping" });
+	await client.next(frame => frame.id === "after-huge");
+	expect(client.frames.filter(frame => frame.event)).toEqual([]);
+});
+
+// WHY: a second subscriber takes its own history snapshot while the shared journal timer still holds
+// the entry as new, so the same entry reached it twice (snapshot, then `appended`).
+// CLASS: one entry reaching one subscriber twice, whichever path delivers first. GAP: the timer itself
+// lives in the mode and is not driven here; the test emits the event it would emit.
+test("a subscriber that already holds a history entry never receives it again as an appended event", async () => {
+	const history = [{ entryId: "e-0", text: "first" }];
+	let listener: ((event: unknown) => void) | undefined;
+	const owner = await serve(
+		async () => "ok",
+		"sess-dup",
+		() => [...history],
+		undefined,
+		next => {
+			listener = next;
+			return () => {};
+		},
+	);
+	const first = connect(owner);
+	first.send({ id: "sub-a", op: "subscribe" });
+	await first.next(frame => frame.id === "sub-a");
+	history.push({ entryId: "e-1", text: "second" });
+	const second = connect(owner);
+	second.send({ id: "sub-b", op: "subscribe" });
+	const snapshot = await second.next(frame => frame.event?.kind === "history");
+	expect(snapshot.event?.entries?.map(entry => entry.entryId)).toEqual(["e-0", "e-1"]);
+	await second.next(frame => frame.id === "sub-b");
+	listener?.({ kind: "appended", sessionId: "sess-dup", entries: [{ entryId: "e-1", text: "second" }] });
+	const appendedForFirst = await first.next(frame => frame.event?.kind === "appended");
+	expect(appendedForFirst.event?.entries?.map(entry => entry.entryId)).toEqual(["e-1"]);
+	second.send({ id: "ping-b", op: "ping" });
+	await second.next(frame => frame.id === "ping-b");
+	expect(second.frames.filter(frame => frame.event?.kind === "appended")).toEqual([]);
+});
+
+// WHY: a subscribed socket already receives a settled delivery by replay or announcement, so an ack
+// retry on it sent the delivery frame a second time.
+test("a retried acked delivery on a subscribed socket announces its settled outcome once", async () => {
+	const owner = await serve(async () => "done", "sess-retry");
+	const client = connect(owner);
+	client.send({ id: "sub", op: "subscribe" });
+	await client.next(frame => frame.id === "sub");
+	client.send({ id: "ack-1", op: "deliver", text: "once", mode: "auto", ack: true, messageId: "m-once" });
+	await client.next(frame => frame.id === "ack-1");
+	await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-once");
+	client.send({ id: "ack-2", op: "deliver", text: "once", mode: "auto", ack: true, messageId: "m-once" });
+	const retried = await client.next(frame => frame.id === "ack-2");
+	expect(retried.result).toMatchObject({ accepted: true, messageId: "m-once", state: "delivered", outcome: "done" });
+	client.send({ id: "ping", op: "ping" });
+	await client.next(frame => frame.id === "ping");
+	expect(client.frames.filter(frame => frame.event?.kind === "delivery")).toEqual([]);
 });

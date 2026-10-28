@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
@@ -40,6 +41,13 @@ const MAX_REMEMBERED_DELIVERIES = 256;
 const MAX_PENDING_DELIVERIES = 64;
 const NOT_READY_RETRIES = 20;
 const NOT_READY_RETRY_MS = 100;
+/** A history replay waits while the socket holds more than this unsent, so one slow reader never reaches the 1 MiB send limit. */
+const REPLAY_HIGH_WATER_BYTES = 256 * 1024;
+const REPLAY_DRAIN_POLL_MS = 5;
+/** A reader that drains nothing for this long is dropped rather than held open. */
+const REPLAY_STALL_TIMEOUT_MS = 30_000;
+const HISTORY_FRAME_MAX_BYTES = 512 * 1024;
+const HISTORY_FRAME_MAX_ENTRIES = 100;
 
 /**
  * The terminal has no input slot free right now, for example because the previous message reserved it
@@ -57,6 +65,28 @@ interface StreamingSnapshotEvent {
 	kind: "streaming";
 	sessionId: string;
 	active: boolean;
+}
+
+interface HistoryEntry {
+	entryId: string;
+	text: string;
+}
+
+interface AppendedEvent {
+	kind: "appended";
+	sessionId: string;
+	entries: HistoryEntry[];
+}
+
+function isAppendedEvent(event: unknown): event is AppendedEvent {
+	return (
+		typeof event === "object" &&
+		event !== null &&
+		"kind" in event &&
+		event.kind === "appended" &&
+		"entries" in event &&
+		Array.isArray(event.entries)
+	);
 }
 
 function isStreamingSnapshotEvent(event: unknown): event is StreamingSnapshotEvent {
@@ -131,7 +161,7 @@ export async function serveTerminalControl(
 			if (isStreamingSnapshotEvent(event)) {
 				currentStreamingEvent = event;
 			}
-			for (const socket of subscribers) send(socket, { event });
+			for (const socket of subscribers) forward(socket, event);
 		});
 	};
 	const stopEvents = (): void => {
@@ -146,6 +176,51 @@ export async function serveTerminalControl(
 			return;
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
+	};
+	// The history entry ids each subscriber already holds. A snapshot and the shared journal timer can
+	// both carry one entry; a subscriber is told about it once.
+	const heldEntries = new WeakMap<TerminalSocket, Set<string>>();
+	const forward = (socket: TerminalSocket, event: unknown): void => {
+		if (!isAppendedEvent(event)) {
+			send(socket, { event });
+			return;
+		}
+		const held = heldEntries.get(socket);
+		const entries = held ? event.entries.filter(entry => !held.has(entry.entryId)) : event.entries;
+		if (!entries.length) return;
+		for (const entry of entries) held?.add(entry.entryId);
+		send(socket, { event: { ...event, entries } });
+	};
+	// Waits on the bytes the socket still holds, because the Windows pipe socket never reports a full buffer.
+	const waitForWritable = async (socket: TerminalSocket): Promise<void> => {
+		const deadline = Date.now() + REPLAY_STALL_TIMEOUT_MS;
+		while (!socket.destroyed && socket.writableLength > REPLAY_HIGH_WATER_BYTES) {
+			if (Date.now() > deadline) {
+				socket.destroy();
+				return;
+			}
+			await sleep(REPLAY_DRAIN_POLL_MS);
+		}
+	};
+	const chunkHistory = (entries: HistoryEntry[]): HistoryEntry[][] => {
+		const chunks: HistoryEntry[][] = [];
+		let chunk: HistoryEntry[] = [];
+		let chunkBytes = 0;
+		for (const entry of entries) {
+			const bytes = Buffer.byteLength(JSON.stringify(entry));
+			if (bytes > HISTORY_FRAME_MAX_BYTES) {
+				throw new Error(`History entry ${entry.entryId} exceeds ${HISTORY_FRAME_MAX_BYTES} byte frame limit`);
+			}
+			if (chunk.length && (chunk.length >= HISTORY_FRAME_MAX_ENTRIES || chunkBytes + bytes > HISTORY_FRAME_MAX_BYTES)) {
+				chunks.push(chunk);
+				chunk = [];
+				chunkBytes = 0;
+			}
+			chunk.push(entry);
+			chunkBytes += bytes;
+		}
+		if (chunk.length) chunks.push(chunk);
+		return chunks;
 	};
 	// Acked deliveries, by the daemon's message id, scoped to the session that accepted them. The table
 	// lets a retry after a lost connection find the earlier request instead of enqueueing the message
@@ -224,7 +299,10 @@ export async function serveTerminalControl(
 				known.watchers.add(socket);
 				return { accepted: true, messageId, state: "pending" };
 			}
-			send(socket, { event: { kind: "delivery", sessionId: known.sessionId, messageId, ...known.status } });
+			// A subscribed socket already received this settled record by replay or announcement.
+			if (!subscribers.has(socket)) {
+				send(socket, { event: { kind: "delivery", sessionId: known.sessionId, messageId, ...known.status } });
+			}
 			return {
 				accepted: true,
 				messageId,
@@ -309,54 +387,36 @@ export async function serveTerminalControl(
 								if (typeof request.cursor === "string" && request.cursor && cursorIndex < 0) {
 									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
 								}
+								// Everything in the snapshot is accounted for: either replayed below or older than the replay window.
+								const held = new Set(fullHistory.map(entry => entry.entryId));
+								let pending = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
+								// The socket joins the live feed only after replay, in the same tick as the last journal read, so
+								// a slow reader cannot be left with a failed subscribe that still streams, nor miss an entry that
+								// arrived while it drained.
+								for (let pass = 0; ; pass++) {
+									const chunks = chunkHistory(pending);
+									if (pass === 0 && !chunks.length) chunks.push([]);
+									if (!chunks.length) break;
+									for (const chunk of chunks) {
+										await waitForWritable(socket);
+										if (socket.destroyed) return;
+										send(socket, { event: { kind: "history", sessionId: publishedSessionId, entries: chunk } });
+									}
+									pending = target.history().filter(entry => !held.has(entry.entryId));
+									for (const entry of pending) held.add(entry.entryId);
+								}
+								if (socket.destroyed) return;
+								if (closed || request.sessionId !== publishedSessionId || request.sessionId !== target.identity().sessionId) {
+									throw new Error("Terminal session detached or changed; rediscover its owner");
+								}
+								heldEntries.set(socket, held);
 								subscribers.add(socket);
 								const isNewListener = !unsubscribe;
 								startEvents();
 								if (!isNewListener && currentStreamingEvent?.active && currentStreamingEvent.sessionId === publishedSessionId) {
 									send(socket, { event: currentStreamingEvent });
 								}
-								const entries = cursorIndex >= 0 ? fullHistory.slice(cursorIndex + 1) : fullHistory.slice(-HISTORY_FRAME_ENTRIES);
-								const maxBytes = 512 * 1024;
-								const maxEntries = 100;
-								let chunk: typeof entries = [];
-								let chunkBytes = 0;
-								const chunks: typeof entries[] = [];
-								for (const entry of entries) {
-									const bytes = Buffer.byteLength(JSON.stringify(entry));
-									if (bytes > maxBytes) throw new Error(`History entry ${entry.entryId} exceeds ${maxBytes} byte frame limit`);
-									if (chunk.length && (chunk.length >= maxEntries || chunkBytes + bytes > maxBytes)) {
-										chunks.push(chunk);
-										chunk = [];
-										chunkBytes = 0;
-									}
-									chunk.push(entry);
-									chunkBytes += bytes;
-								}
-								if (chunk.length || !chunks.length) chunks.push(chunk);
-								for (let index = 0; index < chunks.length; index++) {
-									send(socket, {
-										event: {
-											kind: "history",
-											sessionId: publishedSessionId,
-											entries: chunks[index],
-										},
-									});
-									if (socket.writableNeedDrain && !socket.destroyed) {
-										await new Promise<void>(resolve => {
-											const onDrain = (): void => { cleanup(); resolve(); };
-											const onClose = (): void => { cleanup(); resolve(); };
-											const cleanup = (): void => {
-												socket.off("drain", onDrain);
-												socket.off("close", onClose);
-												socket.off("error", onClose);
-											};
-											socket.once("drain", onDrain);
-											socket.once("close", onClose);
-											socket.once("error", onClose);
-										});
-									}
-								}
-								for (const [key, record] of deliveries) {
+								for (const record of deliveries.values()) {
 									if (record.sessionId !== request.sessionId) continue;
 									if (record.status.state === "pending") {
 										record.watchers.add(socket);

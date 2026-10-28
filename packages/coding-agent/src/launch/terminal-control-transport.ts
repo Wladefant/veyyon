@@ -8,8 +8,6 @@ import { StringDecoder } from "node:string_decoder";
 export interface TerminalSocket extends EventEmitter {
 	readonly destroyed: boolean;
 	readonly writableLength: number;
-	/** Set by `net.Socket` when its buffer is full; the virtual socket never reports it. */
-	readonly writableNeedDrain?: boolean;
 	setEncoding(encoding: BufferEncoding): this;
 	write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void): boolean;
 	write(chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: (err?: Error | null) => void): boolean;
