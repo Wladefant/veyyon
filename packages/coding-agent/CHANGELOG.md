@@ -4,6 +4,7 @@
 
 ### Fixed
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
+- Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
 - Browser session cleanup continues after one tab release or orphan browser disposal fails.
 - Recovered daemons whose process tree cannot be proven gone now settle as `failed` with `ownershipUncertain`, are never restarted automatically, and allow manual replacement only when the configured ready port is free.
 - Launch retains stable handles for tracked descendants after a wrapper exits and waits for their teardown before restarting ([issue](https://github.com/Wladefant/veyyon/issues/530)).
@@ -42,7 +43,6 @@
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
 - Optional encrypted cloud checkpoints preserve native journals, artifacts, blobs, dirty files and version pins. The default-off client supports restore and explicit forks. Durable Object epochs fence synchronized prompt and tool admission. The existing `sessions` command alias remains available ([issue](https://github.com/Wladefant/veyyon/issues/567)).
 - Auth gateway accepts a server-only live device token map with `--device-tokens-file`. PC2 uses existing `pi-native` transport with a device bearer instead of provider credentials ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
-- Task and qa-verifier spawns share configured Gemini 3.8 Flash and GPT-6 Luna models evenly by spawn identity.
 - `deepseek` is a `web_search` provider and a `fetch` reader backend. Both use the `DEEPSEEK_API_KEY` that the DeepSeek model provider already reads, so a machine with a DeepSeek key searches and reads pages with no second credential.
 - Browser tab inventory lists only relay-controlled tabs, and approved close IDs apply only to ownerless relay-controlled tabs; lane-owned tabs remain protected ([Refs](https://github.com/Wladefant/veyyon/issues/538)).
 
