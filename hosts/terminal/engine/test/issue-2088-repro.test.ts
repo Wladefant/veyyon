@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, TUI } from "@veyyon/tui";
 import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
-import { captureWrites } from "./helpers/terminal-output";
+import { captureWrites, viewportRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2088
@@ -64,10 +64,6 @@ async function waitUntil(label: string, condition: () => boolean, timeoutMs = 5_
 		if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${label}`);
 		await Bun.sleep(1);
 	}
-}
-
-function visible(term: VirtualTerminal): string[] {
-	return term.getViewport().map(line => line.trimEnd());
 }
 
 const MULTIPLEXER_ENV_KEYS = [
@@ -150,7 +146,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
 				tui.stop();
 			}
@@ -186,12 +182,12 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				const fullRedrawsWhenViewportPainted = tui.fullRedraws;
 				await term.flush();
 				expect(fullRedrawsWhenViewportPainted).toBe(baselineRedraws);
-				expect(visible(term)).toEqual(expectedViewport);
+				expect(viewportRows(term)).toEqual(expectedViewport);
 
 				// Once the drag goes quiet the full replay fires.
 				await waitUntil("the deferred authoritative full paint", () => tui.fullRedraws > baselineRedraws);
 				await settleFrames(term, tui);
-				expect(visible(term)).toEqual(expectedViewport);
+				expect(viewportRows(term)).toEqual(expectedViewport);
 			} finally {
 				tui.stop();
 			}
@@ -258,7 +254,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
-				expect(visible(term).at(-1)).toBe("line-19 streamed");
+				expect(viewportRows(term).at(-1)).toBe("line-19 streamed");
 			} finally {
 				tui.stop();
 			}
@@ -297,7 +293,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
 				tui.stop();
 			}
@@ -331,7 +327,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
 				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
 				tui.stop();
 			}
@@ -400,7 +396,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 					expect(out.length).toBeGreaterThan(0);
 					expect(out).not.toContain(ED3);
 					expect(tui.fullRedraws - baselineRedraws).toBe(1);
-					expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+					expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 				} finally {
 					tui.stop();
 				}
@@ -433,7 +429,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 					expect(out.length).toBeGreaterThan(0);
 					expect(out).not.toContain(ED3);
 					expect(tui.fullRedraws - baselineRedraws).toBe(1);
-					expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+					expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 				} finally {
 					tui.stop();
 				}
@@ -485,7 +481,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 				await settleFrames(term, tui);
 				const out = writes.join("");
 				expect(out).toContain(ED3);
-				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				expect(viewportRows(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
 				tui.stop();
 			}

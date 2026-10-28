@@ -28,6 +28,7 @@
 import { describe, expect, it } from "bun:test";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { type Component, Container, TUI } from "@veyyon/tui";
+import { plainRows } from "../../../../../../hosts/terminal/engine/test/helpers/terminal-output";
 import { StressRenderScheduler } from "../../../../../../hosts/terminal/engine/test/render-stress-scheduler";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
 import { mulberry32 } from "../../../../../utils/test/helpers/mulberry32";
@@ -102,10 +103,6 @@ function rowsOf(label: string, count: number): string[] {
 	return Array.from({ length: count }, (_, i) => `${label} row ${i + 1}`);
 }
 
-function strip(rows: readonly string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 interface Harness {
 	term: VirtualTerminal;
 	scheduler: StressRenderScheduler;
@@ -136,7 +133,7 @@ async function unmount(harness: Harness): Promise<void> {
 async function coldViewport(rows: number, children: readonly Component[]): Promise<string[]> {
 	const cold = await mount(rows, children);
 	try {
-		return strip(cold.term.getViewport());
+		return plainRows(cold.term.getViewport());
 	} finally {
 		await unmount(cold);
 	}
@@ -172,7 +169,7 @@ describe("an animating block re-derives only the transcript below it", () => {
 				renderedAbove: rendersAbove() - beforeScoped,
 				renderedRequester: requester.block.renders - requesterRenders,
 			}).toEqual({ renderedAbove: 0, renderedRequester: 1 });
-			expect(strip(harness.term.getViewport())).toEqual(
+			expect(plainRows(harness.term.getViewport())).toEqual(
 				await coldViewport(
 					rows,
 					entries.map(e => e.child),
@@ -307,8 +304,8 @@ describe("an animating block re-derives only the transcript below it", () => {
 
 	function painted(target: Arm): { viewport: string[]; history: string[]; sealed: boolean[]; seam?: number } {
 		return {
-			viewport: strip(target.harness.term.getViewport()),
-			history: strip(target.harness.term.getScrollBuffer()),
+			viewport: plainRows(target.harness.term.getViewport()),
+			history: plainRows(target.harness.term.getScrollBuffer()),
 			sealed: target.entries.map(e => e.block.sealed),
 			// The row the engine treats as the start of the still-mutating region.
 			seam: target.harness.transcript.getNativeScrollbackLiveRegionStart(),

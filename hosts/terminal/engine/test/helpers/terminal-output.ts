@@ -16,3 +16,13 @@ export function captureWrites(term: VirtualTerminal): string[] {
 export function lastPaintedRow(term: VirtualTerminal): number {
 	return term.getViewport().reduce((last, row, i) => (Bun.stripANSI(row).trim().length > 0 ? i : last), -1);
 }
+
+/** Each row with its ANSI styling removed and its trailing blanks trimmed. */
+export function plainRows(rows: readonly string[]): string[] {
+	return rows.map(row => Bun.stripANSI(row).trimEnd());
+}
+
+/** The terminal's visible rows as plain text, trailing blanks trimmed. */
+export function viewportRows(term: VirtualTerminal): string[] {
+	return plainRows(term.getViewport());
+}

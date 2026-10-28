@@ -22,6 +22,7 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@veyyon/tui";
 import { settleFrames } from "./helpers/settle-frames";
+import { viewportRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 /** A component whose rows the test rewrites between frames. */
@@ -71,10 +72,6 @@ class SlowRenderScheduler implements RenderScheduler {
 	}
 }
 
-function plain(term: VirtualTerminal): string[] {
-	return term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-}
-
 describe("TUI.renderPending", () => {
 	/** A TUI that has never been asked to paint owes nothing. Without this the
 	 *  getter could be a constant `true` and every test below would still pass by
@@ -104,11 +101,11 @@ describe("TUI.renderPending", () => {
 			expect(tui.renderPending).toBe(true);
 			// And the frame really had not landed yet, so the flag is not merely
 			// true-in-passing after the paint.
-			expect(plain(term)[0]).toBe("one");
+			expect(viewportRows(term)[0]).toBe("one");
 
 			await settleFrames(term, tui);
 			expect(tui.renderPending).toBe(false);
-			expect(plain(term)[0]).toBe("two");
+			expect(viewportRows(term)[0]).toBe("two");
 		} finally {
 			tui.stop();
 		}
@@ -146,7 +143,7 @@ describe("settleFrames", () => {
 		try {
 			tui.start();
 			await settleFrames(term, tui, { timeoutMs: 10_000 });
-			expect(plain(term)[0]).toBe("status-before");
+			expect(viewportRows(term)[0]).toBe("status-before");
 
 			rows.setLines(["status-after"]);
 			tui.requestRender();
@@ -155,10 +152,10 @@ describe("settleFrames", () => {
 			await new Promise<void>(resolve => process.nextTick(resolve));
 			await Bun.sleep(40);
 			await term.flush();
-			expect(plain(term)[0]).toBe("status-before");
+			expect(viewportRows(term)[0]).toBe("status-before");
 
 			await settleFrames(term, tui, { timeoutMs: 10_000 });
-			expect(plain(term)[0]).toBe("status-after");
+			expect(viewportRows(term)[0]).toBe("status-after");
 		} finally {
 			tui.stop();
 		}
@@ -182,7 +179,7 @@ describe("settleFrames", () => {
 			}
 			await settleFrames(term, tui, { timeoutMs: 10_000 });
 
-			expect(plain(term)[0]).toBe("r5");
+			expect(viewportRows(term)[0]).toBe("r5");
 			expect(tui.renderPending).toBe(false);
 		} finally {
 			tui.stop();
@@ -231,7 +228,7 @@ describe("VirtualTerminal.waitForRender", () => {
 			tui.requestRender();
 			await term.waitForRender(tui);
 
-			expect(plain(term)[0]).toBe("status-after");
+			expect(viewportRows(term)[0]).toBe("status-after");
 			expect(tui.renderPending).toBe(false);
 		} finally {
 			tui.stop();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TUI } from "@veyyon/tui";
 import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
+import { plainRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1974
@@ -95,10 +96,6 @@ function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
 }
 
-function strip(rows: string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 const TMUX_ENV: Record<string, string | undefined> = {
 	TMUX: "1",
 	STY: undefined,
@@ -157,7 +154,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				// way up). Each MARK-NNN must appear in that combined buffer
 				// exactly once — no gaps ("missing sections") and no
 				// duplicates ("repeating chunks").
-				const scrollback = strip(term.getScrollBuffer());
+				const scrollback = plainRows(term.getScrollBuffer());
 				const buffer = scrollback.join("\n");
 				const missing: string[] = [];
 				const duplicated: string[] = [];
@@ -170,7 +167,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				expect(duplicated).toEqual([]);
 
 				// The visible viewport still shows the live tail.
-				const viewport = strip(term.getViewport());
+				const viewport = plainRows(term.getViewport());
 				expect(viewport.some(row => row.includes("MARK-039"))).toBe(true);
 			} finally {
 				tui.stop();
@@ -242,8 +239,8 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				// `getScrollBuffer()` returns pane history followed by the
 				// active grid (the visible viewport). For "what is in pane
 				// history alone", chop off the last `rows` entries.
-				const fullBuffer = strip(term.getScrollBuffer());
-				const viewport = strip(term.getViewport());
+				const fullBuffer = plainRows(term.getScrollBuffer());
+				const viewport = plainRows(term.getViewport());
 				const history = fullBuffer.slice(0, Math.max(0, fullBuffer.length - viewport.length));
 
 				// Chrome must NEVER enter pane history (it sits below the live
@@ -293,7 +290,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 			tui.requestRender();
 			await settleFrames(term, tui);
 
-			expect(strip(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
+			expect(plainRows(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
 			expect(term.getCursor()).toEqual({ row: 3, col: 4 });
 		} finally {
 			tui.stop();

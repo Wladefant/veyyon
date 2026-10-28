@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Component, TUI } from "../src/index";
 import { settleFrames } from "./helpers/settle-frames";
+import { plainRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 const WIDTH = 40;
@@ -47,12 +48,8 @@ const REPLACED_ROWS = [
 
 const TERMINAL_KINDS = ["direct", "multiplexer"] as const;
 
-function plain(rows: readonly string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 function history(term: VirtualTerminal): string[] {
-	return plain(term.getScrollBuffer().slice(0, term.getBufferPosition().baseY));
+	return plainRows(term.getScrollBuffer().slice(0, term.getBufferPosition().baseY));
 }
 
 interface Outcome {
@@ -77,7 +74,7 @@ async function collapseThenGrow(survivors: number, replaced: number | null): Pro
 		root.lines = collapsed;
 		tui.requestRender();
 		await settleFrames(term, tui);
-		const shownAfterCollapse = [...history(term), ...plain(term.getViewport())];
+		const shownAfterCollapse = [...history(term), ...plainRows(term.getViewport())];
 
 		root.lines = [...collapsed, ...Array.from({ length: GROWTH }, (_, i) => `grown ${i}`)];
 		tui.requestRender();

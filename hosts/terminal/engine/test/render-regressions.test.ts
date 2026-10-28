@@ -12,7 +12,7 @@ import {
 } from "@veyyon/tui";
 import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
-import { captureWrites } from "./helpers/terminal-output";
+import { captureWrites, viewportRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Ends this file's effect with this file: the flag is process-global and is read at
@@ -231,10 +231,6 @@ async function settleResize(term: VirtualTerminal, tui: TUI): Promise<void> {
 	await settleFrames(term, tui);
 }
 
-function visible(term: VirtualTerminal): string[] {
-	return term.getViewport().map(line => line.trimEnd());
-}
-
 function countMatches(lines: string[], pattern: RegExp): number {
 	let count = 0;
 	for (const line of lines) {
@@ -302,14 +298,14 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				const before = visible(term);
+				const before = viewportRows(term);
 
 				for (let i = 0; i < 8; i++) {
 					tui.requestRender();
 					await settleFrames(term, tui);
 				}
 
-				expect(visible(term)).toEqual(before);
+				expect(viewportRows(term)).toEqual(before);
 			} finally {
 				tui.stop();
 			}
@@ -324,13 +320,13 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				const before = visible(term);
+				const before = viewportRows(term);
 
 				component.setLines(["AAA", "BBB", "XXX", "DDD", "EEE"]);
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const after = visible(term);
+				const after = viewportRows(term);
 				expect(after[0]).toBe(before[0]);
 				expect(after[1]).toBe(before[1]);
 				expect(after[2]?.trim()).toBe("XXX");
@@ -362,7 +358,7 @@ describe("TUI terminal-state regressions", () => {
 				const paint = writes.at(-1) ?? "";
 				expect(paint).toContain("tool\x1b[0m\x1b[K");
 				expect(paint).not.toContain("\x1b[2Ktool");
-				expect(visible(term)[1]).toBe("tool");
+				expect(viewportRows(term)[1]).toBe("tool");
 			} finally {
 				tui.stop();
 			}
@@ -382,7 +378,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]?.trim()).toBe("A");
 				expect(viewport[1]?.trim()).toBe("B");
 				expect(viewport[2]?.trim()).toBe("");
@@ -407,7 +403,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]?.trim()).toBe("");
 			} finally {
 				tui.stop();
@@ -429,7 +425,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(["A", "B", "C", "D", "E"]);
-				expect(visible(term)).toEqual(["C", "D", "E"]);
+				expect(viewportRows(term)).toEqual(["C", "D", "E"]);
 			} finally {
 				tui.stop();
 			}
@@ -478,7 +474,7 @@ describe("TUI terminal-state regressions", () => {
 
 				expect(writes.some(write => write.includes("\x1b[H\x1b[3J") && !write.includes("\x1b[2J"))).toBe(true);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
-				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+				expect(viewportRows(term)).toEqual(["L5", "L6", "L7"]);
 			} finally {
 				tui.stop();
 			}
@@ -493,7 +489,7 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
+				expect(viewportRows(term)).toEqual(["L5", "L6", "L7"]);
 
 				// The component's content changes, but its render stays cached (a
 				// frozen transcript snapshot). resetDisplay() must invalidate it so the
@@ -504,7 +500,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("M", 8));
-				expect(visible(term)).toEqual(["M5", "M6", "M7"]);
+				expect(viewportRows(term)).toEqual(["M5", "M6", "M7"]);
 			} finally {
 				tui.stop();
 			}
@@ -526,7 +522,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 6));
-				expect(visible(term)).toEqual(["L3", "L4", "L5"]);
+				expect(viewportRows(term)).toEqual(["L3", "L4", "L5"]);
 			} finally {
 				tui.stop();
 			}
@@ -547,7 +543,7 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-1);
 
 				const beforeViewportY = term.getBufferPosition().viewportY;
-				const beforeView = visible(term);
+				const beforeView = viewportRows(term);
 				const writes = captureWrites(term);
 
 				component.setLines(rows("L", 9));
@@ -561,7 +557,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(paint).not.toContain("\x1b[3J");
 				// The reader's anchor and view are untouched by the append.
 				expect(term.getBufferPosition().viewportY).toBe(beforeViewportY);
-				expect(visible(term)).toEqual(beforeView);
+				expect(viewportRows(term)).toEqual(beforeView);
 
 				term.scrollLines(1_000_000);
 				await term.flush();
@@ -596,7 +592,7 @@ describe("TUI terminal-state regressions", () => {
 
 				const buffer = term.getScrollBuffer().join("\n");
 				expect(buffer.includes("shell-")).toBeFalsy();
-				expect(visible(term).at(-1)?.trim()).toBe("ui-7");
+				expect(viewportRows(term).at(-1)?.trim()).toBe("ui-7");
 			} finally {
 				tui.stop();
 			}
@@ -634,7 +630,7 @@ describe("TUI terminal-state regressions", () => {
 					term.resize(16, 6);
 					await settleFrames(term, tui);
 
-					expect(visible(term)).toEqual([
+					expect(viewportRows(term)).toEqual([
 						"line-25",
 						"line-26",
 						"line-27",
@@ -703,7 +699,7 @@ describe("TUI terminal-state regressions", () => {
 				term.resize(16, 6);
 				await settleFrames(term, tui);
 
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[1]!.length).toBeLessThanOrEqual(16);
 				expect(viewport[2]?.trim()).toBe("");
@@ -797,13 +793,13 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				expect(visible(term)).toEqual(expectedViewport(80, 18));
+				expect(viewportRows(term)).toEqual(expectedViewport(80, 18));
 
 				const widths = [72, 64, 56, 68, 52, 80];
 				for (const width of widths) {
 					term.resize(width, 18);
 					await settleFrames(term, tui);
-					expect(visible(term)).toEqual(expectedViewport(width, 18));
+					expect(viewportRows(term)).toEqual(expectedViewport(width, 18));
 				}
 			} finally {
 				tui.stop();
@@ -829,12 +825,12 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				expect(visible(term)).toEqual(expectedViewport(40, 10));
+				expect(viewportRows(term)).toEqual(expectedViewport(40, 10));
 
 				term.resize(20, 10);
 				await settleFrames(term, tui);
 
-				expect(visible(term)).toEqual(expectedViewport(20, 10));
+				expect(viewportRows(term)).toEqual(expectedViewport(20, 10));
 			} finally {
 				tui.stop();
 			}
@@ -909,7 +905,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				const [finalWidth, finalHeight] = sizes[sizes.length - 1]!;
-				expect(visible(term)).toEqual(expectedViewport(finalWidth, finalHeight));
+				expect(viewportRows(term)).toEqual(expectedViewport(finalWidth, finalHeight));
 				// A budget on the HARNESS's work, not on the clock. This case used
 				// to carry a 20-second wall-clock timeout because the virtual
 				// terminal threw its Ghostty instance away and replayed its whole
@@ -991,7 +987,7 @@ describe("TUI terminal-state regressions", () => {
 				term.resize(80, 17);
 				await settleFrames(term, tui);
 
-				expect(visible(term)).toEqual(expectedViewport(80, 17));
+				expect(viewportRows(term)).toEqual(expectedViewport(80, 17));
 			} finally {
 				tui.stop();
 			}
@@ -1080,7 +1076,7 @@ describe("TUI terminal-state regressions", () => {
 						await settleFrames(term, tui);
 					}
 
-					expect(visible(term)).toEqual(expectedViewport(finalWidth, finalHeight));
+					expect(viewportRows(term)).toEqual(expectedViewport(finalWidth, finalHeight));
 				} finally {
 					tui.stop();
 				}
@@ -1123,7 +1119,7 @@ describe("TUI terminal-state regressions", () => {
 						await settleFrames(term, tui);
 					}
 
-					expect(visible(term)).toEqual(expectedViewport(finalWidth, finalHeight));
+					expect(viewportRows(term)).toEqual(expectedViewport(finalWidth, finalHeight));
 				} finally {
 					tui.stop();
 				}
@@ -1149,7 +1145,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term).filter(line => line.trim().length > 0);
+				const viewport = viewportRows(term).filter(line => line.trim().length > 0);
 				expect(viewport).toHaveLength(6);
 				expect(viewport[0]?.trim()).toBe("row-18");
 				expect(viewport[5]?.trim()).toBe("row-23");
@@ -1267,7 +1263,7 @@ describe("TUI terminal-state regressions", () => {
 
 				// 19 lines fit inside the 24-row viewport: rows 0..18 hold content,
 				// 19..23 stay blank — with no 4-row (height delta) displacement.
-				expect(visible(term)).toEqual([...rows("line-", 19), "", "", "", "", ""]);
+				expect(viewportRows(term)).toEqual([...rows("line-", 19), "", "", "", "", ""]);
 				const position = term.getBufferPosition();
 				expect(position.viewportY).toBe(position.baseY);
 			} finally {
@@ -1344,7 +1340,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settleFrames(term, tui);
 
-					expect(visible(term)).toEqual([...final, ...Array<string>(24 - final.length).fill("")]);
+					expect(viewportRows(term)).toEqual([...final, ...Array<string>(24 - final.length).fill("")]);
 				} finally {
 					tui.stop();
 				}
@@ -1371,14 +1367,14 @@ describe("TUI terminal-state regressions", () => {
 
 					term.resize(16, 6);
 					await settleFrames(term, tui);
-					expect(visible(term)).toEqual(lines.slice(6));
+					expect(viewportRows(term)).toEqual(lines.slice(6));
 
 					const final = [...lines, "row-12"];
 					component.setLines(final);
 					tui.requestRender();
 					await settleResize(term, tui);
 
-					expect(visible(term)).toEqual(final.slice(7));
+					expect(viewportRows(term)).toEqual(final.slice(7));
 					expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(final);
 				} finally {
 					tui.stop();
@@ -1477,7 +1473,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(out).toContain("\x1b[H\x1b[3J");
 				expect(out).not.toContain("\x1b[2J");
 				expect(out).not.toContain("\x1b[22J");
-				expect(visible(term)).toEqual(["new", "", ""]);
+				expect(viewportRows(term)).toEqual(["new", "", ""]);
 			} finally {
 				tui.stop();
 				setTerminalScreenToScrollback(saved);
@@ -1600,7 +1596,7 @@ describe("TUI terminal-state regressions", () => {
 				try {
 					tui.start();
 					await settleFrames(term, tui);
-					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+					expect(viewportRows(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
 
 					const writes = captureWrites(term);
 					// Deleting "remove-me" (already committed to pane history) shifts
@@ -1613,7 +1609,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settleFrames(term, tui);
 
-					expect(visible(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
+					expect(viewportRows(term)).toEqual(["tail-0", "tail-1", "tail-2", "tail-3"]);
 					expect(writes.join("")).not.toContain("\x1b[3J");
 					const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY);
 					expect(history.map(line => line.trimEnd())).toEqual([
@@ -1666,7 +1662,7 @@ describe("TUI terminal-state regressions", () => {
 
 						// The visible pane must show the frame tail at the new geometry —
 						// no phantom rows, no stale-anchor splices.
-						const view = visible(term);
+						const view = viewportRows(term);
 						expect(view).toEqual(["line-35", "line-36", "line-37", "line-38", "line-39", "line-40 streamed"]);
 					} finally {
 						tui.stop();
@@ -1834,7 +1830,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settleFrames(term, tui);
 				}
-				const viewport = visible(term).map(line => line.trim());
+				const viewport = viewportRows(term).map(line => line.trim());
 				expect(viewport.at(-1)).toBe("line-69");
 				for (let i = 1; i < viewport.length; i++) {
 					const prev = Number.parseInt(viewport[i - 1]!.slice(5), 10);
@@ -1854,7 +1850,7 @@ describe("TUI terminal-state regressions", () => {
 			try {
 				tui.start();
 				await settleFrames(term, tui);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"line-5",
 					"line-6",
 					"line-7",
@@ -1872,7 +1868,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.resetDisplay();
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"line-6",
 					"line-7",
 					"line-8",
@@ -1909,7 +1905,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.start();
 					await settleFrames(term, tui);
 					expect(term.isNativeViewportAtBottom()).toBe(true);
-					expect(visible(term).map(line => line.trim())).toEqual(["a", "b", "c", "d"]);
+					expect(viewportRows(term).map(line => line.trim())).toEqual(["a", "b", "c", "d"]);
 
 					// An offscreen edit (E0 -> E0x, above the commit boundary) lands
 					// together with a tail append whose rows make the prior last line "d"
@@ -1920,7 +1916,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settleFrames(term, tui);
 
-					expect(visible(term).map(line => line.trim())).toEqual(["b", "d", "e", "f"]);
+					expect(viewportRows(term).map(line => line.trim())).toEqual(["b", "d", "e", "f"]);
 					const buffer = term.getScrollBuffer().map(line => line.trimEnd());
 					for (const line of ["E1", "a", "b", "d", "e", "f"]) {
 						expect(buffer.filter(row => row === line).length, `${line} should appear exactly once`).toBe(1);
@@ -1971,7 +1967,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.resetDisplay();
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"json-6",
 					"json-7",
 					"json-8",
@@ -2038,7 +2034,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"json-6",
 					"json-7",
 					"json-8",
@@ -2070,7 +2066,7 @@ describe("TUI terminal-state regressions", () => {
 					tui.requestRender();
 					await settleFrames(term, tui);
 
-					const viewport = visible(term).map(line => line.trim());
+					const viewport = viewportRows(term).map(line => line.trim());
 					const expectedViewport = lines.slice(Math.max(0, lines.length - term.rows)).map(line => line.trim());
 					expect(viewport).toEqual(expectedViewport);
 				}
@@ -2127,7 +2123,7 @@ describe("TUI terminal-state regressions", () => {
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(finalFrame);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"base-5",
 					"base-6",
 					"base-7",
@@ -2141,7 +2137,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual(rows("tail-", 5));
+				expect(viewportRows(term).map(line => line.trim())).toEqual(rows("tail-", 5));
 				const grownHistory = term
 					.getScrollBuffer()
 					.slice(0, term.getBufferPosition().baseY)
@@ -2176,7 +2172,7 @@ describe("TUI terminal-state regressions", () => {
 					"final-0",
 					"final-1",
 				]);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"base-5",
 					"base-6",
 					"base-7",
@@ -2211,7 +2207,7 @@ describe("TUI terminal-state regressions", () => {
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(["final-0", "final-1", "", "", ""]);
-				expect(visible(term).map(line => line.trim())).toEqual(["final-0", "final-1", "", "", ""]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual(["final-0", "final-1", "", "", ""]);
 			} finally {
 				tui.stop();
 			}
@@ -2239,7 +2235,7 @@ describe("TUI terminal-state regressions", () => {
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(["settled-0", "settled-1", "", "", ""]);
-				expect(visible(term).map(line => line.trim())).toEqual(["settled-0", "settled-1", "", "", ""]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual(["settled-0", "settled-1", "", "", ""]);
 			} finally {
 				tui.stop();
 			}
@@ -2274,7 +2270,7 @@ describe("TUI terminal-state regressions", () => {
 					.slice(0, term.getBufferPosition().baseY)
 					.map(line => line.trimEnd());
 				expect(history).toEqual(rows("history-", 5));
-				expect(visible(term).map(line => line.trim())).toEqual(rows("history-", 10).slice(5));
+				expect(viewportRows(term).map(line => line.trim())).toEqual(rows("history-", 10).slice(5));
 			} finally {
 				tui.stop();
 			}
@@ -2301,7 +2297,7 @@ describe("TUI terminal-state regressions", () => {
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(["short-0", "short-1", "", "", ""]);
-				expect(visible(term).map(line => line.trim())).toEqual(["short-0", "short-1", "", "", ""]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual(["short-0", "short-1", "", "", ""]);
 			} finally {
 				tui.stop();
 			}
@@ -2319,7 +2315,13 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-2);
 				const before = term.getBufferPosition();
 				expect(before.viewportY).toBeGreaterThan(0);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "line-8", "line-9"]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
+					"line-5",
+					"line-6",
+					"line-7",
+					"line-8",
+					"line-9",
+				]);
 
 				component.setLines(rows("line-", 8));
 				tui.requestRender();
@@ -2327,7 +2329,7 @@ describe("TUI terminal-state regressions", () => {
 
 				const after = term.getBufferPosition();
 				expect(after.viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
 			} finally {
 				tui.stop();
 			}
@@ -2349,7 +2351,13 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-5);
 				const before = term.getBufferPosition();
 				expect(before.viewportY).toBe(2);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-2", "line-3", "line-4", "line-5", "line-6"]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
+					"line-2",
+					"line-3",
+					"line-4",
+					"line-5",
+					"line-6",
+				]);
 
 				const writes = captureWrites(term);
 				component.setLines(["line-0", "line-1", "expanded-0", "expanded-1", ...rows("line-", 12).slice(2)]);
@@ -2363,7 +2371,7 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(999);
 				tui.requestRender();
 				await settleFrames(term, tui);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"line-7",
 					"line-8",
 					"line-9",
@@ -2391,7 +2399,13 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-5);
 				const before = term.getBufferPosition();
 				expect(before.viewportY).toBe(2);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-2", "line-3", "line-4", "line-5", "line-6"]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
+					"line-2",
+					"line-3",
+					"line-4",
+					"line-5",
+					"line-6",
+				]);
 
 				const writes = captureWrites(term);
 				component.setLines([...rows("line-", 9), "preview-appeared", ...rows("line-", 12).slice(9)]);
@@ -2403,14 +2417,20 @@ describe("TUI terminal-state regressions", () => {
 				expect(paint).not.toContain("\x1b[2J");
 				expect(paint).not.toContain("\x1b[H");
 				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-2", "line-3", "line-4", "line-5", "line-6"]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
+					"line-2",
+					"line-3",
+					"line-4",
+					"line-5",
+					"line-6",
+				]);
 				// The preview painted into the live grid, not into history.
 				const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY);
 				expect(history.join("\n")).not.toContain("preview-appeared");
 
 				term.scrollLines(999);
 				await term.flush();
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"line-8",
 					"preview-appeared",
 					"line-9",
@@ -2442,7 +2462,7 @@ describe("TUI terminal-state regressions", () => {
 
 				const after = term.getBufferPosition();
 				expect(after.viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
+				expect(viewportRows(term).map(line => line.trim())).toEqual(["line-5", "line-6", "line-7", "", ""]);
 				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
 			} finally {
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -2512,7 +2532,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term).map(line => line.trim());
+				const viewport = viewportRows(term).map(line => line.trim());
 				expect(viewport.at(-1)).toBe("spinner-b");
 				expect(term.getScrollBuffer().join("\n")).not.toContain("edited-0");
 				const paint = writes.at(-1) ?? "";
@@ -2533,7 +2553,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(scrolledTerm, scrolledTui);
 				scrolledTerm.scrollLines(-1);
 				const before = scrolledTerm.getBufferPosition();
-				const beforeViewport = visible(scrolledTerm).map(line => line.trim());
+				const beforeViewport = viewportRows(scrolledTerm).map(line => line.trim());
 				const writes = captureWrites(scrolledTerm);
 
 				scrolledComponent.setLines(updated);
@@ -2541,7 +2561,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(scrolledTerm, scrolledTui);
 
 				expect(scrolledTerm.getBufferPosition()).toEqual(before);
-				expect(visible(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
+				expect(viewportRows(scrolledTerm).map(line => line.trim())).toEqual(beforeViewport);
 				expect(scrolledTerm.getScrollBuffer().join("\n")).not.toContain("edited-0");
 				const paint = writes.at(-1) ?? "";
 				expect(paint).toContain("\rspinner-b\x1b[0m\x1b[K");
@@ -2572,7 +2592,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term).map(line => line.trim());
+				const viewport = viewportRows(term).map(line => line.trim());
 				expect(viewport).toEqual([
 					"short-10",
 					"short-11",
@@ -2622,7 +2642,7 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(999);
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"short-10",
 					"short-11",
 					"short-12",
@@ -2664,7 +2684,7 @@ describe("TUI terminal-state regressions", () => {
 				component.setLines(expanded);
 				tui.requestRender();
 				await settleFrames(term, tui);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"line-109",
 					"line-110",
 					"line-111",
@@ -2689,7 +2709,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"short-5",
 					"short-6",
 					"short-7",
@@ -2731,7 +2751,7 @@ describe("TUI terminal-state regressions", () => {
 					try {
 						tui.start();
 						await settleFrames(term, tui);
-						expect(visible(term).map(line => line.trim())).toEqual([
+						expect(viewportRows(term).map(line => line.trim())).toEqual([
 							"seed-0",
 							"seed-1",
 							"seed-2",
@@ -2746,7 +2766,7 @@ describe("TUI terminal-state regressions", () => {
 							tui.requestRender();
 							await settleFrames(term, tui);
 
-							const viewport = visible(term).map(line => line.trim());
+							const viewport = viewportRows(term).map(line => line.trim());
 							// The most recently streamed token MUST land in the viewport without the
 							// user resizing the window. Pre-fix the viewport stayed frozen at the
 							// initial seed because deferredMutation returned a no-op render.
@@ -2786,7 +2806,7 @@ describe("TUI terminal-state regressions", () => {
 						// Reader scrolls up into history.
 						term.scrollLines(-4);
 						const before = term.getBufferPosition();
-						const anchored = visible(term).map(line => line.trim());
+						const anchored = viewportRows(term).map(line => line.trim());
 						expect(before.viewportY).toBeGreaterThan(0);
 						expect(before.viewportY).toBeLessThan(before.baseY);
 
@@ -2800,7 +2820,7 @@ describe("TUI terminal-state regressions", () => {
 							const pos = term.getBufferPosition();
 							// Still scrolled up (not snapped to the tail) and reading the same rows.
 							expect(pos.viewportY).toBeLessThan(pos.baseY);
-							expect(visible(term).map(line => line.trim())).toEqual(anchored);
+							expect(viewportRows(term).map(line => line.trim())).toEqual(anchored);
 						}
 
 						// The incremental diff path streamed the tail straight into native
@@ -2816,7 +2836,7 @@ describe("TUI terminal-state regressions", () => {
 						await settleFrames(term, tui);
 						const offscreenPos = term.getBufferPosition();
 						expect(offscreenPos.viewportY).toBeLessThan(offscreenPos.baseY);
-						expect(visible(term).map(line => line.trim())).toEqual(anchored);
+						expect(viewportRows(term).map(line => line.trim())).toEqual(anchored);
 
 						term.scrollLines(999);
 						await settleFrames(term, tui);
@@ -2847,7 +2867,7 @@ describe("TUI terminal-state regressions", () => {
 
 						term.scrollLines(-4);
 						const before = term.getBufferPosition();
-						const anchored = visible(term).map(line => line.trim());
+						const anchored = viewportRows(term).map(line => line.trim());
 						expect(before.viewportY).toBeLessThan(before.baseY);
 
 						component.setLines(["seed-EDIT", ...rows("seed-", 12).slice(1), ...rows("tail-", 4)]);
@@ -2856,7 +2876,7 @@ describe("TUI terminal-state regressions", () => {
 
 						const after = term.getBufferPosition();
 						expect(after.viewportY).toBe(before.viewportY);
-						expect(visible(term).map(line => line.trim())).toEqual(anchored);
+						expect(viewportRows(term).map(line => line.trim())).toEqual(anchored);
 					} finally {
 						tui.stop();
 					}
@@ -2904,7 +2924,7 @@ describe("TUI terminal-state regressions", () => {
 						await settleFrames(term, tui);
 
 						// Bottom-anchored on the live tail.
-						expect(visible(term).map(line => line.trim())).toEqual([
+						expect(viewportRows(term).map(line => line.trim())).toEqual([
 							"row-18",
 							"row-19",
 							"row-20",
@@ -2921,7 +2941,7 @@ describe("TUI terminal-state regressions", () => {
 							.getScrollBuffer()
 							.slice(0, baseY)
 							.map(line => line.trimEnd());
-						const reachable = new Set([...history, ...visible(term)].map(line => line.trim()));
+						const reachable = new Set([...history, ...viewportRows(term)].map(line => line.trim()));
 						for (const row of grown) {
 							expect(reachable.has(row), `${row} must stay reachable`).toBe(true);
 						}
@@ -3037,7 +3057,7 @@ describe("TUI terminal-state regressions", () => {
 						expect(writes.join("")).not.toContain("\x1b[3J");
 						// The wrap row paints in the same frame — viewportRepaint is non-destructive
 						// but writes the visible window, so the editor's new visual row is on screen.
-						expect(visible(term).map(line => line.trim())).toContain("wrap-row");
+						expect(viewportRows(term).map(line => line.trim())).toContain("wrap-row");
 					} finally {
 						tui.stop();
 					}
@@ -3086,7 +3106,7 @@ describe("TUI terminal-state regressions", () => {
 						await settleFrames(term, tui);
 
 						expect(writes.join("")).not.toContain("\x1b[3J");
-						const view = visible(term).map(line => line.trim());
+						const view = viewportRows(term).map(line => line.trim());
 						expect(view).toContain("STATUS-NEW");
 						expect(view).toContain("EXTRA");
 					} finally {
@@ -3163,7 +3183,7 @@ describe("TUI terminal-state regressions", () => {
 				tail.setLines([...out.slice(0, 8), "[summary]", "[footer]"]);
 				tui.requestRender();
 				await settleFrames(term, tui);
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"cell-6",
 					"cell-7",
 					"[summary]",
@@ -3183,7 +3203,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				expect(visible(term).map(line => line.trim())).toEqual([
+				expect(viewportRows(term).map(line => line.trim())).toEqual([
 					"cell-8",
 					"cell-9",
 					"cell-10",
@@ -3311,7 +3331,7 @@ describe("TUI terminal-state regressions", () => {
 				term.write("bash$ ");
 				await term.flush();
 
-				expect(visible(term)).toEqual(["omp0", "omp1", "omp2", "bash$", ""]);
+				expect(viewportRows(term)).toEqual(["omp0", "omp1", "omp2", "bash$", ""]);
 			} finally {
 				if (!stopped) tui.stop();
 			}
@@ -3336,13 +3356,13 @@ describe("TUI terminal-state regressions", () => {
 				});
 				await settleFrames(term, tui);
 
-				expect(visible(term)[2]?.includes("OVERLAY-0")).toBeTruthy();
-				expect(visible(term)[3]?.includes("OVERLAY-1")).toBeTruthy();
+				expect(viewportRows(term)[2]?.includes("OVERLAY-0")).toBeTruthy();
+				expect(viewportRows(term)[3]?.includes("OVERLAY-1")).toBeTruthy();
 
 				handle.hide();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[2]?.trim()).toBe("base-2");
 				expect(viewport[3]?.trim()).toBe("base-3");
 			} finally {
@@ -3375,7 +3395,7 @@ describe("TUI terminal-state regressions", () => {
 				await settleFrames(term, tui);
 
 				expect(term.getScrollBuffer().some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
-				expect(visible(term).some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
+				expect(viewportRows(term).some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
 			} finally {
 				tui.stop();
 			}
@@ -3396,7 +3416,7 @@ describe("TUI terminal-state regressions", () => {
 						col: 0,
 					});
 					await settleFrames(term, tui);
-					expect(visible(term)).toEqual(["OV-0", "OV-1", "OV-2"]);
+					expect(viewportRows(term)).toEqual(["OV-0", "OV-1", "OV-2"]);
 
 					// Root cause: tmux disables destructive history rebuilds, so overlay
 					// removal that shrinks the composite frame must repaint the viewport;
@@ -3404,7 +3424,7 @@ describe("TUI terminal-state regressions", () => {
 					handle.hide();
 					await settleFrames(term, tui);
 
-					expect(visible(term)).toEqual(["base-0", "base-1", "base-2"]);
+					expect(viewportRows(term)).toEqual(["base-0", "base-1", "base-2"]);
 				} finally {
 					tui.stop();
 				}
@@ -3446,7 +3466,7 @@ describe("TUI terminal-state regressions", () => {
 				expect(modalWrites).toContain("\x1b[?1006h");
 				// … and never erased scrollback (ED3) or otherwise touched the transcript.
 				expect(modalWrites).not.toContain("\x1b[3J");
-				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
+				expect(viewportRows(term).some(line => line.includes("MODAL-0"))).toBeTrue();
 
 				const hideFrom = writes.length;
 				handle.hide();
@@ -3461,8 +3481,8 @@ describe("TUI terminal-state regressions", () => {
 				expect(hideWrites).toContain("\x1b[?1003l"); // motion tracking torn down too
 				expect(hideWrites).toContain("\x1b[?1000l");
 				// Transcript is back on the normal screen after leaving the alt buffer.
-				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
-				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+				expect(viewportRows(term).some(line => line.includes("base-"))).toBeTrue();
+				expect(viewportRows(term).some(line => line.includes("MODAL-0"))).toBeFalse();
 			} finally {
 				tui.stop();
 			}
@@ -3545,7 +3565,7 @@ describe("TUI terminal-state regressions", () => {
 				}
 
 				const expected = Array.from({ length: 3 }, (_v, j) => `iter-79-line-${j}`);
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]?.trim()).toBe(expected[0]);
 				expect(viewport[1]?.trim()).toBe(expected[1]);
 				expect(viewport[2]?.trim()).toBe(expected[2]);
@@ -3602,7 +3622,7 @@ describe("TUI terminal-state regressions", () => {
 
 				// One terminal row per logical line — the boundary row did not wrap.
 				expect(term.getScrollBuffer().length).toBe(height);
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]).toBe("header");
 				expect(viewport[2]).toBe("tail");
 				expect(viewport[1]?.startsWith("B".repeat(18))).toBe(true);
@@ -3648,7 +3668,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 
-				const viewport = visible(term);
+				const viewport = viewportRows(term);
 				expect(viewport[0]).toBe("row-0");
 				expect(viewport[2]).toBe("EDITED");
 				expect(viewport[3]).toBe("row-3");
@@ -3830,7 +3850,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 				expect(backgroundRows(term, height)).toEqual([1]);
-				expect(visible(term)[2]).toBe("EDITED-2");
+				expect(viewportRows(term)[2]).toBe("EDITED-2");
 
 				// Shrink path: the cleared trailing row must come back as a
 				// default-background blank, not a red bar.
@@ -3838,7 +3858,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settleFrames(term, tui);
 				expect(backgroundRows(term, height)).toEqual([1]);
-				expect(visible(term)[2]).toBe("");
+				expect(viewportRows(term)[2]).toBe("");
 			} finally {
 				tui.stop();
 			}
@@ -4380,7 +4400,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			tui.start();
 			await settleFrames(term, tui);
 			// The header has scrolled above the viewport top (offscreen).
-			expect(visible(term)).toEqual(["code-148", "code-149", "code-150", "loader", "todos", "editor"]);
+			expect(viewportRows(term)).toEqual(["code-148", "code-149", "code-150", "loader", "todos", "editor"]);
 
 			// Frame B: the offscreen header ticks (0s -> 1s) AND four notification
 			// chips inject between the tool and the footer — an offscreen-edit grow
@@ -4407,7 +4427,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			component.setLines(frameB);
 			tui.requestRender();
 			await settleFrames(term, tui);
-			expect(visible(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
+			expect(viewportRows(term)).toEqual(["chip-1", "chip-2", "chip-3", "loader", "todos", "editor"]);
 
 			// Frame C: a visible chip collapses (a shrink whose first change lands in
 			// the visible region) while the header does NOT tick this frame. The
@@ -4435,7 +4455,7 @@ describe("foreground-tool streaming on ED3-risk terminals", () => {
 			component.setLines(frameC);
 			tui.requestRender();
 			await settleFrames(term, tui);
-			expect(visible(term)).toEqual(["chip-1", "chip-2", "loader", "todos", "editor", ""]);
+			expect(viewportRows(term)).toEqual(["chip-1", "chip-2", "loader", "todos", "editor", ""]);
 		} finally {
 			tui.stop();
 		}

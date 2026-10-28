@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI, type ViewportTailProvider } from "@veyyon/tui";
 import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
-import { captureWrites } from "./helpers/terminal-output";
+import { captureWrites, viewportRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Outside a multiplexer a resize used to erase-and-replay the whole transcript
@@ -109,10 +109,6 @@ class DeferScheduler implements RenderScheduler {
 	}
 }
 
-function visible(term: VirtualTerminal): string[] {
-	return term.getViewport().map(line => line.trimEnd());
-}
-
 function eraseScrollbackCount(writes: string[]): number {
 	return writes.filter(chunk => chunk.includes("\x1b[3J")).length;
 }
@@ -206,7 +202,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 
 				// The viewport still shows the bottom of the transcript, rewrapped
 				// at the new width.
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
@@ -254,7 +250,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 					expect(buffer.filter(line => line === `b${i}-x`).length).toBe(1);
 					expect(buffer.filter(line => line === `b${i}-y`).length).toBe(1);
 				}
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
@@ -349,7 +345,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				expect(tui.resizeViewportActive).toBe(false);
 				expect(tui.fullRedraws).toBe(baselineFull + 1);
 				expect(eraseScrollbackCount(writes)).toBe(1);
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
@@ -405,7 +401,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				expect(drag).toContain(ALT_SCREEN_ENTER);
 				expect(drag).not.toContain("\x1b[2J");
 				expect(drag).not.toContain("\x1b[3J");
-				expect(visible(term)).toEqual(expected);
+				expect(viewportRows(term)).toEqual(expected);
 
 				const dragWrites = writes.length;
 				await scheduler.flushAll(term);
@@ -413,7 +409,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				const settle = writes.slice(dragWrites).join("");
 				expect(settle).toContain(ALT_SCREEN_EXIT);
 				expect(settle.indexOf(ALT_SCREEN_EXIT)).toBeLessThan(settle.indexOf("\x1b[3J"));
-				expect(visible(term)).toEqual(expected);
+				expect(viewportRows(term)).toEqual(expected);
 			} finally {
 				tui.stop();
 			}
@@ -509,7 +505,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 				await scheduler.flushAll(term);
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
