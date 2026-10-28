@@ -39,7 +39,6 @@ class SlowVirtualSocket extends EventEmitter {
 	}
 
 	write(chunk: string): boolean {
-		const previousLength = this.writableLength;
 		this.writableLength += Buffer.byteLength(chunk);
 		this.peakWritableLength = Math.max(this.peakWritableLength, this.writableLength);
 		for (const line of chunk.split("\n")) {
@@ -154,7 +153,9 @@ test("a history replay and late delivery replay larger than the send limit waits
 	const deliveryCount = 50;
 	const allSettled = Promise.withResolvers<void>();
 	const seeder = new FastVirtualSocket(() => {
-		const settled = seeder.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.state === "delivered").length;
+		const settled = seeder.frames.filter(
+			frame => frame.event?.kind === "delivery" && frame.event.state === "delivered",
+		).length;
 		if (settled >= deliveryCount) allSettled.resolve();
 	});
 	cleanup.push(() => {
@@ -163,17 +164,20 @@ test("a history replay and late delivery replay larger than the send limit waits
 	accept?.(seeder as unknown as transport.TerminalSocket);
 
 	for (let index = 0; index < deliveryCount; index++) {
-		seeder.emit("data", `${JSON.stringify({
-			version: 1,
-			token: owner.token,
-			sessionId: owner.sessionId,
-			id: `ack-${index}`,
-			op: "deliver",
-			text: `msg-${index}`,
-			mode: "auto",
-			ack: true,
-			messageId: `m-${index}`,
-		})}\n`);
+		seeder.emit(
+			"data",
+			`${JSON.stringify({
+				version: 1,
+				token: owner.token,
+				sessionId: owner.sessionId,
+				id: `ack-${index}`,
+				op: "deliver",
+				text: `msg-${index}`,
+				mode: "auto",
+				ack: true,
+				messageId: `m-${index}`,
+			})}\n`,
+		);
 	}
 	await allSettled.promise;
 	seeder.destroy();
@@ -186,11 +190,19 @@ test("a history replay and late delivery replay larger than the send limit waits
 		}
 		socket.writableLength = 0;
 	};
-	socket.emit("data", `${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, id: "sub", op: "subscribe" })}\n`);
+	socket.emit(
+		"data",
+		`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, id: "sub", op: "subscribe" })}\n`,
+	);
 	await socket.replied.promise;
 
-	const expectedIds = [...Array.from({ length: 400 }, (_, index) => `e-${index}`), ...Array.from({ length: 1001 }, (_, index) => `new-${String(index).padStart(4, "0")}`)];
-	const receivedIds = socket.frames.flatMap(frame => frame.event?.kind === "history" ? (frame.event.entries ?? []).map(entry => entry.entryId) : []);
+	const expectedIds = [
+		...Array.from({ length: 400 }, (_, index) => `e-${index}`),
+		...Array.from({ length: 1001 }, (_, index) => `new-${String(index).padStart(4, "0")}`),
+	];
+	const receivedIds = socket.frames.flatMap(frame =>
+		frame.event?.kind === "history" ? (frame.event.entries ?? []).map(entry => entry.entryId) : [],
+	);
 	expect(socket.destroyed).toBe(false);
 	expect(socket.frames.find(frame => frame.id === "sub")?.ok).toBe(true);
 	expect(receivedIds).toEqual(expectedIds);

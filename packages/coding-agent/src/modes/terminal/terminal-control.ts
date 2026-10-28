@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
-import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
+import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {

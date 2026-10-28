@@ -60,7 +60,10 @@ function connect(owner: TerminalOwner) {
 		socket.destroy();
 	});
 	const frames: Record<string, any>[] = [];
-	const waiters: Array<{ match: (frame: Record<string, any>) => boolean; done: (frame: Record<string, any>) => void }> = [];
+	const waiters: Array<{
+		match: (frame: Record<string, any>) => boolean;
+		done: (frame: Record<string, any>) => void;
+	}> = [];
 	let buffer = "";
 	socket.setEncoding("utf8");
 	socket.on("data", chunk => {
@@ -77,7 +80,9 @@ function connect(owner: TerminalOwner) {
 	});
 	return {
 		send(request: Record<string, unknown>) {
-			socket.write(`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...request })}\n`);
+			socket.write(
+				`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...request })}\n`,
+			);
 		},
 		/** Resolves with the first frame, seen or future, that matches. Bounded against a dead socket. */
 		next(match: (frame: Record<string, any>) => boolean): Promise<Record<string, any>> {
@@ -194,9 +199,7 @@ test("a request without ack keeps the original reply, and a bad message id is re
 		result: "started",
 	});
 	expect((await rpc(owner, "deliver", { text: "x", mode: "auto", ack: true })).response.ok).toBe(false);
-	expect((await rpc(owner, "deliver", { text: "x", mode: "auto", ack: true, messageId: "" })).response.ok).toBe(
-		false,
-	);
+	expect((await rpc(owner, "deliver", { text: "x", mode: "auto", ack: true, messageId: "" })).response.ok).toBe(false);
 });
 
 test("history converts only new entries on a leaf change, and the frame stays bounded", async () => {
@@ -249,7 +252,12 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 	for (let step = 0; step < 50; step++) {
 		add(1);
 		const next = await rpc(owner, "subscribe");
-		expect(next.events.filter(event => event.kind === "history").flatMap(event => event.entries).at(-1).entryId).toBe(`e${BASE + step}`);
+		expect(
+			next.events
+				.filter(event => event.kind === "history")
+				.flatMap(event => event.entries)
+				.at(-1).entryId,
+		).toBe(`e${BASE + step}`);
 	}
 	// Old code converted every assistant entry on each of the 51 leaf changes: 1,020,000 calls.
 	expect(conversions).toBe(BASE + 50);
@@ -258,7 +266,12 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 	journal.splice(0, 10);
 	add(1);
 	const rebuilt = await rpc(owner, "subscribe");
-	expect(rebuilt.events.filter(event => event.kind === "history").flatMap(event => event.entries).at(-1).entryId).toBe(`e${BASE + 50}`);
+	expect(
+		rebuilt.events
+			.filter(event => event.kind === "history")
+			.flatMap(event => event.entries)
+			.at(-1).entryId,
+	).toBe(`e${BASE + 50}`);
 	expect(conversions).toBe(BASE + 50 + journal.length);
 });
 

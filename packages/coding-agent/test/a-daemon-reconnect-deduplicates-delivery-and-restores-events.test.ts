@@ -70,7 +70,9 @@ function connect(owner: TerminalOwner) {
 	return {
 		socket,
 		send(request: Record<string, unknown>) {
-			socket.write(`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...request })}\n`);
+			socket.write(
+				`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...request })}\n`,
+			);
 		},
 		next(match: (frame: ControlFrame) => boolean): Promise<ControlFrame> {
 			const index = frames.findIndex(match);
@@ -101,7 +103,11 @@ async function serve(
 	const identity = identityRef ?? { sessionId };
 	const close = await serveTerminalControl(
 		{
-			identity: () => ({ sessionId: identity.sessionId, cwd: root, sessionFile: path.join(root, `${identity.sessionId}.jsonl`) }),
+			identity: () => ({
+				sessionId: identity.sessionId,
+				cwd: root,
+				sessionFile: path.join(root, `${identity.sessionId}.jsonl`),
+			}),
 			deliver,
 			abort: async () => false,
 			history: getHistory ?? (() => [{ entryId: "e-0", text: "initial entry" }]),
@@ -237,7 +243,11 @@ test("a reconnected subscriber with a cursor receives only missed history entrie
 		{ entryId: "e-1", text: "turn 1" },
 		{ entryId: "e-2", text: "turn 2" },
 	];
-	const owner = await serve(async () => "steered", "sess-cursor", () => historyEntries);
+	const owner = await serve(
+		async () => "steered",
+		"sess-cursor",
+		() => historyEntries,
+	);
 
 	// Client 1 connects and subscribes with cursor "e-0": receives only entries after e-0
 	const client1 = connect(owner);
@@ -267,8 +277,15 @@ test("a reconnected subscriber with a cursor receives only missed history entrie
 });
 
 test("cursor replay sends every missed entry in bounded history frames", async () => {
-	const historyEntries = Array.from({ length: 1201 }, (_, index) => ({ entryId: `e-${index}`, text: `turn ${index}` }));
-	const owner = await serve(async () => "ok", "sess-large-history", () => historyEntries);
+	const historyEntries = Array.from({ length: 1201 }, (_, index) => ({
+		entryId: `e-${index}`,
+		text: `turn ${index}`,
+	}));
+	const owner = await serve(
+		async () => "ok",
+		"sess-large-history",
+		() => historyEntries,
+	);
 	const client = connect(owner);
 	client.send({ id: "sub-large", op: "subscribe", cursor: "e-0" });
 	await client.next(frame => frame.id === "sub-large");
@@ -296,7 +313,14 @@ test("a busy rejection does not retain the message id after the delivery queue d
 	});
 	const client = connect(owner);
 	for (let index = 0; index < 64; index++) {
-		client.send({ id: `fill-${index}`, op: "deliver", text: "queued", mode: "auto", ack: true, messageId: `fill-${index}` });
+		client.send({
+			id: `fill-${index}`,
+			op: "deliver",
+			text: "queued",
+			mode: "auto",
+			ack: true,
+			messageId: `fill-${index}`,
+		});
 		await client.next(frame => frame.id === `fill-${index}`);
 	}
 	client.send({ id: "busy-first", op: "deliver", text: "retry me", mode: "auto", ack: true, messageId: "busy-retry" });
@@ -306,7 +330,14 @@ test("a busy rejection does not retain the message id after the delivery queue d
 	gate.resolve();
 	await callsReached;
 	for (let index = 0; index < 64; index++) await client.next(frame => frame.event?.kind === "delivery");
-	client.send({ id: "busy-retry-again", op: "deliver", text: "retry me", mode: "auto", ack: true, messageId: "busy-retry" });
+	client.send({
+		id: "busy-retry-again",
+		op: "deliver",
+		text: "retry me",
+		mode: "auto",
+		ack: true,
+		messageId: "busy-retry",
+	});
 	const accepted = await client.next(frame => frame.id === "busy-retry-again");
 	expect(accepted.result).toMatchObject({ accepted: true, messageId: "busy-retry", state: "pending" });
 });
@@ -321,7 +352,14 @@ test("a busy rejection of a plain delivery leaves its message id retryable", asy
 	});
 	const client = connect(owner);
 	for (let index = 0; index < 64; index++) {
-		client.send({ id: `fill-${index}`, op: "deliver", text: "queued", mode: "auto", ack: true, messageId: `fill-${index}` });
+		client.send({
+			id: `fill-${index}`,
+			op: "deliver",
+			text: "queued",
+			mode: "auto",
+			ack: true,
+			messageId: `fill-${index}`,
+		});
 		await client.next(frame => frame.id === `fill-${index}`);
 	}
 	client.send({ id: "plain-busy", op: "deliver", text: "plain retry", mode: "auto", messageId: "plain-retry" });
@@ -336,19 +374,28 @@ test("a busy rejection of a plain delivery leaves its message id retryable", asy
 	expect(delivered.filter(text => text === "plain retry")).toHaveLength(1);
 });
 
-
 test("message ids and delivery announcements stay within their accepting session", async () => {
 	const identity = { sessionId: "sess-before-switch" };
 	const gate = Promise.withResolvers<void>();
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-reconnect-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
-	const close = await serveTerminalControl({
-		identity: () => ({ sessionId: identity.sessionId, cwd: root, sessionFile: path.join(root, `${identity.sessionId}.jsonl`) }),
-		deliver: async text => { await gate.promise; return text; },
-		abort: async () => false,
-		history: () => [],
-		subscribe: () => () => {},
-	}, root);
+	const close = await serveTerminalControl(
+		{
+			identity: () => ({
+				sessionId: identity.sessionId,
+				cwd: root,
+				sessionFile: path.join(root, `${identity.sessionId}.jsonl`),
+			}),
+			deliver: async text => {
+				await gate.promise;
+				return text;
+			},
+			abort: async () => false,
+			history: () => [],
+			subscribe: () => () => {},
+		},
+		root,
+	);
 	cleanup.push(close);
 	const owner = await readOwner(root);
 	const oldClient = connect(owner);
@@ -370,8 +417,14 @@ test("message ids and delivery announcements stay within their accepting session
 	const accepted = await newClient.next(frame => frame.id === "new-ack");
 	expect(accepted.result).toMatchObject({ accepted: true, messageId: "same-id", state: "pending" });
 	gate.resolve();
-	const newOutcome = await newClient.next(frame => frame.event?.kind === "delivery" && frame.event?.messageId === "same-id");
-	expect(newOutcome.event).toMatchObject({ sessionId: "sess-after-switch", state: "delivered", outcome: "new-session" });
+	const newOutcome = await newClient.next(
+		frame => frame.event?.kind === "delivery" && frame.event?.messageId === "same-id",
+	);
+	expect(newOutcome.event).toMatchObject({
+		sessionId: "sess-after-switch",
+		state: "delivered",
+		outcome: "new-session",
+	});
 });
 
 test("an exhausted terminal-not-ready delivery can retry with the same message id", async () => {
@@ -657,10 +710,14 @@ test("a delivery settling during large history replay reaches its acking subscri
 		entryId: `e-${index}`,
 		text: `turn ${index} ${"x".repeat(1024)}`,
 	}));
-	const owner = await serve(async () => {
-		await gate.promise;
-		return "during-replay";
-	}, "sess-replay-race", () => history);
+	const owner = await serve(
+		async () => {
+			await gate.promise;
+			return "during-replay";
+		},
+		"sess-replay-race",
+		() => history,
+	);
 	const client = connect(owner);
 	client.send({ id: "ack-race", op: "deliver", text: "race", mode: "auto", ack: true, messageId: "m-race" });
 	expect((await client.next(frame => frame.id === "ack-race")).result).toMatchObject({
@@ -685,7 +742,9 @@ test("a delivery settling during large history replay reaches its acking subscri
 	await client.next(frame => frame.id === "ping-race");
 
 	expect(historyFrames).toBe(12);
-	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-race")).toHaveLength(0);
+	expect(
+		client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-race"),
+	).toHaveLength(0);
 });
 
 // WHY: A settled ack is announced to its socket before that socket subscribes, then subscribe replay
@@ -704,7 +763,9 @@ test("a settled ack followed by subscribe on the same socket has one delivery fr
 	client.send({ id: "ping-after-sub", op: "ping" });
 	await client.next(frame => frame.id === "ping-after-sub");
 
-	expect(client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-settled")).toHaveLength(0);
+	expect(
+		client.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.messageId === "m-settled"),
+	).toHaveLength(0);
 });
 
 // WHY: A long-lived terminal session may stream thousands of history entries over time.
@@ -712,9 +773,7 @@ test("a settled ack followed by subscribe on the same socket has one delivery fr
 // GAP: entries are pushed in batches over a real Unix/Windows socket, not synthesized in-process.
 test("a long-lived subscriber bounds history receipt memory when more than 1000 entries are appended", async () => {
 	let emitAppended: ((event: unknown) => void) | undefined;
-	const history: Array<{ entryId: string; text: string }> = [
-		{ entryId: "e-0", text: "initial entry" },
-	];
+	const history: Array<{ entryId: string; text: string }> = [{ entryId: "e-0", text: "initial entry" }];
 	const owner = await serve(
 		async () => "done",
 		"sess-bounded-history",
@@ -722,7 +781,9 @@ test("a long-lived subscriber bounds history receipt memory when more than 1000 
 		undefined,
 		listener => {
 			emitAppended = listener;
-			return () => { emitAppended = undefined; };
+			return () => {
+				emitAppended = undefined;
+			};
 		},
 	);
 
@@ -751,7 +812,9 @@ test("a long-lived subscriber bounds history receipt memory when more than 1000 
 	client.send({ id: "ping-bounded-history", op: "ping" });
 	await client.next(frame => frame.id === "ping-bounded-history");
 
-	const receivedAppendedEntries = client.frames.flatMap(frame => frame.event?.kind === "appended" ? (frame.event.entries ?? []) : []);
+	const receivedAppendedEntries = client.frames.flatMap(frame =>
+		frame.event?.kind === "appended" ? (frame.event.entries ?? []) : [],
+	);
 	expect(receivedAppendedEntries).toHaveLength(appendCount);
 	expect(receivedAppendedEntries.at(-1)?.entryId).toBe(`e-${appendCount}`);
 	expect(historySizes.length).toBeGreaterThan(1000);
@@ -800,7 +863,11 @@ test("a long-lived subscriber bounds delivery receipt memory and updates on retr
 		}
 		for (let i = 0; i < batchSize; i++) {
 			const index = batchStart + i;
-			receivedDeliveries.push(await client.next(frame => frame.event?.kind === "delivery" && frame.event.messageId === `m-bounded-${index}`));
+			receivedDeliveries.push(
+				await client.next(
+					frame => frame.event?.kind === "delivery" && frame.event.messageId === `m-bounded-${index}`,
+				),
+			);
 		}
 	}
 	expect(deliverySizes.length).toBeGreaterThan(256);
