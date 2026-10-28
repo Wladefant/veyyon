@@ -8,6 +8,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -56,28 +57,12 @@ describe("write→read→edit→read chain adversarial", () => {
 		});
 	}
 
-	function editOpts(sess: ToolSession, input: string) {
-		return {
-			session: sess,
-			input,
-			writethrough: async (targetPath: string, content: string) => {
-				await Bun.write(targetPath, content);
-				return undefined;
-			},
-			beginDeferredDiagnosticsForPath: () => ({
-				onDeferredDiagnostics: () => {},
-				signal: new AbortController().signal,
-				finalize: () => {},
-			}),
-		};
-	}
-
 	it("write three lines, SWAP middle, disk is exact", async () => {
 		const s = session();
 		const file = path.join(tmpDir, "m.ts");
 		await new WriteTool(s).execute("w", { path: file, content: "L1\nL2\nL3\n" });
 		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nSWAP 2.=2:\n+MID\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 2.=2:\n+MID\n`, s));
 		expect(await Bun.file(file).text()).toBe("L1\nMID\nL3\n");
 		const after = toolResultText(await new ReadTool(s).execute("r2", { path: file }));
 		expect(after).toContain("MID");
@@ -90,7 +75,7 @@ describe("write→read→edit→read chain adversarial", () => {
 		const file = path.join(tmpDir, "t.ts");
 		await new WriteTool(s).execute("w", { path: file, content: "only\n" });
 		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nINS.TAIL:\n+tail\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nINS.TAIL:\n+tail\n`, s));
 		expect(await Bun.file(file).text()).toBe("only\ntail\n");
 	});
 
@@ -99,7 +84,7 @@ describe("write→read→edit→read chain adversarial", () => {
 		const file = path.join(tmpDir, "d.ts");
 		await new WriteTool(s).execute("w", { path: file, content: "a\nb\nc\n" });
 		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nDEL 3.=3\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nDEL 3.=3\n`, s));
 		expect(await Bun.file(file).text()).toBe("a\nb\n");
 	});
 });

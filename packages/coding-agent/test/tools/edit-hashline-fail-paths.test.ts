@@ -7,6 +7,7 @@ import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -58,29 +59,13 @@ describe("edit hashline fail paths", () => {
 		});
 	}
 
-	function editOpts(sess: ToolSession, input: string) {
-		return {
-			session: sess,
-			input,
-			writethrough: async (targetPath: string, content: string) => {
-				await Bun.write(targetPath, content);
-				return undefined;
-			},
-			beginDeferredDiagnosticsForPath: () => ({
-				onDeferredDiagnostics: () => {},
-				signal: new AbortController().signal,
-				finalize: () => {},
-			}),
-		};
-	}
-
 	it("read → SWAP → disk matches the edited content", async () => {
 		const filePath = path.join(tmpDir, "m.ts");
 		await Bun.write(filePath, "alpha\nbeta\n");
 		const sess = session();
 		const header = toolResultText(await new ReadTool(sess).execute("r", { path: filePath })).split("\n")[0]!;
 		expect(header).toMatch(/^\[.+#[0-9A-Fa-f]{4}\]$/);
-		const result = await executeHashlineSingle(editOpts(sess, `${header}\nSWAP 1.=1:\n+ALPHA\n`));
+		const result = await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+ALPHA\n`, sess));
 		const out = toolResultText(result);
 		expect(out.toLowerCase()).not.toContain("file not found");
 		expect(await Bun.file(filePath).text()).toBe("ALPHA\nbeta\n");
@@ -96,7 +81,9 @@ describe("edit hashline fail paths", () => {
 		// channel carried the rejection and assert on it.
 		let surfaced: string;
 		try {
-			surfaced = toolResultText(await executeHashlineSingle(editOpts(sess, `[${rel}#dead]\nSWAP 1.=1:\n+NOPE\n`)));
+			surfaced = toolResultText(
+				await executeHashlineSingle(hashlineExecOptions(`[${rel}#dead]\nSWAP 1.=1:\n+NOPE\n`, sess)),
+			);
 		} catch (e) {
 			surfaced = e instanceof Error ? e.message : String(e);
 		}
@@ -118,7 +105,7 @@ describe("edit hashline fail paths", () => {
 		const header = toolResultText(await new ReadTool(sess).execute("r", { path: filePath })).split("\n")[0]!;
 		let errText = "";
 		try {
-			const result = await executeHashlineSingle(editOpts(sess, `${header}\nSWAP 1.=1:\n+same\n`));
+			const result = await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+same\n`, sess));
 			errText = toolResultText(result);
 		} catch (e) {
 			errText = String(e);
@@ -132,7 +119,7 @@ describe("edit hashline fail paths", () => {
 		const missing = path.join(tmpDir, "ghost.ts");
 		let failed = false;
 		try {
-			await executeHashlineSingle(editOpts(sess, `[ghost.ts#abcd]\nSWAP 1.=1:\n+x\n`));
+			await executeHashlineSingle(hashlineExecOptions(`[ghost.ts#abcd]\nSWAP 1.=1:\n+x\n`, sess));
 		} catch {
 			failed = true;
 		}
@@ -146,7 +133,7 @@ describe("edit hashline fail paths", () => {
 		await Bun.write(filePath, "keep-first\nchange-me\n");
 		const sess = session();
 		const header = toolResultText(await new ReadTool(sess).execute("r", { path: filePath })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(sess, `${header}\nSWAP 2.=2:\n+CHANGED\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 2.=2:\n+CHANGED\n`, sess));
 		expect(await Bun.file(filePath).text()).toBe("keep-first\nCHANGED\n");
 	});
 
@@ -155,11 +142,11 @@ describe("edit hashline fail paths", () => {
 		await Bun.write(filePath, "A\nB\nC\n");
 		const sess = session();
 		const h1 = toolResultText(await new ReadTool(sess).execute("r1", { path: filePath })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(sess, `${h1}\nSWAP 1.=1:\n+A2\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${h1}\nSWAP 1.=1:\n+A2\n`, sess));
 		expect(await Bun.file(filePath).text()).toBe("A2\nB\nC\n");
 		const h2 = toolResultText(await new ReadTool(sess).execute("r2", { path: filePath })).split("\n")[0]!;
 		expect(h2).not.toBe(h1);
-		await executeHashlineSingle(editOpts(sess, `${h2}\nSWAP 3.=3:\n+C2\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${h2}\nSWAP 3.=3:\n+C2\n`, sess));
 		expect(await Bun.file(filePath).text()).toBe("A2\nB\nC2\n");
 	});
 
@@ -171,7 +158,7 @@ describe("edit hashline fail paths", () => {
 		await Bun.write(filePath, "v2-external\n");
 		let failed = false;
 		try {
-			await executeHashlineSingle(editOpts(sess, `${staleHeader}\nSWAP 1.=1:\n+MODEL\n`));
+			await executeHashlineSingle(hashlineExecOptions(`${staleHeader}\nSWAP 1.=1:\n+MODEL\n`, sess));
 		} catch {
 			failed = true;
 		}
@@ -192,7 +179,7 @@ describe("edit hashline fail paths", () => {
 		await Bun.write(filePath, "const 名前 = 1;\n");
 		const sess = session();
 		const header = toolResultText(await new ReadTool(sess).execute("r", { path: filePath })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(sess, `${header}\nSWAP 1.=1:\n+const 名前 = 2;\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+const 名前 = 2;\n`, sess));
 		expect(await Bun.file(filePath).text()).toBe("const 名前 = 2;\n");
 	});
 });

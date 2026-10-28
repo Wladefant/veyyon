@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "./helpers/hashline-exec";
 import { toolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -28,22 +29,6 @@ function createSession(cwd: string): ToolSession {
 		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
 		settings,
 	});
-}
-
-function editOptions(session: ToolSession, input: string): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await Bun.write(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
 }
 
 // Regression: reading a file *outside* the session cwd (e.g. `~/.claude/settings.json`)
@@ -78,7 +63,7 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		expect(header).toMatch(/^\[.+settings\.json#[0-9A-F]{4}\]$/);
 		expect(header).toContain(path.basename(outDir));
 
-		const result = await executeHashlineSingle(editOptions(session, `${header}\nSWAP 1.=1:\n+ALPHA\n`));
+		const result = await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+ALPHA\n`, session));
 		const resultText = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
 
 		expect(resultText).not.toContain("File not found");

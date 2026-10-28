@@ -18,11 +18,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
@@ -40,22 +41,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
 		enableLsp: false,
 	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
 }
 
 function tagFromOutput(text: string, file: string): string {
@@ -98,7 +83,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 		expect(await fs.readFile(original, "utf8")).toBe(CONTENT);
 	});
@@ -108,7 +93,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 		const tag = tagFromOutput(toolResultText(hit), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("NEEDLE line 20\n", "EDITED\n"));
 	});
 
@@ -118,7 +103,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 		await copyAndReadTail(tag);
 
 		await expect(
-			executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT);
 	});

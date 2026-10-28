@@ -20,12 +20,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 29 ? "NEEDLE line 30" : `line ${i + 1}`));
@@ -49,22 +50,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
 		enableLsp: false,
 	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
 }
 
 function tagFromOutput(text: string, file: string): string {
@@ -113,7 +98,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
 		expect(tagFromOutput(toolResultText(reread), file)).toBe(tag);
 
-		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 	});
 
@@ -130,7 +115,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		const hit = await new SearchTool(session).execute("s2", { type: "text", input: "NEEDLE", path: file });
 		expect(tagFromOutput(toolResultText(hit), file)).toBe(tag);
 
-		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 	});
 
@@ -143,7 +128,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
 
 		await expect(
-			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 18.=18:\n+EDITED`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 18.=18:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT);
 	});
@@ -155,14 +140,14 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		}
 		expectEvicted();
 		const edited = toolResultText(
-			await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
+			await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
 		);
 		const editedTag = tagFromOutput(edited, file);
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
 		expect(tagFromOutput(toolResultText(reread), file)).toBe(editedTag);
 
 		await executeHashlineSingle(
-			execOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),
+			hashlineExecOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),
 		);
 		expect(await fs.readFile(file, "utf8")).toBe(
 			CONTENT.replace("line 1\nline 2\nline 3\n", "ONE\nTWO\nTHREE\n").replace("line 35\n", "LATER\n"),

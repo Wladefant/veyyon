@@ -19,11 +19,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
@@ -45,22 +46,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
 		enableLsp: false,
 	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
 }
 
 function tagFromOutput(text: string, file: string): string {
@@ -98,7 +83,7 @@ describe("a line read before an outside change left it in place stays editable",
 		await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = await changeAndReadTail(FORMATTED);
 
-		await executeHashlineSingle(execOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED.replace("line 2\n", "EDITED\n"));
 	});
 
@@ -106,7 +91,7 @@ describe("a line read before an outside change left it in place stays editable",
 		await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: file });
 		const tag = await changeAndReadTail(FORMATTED);
 
-		await executeHashlineSingle(execOptions(`[probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED.replace("NEEDLE line 20\n", "EDITED\n"));
 	});
 
@@ -115,7 +100,7 @@ describe("a line read before an outside change left it in place stays editable",
 		const tag = await changeAndReadTail(SHIFTED);
 
 		await expect(
-			executeHashlineSingle(execOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(file, "utf8")).toBe(SHIFTED);
 	});

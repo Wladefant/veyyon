@@ -8,6 +8,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -56,28 +57,12 @@ describe("write→read→multi-line SWAP adversarial", () => {
 		});
 	}
 
-	function editOpts(sess: ToolSession, input: string) {
-		return {
-			session: sess,
-			input,
-			writethrough: async (targetPath: string, content: string) => {
-				await Bun.write(targetPath, content);
-				return undefined;
-			},
-			beginDeferredDiagnosticsForPath: () => ({
-				onDeferredDiagnostics: () => {},
-				signal: new AbortController().signal,
-				finalize: () => {},
-			}),
-		};
-	}
-
 	it("SWAP 2.=3 replaces two lines with three", async () => {
 		const s = session();
 		const file = path.join(tmpDir, "m.ts");
 		await new WriteTool(s).execute("w", { path: file, content: "L1\nL2\nL3\nL4\n" });
 		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nSWAP 2.=3:\n+A\n+B\n+C\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 2.=3:\n+A\n+B\n+C\n`, s));
 		expect(await Bun.file(file).text()).toBe("L1\nA\nB\nC\nL4\n");
 	});
 });

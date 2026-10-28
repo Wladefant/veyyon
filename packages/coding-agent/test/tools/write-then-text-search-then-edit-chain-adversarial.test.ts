@@ -9,6 +9,7 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -57,22 +58,6 @@ describe("write→search(text)→edit→search(text) chain adversarial", () => {
 		});
 	}
 
-	function editOpts(sess: ToolSession, input: string) {
-		return {
-			session: sess,
-			input,
-			writethrough: async (targetPath: string, content: string) => {
-				await Bun.write(targetPath, content);
-				return undefined;
-			},
-			beginDeferredDiagnosticsForPath: () => ({
-				onDeferredDiagnostics: () => {},
-				signal: new AbortController().signal,
-				finalize: () => {},
-			}),
-		};
-	}
-
 	it("token is replaced and old token disappears from grep", async () => {
 		const s = session();
 		const file = path.join(tmpDir, "chain.ts");
@@ -87,7 +72,7 @@ describe("write→search(text)→edit→search(text) chain adversarial", () => {
 		).toContain(oldTok);
 
 		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nSWAP 1.=1:\n+const x = '${newTok}';\n`));
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+const x = '${newTok}';\n`, s));
 		expect(await Bun.file(file).text()).toBe(`const x = '${newTok}';\n`);
 		expect(
 			toolResultText(await new SearchTool(s).execute("g2", { type: "text", input: newTok, path: file })),
