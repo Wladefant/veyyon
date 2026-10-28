@@ -74,16 +74,6 @@ function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleRe
 	};
 }
 
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
 async function pollUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
 	const start = Date.now();
 	while (!predicate()) {
@@ -247,7 +237,7 @@ describe("task spawn routing", () => {
 			agents: [taskAgent],
 			projectAgentsDir: null,
 		});
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			await gate.promise;
 			return makeResult(options.id ?? "?");
@@ -291,11 +281,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -333,11 +323,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -376,11 +366,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -444,11 +434,11 @@ describe("task spawn routing", () => {
 				projectAgentsDir: null,
 			});
 			const started: string[] = [];
-			const gates = new Map<string, Deferred>();
+			const gates = new Map<string, PromiseWithResolvers<void>>();
 			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 				const id = options.id ?? "?";
 				started.push(id);
-				const gate = deferred();
+				const gate = Promise.withResolvers<void>();
 				gates.set(id, gate);
 				await gate.promise;
 				return makeResult(id);
@@ -482,11 +472,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -535,11 +525,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);

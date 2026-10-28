@@ -32,14 +32,6 @@ function makeSessionStub(dispose?: () => Promise<void>, flush?: () => Promise<vo
 	};
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>(r => {
-		resolve = r;
-	});
-	return { promise, resolve };
-}
-
 /** Settle the async park chain (timer callback → park() → dispose → setStatus). */
 async function flushAsync(): Promise<void> {
 	for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -191,7 +183,7 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("concurrent ensureLive calls during a slow revive coalesce into one reviver run", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		let reviverRuns = 0;
 		registry.register({
@@ -509,7 +501,7 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("isParking is true exactly while park's dispose is in flight; parked only after it completes", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const stub = makeSessionStub(() => gate.promise);
 		registerIdleSub("7-Sub", stub.session);
 		lifecycle.adopt("7-Sub", { idleTtlMs: 0 });
@@ -559,7 +551,7 @@ describe("AgentLifecycleManager", () => {
 	 * never armed.
 	 */
 	it("drops the cold adoption when the ref's status changes during the reviver factory await", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		registry.register({
 			id: "Cold",
@@ -610,7 +602,7 @@ describe("AgentLifecycleManager", () => {
 	 * and the ref reads `idle` with a live session.
 	 */
 	it("refuses the wake and disposes the rebuilt session when the ref is aborted mid-revive", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		registry.register({
 			id: "Killed",

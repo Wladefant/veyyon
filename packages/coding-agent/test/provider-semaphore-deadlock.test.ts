@@ -15,24 +15,14 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { wrapStreamFnWithProviderConcurrency } from "@veyyon/coding-agent/task/provider-concurrency";
 import { requireBundledModel } from "../../agent/test/helpers";
 
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
 /**
- * Build a base StreamFn that gates each invocation through an externally
- * resolved Deferred, so the test can interleave parent and child turns
+ * Build a base StreamFn that gates each invocation on a promise the test
+ * resolves, so the test can interleave parent and child turns
  * deterministically without leaning on wall-clock timers.
  */
 function makeGatedStream(): {
 	stream: StreamFn;
-	gates: Deferred[];
+	gates: PromiseWithResolvers<void>[];
 	invocations: () => number;
 	inFlight: () => number;
 	peakInFlight: () => number;
@@ -40,9 +30,9 @@ function makeGatedStream(): {
 	let inFlight = 0;
 	let peakInFlight = 0;
 	let invocations = 0;
-	const gates: Deferred[] = [];
+	const gates: PromiseWithResolvers<void>[] = [];
 	const stream: StreamFn = model => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		gates.push(gate);
 		invocations++;
 		inFlight++;

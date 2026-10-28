@@ -35,16 +35,6 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { wrapStreamFnWithProviderConcurrency } from "@veyyon/coding-agent/task/provider-concurrency";
 import { requireBundledModel } from "../../agent/test/helpers";
 
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
 function makeAssistantMessage(text: string, model: Model): AssistantMessage {
 	return {
 		role: "assistant",
@@ -127,9 +117,9 @@ describe("issue #3751: compaction summaries respect provider concurrency cap", (
 
 		let inFlight = 0;
 		let peakInFlight = 0;
-		const gates: Deferred[] = [];
+		const gates: PromiseWithResolvers<void>[] = [];
 		const base: StreamFn = streamModel => {
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.push(gate);
 			inFlight++;
 			peakInFlight = Math.max(peakInFlight, inFlight);

@@ -24,14 +24,6 @@ const GLOBAL_KIND = "memory_consolidate_global";
 const PROJECT_CWD = "/repo";
 const GLOBAL_KEY = `global:${PROJECT_CWD}`;
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>(res => {
-		resolve = res;
-	});
-	return { promise, resolve };
-}
-
 function createMemoryTestModel(): Model {
 	return {
 		provider: "openai",
@@ -278,7 +270,7 @@ describe("memories/storage", () => {
 			"memories.threadScanLimit": 64,
 			"memories.phase2HeartbeatSeconds": 1,
 		});
-		const settled = deferred();
+		const settled = Promise.withResolvers<void>();
 		const session = {
 			sessionManager: {
 				getSessionFile: () => currentSessionFile,

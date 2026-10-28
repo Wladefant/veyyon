@@ -14,16 +14,6 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../agent/test/helpers";
 
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
 describe("issue #3464: ollama-cloud task backoff", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -99,9 +89,9 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 		let inFlight = 0;
 		let peakInFlight = 0;
 		let invocations = 0;
-		const gates: Deferred[] = [];
+		const gates: PromiseWithResolvers<void>[] = [];
 		const base: StreamFn = model => {
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.push(gate);
 			invocations++;
 			inFlight++;
@@ -175,7 +165,7 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 			() => {},
 		);
 
-		const nextStarted = deferred();
+		const nextStarted = Promise.withResolvers<void>();
 		const next = (async () => {
 			await semaphore.acquire();
 			nextStarted.resolve();
