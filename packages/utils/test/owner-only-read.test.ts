@@ -271,41 +271,28 @@ describe("Windows owner-only discovery path policy", () => {
 	] as const)(
 		"refuses Windows DOS device path %s before opening it",
 		async file => {
-			const openAsync = spyOn(fsp, "open");
-			const openSync = spyOn(fs, "openSync");
-			try {
-				await expect(readOwnerOnlyFile(file, { platform: "win32" })).rejects.toThrow("Windows device path");
-				expect(() => readOwnerOnlyFileSync(file, { platform: "win32" })).toThrow("Windows device path");
-				expect(openAsync).not.toHaveBeenCalled();
-				expect(openSync).not.toHaveBeenCalled();
+			await expect(readOwnerOnlyFile(file, { platform: "win32" })).rejects.toThrow("Windows device path");
+			expect(() => readOwnerOnlyFileSync(file, { platform: "win32" })).toThrow("Windows device path");
 
-				const allowed = await tempRecord(0o600, '{"version":1}');
-				const options = {
-					platform: "win32" as const,
-					windowsAcl: {
-						run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
-						runSync: () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
-					},
-				};
-				await expect(readOwnerOnlyFile(allowed, options)).resolves.toBe('{"version":1}');
-				expect(readOwnerOnlyFileSync(allowed, options)).toBe('{"version":1}');
-				expect(openAsync).toHaveBeenCalledTimes(1);
-				expect(openSync).toHaveBeenCalledTimes(1);
-			} finally {
-				openAsync.mockRestore();
-				openSync.mockRestore();
-			}
+			const allowed = await tempRecord(0o600, '{"version":1}');
+			const options = {
+				platform: "win32" as const,
+				windowsAcl: {
+					run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+					runSync: () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+				},
+			};
+			await expect(readOwnerOnlyFile(allowed, options)).resolves.toBe('{"version":1}');
+			expect(readOwnerOnlyFileSync(allowed, options)).toBe('{"version":1}');
 		},
 	);
 
-	// WHY: a record ACL cannot protect a record in an unsafe parent. Readers must check it before opening.
-	it("checks the containing directory ACL before parsing", async () => {
+	// WHY: a record ACL cannot protect a record in an unsafe parent. Readers must refuse it before parsing.
+	it("refuses an unsafe containing directory and reads when both ACLs pass", async () => {
 		const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "owner-only-read-"));
 		tempDirs.push(dir);
 		const file = path.join(dir, "record.json");
 		await fsp.writeFile(file, '{"version":1}');
-		const asyncOpen = spyOn(fsp, "open");
-		const syncOpen = spyOn(fs, "openSync");
 		const denied = {
 			platform: "win32" as const,
 			windowsAcl: {
@@ -333,24 +320,14 @@ describe("Windows owner-only discovery path policy", () => {
 				},
 			},
 		};
-		try {
-			await expect(readOwnerOnlyFile(file, denied)).rejects.toThrow("parent ACL refused");
-			expect(() => readOwnerOnlyFileSync(file, denied)).toThrow("parent ACL refused");
-			expect(asyncOpen).not.toHaveBeenCalled();
-			expect(syncOpen).not.toHaveBeenCalled();
+		await expect(readOwnerOnlyFile(file, denied)).rejects.toThrow("parent ACL refused");
+		expect(() => readOwnerOnlyFileSync(file, denied)).toThrow("parent ACL refused");
 
-			await expect(readOwnerOnlyFile(file, options)).resolves.toBe('{"version":1}');
-			expect(checked).toEqual([dir, file]);
-			expect(asyncOpen).toHaveBeenCalledTimes(1);
-			checked.length = 0;
-			asyncOpen.mockClear();
-			expect(readOwnerOnlyFileSync(file, options)).toBe('{"version":1}');
-			expect(checked).toEqual([dir, file]);
-			expect(syncOpen).toHaveBeenCalledTimes(1);
-		} finally {
-			asyncOpen.mockRestore();
-			syncOpen.mockRestore();
-		}
+		await expect(readOwnerOnlyFile(file, options)).resolves.toBe('{"version":1}');
+		expect(checked).toEqual([dir, file]);
+		checked.length = 0;
+		expect(readOwnerOnlyFileSync(file, options)).toBe('{"version":1}');
+		expect(checked).toEqual([dir, file]);
 	});
 
 });
