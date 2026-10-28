@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-10-28
+
+### Fixed
+
+- Nested lanes see their delegating ancestors separately from other lanes in IRC and receive their parent identity with the assignment ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
+
 ## [1.6.5] - 2026-10-28
 
 ## [1.6.4] - 2026-10-28
