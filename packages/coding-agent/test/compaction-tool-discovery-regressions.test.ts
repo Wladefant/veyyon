@@ -335,7 +335,7 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 		};
 		const session: CompactionSession = {
 			agent: new Agent({
-				initialState: { model, systemPrompt: "test system prompt", messages: [], tools: [] },
+				initialState: { model, systemPrompt: ["test system prompt"], messages: [], tools: [] },
 			}),
 			sessionManager,
 			settings,

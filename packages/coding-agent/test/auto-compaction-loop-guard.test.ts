@@ -134,7 +134,7 @@ function createCompactionRuntimeHarness(
 	const agent = new Agent({
 		initialState: {
 			model: state.model,
-			systemPrompt: "test system prompt",
+			systemPrompt: ["test system prompt"],
 			messages: [],
 			tools: [],
 		},
@@ -681,7 +681,7 @@ describe("AgentSession tool pruning after compaction (#685)", () => {
 		const agent = new Agent({
 			initialState: {
 				model: createMockModel(),
-				systemPrompt: "test system prompt",
+				systemPrompt: ["test system prompt"],
 				messages: [],
 				tools: [readTool],
 			},
