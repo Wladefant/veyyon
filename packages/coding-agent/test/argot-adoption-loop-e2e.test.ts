@@ -57,6 +57,7 @@ import {
 } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { type ArgotSession, renderPreamble } from "argot";
+import { stopReply } from "./helpers/mock-turns";
 
 const CONNECTION = "packages/server/src/database/connection.ts";
 const ROUTES = "packages/server/src/server/routes.ts";
@@ -76,10 +77,6 @@ function writeFile(root: string, rel: string, content: string): void {
 
 function toolCall(name: string, args: Record<string, unknown>, callId: string): MockResponse {
 	return { content: [{ type: "toolCall", id: callId, name, arguments: args }], stopReason: "toolUse" };
-}
-
-function stopReply(text: string): MockResponse {
-	return { content: [{ type: "text", text }], stopReason: "stop" };
 }
 
 /** The text of the most recent toolResult for a call id, or undefined (prints what was seen). */

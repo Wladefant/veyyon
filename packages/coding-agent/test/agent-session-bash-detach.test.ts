@@ -53,20 +53,13 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { stopReply } from "./helpers/mock-turns";
 
 /** Scripted assistant turn that issues a single `bash` tool call. */
 function bashCall(command: string, callId: string): MockResponse {
 	return {
 		content: [{ type: "toolCall", id: callId, name: "bash", arguments: { command, timeout: 10 } }],
 		stopReason: "toolUse",
-	};
-}
-
-/** Scripted plain-text assistant turn with `stopReason: "stop"`. */
-function stopReply(text: string): MockResponse {
-	return {
-		content: [{ type: "text", text }],
-		stopReason: "stop",
 	};
 }
 
