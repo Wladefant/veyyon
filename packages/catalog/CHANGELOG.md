@@ -2,62 +2,31 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- `collapseEffortVariants` plans each hand-table family, its live effort routing, its collapsed spec and its recycled alias rows in separate steps, and the collapse and the snapshot refresh build the thinking surface through one `familyThinkingConfig`; every collapsed catalog, discovered model list and cached snapshot is unchanged across 92,001 randomized and bundled inputs compared with the previous implementation.
 
 ### Fixed
 
 - GitHub Copilot discovery caps a tiered base model at the tighter of the billed default tier and max_prompt_tokens, and reads the tier boundary from max_prompt_tokens before context_max, so the base row no longer gets the ~1M window of its -1m sibling (oh-my-pi 508e263c0c2b8979e8bd3f0c404db044463d7cad, c668ce4e1c3b47abc96dabf33a6b9cdab7abf8ec, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - GitHub Copilot discovery prices a base model from the default tier Copilot reports, keeping the provider cache-write rate, instead of the bundled or default rate (oh-my-pi 27c1d6e8d4eceafd85b33c3294d88bd6cffd6dc3, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-
 - Gemini family discovery uses the renamed variant family.
+- Kimi Code model discovery with a kimi.ai credential lists models at api.kimi.ai instead of api.kimi.com, and a model on api.kimi.ai gets the Moonshot-native compat (`moonshot-mfjs` tool schemas and K2.6 `thinking.keep`) that api.kimi.com gets.
+- Google Antigravity lists Gemini 4 Argon: the client reports version 3.0.0 instead of 2.1.4, which the endpoint served neither Argon nor the per-tier Gemini 3.8 Flash deployments; the model cache schema moves to v13 to drop lists discovered as 2.1.4.
+- The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
+
 ## [1.5.6] - 2026-10-10
+
 ### Added
 
 - `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
 - Codex discovery reads `available_access_programs` into `Model.accessPrograms`, which the bundled catalog never contains, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
-
-### Removed
-
-- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
-
-### Changed
-
-- OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
-- The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
-- The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
-
-### Fixed
-
-- Claude Opus and Sonnet 5.5 and later default to `supportsForcedToolChoice: false`, as Fable and Mythos already did, so a forced tool choice goes out as `auto` instead of drawing `400 tool_choice: type "tool" and "any" are not supported for this model.`; `rejectsForcedToolChoice` in `@veyyon/catalog/identity` states the rule.
-- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
-
-## [1.5.7] - 2026-10-15
-
-### Added
-
-- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
-
-### Changed
-
-- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
-- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
-
-## [1.5.6] - 2026-10-13
-
-### Added
-
 - `@veyyon/catalog/wire/kimi-code` exports `KIMI_CODE_REGIONS`, the display name, site, OAuth host and API hosts of the global (kimi.ai) and mainland China (kimi.com) Kimi Code deployments in the order the login lists them, with `kimiCodeApiKey`, which encodes a credential's deployment into its API key, and `resolveKimiCodeEndpoint`, which reads the token and API bases a request uses from that key.
 - `@veyyon/catalog/wire/codex` exports `getCodexPlanType`, which reads the lowercased ChatGPT plan (`chatgpt_plan_type`) out of a Codex access token.
 - Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and for Google Antigravity with the same context, a 65,536-token output cap, and low, medium and high routed to the `gemini-4-argon-low`, `-medium` and `-high` deployments.
-
-### Changed
-
-- Replaced `OPENCODE_HEADERS` with `COPILOT_IDENTITY_HEADERS`, set `COPILOT_USER_AGENT` to `veyyon/<version>`, and removed the baked `opencode/1.3.15` User-Agent from bundled Copilot models ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
-
-### Added
-
 - Added DeepInfra provider descriptor and keyless authoritative model discovery from tagged public catalog metadata ([Refs https://github.com/Wladefant/veyyon/issues/107](https://github.com/Wladefant/veyyon/issues/107)).
 - Declared GPT-6 Astra reasoning configuration-update support and generated first-party GPT-6 freeform `apply_patch` metadata ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Preserved specialist runner models across authoritative dynamic discovery pruning and collision resolution, and inherited model kinds and web search grounding capabilities ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -68,17 +37,41 @@
 - Added the GMI Cloud provider (`gmi-cloud`) with dynamic model discovery and bundled default model seed ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added the `openai-codex` subscription fields: 1M context for `gpt-5.6-*`, a `maxContextWindow` ceiling (872K, 922K for Astra and GPT-6.1 Sol), `longContext` pricing above 272K, `serviceTierCost` for flex and priority, zero cache-write cost for GPT-6 subscription models, the `gpt-daybreak-blue-latest` price, and the hidden `gpt-image-2` image runner ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Added `getBundledChatModels` and `resolveSessionContextWindow`, which cap a session at the standard-pricing window unless extended context is on ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-### Changed
-
-- OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
-- Regenerated the bundled catalog for 19 providers: it gains `claude-sonnet-5-5`, `gemini-3.8-flash` and about 340 OpenRouter, Kilo, Vercel, ZenMux, Venice, OpenCode Zen and Copilot rows, and drops retired Bedrock and Novita rows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Removed
 
+- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 - Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+### Changed
+
+- OpenAI-compatible and LiteLLM discovery take their request deadline from `withScopedTimeoutSignal` in `@veyyon/utils` and `toNonEmptyString` from the catalog's own helpers instead of private copies; no user-visible change.
+- The `OPENROUTER_API_ENDPOINT` documentation states which clients fall back to it; no user-visible change.
+- The model cache writes under `synchronous = NORMAL` in WAL mode instead of flushing the disk on every commit, so storing one provider's discovered models at startup takes 0.06–0.08 ms instead of 0.41–0.63 ms, and at most 0.87 ms instead of up to 38 ms.
+- Replaced `OPENCODE_HEADERS` with `COPILOT_IDENTITY_HEADERS`, set `COPILOT_USER_AGENT` to `veyyon/<version>`, and removed the baked `opencode/1.3.15` User-Agent from bundled Copilot models ([Refs https://github.com/Wladefant/veyyon/issues/468](https://github.com/Wladefant/veyyon/issues/468)).
+- OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
+- Regenerated the bundled catalog for 19 providers: it gains `claude-sonnet-5-5`, `gemini-3.8-flash` and about 340 OpenRouter, Kilo, Vercel, ZenMux, Venice, OpenCode Zen and Copilot rows, and drops retired Bedrock and Novita rows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Switched the paid 'xai' provider (using 'XAI_API_KEY') from Chat Completions to the Responses API ('/v1/responses'), and defaulted both 'xai' and 'xai-oauth' to 'grok-4.5'.
+- `COMMAND_CODE_COSTS` and the Command Code effort table use plain string keys instead of computed ones; every rate and ladder is unchanged.
+- `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
+- `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
+- The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
+- Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
+- Models whose resolved compat records are equal share one frozen record, which cut the retained heap of a full catalog build from 4.41 MiB to 2.69 MiB and the idle heap of an interactive session from 43.8 MiB to 41.5 MiB (median of 3 runs).
+- GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
+- The parsed bundled catalog and the reference index built from it are released 30 seconds after the last read and parsed again on the next one, and the provider list is kept apart so listing providers never parses the catalog, which cut the settled idle heap of an interactive session from 39.96 MiB to 38.88 MiB and its live objects from 485,605 to 471,040 (median of 5 runs).
+- Cursor and Devin model discovery modules load through `lazy` from `@veyyon/utils`; no user-visible change.
+- A discovered model's reference resolver builds the index of every bundled provider's models on the first id its own provider's references miss instead of when the provider's model manager options are created, so a launch holding only a GitHub Copilot credential builds 566 model specs from 3 providers instead of 4,560 from 59 and settles at 28.96 MiB of heap instead of 30.36 MiB (median of 5).
+- The Xiaomi Token Plan model managers read the `xiaomi` provider's bundled models on the first model a discovery returns instead of when their options are created, so a launch holding a Token Plan credential builds no `xiaomi` model.
+- A read of one bundled provider parses that provider's object out of `models.json` instead of the whole 2.3 MB catalog, and listing providers parses none of it, which cut the heap of a default-role launch 3 seconds after start from 46.70 MiB to 44.47 MiB, its live objects from 418,889 to 371,624 and `createAgentSession` from 69.7 ms to 63.5 ms (median of 5 and 11 runs).
+- A custom or discovered model's bundled reference lookup scans the model ids out of `models.json` and parses only the models the id reaches instead of the whole catalog, which cut a custom-model launch's time to a ready session from 217.2 ms to 206.6 ms and its idle heap from 36.21 MiB to 33.71 MiB and live objects from 399,664 to 350,968 (median of 11 and 5 runs).
+- A model reference lookup checks each reduction of a proxied id as it derives it and reads each lookup key once, which cut the mean lookup over every bundled id, bare and under two proxy affixes (13,218 ids), from 4.6 µs to 2.7 µs on the lazy bundled index and from 4.1 µs to 1.9 µs on the full index (2 runs before, 4 after).
+
 ### Fixed
+
+- Claude Opus and Sonnet 5.5 and later default to `supportsForcedToolChoice: false`, as Fable and Mythos already did, so a forced tool choice goes out as `auto` instead of drawing `400 tool_choice: type "tool" and "any" are not supported for this model.`; `rejectsForcedToolChoice` in `@veyyon/catalog/identity` states the rule.
+- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
 - Routed OpenCode gateway-only models via discovery overrides and sibling hints, pinned `deepseek-v4-flash` to Responses, preserved OpenRouter limits when zero is advertised, and restored unfetched catalog rows without resurrecting retired providers ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 7099457f8424de31675f581b6a296156aa4c24bc, aae14ce4625cadc48a22c25f9ccd2d4395920539, 6ab9aca7acc7a73198da6118405d7949656ddfcf).
 - Fixed the `catalog` model-manager and specialist-provider test fixtures to match the current `ModelSpec` and `resolveProviderModels` signatures ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Typed the Antigravity discovery `fetcher` option as `FetchImpl`, so a caller's fetch override type-checks without a `preconnect` adapter ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -86,7 +79,6 @@
 - Defaulted paid xAI and SuperGrok model selection to Grok 4.6.
 - Versioned the GitHub Copilot model cache per credential and endpoint so stale routing rows are refetched.
 - Aligned runtime model discovery with generation-time exclusion policies for Amazon Bedrock, Z.AI, Fireworks, and Xiaomi, and relaxed literal ZenMux default model assertions ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-
 - Fixed static catalog generation to union OpenAI Codex models across all configured OAuth accounts via the model manager path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Aborted OpenAI Codex catalog discovery when any account credential fails to refresh to keep bundled models ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog and forward the configured transport fetch ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -113,32 +105,19 @@
 - Anthropic OAuth advertises Claude Code 2.1.280, and the bundled catalog includes Claude Opus 5.5 with its low-through-max effort ladder and published pricing.
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
-### Changed
-
-- Switched the paid 'xai' provider (using 'XAI_API_KEY') from Chat Completions to the Responses API ('/v1/responses'), and defaulted both 'xai' and 'xai-oauth' to 'grok-4.5'.
-- `COMMAND_CODE_COSTS` and the Command Code effort table use plain string keys instead of computed ones; every rate and ladder is unchanged.
-- `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
-- `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
-- The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
-- Model id classification no longer keeps a process-lifetime table from each id to its answer, which cut the idle heap of an interactive session from 66.8 MiB to 63.6 MiB (median of 3 runs) and stops each newly seen model id from growing the heap.
-- Models whose resolved compat records are equal share one frozen record, which cut the retained heap of a full catalog build from 4.41 MiB to 2.69 MiB and the idle heap of an interactive session from 43.8 MiB to 41.5 MiB (median of 3 runs).
-- GitLab Duo workflow discovery parses the available-models answer without Zod, and `@veyyon/catalog` no longer depends on `zod`; every answer resolves to the same models.
-- The parsed bundled catalog and the reference index built from it are released 30 seconds after the last read and parsed again on the next one, and the provider list is kept apart so listing providers never parses the catalog, which cut the settled idle heap of an interactive session from 39.96 MiB to 38.88 MiB and its live objects from 485,605 to 471,040 (median of 5 runs).
-- Cursor and Devin model discovery modules load through `lazy` from `@veyyon/utils`; no user-visible change.
-- A discovered model's reference resolver builds the index of every bundled provider's models on the first id its own provider's references miss instead of when the provider's model manager options are created, so a launch holding only a GitHub Copilot credential builds 566 model specs from 3 providers instead of 4,560 from 59 and settles at 28.96 MiB of heap instead of 30.36 MiB (median of 5).
-- The Xiaomi Token Plan model managers read the `xiaomi` provider's bundled models on the first model a discovery returns instead of when their options are created, so a launch holding a Token Plan credential builds no `xiaomi` model.
-- A read of one bundled provider parses that provider's object out of `models.json` instead of the whole 2.3 MB catalog, and listing providers parses none of it, which cut the heap of a default-role launch 3 seconds after start from 46.70 MiB to 44.47 MiB, its live objects from 418,889 to 371,624 and `createAgentSession` from 69.7 ms to 63.5 ms (median of 5 and 11 runs).
-- A custom or discovered model's bundled reference lookup scans the model ids out of `models.json` and parses only the models the id reaches instead of the whole catalog, which cut a custom-model launch's time to a ready session from 217.2 ms to 206.6 ms and its idle heap from 36.21 MiB to 33.71 MiB and live objects from 399,664 to 350,968 (median of 11 and 5 runs).
-- A model reference lookup checks each reduction of a proxied id as it derives it and reads each lookup key once, which cut the mean lookup over every bundled id, bare and under two proxy affixes (13,218 ids), from 4.6 µs to 2.7 µs on the lazy bundled index and from 4.1 µs to 1.9 µs on the full index (2 runs before, 4 after).
-- `collapseEffortVariants` plans each hand-table family, its live effort routing, its collapsed spec and its recycled alias rows in separate steps, and the collapse and the snapshot refresh build the thinking surface through one `familyThinkingConfig`; every collapsed catalog, discovered model list and cached snapshot is unchanged across 92,001 randomized and bundled inputs compared with the previous implementation.
-
-### Fixed
-
-- Kimi Code model discovery with a kimi.ai credential lists models at api.kimi.ai instead of api.kimi.com, and a model on api.kimi.ai gets the Moonshot-native compat (`moonshot-mfjs` tool schemas and K2.6 `thinking.keep`) that api.kimi.com gets.
 - OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
 - A model the models.dev overlay enriches keeps the compat its bundled row declares, so wafer.ai GLM and Kimi models request the Z.ai thinking format and xAI OAuth models map `minimal` effort to `low` again; the model cache schema moves to v12 to drop rows that stored a resolved compat record as their declaration, which cut the cached rows of a full catalog refresh from 4.85 MB to 1.72 MB and the static model stage a launch restores from 10.8 MB to 7.8 MB and 4.79 MiB to 3.16 MiB retained.
-- Google Antigravity lists Gemini 4 Argon: the client reports version 3.0.0 instead of 2.1.4, which the endpoint served neither Argon nor the per-tier Gemini 3.8 Flash deployments; the model cache schema moves to v13 to drop lists discovered as 2.1.4.
-- The Google, Vertex and Gemini CLI transports send `thinkingLevel` to every Gemini model from 3.0 up, including Gemini 4 and the `argon` tier, instead of a `thinkingBudget` that Gemini 4 rejects with HTTP 400.
+
+## [1.5.7] - 2026-10-15
+
+### Added
+
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
+### Changed
+
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
 
 ## [1.5.4] - 2026-09-24
 
@@ -167,6 +146,9 @@
 - Model input capability support includes `"video"` for video-capable models.
 - `calculateCost` bills a request at a model's `longContextCost` rates when the prompt crosses that model's threshold, so a model the upstream charges two rate cards for is no longer reported at the cheaper one.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
+- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
+- Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
+- Case-insensitive host classification no longer treats control characters as URL punctuation.
 
 ### Changed
 
@@ -186,12 +168,6 @@
 - Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
 - A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
-
-### Fixed
-
-- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
-- Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
-- Case-insensitive host classification no longer treats control characters as URL punctuation.
 
 ## [1.4.1] - 2026-09-08
 

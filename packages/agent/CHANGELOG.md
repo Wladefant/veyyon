@@ -2,98 +2,18 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Added
 
 - `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
-### Fixed
-- Restored the missing compaction configuration and video content types.
-- A `beforeToolCall` hook that throws `ToolAdmissionFatalError` ends the run after the tool batch's results instead of sampling another turn ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
-
-### Changed
-
-- Sync upstream changes from santhreal/veyyon.
-
-### Fixed
-
-- Tool-call preparation preserves schema-owned `i` arguments and rejects oversized harness intent before execution, including repaired arguments.
-
-## [1.5.6] - 2026-10-10
-
-### Added
-
-- Added `summarizeRemoteCompactionWindow` and staged summary checkpoints to resume summarization across partial failures.
-
-### Changed
-
-- Collapsed the intent-length guard in `executeToolCalls` onto the single line the repository formatter requires; no behavior change.
-- Renamed the intent-length rejection local in `executeToolCalls` from `errorText` to `intentRejection`; no behavior change.
-
-### Fixed
-
-- Preserved native generated images in streaming snapshots and telemetry, including image completion updates.
-- Restored contextual typing for remote compaction requests after the socket retry port without changing runtime behavior.
-- Fixed Codex remote compaction retrying transient unexpected socket closures instead of prematurely failing over to paid local compaction ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Recovered tool-call turns from mid-stream envelope errors and transient stream-parse errors, not only stream-read errors.
-- Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed stream finalization when a provider ends without emitting a completion or error event, ensuring the final assistant message is preserved and corresponding message lifecycle events are emitted ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed chat request telemetry recording service tiers based on the target model rather than provider name alone, correctly emitting attributes for custom OpenAI relays and dropping unadvertised tiers ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
-### Changed
-
-- `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
-- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
-- `prepareToolCall` builds every rejection through one constructor; the rejections it returns are unchanged.
-
-### Fixed
-
-- Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
-- Planning a history summary measures the span in slices that yield to the event loop every 8 ms and stages a span whose byte count already puts one request past the window without serializing it whole, so on a resumed 34,572-entry session the candidate estimate holds the event loop at most 9.5 ms instead of 405 ms; `estimateCompactionRequestTokens` and `planSummarySegments` are now async, and `planSummarySegments` takes the `SummarySource` that `measureSummarySource` returns.
-- Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
-- A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
-- A compaction on a model that does not accept the requested effort logs "Compaction effort is not accepted by the model" once per model and effort instead of once per request, so a staged compaction of a 146 MB session logs it once instead of 133 times; `clampPassEffort` in `@veyyon/agent-core/effort-clamp` is the shared clamp.
-- The agent loop's cooperative yield hands the event loop one turn instead of sleeping 20 ms (`YieldGateOptions.sleep` and `sleepMs` are replaced by `yieldTurn`), so with a 300 ms provider the gap between a tool-call response and the next request falls from 26.8 ms to 6.9 ms and a response's first streamed event is no longer held 20 ms.
-
-### Removed
-
-- Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
-- Removed the threshold and `estimateTokens` re-exports from `@veyyon/agent-core/compaction/compaction`; import them from `@veyyon/agent-core/compaction/threshold`, `@veyyon/agent-core/compaction/token-estimate` or `@veyyon/agent-core/compaction`, which still exports all of them.
-- Removed the `splitReadSelector` and `stripReadSelector` re-exports from `@veyyon/agent-core/compaction/utils` and the legacy provider-native re-exports from `@veyyon/agent-core/compaction/remote-summarizer`; `@veyyon/agent-core/compaction` and the package root still export all four.
-
-## [1.5.8] - 2026-10-16
-
-### Changed
-
-- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
-
-## [1.5.6] - 2026-10-13
-
-### Breaking Changes
-
-- `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
-- `CompactionPreparation.remoteChain` holds every window a server-side pass may chain as `links`, each with the offset at which its span starts in one shared `messages` array, instead of a single `previousPreserveData` with `messagesToSummarize` and `turnPrefixMessages`.
-
-### Added
-
-- `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
-- `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
 - `Agent.buildSideRequestContext` takes an optional model, defaulting to the agent's, and normalizes messages and tools for that model.
 
 ### Changed
 
-- The telemetry module evaluates `@opentelemetry/api` on the first span it starts with tracing enabled instead of when the module loads, which keeps 44 modules off a launch that traces nothing; the re-exported `SpanKind`, `SpanStatusCode` and `trace` evaluate the package on first property access.
-- Remote compaction resolves the server-side transport through `@veyyon/ai/providers/server-compaction-transport`, so a session evaluates the Codex client on its first server-side compaction instead of with the compaction module; no user-visible change.
-- Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
-- `Agent` reads its fallback Google model only when the initial state names no model, so a session that brings its own model no longer builds the Google provider's bundled models, and a launch with no credential builds 478 model specs instead of 521.
-- The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
-- `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
+- Sync upstream changes from santhreal/veyyon.
 - Append-only context mode compares each synced message against a structural snapshot that shares its strings instead of re-serializing and hashing the whole transcript every turn, which cut syncing a 601-message transcript over 300 turns from 354ms to 13ms and removes the 32-bit hash collision that could hide an in-place rewrite.
 - Append-only context mode checks an unchanged system prompt and tool set against a structural snapshot instead of re-serializing and hashing it every turn, which cut each turn's prefix check from 430µs to 55µs on an 80 KB prompt with 40 tools.
-- Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
-- `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
-- `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
-- `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
-- `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
-- Compaction reads the Codex compaction request context from `@veyyon/ai/providers/openai-codex/session-state` and the remote summarizer reads the Azure deployment map from `@veyyon/ai/providers/azure-deployment-names`, so the compaction engine loads 303 modules instead of 322 and the remote summarizer 100 instead of 225.
-- Split the token estimate's message walk into one function per content body (shared content, file mention, assistant turn, compaction summary); no user-visible change.
 - Split the agent loop's tool-call batch into a `ToolBatch` class with one method per step (scheduling, steering and IRC interrupts, argument repair and validation, execution, result emission) and its tool-result coercion into one function per block and per content list; no user-visible change.
 - Split the agent loop's assistant-response streaming into an `AssistantTurnStream` class with one method per stream ending (terminal event, trailing result, abort) and its request setup into one function per step (provider context, request options, provider stream), and split intent-schema injection, per-tool normalization and the aborted-turn ledger into one function per case; no user-visible change.
 - Split compaction's cut-point search, file-list resolution, result validation, tail tool-result elision, preparation and summarization into one function per step; no user-visible change.
@@ -105,8 +25,58 @@
 
 ### Fixed
 
+- Restored the missing compaction configuration and video content types.
+- A `beforeToolCall` hook that throws `ToolAdmissionFatalError` ends the run after the tool batch's results instead of sampling another turn ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
+- Tool-call preparation preserves schema-owned `i` arguments and rejects oversized harness intent before execution, including repaired arguments.
 - Supersede pruning does not count a `read` result whose details set `inContextRefusal` as a newer read of its file, so it no longer blanks the earlier result the refusal points back to.
 - A tool call whose `toolcall_end` the provider delivered before an abort is kept and answered with a result when the abort fires before the loop reads that event, instead of being dropped and reported as unfinished depending on microtask order.
+- A tool call released from the pause gate by a cancel of the run is answered as skipped because the run was cancelled and never started, instead of as skipped for a pending steering message with advice to retry after a queued message that does not exist.
+- A run summary counts a tool name, stop reason or error type that names an `Object.prototype` member (`constructor`, `toString`, `__proto__`) under its own key, instead of reporting `NaN` or a string for its count or dropping it from `tools.byName`.
+
+## [1.5.6] - 2026-10-10
+
+### Added
+
+- Added `summarizeRemoteCompactionWindow` and staged summary checkpoints to resume summarization across partial failures.
+- `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
+- `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
+
+### Changed
+
+- Collapsed the intent-length guard in `executeToolCalls` onto the single line the repository formatter requires; no behavior change.
+- Renamed the intent-length rejection local in `executeToolCalls` from `errorText` to `intentRejection`; no behavior change.
+- `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
+- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
+- `prepareToolCall` builds every rejection through one constructor; the rejections it returns are unchanged.
+- The telemetry module evaluates `@opentelemetry/api` on the first span it starts with tracing enabled instead of when the module loads, which keeps 44 modules off a launch that traces nothing; the re-exported `SpanKind`, `SpanStatusCode` and `trace` evaluate the package on first property access.
+- Remote compaction resolves the server-side transport through `@veyyon/ai/providers/server-compaction-transport`, so a session evaluates the Codex client on its first server-side compaction instead of with the compaction module; no user-visible change.
+- Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
+- `Agent` reads its fallback Google model only when the initial state names no model, so a session that brings its own model no longer builds the Google provider's bundled models, and a launch with no credential builds 478 model specs instead of 521.
+- The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
+- `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
+- Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
+- `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
+- `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
+- `normalizeTools` holds a description with an appended examples block as the shared copy of its text, so live agents with the same tools hold one buffer of each, which cut the heap after 40 live subagents from 96.9 MiB to 95.4 MiB (median of 3 runs).
+- `estimateTokens` caches both option variants of a message in one record of four numbers instead of a holder object plus an object per variant, which cut the heap and extra memory of an idle resumed 600-turn session from 123,632 KiB to 123,399 KiB and its live objects from 708,261 to 702,908 (median of five).
+- Compaction reads the Codex compaction request context from `@veyyon/ai/providers/openai-codex/session-state` and the remote summarizer reads the Azure deployment map from `@veyyon/ai/providers/azure-deployment-names`, so the compaction engine loads 303 modules instead of 322 and the remote summarizer 100 instead of 225.
+- Split the token estimate's message walk into one function per content body (shared content, file mention, assistant turn, compaction summary); no user-visible change.
+
+### Fixed
+
+- Preserved native generated images in streaming snapshots and telemetry, including image completion updates.
+- Restored contextual typing for remote compaction requests after the socket retry port without changing runtime behavior.
+- Fixed Codex remote compaction retrying transient unexpected socket closures instead of prematurely failing over to paid local compaction ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Recovered tool-call turns from mid-stream envelope errors and transient stream-parse errors, not only stream-read errors.
+- Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed stream finalization when a provider ends without emitting a completion or error event, ensuring the final assistant message is preserved and corresponding message lifecycle events are emitted ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed chat request telemetry recording service tiers based on the target model rather than provider name alone, correctly emitting attributes for custom OpenAI relays and dropping unadvertised tiers ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Preparing a compaction behind server-side compaction windows no longer reads the summarized history back from the session file; `CompactionPreparation.fileOps` is computed on first read.
+- Planning a history summary measures the span in slices that yield to the event loop every 8 ms and stages a span whose byte count already puts one request past the window without serializing it whole, so on a resumed 34,572-entry session the candidate estimate holds the event loop at most 9.5 ms instead of 405 ms; `estimateCompactionRequestTokens` and `planSummarySegments` are now async, and `planSummarySegments` takes the `SummarySource` that `measureSummarySource` returns.
+- Summarization requests that do not replay the session prefix (the turn-prefix summary of a split turn, a history summary without cache alignment, staged segment and merge summaries, and branch summaries) are sent with `cacheRetention: "none"`, so Anthropic no longer bills a cache write that is never read and no longer warns "prompt cache prefix changed" after each split-turn compaction.
+- A compaction no longer cuts between a tool call and its result when a message sits between them, such as the `cwd_changed` and `prompt_cache_invalidated` messages `set_cwd` appends while it runs, so the kept history no longer starts with a result whose call was summarized and every later request no longer folds that result into a note.
+- A compaction on a model that does not accept the requested effort logs "Compaction effort is not accepted by the model" once per model and effort instead of once per request, so a staged compaction of a 146 MB session logs it once instead of 133 times; `clampPassEffort` in `@veyyon/agent-core/effort-clamp` is the shared clamp.
+- The agent loop's cooperative yield hands the event loop one turn instead of sleeping 20 ms (`YieldGateOptions.sleep` and `sleepMs` are replaced by `yieldTurn`), so with a 300 ms provider the gap between a tool-call response and the next request falls from 26.8 ms to 6.9 ms and a response's first streamed event is no longer held 20 ms.
 - A server-side compaction whose cut lands inside a turn that opened before the previous provider window chains that window and posts only the context behind it, instead of posting the whole session, which on a long single-turn Codex run outgrew the provider's context and failed every pass with `context_length_exceeded`.
 - A compaction reads the turns the previous compaction kept, so a local pass no longer drops them from the context and a chained server-side pass no longer omits them from the input it posts.
 - A server-side compaction after a local summary posts that summary ahead of the messages since it, so the window it returns replaces the summary instead of discarding the history the summary held.
@@ -114,8 +84,23 @@
 - A `tool_execution_update` a tool reports after its run emitted `agent_end` reaches `Agent` subscribers through the new `AgentLoopConfig.onToolUpdateAfterRun` sink instead of being dropped, so a background task card settles when its agents finish instead of animating for the life of the process, which cut timer callbacks in the 20 idle seconds after three turns that each spawned two background agents from 2,301 to 64.
 - A branch summary over session history held on disk reads each message's fields before it redacts them, so navigating the tree with a summary no longer fails with "Branch summary provider text transformation failed." when the history was moved out of memory again while the credential resolved.
 - The turn loop no longer holds every streamed event until the turn ends: it waits on each provider event through one `LoopRace` instead of racing it against a long-lived abort promise, which cut the heap held by a 20,000-delta turn from 4.0 MiB and 120,359 objects to 0.3 MiB and 2,438 objects and the loop's cost per event from 1,160 ns to 877 ns (median of seven).
-- A tool call released from the pause gate by a cancel of the run is answered as skipped because the run was cancelled and never started, instead of as skipped for a pending steering message with advice to retry after a queued message that does not exist.
-- A run summary counts a tool name, stop reason or error type that names an `Object.prototype` member (`constructor`, `toString`, `__proto__`) under its own key, instead of reporting `NaN` or a string for its count or dropping it from `tools.byName`.
+
+### Removed
+
+- Removed the unused `AGENT_PROMPT_IDS` export; `agentCorePrompts.ids` lists the registered prompt ids.
+- Removed the threshold and `estimateTokens` re-exports from `@veyyon/agent-core/compaction/compaction`; import them from `@veyyon/agent-core/compaction/threshold`, `@veyyon/agent-core/compaction/token-estimate` or `@veyyon/agent-core/compaction`, which still exports all of them.
+- Removed the `splitReadSelector` and `stripReadSelector` re-exports from `@veyyon/agent-core/compaction/utils` and the legacy provider-native re-exports from `@veyyon/agent-core/compaction/remote-summarizer`; `@veyyon/agent-core/compaction` and the package root still export all four.
+
+### Breaking Changes
+
+- `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
+- `CompactionPreparation.remoteChain` holds every window a server-side pass may chain as `links`, each with the offset at which its span starts in one shared `messages` array, instead of a single `previousPreserveData` with `messagesToSummarize` and `turnPrefixMessages`.
+
+## [1.5.8] - 2026-10-16
+
+### Changed
+
+- Supersede pruning no longer reads an `inContextRefusal` marker from a `read` result; a read refused as still in context is a failed read, which pruning already never counts as a newer read.
 
 ## [1.5.4] - 2026-09-24
 

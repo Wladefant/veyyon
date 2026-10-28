@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Added
 
 - Added `CacheRequestTtl`, `CacheRequestRecord`, and optional `Usage.cacheRequests` for per-request prompt-cache telemetry records ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
@@ -20,15 +22,11 @@
 - Added `image_end` to `AssistantMessageEvent` for streamed image completion events (Refs #107).
 - Added `Model.maxContextWindow` and `Model.serviceTierCost` for Codex subscription models (Refs #107).
 - Added specialist model-kind vocabulary (`MODEL_KINDS`, `ModelKind`, `RUNNER_APIS`, `WebSearchGrounding`, and `modelKind` helper) and `Model.kind`/`Model.webSearch` capability attributes (Refs #107).
+- `Model.accessPrograms` lists the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) model discovery offers the signed-in account for a model.
 
 ### Fixed
 
 - Included native generated images in the assistant content contract used by Responses providers.
-### Added
-
-- `Model.accessPrograms` lists the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) model discovery offers the signed-in account for a model.
-
-## [1.5.6] - 2026-10-13
 
 ### Changed
 
