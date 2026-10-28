@@ -758,6 +758,21 @@ describe("MCPManager event subscription contracts", () => {
 		const manager = new MCPManager(process.cwd());
 		const serverName = "cursor-race-server";
 		process.env.MCP_EVENTS_RACE_SECRET = CALLBACK_SECRET;
+		const realSetTimeout = globalThis.setTimeout;
+		const refreshTimers: number[] = [];
+		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+			handler: TimerHandler,
+			delay?: number,
+			...args: unknown[]
+		) => {
+			const handle = realSetTimeout(handler as () => void, delay, ...args);
+			if (typeof delay === "number" && delay >= 500_000) {
+				refreshTimers.push(delay);
+				// Never let a leaked timer outlive the test.
+				clearTimeout(handle);
+			}
+			return handle;
+		}) as typeof setTimeout);
 
 		try {
 			await connect(
@@ -790,11 +805,14 @@ describe("MCPManager event subscription contracts", () => {
 			cursorGate.resolve();
 			await disconnectPromise;
 
-			expect(manager.getEventStartupPromise(serverName)).toBeUndefined();
+			// The refresh timer is the only ~9 minute timer the manager arms. The startup promise is
+			// deleted whether or not it was armed, so the armed delays are the observable contract.
+			expect(refreshTimers).toEqual([]);
 		} finally {
 			await manager.stopEvents();
 			server.stop();
 			delete process.env.MCP_EVENTS_RACE_SECRET;
+			setTimeoutSpy.mockRestore();
 		}
 	});
 
