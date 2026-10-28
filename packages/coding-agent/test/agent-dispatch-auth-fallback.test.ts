@@ -9,7 +9,6 @@ import { resolveAgentModelChain } from "@veyyon/coding-agent/config/model-resolv
  * parent model is not an implicit candidate when the configured chain fails.
  */
 
-
 const parentModel: Model<Api> = buildModel({
 	id: "deepseek-v4-pro",
 	name: "DeepSeek V4 Pro",
@@ -36,7 +35,6 @@ const unauthedTaskModel: Model<Api> = buildModel({
 	maxTokens: 8192,
 });
 
-
 interface MockRegistryOptions {
 	models: Model<Api>[];
 	authedProviders: Set<string>;
@@ -56,11 +54,16 @@ function createMockRegistry(options: MockRegistryOptions) {
 describe("ordered agent model auth resolution", () => {
 	test("selects the third configured member when earlier members are unavailable", async () => {
 		const third = buildModel({
-			id: "third-choice", name: "Third", api: "openai-completions",
-			provider: "third-provider", baseUrl: "https://third.example",
-			reasoning: false, input: ["text"],
+			id: "third-choice",
+			name: "Third",
+			api: "openai-completions",
+			provider: "third-provider",
+			baseUrl: "https://third.example",
+			reasoning: false,
+			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000, maxTokens: 8192,
+			contextWindow: 128000,
+			maxTokens: 8192,
 		});
 		const registry = createMockRegistry({
 			models: [unauthedTaskModel, third],
@@ -83,10 +86,14 @@ describe("ordered agent model auth resolution", () => {
 			suppressed: ["opencode-zen/qwen3.6-plus-free", "deepseek/deepseek-v4-pro"],
 		});
 
-		await expect(resolveAgentModelChain(
-			["missing-provider/missing-model", "qwen3.6-plus-free", "deepseek/deepseek-v4-pro"],
-			registry,
-		)).rejects.toThrow(/missing-provider\/missing-model.*not found.*qwen3\.6-plus-free.*suppressed.*deepseek\/deepseek-v4-pro.*suppressed/s);
+		await expect(
+			resolveAgentModelChain(
+				["missing-provider/missing-model", "qwen3.6-plus-free", "deepseek/deepseek-v4-pro"],
+				registry,
+			),
+		).rejects.toThrow(
+			/missing-provider\/missing-model.*not found.*qwen3\.6-plus-free.*suppressed.*deepseek\/deepseek-v4-pro.*suppressed/s,
+		);
 	});
 
 	test("does not select the parent when all configured models lack auth", async () => {
@@ -95,10 +102,9 @@ describe("ordered agent model auth resolution", () => {
 			authedProviders: new Set(["deepseek"]),
 		});
 
-		await expect(resolveAgentModelChain(
-			["qwen3.6-plus-free"],
-			registry,
-		)).rejects.toThrow(/qwen3\.6-plus-free.*missing working credentials/);
+		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry)).rejects.toThrow(
+			/qwen3\.6-plus-free.*missing working credentials/,
+		);
 	});
 
 	test("does not expose a thrown provider auth error", async () => {
@@ -134,39 +140,41 @@ describe("ordered agent model auth resolution", () => {
 			isSelectorSuppressed: () => false,
 		};
 
-		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry))
-			.rejects.toThrow(/qwen3\.6-plus-free.*unavailable in the model registry/);
+		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry)).rejects.toThrow(
+			/qwen3\.6-plus-free.*unavailable in the model registry/,
+		);
 	});
 
 	test("keeps keyless models usable", async () => {
 		const registry = {
 			getAll: () => [parentModel, unauthedTaskModel],
 			getAvailable: () => [unauthedTaskModel],
-			getApiKey: async (model: Model<Api>) =>
-				model.provider === "opencode-zen" ? kNoAuth : "sk-test",
+			getApiKey: async (model: Model<Api>) => (model.provider === "opencode-zen" ? kNoAuth : "sk-test"),
 			isSelectorSuppressed: () => false,
 		};
 
-		const result = await resolveAgentModelChain(
-			["qwen3.6-plus-free"], registry,
-		);
+		const result = await resolveAgentModelChain(["qwen3.6-plus-free"], registry);
 
 		expect(result.model.provider).toBe("opencode-zen");
 	});
 
 	test("uses the third model when the first two selectors are quota-suppressed", async () => {
 		const third = buildModel({
-			id: "third-choice", name: "Third", api: "openai-completions",
-			provider: "third-provider", baseUrl: "https://third.example",
-			reasoning: false, input: ["text"],
+			id: "third-choice",
+			name: "Third",
+			api: "openai-completions",
+			provider: "third-provider",
+			baseUrl: "https://third.example",
+			reasoning: false,
+			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000, maxTokens: 8192,
+			contextWindow: 128000,
+			maxTokens: 8192,
 		});
 		const registry = {
 			getAll: () => [parentModel, unauthedTaskModel, third],
 			getAvailable: () => [parentModel, unauthedTaskModel, third],
-			getApiKey: async (model: Model<Api>) =>
-				model.provider === "third-provider" ? "sk-third" : "sk-test",
+			getApiKey: async (model: Model<Api>) => (model.provider === "third-provider" ? "sk-third" : "sk-test"),
 			isSelectorSuppressed: (selector: string) =>
 				selector === "deepseek/deepseek-v4-pro" || selector === "opencode-zen/qwen3.6-plus-free",
 		};
@@ -193,12 +201,9 @@ describe("session-sticky OAuth resolution", () => {
 			isSelectorSuppressed: () => false,
 		};
 
-		const result = await resolveAgentModelChain(
-			["qwen3.6-plus-free"], registry, undefined, "agent-session",
-		);
+		const result = await resolveAgentModelChain(["qwen3.6-plus-free"], registry, undefined, "agent-session");
 
 		expect(receivedSessionId).toBe("agent-session");
 		expect(result.model.provider).toBe("opencode-zen");
 	});
 });
-

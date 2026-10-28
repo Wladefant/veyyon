@@ -32,8 +32,8 @@ import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
 	formatModelStringWithRouting,
-	resolveModelOverride,
 	resolveAgentModelChain,
+	resolveModelOverride,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, resolveAgentServiceTier } from "../config/service-tier";
@@ -1909,12 +1909,7 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 	throwIfRunAborted(monitor.abortSignal);
 	const modelRegistry = await openModelRegistry(options, monitor.abortSignal, ctx.awaitAbortable);
 	const resolution = await ctx.awaitAbortable(
-		resolveAgentModelChain(
-			modelPatterns,
-			modelRegistry,
-			settings,
-			options.id,
-		),
+		resolveAgentModelChain(modelPatterns, modelRegistry, settings, options.id),
 	);
 	const { model } = resolution;
 	if (resolution.warning) {
