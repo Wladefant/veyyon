@@ -86,11 +86,14 @@ const FAST_MODE_SPEED_PARAM_PATTERN = /\bspeed\b/i;
 const FAST_MODE_NOT_SUPPORTED_PATTERN = /not support/i;
 const FAST_MODE_RATE_LIMIT_PATTERN = /rate_limit_error/i;
 const FAST_MODE_ENTITLEMENT_PATTERN = /fast mode/i;
-// A `tool_choice` the endpoint will not take. The two measured wordings: the OpenCode gateways'
-// `only '"auto"' is supported for 'tool_choice'`, and DeepSeek's `Thinking mode does not support
-// this tool_choice`. Both name the field, and both say it is the value, not the request, at fault.
+// A `tool_choice` the endpoint will not take. The measured wordings: the OpenCode gateways'
+// `only '"auto"' is supported for 'tool_choice'`, DeepSeek's `Thinking mode does not support
+// this tool_choice`, Anthropic's `tool_choice: type "tool" and "any" are not supported for this
+// model.`, and Kimi's `tool_choice 'specified' is incompatible with thinking enabled`. Each names
+// the field, and each says it is the value, not the request, at fault.
 const TOOL_CHOICE_FIELD_PATTERN = /\btool_choice\b/i;
 const ONLY_SUPPORTED_PATTERN = /\bonly\b.*\bsupported\b/i;
+const INCOMPATIBLE_PATTERN = /\bincompatible\b/i;
 
 // The phrasings an endpoint uses to reject strict tools without calling it an invalid request:
 // a wire-format complaint, a `strict` value it will not mix, a tool schema it cannot take. These
@@ -149,7 +152,9 @@ export function matchesFastModeEntitlementText(message: string): boolean {
 export function matchesToolChoiceRejectionText(message: string): boolean {
 	return (
 		TOOL_CHOICE_FIELD_PATTERN.test(message) &&
-		(FEATURE_NOT_SUPPORTED_PATTERN.test(message) || ONLY_SUPPORTED_PATTERN.test(message))
+		(FEATURE_NOT_SUPPORTED_PATTERN.test(message) ||
+			ONLY_SUPPORTED_PATTERN.test(message) ||
+			INCOMPATIBLE_PATTERN.test(message))
 	);
 }
 
@@ -202,7 +207,7 @@ export const fastModeDomain: ErrorDomain = {
 
 export const toolChoiceDomain: ErrorDomain = {
 	id: "tool-choice",
-	why: "The endpoint rejected the `tool_choice` value the request named, so the request goes out without it.",
+	why: "The endpoint rejected the `tool_choice` value the request named, so the request goes out without the rejected form.",
 	recovers: [Flag.ToolChoiceRejected],
 	recovery: {
 		transport: { action: "surface" },
@@ -213,7 +218,7 @@ export const toolChoiceDomain: ErrorDomain = {
 		{
 			flags: Flag.ToolChoiceRejected,
 			name: "tool-choice-value-rejected",
-			why: "A 400 naming `tool_choice` as unsupported: a gateway that takes only `auto`, or a thinking model that takes no forced choice. The turn retries without the field and the session remembers the rejected form for that model.",
+			why: "A 400 naming `tool_choice` as unsupported or incompatible: a gateway that takes only `auto`, or a model that takes no forced choice. The turn retries without the rejected form (the OpenAI-shaped requests leave the field out, the Anthropic request sends `auto`) and the session remembers the rejection for that model.",
 			structural: signal => signal.status === 400,
 			text: matchesToolChoiceRejectionText,
 		},

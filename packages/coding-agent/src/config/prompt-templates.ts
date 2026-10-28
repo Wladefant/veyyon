@@ -9,6 +9,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@veyyon/utils";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { jtdToTypeScript, jtdToTypeScriptParts } from "../tools/core/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
@@ -127,14 +128,12 @@ async function loadTemplatesFromDir(
 
 		for (const entry of entries) {
 			const fullPath = path.join(dir, entry);
-			const file = Bun.file(fullPath);
 
 			try {
-				const stat = await file.exists();
-				if (!stat) continue;
+				if (!(await Bun.file(fullPath).exists())) continue;
 
 				if (entry.endsWith(".md")) {
-					const rawContent = await file.text();
+					const rawContent = await readFileText(fullPath);
 					const { frontmatter, body } = parseFrontmatter(rawContent, { source: fullPath });
 
 					const name = entry.split("/").pop()!.slice(0, -3); // Remove .md extension

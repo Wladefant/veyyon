@@ -33,6 +33,7 @@
     "@veyyon/agent-core": "catalog:",
     "@veyyon/ai": "catalog:",
     "@veyyon/catalog": "catalog:",
+    "@veyyon/natives": "catalog:",
     "@veyyon/plugin": "catalog:",
     "@veyyon/session": "catalog:",
     "@veyyon/settings": "catalog:",
@@ -42,7 +43,7 @@
     "@types/bun": "catalog:"
   },
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.3"
   },
   "files": [
     "src",

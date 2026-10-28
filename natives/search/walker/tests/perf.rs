@@ -13,7 +13,10 @@ use std::{
 };
 
 use veyyon_test_scratch::{TempTree, scratch_dir};
-use veyyon_walker::{WalkDetail, WalkOrder, WalkRequest};
+use veyyon_walker::{
+	CompiledWalkGlob, WalkDetail, WalkFilter, WalkOrder, WalkRank, WalkRequest,
+	collect_entries_without_heartbeat,
+};
 
 const DIRECTORY_FANOUT: [usize; 5] = [5, 5, 5, 4, 2];
 const CONTENT_FILE_COUNT: usize = 15_000;
@@ -89,6 +92,61 @@ fn perf_walk_collect_full_detail() {
 		assert!(count > 15_000, "expected full-detail entries, got {count}");
 		count
 	});
+}
+
+/// A files search: a glob ranked by mtime, which lists with full metadata.
+///
+/// Three arms over one tree. `serial` is the uncached collector this replaced:
+/// list and stat every entry on one thread, sort them all, then filter.
+/// `parallel, stat listed` walks in parallel with full metadata at the
+/// listing, which a size bound forces. `parallel, stat kept` lists without
+/// metadata and stats what the glob keeps.
+#[test]
+#[ignore = "run with: cargo test --profile ci -p veyyon-walker --test perf -- --ignored \
+            --nocapture --test-threads=1"]
+fn perf_ranked_glob_collection() {
+	let tree = build_synthetic_tree();
+	let root = tree.path();
+	for (label, pattern) in
+		[("matching nothing", "**/missing-zz.md"), ("matching every file", "**/*")]
+	{
+		let glob = CompiledWalkGlob::new([pattern]).expect("bench glob should compile");
+		let request = WalkRequest::new(root)
+			.hidden(true)
+			.gitignore(true)
+			.skip_git(true)
+			.skip_node_modules(true)
+			.detail(WalkDetail::Full);
+		let options = request.options();
+		run_bench(&format!("perf_ranked_glob {label}: serial"), || {
+			let mut entries = collect_entries_without_heartbeat(root, options)
+				.expect("serial collection")
+				.entries;
+			entries.retain(|entry| glob.is_match(&entry.path));
+			// The rank the walker applies: newest first, then by path.
+			entries.sort_by(|a, b| {
+				b.mtime
+					.partial_cmp(&a.mtime)
+					.unwrap_or(std::cmp::Ordering::Equal)
+					.then_with(|| a.path.cmp(&b.path))
+			});
+			entries.truncate(200);
+			entries.len()
+		});
+		for (arm, filter) in [
+			("parallel, stat listed", WalkFilter::all().glob(glob.clone()).max_file_size(u64::MAX)),
+			("parallel, stat kept", WalkFilter::all().glob(glob.clone())),
+		] {
+			let request = request.clone().filter(filter);
+			run_bench(&format!("perf_ranked_glob {label}: {arm}"), || {
+				request
+					.collect_ranked(WalkRank::MtimeDescPathAsc, 200)
+					.expect("ranked collection")
+					.stats
+					.scanned_entries
+			});
+		}
+	}
 }
 
 fn run_bench(mut name: &str, mut run: impl FnMut() -> usize) {

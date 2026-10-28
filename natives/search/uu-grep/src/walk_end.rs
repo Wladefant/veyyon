@@ -136,7 +136,7 @@ mod tests {
 	fn in_scope<T>(cancelled: bool, body: impl FnOnce() -> T) -> T {
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(io::sink()),
 			stdout_is_terminal:    false,
@@ -382,7 +382,7 @@ mod tests {
 		let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
 		let io = ScopeIo {
 			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			fds:                   Vec::new(),
 			stdin_is_search_input: false,
 			stdout:                Box::new(io::sink()),
 			stdout_is_terminal:    false,

@@ -116,7 +116,7 @@ describe("SshTool cwd handling", () => {
 
 		expect(executeSpy).toHaveBeenCalledWith(
 			HOST_A,
-			"cd -- '/srv/app' && pwd",
+			"cd -- '/srv/app' || exit; pwd",
 			expect.objectContaining({ compatEnabled: false, timeout: 60000 }),
 		);
 	});

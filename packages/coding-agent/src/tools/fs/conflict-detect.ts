@@ -18,8 +18,10 @@
  * merely start with `<` or `=` never match.
  */
 
-// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+import * as fs from "node:fs/promises";
+// Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { formatCount } from "@veyyon/utils/format";
+import { readFileRange } from "@veyyon/utils/fs-io";
 import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
 
@@ -154,10 +156,9 @@ export async function scanFileForConflicts(
 	options: { maxBytes?: number } = {},
 ): Promise<{ blocks: ConflictBlock[]; scanTruncated: boolean }> {
 	const maxBytes = options.maxBytes ?? SCAN_FILE_DEFAULT_MAX_BYTES;
-	const file = Bun.file(absolutePath);
-	const size = file.size;
+	const size = (await fs.stat(absolutePath)).size;
 	const truncated = size > maxBytes;
-	const bytes = truncated ? new Uint8Array(await file.slice(0, maxBytes).arrayBuffer()) : await file.bytes();
+	const bytes = truncated ? await readFileRange(absolutePath, 0, maxBytes) : await fs.readFile(absolutePath);
 	const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 	// `split("\n")` over a truncated read may leave a partial last line; the
 	// scanner already tolerates an unclosed opener, so no extra trimming.

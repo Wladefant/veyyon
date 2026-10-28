@@ -93,13 +93,22 @@ function expandString(
 	});
 }
 
-function expand<T>(obj: T, field: string, sink: UnresolvedEnvSink, extraEnv?: Record<string, string>): T {
+function expand<T>(
+	obj: T,
+	field: string,
+	sink: UnresolvedEnvSink,
+	extraEnv?: Record<string, string>,
+	preserveField?: (field: string) => boolean,
+): T {
+	if (preserveField?.(field)) return obj;
 	if (typeof obj === "string") return expandString(obj, field, sink, extraEnv) as T;
-	if (Array.isArray(obj)) return obj.map((item, index) => expand(item, `${field}[${index}]`, sink, extraEnv)) as T;
+	if (Array.isArray(obj)) {
+		return obj.map((item, index) => expand(item, `${field}[${index}]`, sink, extraEnv, preserveField)) as T;
+	}
 	if (obj !== null && typeof obj === "object") {
 		const result: Record<string, unknown> = {};
 		for (const [key, value] of Object.entries(obj)) {
-			result[key] = expand(value, field ? `${field}.${key}` : key, sink, extraEnv);
+			result[key] = expand(value, field ? `${field}.${key}` : key, sink, extraEnv, preserveField);
 		}
 		return result as T;
 	}
@@ -112,7 +121,13 @@ function expand<T>(obj: T, field: string, sink: UnresolvedEnvSink, extraEnv?: Re
  * The value keeps the literal `${VAR}` for an unresolved reference, because a consumer that
  * currently spawns or dials with it is refused by name downstream rather than handed an empty
  * string that looks like a deliberate setting.
+ * `preserveField` leaves credential references untouched before reading the environment.
  */
-export function expandEnvVarsDeep<T>(obj: T, sink: UnresolvedEnvSink, extraEnv?: Record<string, string>): T {
-	return expand(obj, "", sink, extraEnv);
+export function expandEnvVarsDeep<T>(
+	obj: T,
+	sink: UnresolvedEnvSink,
+	extraEnv?: Record<string, string>,
+	preserveField?: (field: string) => boolean,
+): T {
+	return expand(obj, "", sink, extraEnv, preserveField);
 }

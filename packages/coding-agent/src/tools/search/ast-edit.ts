@@ -6,6 +6,7 @@ import { formatHashlineHeader } from "@veyyon/hashline";
 import { type AstReplaceChange, type AstReplaceFileChange, astEdit } from "@veyyon/natives";
 import { $envpos, lazy, prompt, truncate, untilAborted } from "@veyyon/utils";
 import { formatCount } from "@veyyon/utils/format";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { normalizeToLF } from "../../edit/normalize";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -341,7 +342,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema.value, AstEdi
 				for (const relativePath of fileList) {
 					const absolutePath = path.resolve(this.session.cwd, relativePath);
 					try {
-						const fullText = normalizeToLF(await Bun.file(absolutePath).text());
+						const fullText = normalizeToLF(await readFileText(absolutePath));
 						const tag = snapshotStore.record(canonicalSnapshotKey(absolutePath), fullText);
 						hashContexts.set(relativePath, { tag });
 					} catch {
@@ -469,7 +470,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema.value, AstEdi
 							for (const relativePath of appliedFileList) {
 								const appliedAbsolutePath = path.resolve(this.session.cwd, relativePath);
 								try {
-									const fullText = normalizeToLF(await Bun.file(appliedAbsolutePath).text());
+									const fullText = normalizeToLF(await readFileText(appliedAbsolutePath));
 									const freshTag = snapshotStore.record(canonicalSnapshotKey(appliedAbsolutePath), fullText);
 									freshTagLines.push(formatHashlineHeader(relativePath, freshTag));
 								} catch {

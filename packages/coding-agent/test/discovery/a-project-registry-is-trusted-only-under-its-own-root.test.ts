@@ -28,18 +28,16 @@
  * - Let a describer null mean allowed: the nested `.git` no-decision case loads the registry.
  * - Drop the non-git owner fallback: the `.veyyon` ancestor case loads nothing from a nested cwd.
  * - Let an approval for one repository trust another: the unrelated-project control loads.
- * - Ignore the recorded denial or the registry bytes: the denial and changed-bytes cases load.
+ * - Ignore the recorded denial, registry bytes or payload digest: the denial and changed-content cases load.
  * - Gate the profile registry, which sits outside the project: the profile root disappears.
  * - Key the writer on `findRepoRoot(cwd) ?? cwd` again: a nested non-git approval never reaches the gate.
  * - Let a junction that resolves outside the repository load after approval: the escape case loads.
- * - Serve a warm cache entry after a denial or a byte change: the warm cases load.
+ * - Serve a warm cache entry after a denial, registry change or payload change: the warm cases load.
  *
  * Gaps: the Windows drive-letter and case variants run only on Windows, and whether they resolve to one
  * trust key depends on how the runtime's `realpath.native` treats case, which this suite does not normalise.
  * The suite does not run plugin code, and it does not cover `--plugin-dir` roots or the Claude Code registry.
- * The gate decides the registry file only. Project scope reads no other file in the project directory: its
- * `package.json`, lockfile and `node_modules` are not read. The files inside each `installPath` directory the
- * registry names are read as before, and they are not hashed. This suite does not claim to cover them.
+ * The gate hashes registry bytes and every file under each named in-project `installPath`.
  */
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -66,6 +64,7 @@ interface Fixture {
 	pluginsRoot: string;
 	home: string;
 	projectInstallPath: string;
+	otherInstallPath: string;
 }
 
 function registryJson(plugins: Record<string, string>, scope: "user" | "project" = "project"): string {
@@ -97,10 +96,13 @@ async function makeFixture(): Promise<Fixture> {
 	const agentDir = path.join(tempRoot, "profiles", "work", "agent");
 	const pluginsRoot = path.join(tempRoot, "profiles", "work", "plugins");
 	const home = path.join(tempRoot, "home");
-	const projectInstallPath = path.join(tempRoot, "payloads", "project-tool");
+	const projectInstallPath = path.join(repoRoot, "payloads", "project-tool");
+	const otherInstallPath = path.join(repoRoot, "payloads", "other-tool");
 	await Promise.all([
 		fs.mkdir(path.join(repoRoot, ".git"), { recursive: true }),
 		fs.mkdir(nestedCwd, { recursive: true }),
+		fs.mkdir(projectInstallPath, { recursive: true }),
+		fs.mkdir(otherInstallPath, { recursive: true }),
 		fs.mkdir(agentDir, { recursive: true }),
 		fs.mkdir(pluginsRoot, { recursive: true }),
 		fs.mkdir(home, { recursive: true }),
@@ -109,7 +111,7 @@ async function makeFixture(): Promise<Fixture> {
 		path.join(pluginsRoot, "installed_plugins.json"),
 		registryJson({ [PROFILE_PLUGIN]: path.join(tempRoot, "payloads", "profile-tool") }, "user"),
 	);
-	return { tempRoot, repoRoot, nestedCwd, agentDir, pluginsRoot, home, projectInstallPath };
+	return { tempRoot, repoRoot, nestedCwd, agentDir, pluginsRoot, home, projectInstallPath, otherInstallPath };
 }
 
 function decide(action: "approve" | "deny" | "list", cwd: string, agentDir: string): Promise<TrustCommandResult> {
@@ -324,7 +326,7 @@ test("registry bytes that change after approval are withheld until they are appr
 		fixture.repoRoot,
 		registryJson({
 			[PROJECT_PLUGIN]: fixture.projectInstallPath,
-			[OTHER_PLUGIN]: path.join(fixture.tempRoot, "payloads", "other-tool"),
+			[OTHER_PLUGIN]: fixture.otherInstallPath,
 		}),
 	);
 	const listed = await decide("list", fixture.nestedCwd, fixture.agentDir);
@@ -350,8 +352,10 @@ test("approving an unrelated repository never trusts this repository's registry"
 	const otherRepo = path.join(fixture.tempRoot, "other-repo");
 	const otherNestedCwd = path.join(otherRepo, "src");
 	await fs.mkdir(path.join(otherRepo, ".git"), { recursive: true });
+	const otherInstallPath = path.join(otherRepo, "payloads", "other-tool");
+	await fs.mkdir(otherInstallPath, { recursive: true });
 	await fs.mkdir(otherNestedCwd, { recursive: true });
-	await writeProjectRegistry(otherRepo, registryJson({ [OTHER_PLUGIN]: path.join(fixture.tempRoot, "payloads", "other-tool") }));
+	await writeProjectRegistry(otherRepo, registryJson({ [OTHER_PLUGIN]: otherInstallPath }));
 	await decide("approve", otherNestedCwd, fixture.agentDir);
 
 	const fromThisRepo = await loadRoots(fixture, fixture.nestedCwd);
@@ -367,9 +371,11 @@ test("approving an unrelated repository never trusts this repository's registry"
 test("a registry under a non-git owner directory is refused before approval and loads from a nested cwd after it", async () => {
 	const fixture = await makeFixture();
 	const owner = path.join(fixture.tempRoot, "loose-owner");
+	const projectInstallPath = path.join(owner, "payloads", "project-tool");
+	await fs.mkdir(projectInstallPath, { recursive: true });
+	await writeProjectRegistry(owner, registryJson({ [PROJECT_PLUGIN]: projectInstallPath }));
 	const nestedCwd = path.join(owner, "a", "b");
 	await fs.mkdir(nestedCwd, { recursive: true });
-	await writeProjectRegistry(owner, registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }));
 
 	const beforeApproval = await loadRoots(fixture, nestedCwd);
 	const approval = await decide("approve", owner, fixture.agentDir);
@@ -390,9 +396,11 @@ async function loadWarm(fixture: Fixture, cwd: string) {
 test("a nested non-git approval is recorded under the key the gate reads, so the same cwd loads the registry", async () => {
 	const fixture = await makeFixture();
 	const owner = path.join(fixture.tempRoot, "loose-owner");
+	const projectInstallPath = path.join(owner, "payloads", "project-tool");
+	await fs.mkdir(projectInstallPath, { recursive: true });
 	const nestedCwd = path.join(owner, "a", "b");
 	await fs.mkdir(nestedCwd, { recursive: true });
-	await writeProjectRegistry(owner, registryJson({ [PROJECT_PLUGIN]: fixture.projectInstallPath }));
+	await writeProjectRegistry(owner, registryJson({ [PROJECT_PLUGIN]: projectInstallPath }));
 
 	const approval = await decide("approve", nestedCwd, fixture.agentDir);
 	const loaded = await loadRoots(fixture, nestedCwd);
@@ -450,7 +458,7 @@ test("a warm load is not served after the registry bytes change under an approva
 		fixture.repoRoot,
 		registryJson({
 			[PROJECT_PLUGIN]: fixture.projectInstallPath,
-			[OTHER_PLUGIN]: path.join(fixture.tempRoot, "payloads", "other-tool"),
+			[OTHER_PLUGIN]: fixture.otherInstallPath,
 		}),
 	);
 	const afterChange = await loadWarm(fixture, fixture.nestedCwd);

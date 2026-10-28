@@ -6,15 +6,27 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { resolveAgentModel } from "../../src/task/agent-settings";
 
-describe("task workers share Flash and GPT-6 Luna", () => {
-	const flash = "google/gemini-3.8-flash";
-	const luna = "openai-codex/gpt-6-luna";
-	const fallback = "anthropic/claude-sonnet-4";
+describe("task workers share Flash and GPT-6 Luna deterministically", () => {
+	const L = "openai-codex/gpt-6-luna:medium";
+	const F = "google-antigravity/gemini-3.8-flash:high";
+	const H = "anthropic/claude-haiku-5-5:max";
+	const standardFlash = "google/gemini-3.8-flash";
+	const standardLuna = "openai-codex/gpt-6-luna";
 
-	it("balances stable task spawn identities and preserves fallback candidates", () => {
+	it("always picks configured Luna-first for task workers across spawn IDs including ProbeTaskD1", () => {
 		const settings = Settings.isolated({
-			"agent.agents": { task: { model: [flash, luna, fallback] } },
+			"agent.agents": { task: { model: [L, F, H] } },
 		});
+		const probeResolved = resolveAgentModel({
+			settings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "ProbeTaskD1",
+		});
+		expect(probeResolved.patterns[0]).toBe(L);
+		expect(probeResolved.patterns[1]).toBe(F);
+		expect(probeResolved.patterns.slice(2)).toEqual([H]);
+
 		const counts: Record<string, number> = {};
 		for (let index = 0; index < 100; index++) {
 			const spawnId = `spawn-${index}`;
@@ -24,99 +36,144 @@ describe("task workers share Flash and GPT-6 Luna", () => {
 			expect(resolveAgentModel({ settings, agentName: "task", taskDepth: 1, spawnId }).patterns).toEqual(
 				resolved.patterns,
 			);
-			expect(resolved.patterns.slice(2)).toEqual([fallback]);
+			expect(resolved.patterns[0]).toBe(L);
+			expect(resolved.patterns[1]).toBe(F);
+			expect(resolved.patterns.slice(2)).toEqual([H]);
 		}
-		expect(counts[flash]).toBeGreaterThanOrEqual(40);
-		expect(counts[flash]).toBeLessThanOrEqual(60);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeLessThanOrEqual(60);
+		expect(counts[L]).toBe(100);
+		expect(counts[F] ?? 0).toBe(0);
 	});
 
-	it("splits nested task and qa-verifier chains while leaving other types and incomplete pairs alone", () => {
-		const nested = Settings.isolated({
-			"agent.agents": { task: { agents: { model: [flash, luna, fallback] } } },
+	it("always picks configured Flash-first for qa-verifier across spawn IDs including ProbeTaskD1", () => {
+		const settings = Settings.isolated({
+			"agent.agents": { "qa-verifier": { model: [F, L, H] } },
 		});
-		const qaSettings = Settings.isolated({
-			"agent.agents": { "qa-verifier": { model: [flash, luna, fallback] } },
+		const probeResolved = resolveAgentModel({
+			settings,
+			agentName: "qa-verifier",
+			taskDepth: 1,
+			spawnId: "ProbeTaskD1",
 		});
-		const countsByLane: Record<string, Record<string, number>> = {
-			task: {},
-			"qa-verifier": {},
-		};
+		expect(probeResolved.patterns[0]).toBe(F);
+		expect(probeResolved.patterns[1]).toBe(L);
+		expect(probeResolved.patterns.slice(2)).toEqual([H]);
+
+		const counts: Record<string, number> = {};
 		for (let index = 0; index < 100; index++) {
-			for (const [agentName, settings, taskDepth] of [
-				["task", nested, 2],
-				["qa-verifier", qaSettings, 1],
-			] as const) {
-				const resolved = resolveAgentModel({
-					settings,
-					agentName,
-					taskDepth,
-					spawnId: `variant-${index}`,
-				});
-				const counts = countsByLane[agentName]!;
-				counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
-				expect(resolved.patterns.slice(2)).toEqual([fallback]);
-			}
+			const spawnId = `variant-${index}`;
+			const resolved = resolveAgentModel({ settings, agentName: "qa-verifier", taskDepth: 1, spawnId });
+			const first = resolved.patterns[0];
+			counts[first] = (counts[first] ?? 0) + 1;
+			expect(resolved.patterns[0]).toBe(F);
+			expect(resolved.patterns[1]).toBe(L);
+			expect(resolved.patterns.slice(2)).toEqual([H]);
 		}
-		for (const agentName of ["task", "qa-verifier"]) {
-			const counts = countsByLane[agentName]!;
-			expect(counts[flash]).toBeGreaterThanOrEqual(40);
-			expect(counts[flash]).toBeLessThanOrEqual(60);
-			expect(counts[luna]).toBeGreaterThanOrEqual(40);
-			expect(counts[luna]).toBeLessThanOrEqual(60);
-		}
-
-		const incomplete = Settings.isolated({ "agent.agents": { task: { model: [flash, fallback] } } });
-		expect(resolveAgentModel({ settings: incomplete, agentName: "task", spawnId: "incomplete" }).patterns).toEqual([
-			flash,
-			fallback,
-		]);
-		const other = Settings.isolated({ "agent.agents": { reviewer: { model: [flash, luna, fallback] } } });
-		expect(resolveAgentModel({ settings: other, agentName: "reviewer", spawnId: "review" }).patterns).toEqual([
-			flash,
-			luna,
-			fallback,
-		]);
+		expect(counts[F]).toBe(100);
+		expect(counts[L] ?? 0).toBe(0);
 	});
 
-	it("keeps the split at deeper configured depths and starts a fresh split for new spawns", () => {
+	it("leaves explicit H-first unchanged, and leaves other agent types and incomplete pairs alone", () => {
+		const incomplete = Settings.isolated({ "agent.agents": { task: { model: [F, H] } } });
+		expect(resolveAgentModel({ settings: incomplete, agentName: "task", spawnId: "incomplete" }).patterns).toEqual([
+			F,
+			H,
+		]);
+
+		const other = Settings.isolated({ "agent.agents": { reviewer: { model: [F, L, H] } } });
+		expect(resolveAgentModel({ settings: other, agentName: "reviewer", spawnId: "review" }).patterns).toEqual([
+			F,
+			L,
+			H,
+		]);
+
+		const haikuSettings = Settings.isolated({ "agent.agents": { haiku: { model: [H, L, F] } } });
+		expect(resolveAgentModel({ settings: haikuSettings, agentName: "haiku", spawnId: "haiku-spawn" }).patterns).toEqual([
+			H,
+			L,
+			F,
+		]);
+		for (let index = 0; index < 100; index++) {
+			const spawnId = `haiku-${index}`;
+			expect(resolveAgentModel({ settings: haikuSettings, agentName: "haiku", taskDepth: 1, spawnId }).patterns).toEqual([
+				H,
+				L,
+				F,
+			]);
+		}
+
+		const haikuAlt = Settings.isolated({ "agent.agents": { haiku: { model: [H, F, L] } } });
+		expect(resolveAgentModel({ settings: haikuAlt, agentName: "haiku", spawnId: "haiku-alt" }).patterns).toEqual([
+			H,
+			F,
+			L,
+		]);
+	});
+	it("starts Haiku-first task and QA chains with Haiku", () => {
+		for (const agentName of ["task", "qa-verifier"]) {
+			const settings = Settings.isolated({
+				"agent.agents": { [agentName]: { model: [H, L, F] } },
+			});
+			const resolved = resolveAgentModel({
+				settings,
+				agentName,
+				taskDepth: 1,
+				spawnId: `${agentName}-haiku-first`,
+			});
+			expect(resolved.patterns).toEqual([H, L, F]);
+		}
+	});
+
+	it("preserves configured model order at deeper configured depths", () => {
 		const deepTask = Settings.isolated({
-			"agent.agents": { task: { agents: { agents: { model: [flash, luna, fallback] } } } },
+			"agent.agents": { task: { agents: { agents: { model: [L, F, H] } } } },
 		});
 		const deepQa = Settings.isolated({
-			"agent.agents": { "qa-verifier": { agents: { agents: { model: [flash, luna, fallback] } } } },
+			"agent.agents": { "qa-verifier": { agents: { agents: { model: [F, L, H] } } } },
 		});
-		for (const [agentName, settings] of [
-			["task", deepTask],
-			["qa-verifier", deepQa],
-		] as const) {
-			const counts: Record<string, number> = {};
-			for (let index = 0; index < 100; index++) {
-				const resolved = resolveAgentModel({
-					settings,
-					agentName,
-					taskDepth: 3,
-					spawnId: `reset-${index}`,
-				});
-				counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
-				expect(resolved.patterns.slice(2)).toEqual([fallback]);
-			}
-			expect(counts[flash]).toBeGreaterThanOrEqual(40);
-			expect(counts[flash]).toBeLessThanOrEqual(60);
-			expect(counts[luna]).toBeGreaterThanOrEqual(40);
-			expect(counts[luna]).toBeLessThanOrEqual(60);
+		for (let index = 0; index < 100; index++) {
+			const taskResolved = resolveAgentModel({
+				settings: deepTask,
+				agentName: "task",
+				taskDepth: 3,
+				spawnId: `reset-${index}`,
+			});
+			expect(taskResolved.patterns[0]).toBe(L);
+			expect(taskResolved.patterns[1]).toBe(F);
+			expect(taskResolved.patterns.slice(2)).toEqual([H]);
+
+			const qaResolved = resolveAgentModel({
+				settings: deepQa,
+				agentName: "qa-verifier",
+				taskDepth: 3,
+				spawnId: `reset-${index}`,
+			});
+			expect(qaResolved.patterns[0]).toBe(F);
+			expect(qaResolved.patterns[1]).toBe(L);
+			expect(qaResolved.patterns.slice(2)).toEqual([H]);
 		}
+	});
+
+	it("also preserves configured model order for standard provider names", () => {
+		const standardTask = Settings.isolated({
+			"agent.agents": { task: { model: [standardLuna, standardFlash, H] } },
+		});
+		const res = resolveAgentModel({ settings: standardTask, agentName: "task", taskDepth: 1, spawnId: "std-1" });
+		expect(res.patterns).toEqual([standardLuna, standardFlash, H]);
 	});
 });
 
 describe("the Flash and Luna share follows quota suppression and the live provider name", () => {
-	const antigravityFlash = "google-antigravity/gemini-3.8-flash";
-	const luna = "openai-codex/gpt-6-luna";
-	const fallback = "anthropic/claude-sonnet-4";
+	const F = "google-antigravity/gemini-3.8-flash:high";
+	const L = "openai-codex/gpt-6-luna:medium";
+	const H = "anthropic/claude-haiku-5-5:max";
+
 	const settings = Settings.isolated({
-		"agent.agents": { task: { model: [antigravityFlash, luna, fallback] } },
+		"agent.agents": { task: { model: [F, L, H] } },
 	});
+	const taskLFirstSettings = Settings.isolated({
+		"agent.agents": { task: { model: [L, F, H] } },
+	});
+
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let registry: ModelRegistry;
@@ -132,56 +189,111 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		tempDir.removeSync();
 	});
 
-	function firstChoices(): Record<string, number> {
+	function firstChoices(targetSettings = settings, agentName = "task"): Record<string, number> {
 		const counts: Record<string, number> = {};
 		for (let index = 0; index < 100; index++) {
 			const resolved = resolveAgentModel({
-				settings,
-				agentName: "task",
+				settings: targetSettings,
+				agentName,
 				taskDepth: 1,
 				spawnId: `quota-${index}`,
 				modelRegistry: registry,
 			});
-			expect(resolved.patterns.slice(2)).toEqual([fallback]);
+			expect(resolved.patterns).toContain(H);
 			counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
 		}
 		return counts;
 	}
 
-	it("splits the live google-antigravity provider name against Luna", () => {
+	it("respects configured first choice for live google-antigravity provider name", () => {
 		registry.clearSuppressedSelectors();
-		const counts = firstChoices();
-		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(counts[antigravityFlash]).toBeLessThanOrEqual(60);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeLessThanOrEqual(60);
+		const flashCounts = firstChoices(settings);
+		expect(flashCounts[F]).toBe(100);
+		expect(flashCounts[L] ?? 0).toBe(0);
+
+		const lunaCounts = firstChoices(taskLFirstSettings);
+		expect(lunaCounts[L]).toBe(100);
+		expect(lunaCounts[F] ?? 0).toBe(0);
 	});
 
-	it("starts new spawns on the other pool while one is suppressed, and restores the split after reset", () => {
+	it("starts new spawns on the other pool while one is suppressed, and restores configured order after reset", () => {
 		registry.clearSuppressedSelectors();
-		registry.suppressSelector(luna, Date.now() + 60_000);
-		const lunaDown = firstChoices();
-		expect(lunaDown[antigravityFlash]).toBe(100);
+		registry.suppressSelector(L, Date.now() + 60_000);
+		const lunaDown = firstChoices(settings);
+		expect(lunaDown[F]).toBe(100);
 
 		registry.clearSuppressedSelectors();
-		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
-		const flashDown = firstChoices();
-		expect(flashDown[luna]).toBe(100);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const flashDown = firstChoices(settings);
+		expect(flashDown[L]).toBe(100);
 
 		registry.clearSuppressedSelectors();
-		registry.suppressSelector(luna, Date.now() - 1);
-		const afterReset = firstChoices();
-		expect(afterReset[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(afterReset[antigravityFlash]).toBeLessThanOrEqual(60);
+		registry.suppressSelector(F, Date.now() - 1);
+		const afterReset = firstChoices(settings);
+		expect(afterReset[F]).toBe(100);
+		expect(afterReset[L] ?? 0).toBe(0);
+
+		// Also check task L-first under suppression
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() + 60_000);
+		const lFirstLunaDown = firstChoices(taskLFirstSettings);
+		expect(lFirstLunaDown[F]).toBe(100);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const lFirstFlashDown = firstChoices(taskLFirstSettings);
+		expect(lFirstFlashDown[L]).toBe(100);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() - 1);
+		const lFirstReset = firstChoices(taskLFirstSettings);
+		expect(lFirstReset[L]).toBe(100);
+		expect(lFirstReset[F] ?? 0).toBe(0);
 	});
 
-	it("keeps the hash split when both pools are suppressed", () => {
+	it("starts on the healthy tail H when both shared pools are suppressed", () => {
 		registry.clearSuppressedSelectors();
-		registry.suppressSelector(luna, Date.now() + 60_000);
-		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
-		const counts = firstChoices();
-		expect(counts[antigravityFlash]).toBeGreaterThanOrEqual(40);
-		expect(counts[luna]).toBeGreaterThanOrEqual(40);
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const counts = firstChoices(settings);
+		expect(counts[H]).toBe(100);
+		expect(counts[F] ?? 0).toBe(0);
+		expect(counts[L] ?? 0).toBe(0);
+
+		const lFirstBothDown = firstChoices(taskLFirstSettings);
+		expect(lFirstBothDown[H]).toBe(100);
+		expect(lFirstBothDown[L] ?? 0).toBe(0);
+		registry.clearSuppressedSelectors();
+	});
+
+	it("keeps Haiku first or promotes it when both pools are down, without exposing the expensive tail", () => {
+		const opus = "anthropic/claude-opus-5-5";
+		const astra = "openai-codex/gpt-6-astra";
+		const haikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, F, L, opus, astra] } },
+		});
+		const poolFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [F, L, H, opus, astra] } },
+		});
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const haikuFirst = resolveAgentModel({
+			settings: haikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		const poolFirst = resolveAgentModel({
+			settings: poolFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		expect(haikuFirst).toEqual([H, F, L]);
+		expect(poolFirst).toEqual([H, F, L]);
 		registry.clearSuppressedSelectors();
 	});
 
@@ -189,20 +301,107 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		const opus = "anthropic/claude-opus-5-5";
 		const astra = "openai-codex/gpt-6-astra";
 		const withExpensiveTail = Settings.isolated({
-			"agent.agents": { task: { model: [antigravityFlash, luna, fallback, opus, astra, "anthropic/*", "claude-opus"] } },
+			"agent.agents": { task: { model: [F, L, H, opus, astra, "anthropic/*", "claude-opus"] } },
 		});
 		const resolve = (spawnId: string) =>
 			resolveAgentModel({ settings: withExpensiveTail, agentName: "task", taskDepth: 1, spawnId, modelRegistry: registry })
 				.patterns;
 
 		registry.clearSuppressedSelectors();
-		expect(resolve("tail-0").slice(2)).toEqual([fallback]);
+		expect(resolve("tail-0").slice(2)).toEqual([H]);
 
-		registry.suppressSelector(luna, Date.now() + 60_000);
-		registry.suppressSelector(antigravityFlash, Date.now() + 60_000);
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
 		const exhausted = resolve("tail-1");
-		expect(exhausted.slice(0, 2).sort()).toEqual([antigravityFlash, luna].sort());
-		expect(exhausted.slice(2)).toEqual([fallback]);
+		expect(exhausted[0]).toBe(H);
+		expect(exhausted.slice(1).sort()).toEqual([F, L].sort());
+		registry.clearSuppressedSelectors();
+	});
+
+	it("verifies full-triad closure across all triad lanes and suppression states", () => {
+		// 1. Task lane (L-first): healthy [L, F, H], L-down [F, L, H], F-down [L, F, H], both-down [H, L, F]
+		const taskSettings = Settings.isolated({
+			"agent.agents": { task: { model: [L, F, H] } },
+		});
+		registry.clearSuppressedSelectors();
+		let res = resolveAgentModel({ settings: taskSettings, agentName: "task", taskDepth: 1, spawnId: "triad-t1", modelRegistry: registry });
+		expect(res.patterns).toEqual([L, F, H]);
+
+		registry.suppressSelector(L, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: taskSettings, agentName: "task", taskDepth: 1, spawnId: "triad-t2", modelRegistry: registry });
+		expect(res.patterns).toEqual([F, L, H]);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(F, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: taskSettings, agentName: "task", taskDepth: 1, spawnId: "triad-t3", modelRegistry: registry });
+		expect(res.patterns).toEqual([L, F, H]);
+
+		registry.suppressSelector(L, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: taskSettings, agentName: "task", taskDepth: 1, spawnId: "triad-t4", modelRegistry: registry });
+		expect(res.patterns).toEqual([H, L, F]);
+
+		// 2. QA lane (F-first): healthy [F, L, H], F-down [L, F, H], L-down [F, L, H], both-down [H, F, L]
+		const qaSettings = Settings.isolated({
+			"agent.agents": { "qa-verifier": { model: [F, L, H] } },
+		});
+		registry.clearSuppressedSelectors();
+		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q1", modelRegistry: registry });
+		expect(res.patterns).toEqual([F, L, H]);
+
+		registry.suppressSelector(F, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q2", modelRegistry: registry });
+		expect(res.patterns).toEqual([L, F, H]);
+
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q3", modelRegistry: registry });
+		expect(res.patterns).toEqual([F, L, H]);
+
+		registry.suppressSelector(F, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q4", modelRegistry: registry });
+		expect(res.patterns).toEqual([H, F, L]);
+		const taskHaikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, L, F] } },
+		});
+		res = resolveAgentModel({
+			settings: taskHaikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		});
+		expect(res.patterns).toEqual([H, L, F]);
+		registry.clearSuppressedSelectors();
+
+
+		// 3. Haiku lane (explicit H-first): [H, L, F] stays [H, L, F] unchanged under all suppression states
+		const haikuSettings = Settings.isolated({
+			"agent.agents": { haiku: { model: [H, L, F] } },
+		});
+		registry.clearSuppressedSelectors();
+		res = resolveAgentModel({ settings: haikuSettings, agentName: "haiku", taskDepth: 1, spawnId: "triad-h1", modelRegistry: registry });
+		expect(res.patterns).toEqual([H, L, F]);
+
+		registry.suppressSelector(H, Date.now() + 60_000);
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		res = resolveAgentModel({ settings: haikuSettings, agentName: "haiku", taskDepth: 1, spawnId: "triad-h2", modelRegistry: registry });
+		expect(res.patterns).toEqual([H, L, F]);
+
+		// 4. Triad with expensive tail: Opus/Astra stripped, H preserved in safe tail
+		const closedTriadWithTail = Settings.isolated({
+			"agent.agents": {
+				task: { model: [L, F, H, "anthropic/claude-opus-5-5", "openai-codex/gpt-6-astra"] },
+				"qa-verifier": { model: [F, L, H, "anthropic/claude-opus-5-5", "openai-codex/gpt-6-astra"] },
+			},
+		});
+		registry.clearSuppressedSelectors();
+		const taskClosed = resolveAgentModel({ settings: closedTriadWithTail, agentName: "task", taskDepth: 1, spawnId: "triad-tail-1", modelRegistry: registry });
+		expect(taskClosed.patterns).toEqual([L, F, H]);
+
+		const qaClosed = resolveAgentModel({ settings: closedTriadWithTail, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-tail-2", modelRegistry: registry });
+		expect(qaClosed.patterns).toEqual([F, L, H]);
+
 		registry.clearSuppressedSelectors();
 	});
 });

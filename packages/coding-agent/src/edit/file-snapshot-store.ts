@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { InMemorySnapshotStore } from "@veyyon/hashline";
+import { readFileText } from "@veyyon/utils/fs-io";
 import { normalizeToLF } from "./normalize";
 
 /**
@@ -130,9 +131,8 @@ export async function recordFileSnapshot(
 			if (Buffer.byteLength(normalizedText) > SNAPSHOT_MAX_BYTES) return undefined;
 			return getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalizedText, seenLines);
 		}
-		const file = Bun.file(absolutePath);
-		if (file.size > SNAPSHOT_MAX_BYTES) return undefined;
-		const normalized = normalizeToLF(await file.text());
+		if ((await fs.promises.stat(absolutePath)).size > SNAPSHOT_MAX_BYTES) return undefined;
+		const normalized = normalizeToLF(await readFileText(absolutePath));
 		return getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized, seenLines);
 	} catch {
 		// A snapshot is taken BEFORE an edit so the edit can be described against it, and a file that does

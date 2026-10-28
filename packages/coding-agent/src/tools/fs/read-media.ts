@@ -151,6 +151,6 @@ export async function readConvertedDocument(
 	};
 	return {
 		kind: "result",
-		result: buildInMemoryResult(session, rendered, parsed, options),
+		result: await buildInMemoryResult(session, rendered, parsed, options),
 	};
 }

@@ -18,6 +18,8 @@ import type {
 	JsonRpcRequest,
 	JsonRpcResponse,
 	MCPRequestOptions,
+	MCPStreamRequest,
+	MCPStreamRequestOptions,
 	MCPStdioServerConfig,
 	MCPTransport,
 	ServerRequestResponse,
@@ -474,6 +476,10 @@ export class StdioTransport implements MCPTransport {
 			reject: (error: Error) => void;
 		}
 	>();
+	#streamRequests = new Map<
+		string | number,
+		{ onNotification: (notification: JsonRpcMessage) => void; resolve: () => void; reject: (error: Error) => void; signal?: AbortSignal; onAbort?: () => void }
+	>();
 	#connected = false;
 	#readLoop: Promise<void> | null = null;
 
@@ -679,15 +685,115 @@ export class StdioTransport implements MCPTransport {
 				} else {
 					pending.resolve(response.result);
 				}
+				return;
+			}
+			const stream = this.#streamRequests.get(responseId);
+			if (stream) {
+				if (response.error) {
+					stream.reject(Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
+						code: response.error.code,
+						data: response.error.data,
+					}));
+				} else {
+					stream.resolve();
+				}
+				return;
 			}
 			return;
 		}
 
 		// Notification: has method but no id
+
 		if ("method" in message) {
+			if (message.params && typeof message.params === "object" && "_meta" in message.params) {
+				const meta = message.params._meta;
+				if (meta && typeof meta === "object" && "io.modelcontextprotocol/subscriptionId" in meta) {
+					const streamId = meta["io.modelcontextprotocol/subscriptionId"];
+					if (typeof streamId === "string" || typeof streamId === "number") {
+						const stream = this.#streamRequests.get(streamId);
+						if (stream) {
+							stream.onNotification(message);
+							return;
+						}
+					}
+				}
+			}
 			const notification = message as { method: string; params?: unknown };
 			this.onNotification?.(notification.method, notification.params);
 		}
+	}
+
+	streamRequest(
+		method: string,
+		params: Record<string, unknown> | undefined,
+		onNotification: (notification: JsonRpcMessage) => void,
+		options?: MCPStreamRequestOptions,
+	): MCPStreamRequest {
+		if (!this.#connected || !this.#process?.stdin) {
+			throw new Error(mcpNotConnectedMessage({ command: this.config.command }, `stream request "${method}"`));
+		}
+		const id = Snowflake.next();
+		const requestParams = {
+			...(params ?? {}),
+			_meta: {
+				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta)
+					? params._meta
+					: {}),
+				"io.modelcontextprotocol/subscriptionId": id,
+			},
+		};
+		const { promise: done, resolve, reject } = Promise.withResolvers<void>();
+		let settled = false;
+		const cleanup = (cancelledByClient = false) => {
+			if (settled) return;
+			settled = true;
+			const stream = this.#streamRequests.get(id);
+			if (stream?.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
+			this.#streamRequests.delete(id);
+			if (cancelledByClient && this.#connected && this.#process?.stdin) {
+				writeFrame(
+					this.#process.stdin,
+					`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } })}\n`,
+				);
+			}
+			resolve();
+		};
+		const signal = options?.signal;
+		const onAbort = () => cleanup(true);
+		this.#streamRequests.set(id, {
+			onNotification,
+			resolve: () => cleanup(false),
+			reject: (err: Error) => {
+				if (settled) return;
+				settled = true;
+				const stream = this.#streamRequests.get(id);
+				if (stream?.signal && stream.onAbort) stream.signal.removeEventListener("abort", stream.onAbort);
+				this.#streamRequests.delete(id);
+				reject(err);
+			},
+			signal,
+			onAbort,
+		});
+		const failSend = (error: unknown) => {
+			this.#streamRequests.get(id)?.reject(error instanceof Error ? error : new Error(String(error)));
+		};
+		if (signal?.aborted) {
+			cleanup(false);
+		} else {
+			signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				options?.onRequestId?.(id);
+				const stdin = this.#process.stdin;
+				const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params: requestParams })}\n`;
+				const wrote = stdin.write(frame);
+				if (isThenable(wrote)) wrote.then(undefined, failSend);
+				const flushed = stdin.flush();
+				if (isThenable(flushed)) flushed.then(undefined, failSend);
+			} catch (error) {
+				failSend(error);
+			}
+		}
+		return { id, done, cancel: () => cleanup(true) };
 	}
 
 	#sendResponse(response: ServerRequestResponse): void {
@@ -746,6 +852,8 @@ export class StdioTransport implements MCPTransport {
 			pending.reject(new Error(reason));
 		}
 		this.#pendingRequests.clear();
+		for (const stream of this.#streamRequests.values()) stream.resolve();
+		this.#streamRequests.clear();
 
 		this.onClose?.();
 	}
@@ -775,7 +883,7 @@ export class StdioTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
+		const timeout = options?.timeoutMs ?? resolveMCPTimeoutMs(this.config.timeout);
 		const signal = options?.signal;
 
 		if (signal?.aborted) {
@@ -801,7 +909,14 @@ export class StdioTransport implements MCPTransport {
 		};
 
 		const onAbort = () => {
+			if (settled) return;
 			cleanup();
+			if (this.#connected && this.#process?.stdin) {
+				writeFrame(
+					this.#process.stdin,
+					`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } })}\n`,
+				);
+			}
 			const reason = signal?.reason instanceof Error ? signal.reason : new Error("Aborted");
 			reject(reason);
 		};
@@ -828,6 +943,7 @@ export class StdioTransport implements MCPTransport {
 			}, timeout);
 		}
 
+
 		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
 		const failFromSend = (error: unknown) => {
@@ -836,6 +952,7 @@ export class StdioTransport implements MCPTransport {
 			reject(error instanceof Error ? error : new Error(String(error)));
 		};
 		try {
+			options?.onRequestId?.(id);
 			// Never `await` write/flush. Bun's FileSink returns a pending Promise
 			// once the OS pipe buffer fills (default ~64 KB on POSIX), and a
 			// subprocess that stops draining stdin will park those awaits forever.

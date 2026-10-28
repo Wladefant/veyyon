@@ -15,7 +15,8 @@ import {
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { OutputSink } from "../session/streaming-output";
+import { LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
+import { ProducerOutputGuard } from "../secrets/producer-output";
 import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
@@ -37,6 +38,7 @@ export interface BashExecutorOptions {
 	/** Milliseconds before aborting the command; 0 disables the executor deadline. */
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	redactOutput?: (text: string) => string;
 	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Session key suffix to isolate shell sessions per agent */
@@ -512,11 +514,12 @@ async function spliceMinimizedOutput(
 	sink: OutputSink,
 	minimized: MinimizerResult | undefined,
 	onMinimizedSave: BashExecutorOptions["onMinimizedSave"],
+	redactOutput?: (text: string) => string,
 ): Promise<void> {
 	if (!minimized || minimized.text === minimized.originalText) return;
 	sink.replace(minimized.text);
 	if (!onMinimizedSave) return;
-	const artifactId = await onMinimizedSave(minimized.originalText, {
+	const artifactId = await onMinimizedSave(new ProducerOutputGuard(redactOutput).sanitize(minimized.originalText), {
 		filter: minimized.filter,
 		inputBytes: minimized.inputBytes,
 		outputBytes: minimized.outputBytes,
@@ -604,6 +607,7 @@ async function runBash(
 	// Output sink for truncation and artifact handling. sink.push() is synchronous: buffer management,
 	// counters and onChunk all run inline, and artifact file writes run asynchronously inside the sink.
 	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options?.redactOutput),
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
@@ -611,7 +615,7 @@ async function runBash(
 		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
 	});
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 
@@ -685,7 +689,7 @@ async function runBash(
 				...(await sink.dumpWithArtifactStatus(INCOMPLETE_CAPTURE_NOTICE)),
 			};
 		}
-		await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave);
+		await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 		return {
 			exitCode: result.exitCode,
 			signal: result.signal,
