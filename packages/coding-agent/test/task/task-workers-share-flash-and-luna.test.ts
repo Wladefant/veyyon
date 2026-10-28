@@ -199,7 +199,7 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 				spawnId: `quota-${index}`,
 				modelRegistry: registry,
 			});
-			expect(resolved.patterns.slice(2)).toEqual([H]);
+			expect(resolved.patterns).toContain(H);
 			counts[resolved.patterns[0]] = (counts[resolved.patterns[0]] ?? 0) + 1;
 		}
 		return counts;
@@ -251,17 +251,49 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		expect(lFirstReset[F] ?? 0).toBe(0);
 	});
 
-	it("keeps configured order when both pools are suppressed", () => {
+	it("starts on the healthy tail H when both shared pools are suppressed", () => {
 		registry.clearSuppressedSelectors();
 		registry.suppressSelector(L, Date.now() + 60_000);
 		registry.suppressSelector(F, Date.now() + 60_000);
 		const counts = firstChoices(settings);
-		expect(counts[F]).toBe(100);
+		expect(counts[H]).toBe(100);
+		expect(counts[F] ?? 0).toBe(0);
 		expect(counts[L] ?? 0).toBe(0);
 
 		const lFirstBothDown = firstChoices(taskLFirstSettings);
-		expect(lFirstBothDown[L]).toBe(100);
-		expect(lFirstBothDown[F] ?? 0).toBe(0);
+		expect(lFirstBothDown[H]).toBe(100);
+		expect(lFirstBothDown[L] ?? 0).toBe(0);
+		registry.clearSuppressedSelectors();
+	});
+
+	it("keeps Haiku first or promotes it when both pools are down, without exposing the expensive tail", () => {
+		const opus = "anthropic/claude-opus-5-5";
+		const astra = "openai-codex/gpt-6-astra";
+		const haikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, F, L, opus, astra] } },
+		});
+		const poolFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [F, L, H, opus, astra] } },
+		});
+		registry.clearSuppressedSelectors();
+		registry.suppressSelector(L, Date.now() + 60_000);
+		registry.suppressSelector(F, Date.now() + 60_000);
+		const haikuFirst = resolveAgentModel({
+			settings: haikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		const poolFirst = resolveAgentModel({
+			settings: poolFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		}).patterns;
+		expect(haikuFirst).toEqual([H, F, L]);
+		expect(poolFirst).toEqual([H, F, L]);
 		registry.clearSuppressedSelectors();
 	});
 
@@ -281,13 +313,13 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 		registry.suppressSelector(L, Date.now() + 60_000);
 		registry.suppressSelector(F, Date.now() + 60_000);
 		const exhausted = resolve("tail-1");
-		expect(exhausted.slice(0, 2).sort()).toEqual([F, L].sort());
-		expect(exhausted.slice(2)).toEqual([H]);
+		expect(exhausted[0]).toBe(H);
+		expect(exhausted.slice(1).sort()).toEqual([F, L].sort());
 		registry.clearSuppressedSelectors();
 	});
 
 	it("verifies full-triad closure across all triad lanes and suppression states", () => {
-		// 1. Task lane (L-first): healthy [L, F, H], L-down [F, L, H], F-down [L, F, H], both-down [L, F, H]
+		// 1. Task lane (L-first): healthy [L, F, H], L-down [F, L, H], F-down [L, F, H], both-down [H, L, F]
 		const taskSettings = Settings.isolated({
 			"agent.agents": { task: { model: [L, F, H] } },
 		});
@@ -306,9 +338,9 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 
 		registry.suppressSelector(L, Date.now() + 60_000);
 		res = resolveAgentModel({ settings: taskSettings, agentName: "task", taskDepth: 1, spawnId: "triad-t4", modelRegistry: registry });
-		expect(res.patterns).toEqual([L, F, H]);
+		expect(res.patterns).toEqual([H, L, F]);
 
-		// 2. QA lane (F-first): healthy [F, L, H], F-down [L, F, H], L-down [F, L, H], both-down [F, L, H]
+		// 2. QA lane (F-first): healthy [F, L, H], F-down [L, F, H], L-down [F, L, H], both-down [H, F, L]
 		const qaSettings = Settings.isolated({
 			"agent.agents": { "qa-verifier": { model: [F, L, H] } },
 		});
@@ -327,7 +359,20 @@ describe("the Flash and Luna share follows quota suppression and the live provid
 
 		registry.suppressSelector(F, Date.now() + 60_000);
 		res = resolveAgentModel({ settings: qaSettings, agentName: "qa-verifier", taskDepth: 1, spawnId: "triad-q4", modelRegistry: registry });
-		expect(res.patterns).toEqual([F, L, H]);
+		expect(res.patterns).toEqual([H, F, L]);
+		const taskHaikuFirstSettings = Settings.isolated({
+			"agent.agents": { task: { model: [H, L, F] } },
+		});
+		res = resolveAgentModel({
+			settings: taskHaikuFirstSettings,
+			agentName: "task",
+			taskDepth: 1,
+			spawnId: "triad-t-haiku-first-both-down",
+			modelRegistry: registry,
+		});
+		expect(res.patterns).toEqual([H, L, F]);
+		registry.clearSuppressedSelectors();
+
 
 		// 3. Haiku lane (explicit H-first): [H, L, F] stays [H, L, F] unchanged under all suppression states
 		const haikuSettings = Settings.isolated({
