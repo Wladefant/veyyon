@@ -374,20 +374,18 @@ export class ExtensionRelay {
 
 	/**
 	 * Close the connect tab this relay adopted, by its exact tab id. Never touches another tab or the browser.
-	 * Returns false when no connect tab is held, or when it is the only attached tab: closing that one drops the socket.
+	 * Does nothing when no connect tab is held, or when it is the only attached tab: closing that one drops the socket.
+	 * It never yields, so two parallel `Target.createTarget` calls cannot both reach `chrome.tabs.remove`. The only
+	 * caller has already awaited the bootstrap. `#dropTab` releases the claim on the id, so a later call finds none.
 	 */
-	async #closeConnectTab(): Promise<boolean> {
+	#closeConnectTab(): void {
 		const tabId = this.#connectTabId;
-		if (tabId === undefined) return false;
-		await this.#bootstrapReady?.catch(() => undefined);
-		if (this.#connectTabId !== tabId) return false;
+		if (tabId === undefined) return;
 		// Chrome closes the extension socket when its last attached tab goes, so a working tab must stay attached.
-		if (![...this.#tabs.keys()].some(id => id !== tabId)) return false;
-		this.#connectTabId = undefined;
+		if (![...this.#tabs.keys()].some(id => id !== tabId)) return;
 		this.#pendingBootstrapTabs.delete(tabId);
 		this.#fireAndForget("chrome.tabs.remove", [tabId]);
 		this.#dropTab(tabId);
-		return true;
 	}
 
 	/**
@@ -1151,7 +1149,7 @@ export class ExtensionRelay {
 		const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
 		if (created instanceof type.errors) throw new Error("The extension returned no tab.");
 		const tab = await this.#registerTab(created.id, false, created.windowId);
-		await this.#closeConnectTab();
+		this.#closeConnectTab();
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Page.navigate", { url }]);
