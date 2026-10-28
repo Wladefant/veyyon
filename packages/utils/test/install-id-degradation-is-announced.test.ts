@@ -32,17 +32,13 @@ import * as path from "node:path";
 import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { __resetInstallIdCacheForTests, getInstallId } from "@veyyon/utils/dirs";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
+import { canRestrictAccess } from "./helpers/mode-bits";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface Emitted {
 	message: string;
 	code: string | undefined;
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them at all. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 let isolated: IsolatedConfigRoot;
