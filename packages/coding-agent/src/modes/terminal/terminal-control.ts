@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
-import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
+import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {
@@ -160,6 +160,9 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			let previous = history();
 			let seen = new Set(previous.map(entry => entry.entryId));
 			let active = mode.session.isStreaming;
+			if (active) {
+				listener({ kind: "streaming", sessionId, active: true });
+			}
 			// Observe persisted owner entries, never JSONL or uncommitted provider deltas.
 			// An unchanged journal costs only two identity reads, not a transcript copy or expansion.
 			const timer = setInterval(() => {

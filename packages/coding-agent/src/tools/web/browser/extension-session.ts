@@ -49,7 +49,11 @@ function findChrome(): string {
 	return found;
 }
 
-/** Hand the connect URL to Chrome. A running Chrome opens it in a tab of the same profile. */
+/**
+ * Hand the connect URL to Chrome. A running Chrome opens it in a tab of the same profile and the launcher
+ * exits. Chrome is never stopped from here: the operator's browser outlives the session, and the connect
+ * tab it opened is closed by id once the first browser tab is attached (`closeConnectTab`), never by closing the browser.
+ */
 async function launchChrome(connectUrl: string, kind: ExtensionKind): Promise<void> {
 	const args = kind.profile ? [`--profile-directory=${kind.profile}`, connectUrl] : [connectUrl];
 	const child = Bun.spawn([findChrome(), ...args], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });

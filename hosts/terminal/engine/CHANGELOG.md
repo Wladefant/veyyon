@@ -2,11 +2,27 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
+- `Markdown` appends an inline paragraph, a `**strong**`/`*em*`/`~~del~~` span and a token it has no style for through one helper each instead of inside its inline-token switch; output is byte-identical.
+- `SelectList` computes each item's visual row count, the visible window, the navigation target of a key and a wrapped description through one helper each instead of inside its window picker, key handler and row renderer; rendered rows and selection are unchanged and a key with its render on a 500-item list costs the same.
+- `Form` paints each field kind through one function and shares one empty click-target list among the rows a click does not operate by column, instead of one 130-line render loop that allocated a target list per row, so rendering an eight-field dialog costs 4.45 µs instead of 4.75 µs with identical rows, click targets and callbacks.
+- `chunkForConPTY` finds each chunk's end and each code point's UTF-8 width through one function each, `emergencyTerminalRestore` restores a tracked terminal and a lost one through one function each, and `OverlayStack.compositeIntoWindow` clips an overlay to its maximum height and paints its rows through one function each; written bytes, chunk boundaries and composited rows are unchanged and chunking a 332,248-character frame costs the same.
+- `Box.render`, `Container.render`, `ScrollView.render`, `TabBar.render`, `Loader.render`, `Image.render`, `SettingsList` rendering and key handling, `Markdown` table layout, list items, HTML normalization, stream freezing and inline-token styling, `renderImage`, the full-paint replay in `core/paint-sequences.ts`, the Sixel probe's input handler, the `StdinBuffer` sequence splitter, the SGR coalescing, committed-prefix resync and oversized-row fit in `core/renderer.ts`, the `TUI`'s frame composition, direct writes, input dispatch, alt-screen residency, window planning and assembly and incremental update, and the editor's `wordWrapLine`, row rendering, key dispatch, typed-text insertion, yank-pop and line-span deletion are split into one function per step; behavior is unchanged.
+- Left and Right move the editor cursor without rebuilding the draft's visual-line map, which only Right at the end of the last line reads, so an arrow key on a 200-line draft costs 0.62 µs instead of 4.5 µs.
+
+### Fixed
+
+- `ImageRenderResult` and `ImageFit`, the types `renderImage` and `calculateImageFit` return, are exported from `@veyyon/tui/terminal-capabilities`.
+- `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
+- A `Markdown` blockquote too narrow to keep a content cell beside its two-cell border renders without the border instead of re-wrapping deeper bordered rows at one cell, so a `>`×20 quote around 15 characters renders 7 rows in 0.4 ms at width 12 instead of 425,984 rows in 410 ms, and no quote row exceeds the render width.
 
 ## [1.5.6] - 2026-10-10
+
 ### Removed
 
 - Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
@@ -14,10 +30,31 @@
 ### Added
 
 - `TextChunk`, the element type `wordWrapLine` returns, is exported from `components/editor`.
+- Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
+- While the engine holds the mouse, a left click above the pinned footer reaches the root child drawn on that row when it declares click targets with `wantsPointer()` ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ### Changed
 
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
+- The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
+- `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
+- The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.
+- 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
+- `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
+- The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
+- The editor dispatches a key through single-purpose handlers for autocomplete, kill and line keys, Enter and new-line keys, and cursor keys instead of one 270-line method; with the memoized key tests in `@veyyon/utils`, a typed character costs 1.35 µs instead of 3.01 µs and a mixed editing key 5.84 µs instead of 7.55 µs.
+- A streaming `Markdown` render that ends inside an open code fence lays out only the fence lines completed since the previous frame, so a 1,500-line code fence renders in 59 ms instead of 898 ms and a 1,500-line diff in 92 ms instead of 900 ms.
+- The frame render and incremental update run as single-purpose phases (alt-screen residency, frame composition, committed-prefix reconciliation, window planning and assembly) whose records are in `core/frame-plan.ts`, with one escape-sequence builder per paint shape in `core/paint-sequences.ts`, and the incremental update finds its changed rows with a forward scan to the first change and a backward scan to the last instead of comparing every row, which cuts a 2,000-block cold paint from 13.73 ms to 12.27 ms with byte-identical terminal output.
+- `Markdown` renders a block token through one method per block kind (heading, paragraph, code block, blockquote, display math) that appends into the frame's row array, instead of one 164-line switch that returned a new row array per token; output is byte-identical and render time is unchanged.
+- `Markdown` bounds the start search of its rule, display math and math environment block extensions to the paragraph that can end there instead of the rest of the message, so lexing is linear in the message length and a 1,200-section message renders in 22.4 ms instead of 229.7 ms.
+- `Markdown` skips marked's setext-heading rule when no `=` or `-` underline comes before the next blank line, with identical tokens, so a 13,362-entry transcript renders in 240 ms instead of 320 ms, re-renders at a new width in 204 ms instead of 280 ms, and streaming an 8.6k-character paragraph over 360 frames costs 22 ms instead of 58 ms.
+- A `Box` with no background and no border ends each row at its ink instead of padding it with spaces to the given width, which the renderer erases anyway, so a resumed 38 MB transcript draws its first frame in 211.1 MiB instead of 223.4 MiB.
+- A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
+- The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
+- The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
+- A streaming `Markdown` render checks that its text still extends the frozen prefix by reference against the text the prefix was frozen from before comparing characters, and a `Container` with one child that draws rows returns that child's rows instead of copying them, so rendering each delta of a 1,000,000-character reply costs 49.8 ms in total instead of 70.4 ms and of a 400,000-character reply 14.1 ms instead of 19.0 ms (median of four).
+- The `Markdown` render cache is keyed by the text a component holds and compares the layout on lookup instead of keying on a new string that spells the text and the layout, so a cached message is held once instead of twice: after 135 turns of 3,000-character replies the session holds 18.0 MiB of strings and objects instead of 18.6 MiB, growing 10.4 KiB per turn instead of 15.0 KiB, and serving 100 cached messages to a rebuilt transcript takes 0.033 ms instead of 0.26 ms.
+- A `Loader` whose spinner frames are single same-width grapheme clusters lays its message out against one shared frame, so a spinner tick that changes no message re-wraps nothing and costs 90 ns instead of 1,950 ns, and a streamed 4,000-character turn spends 255 ms of main-thread CPU instead of 264 ms (median of six).
 
 ### Fixed
 
@@ -26,26 +63,6 @@
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
 - An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
 - A terminal started again while running no longer leaves its first keyboard-probe fallback armed, which enabled modifyOtherKeys on the restored terminal after `stop()`.
-
-## [1.5.7] - 2026-10-15
-
-### Changed
-
-- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
-
-## [1.5.6] - 2026-10-13
-
-### Breaking Changes
-
-- `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
-
-### Added
-
-- Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
-- While the engine holds the mouse, a left click above the pinned footer reaches the root child drawn on that row when it declares click targets with `wantsPointer()` ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-
-### Fixed
-
 - Fixed Shift+Enter and Ctrl+Enter arriving as plain Enter or a bare line feed in Windows Terminal 1.24 and earlier, by requesting win32-input-mode on native Windows consoles and decoding its key records ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a bracketed paste on the Windows console leaking its marker tails and submitting a partial prompt at each pasted newline, because decoded win32 key records skipped paste handling ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the terminal flickering when leaving a fullscreen overlay (such as settings) on terminals that re-report their size when the alternate screen buffer toggles: the resize fast path now keeps height-only resizes on the normal buffer ([#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -66,45 +83,20 @@
 - A full-width overlay that is not fullscreen, such as the `/autoresearch status` run screen, replaces the rows of an inline Kitty image drawn with Unicode placeholders instead of letting the image cover it; a narrower overlay still leaves those rows untouched ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
 - `TUI.reusedRows(child)`, read inside `onBeforeCompose`, returns the rows a component-scoped frame keeps for a root child it does not re-render, and `undefined` when the frame renders the child or outside the sizing pass.
-- `ImageRenderResult` and `ImageFit`, the types `renderImage` and `calculateImageFit` return, are exported from `@veyyon/tui/terminal-capabilities`.
-- `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
-
-### Changed
-
-- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
-- The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
-- `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
-- The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.
-- 23 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
-- `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
-- The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
-- The editor dispatches a key through single-purpose handlers for autocomplete, kill and line keys, Enter and new-line keys, and cursor keys instead of one 270-line method; with the memoized key tests in `@veyyon/utils`, a typed character costs 1.35 µs instead of 3.01 µs and a mixed editing key 5.84 µs instead of 7.55 µs.
-- A streaming `Markdown` render that ends inside an open code fence lays out only the fence lines completed since the previous frame, so a 1,500-line code fence renders in 59 ms instead of 898 ms and a 1,500-line diff in 92 ms instead of 900 ms.
-- The frame render and incremental update run as single-purpose phases (alt-screen residency, frame composition, committed-prefix reconciliation, window planning and assembly) whose records are in `core/frame-plan.ts`, with one escape-sequence builder per paint shape in `core/paint-sequences.ts`, and the incremental update finds its changed rows with a forward scan to the first change and a backward scan to the last instead of comparing every row, which cuts a 2,000-block cold paint from 13.73 ms to 12.27 ms with byte-identical terminal output.
-- `Markdown` renders a block token through one method per block kind (heading, paragraph, code block, blockquote, display math) that appends into the frame's row array, instead of one 164-line switch that returned a new row array per token; output is byte-identical and render time is unchanged.
-- `Markdown` appends an inline paragraph, a `**strong**`/`*em*`/`~~del~~` span and a token it has no style for through one helper each instead of inside its inline-token switch; output is byte-identical.
-- `SelectList` computes each item's visual row count, the visible window, the navigation target of a key and a wrapped description through one helper each instead of inside its window picker, key handler and row renderer; rendered rows and selection are unchanged and a key with its render on a 500-item list costs the same.
-- `Form` paints each field kind through one function and shares one empty click-target list among the rows a click does not operate by column, instead of one 130-line render loop that allocated a target list per row, so rendering an eight-field dialog costs 4.45 µs instead of 4.75 µs with identical rows, click targets and callbacks.
-- `chunkForConPTY` finds each chunk's end and each code point's UTF-8 width through one function each, `emergencyTerminalRestore` restores a tracked terminal and a lost one through one function each, and `OverlayStack.compositeIntoWindow` clips an overlay to its maximum height and paints its rows through one function each; written bytes, chunk boundaries and composited rows are unchanged and chunking a 332,248-character frame costs the same.
-- `Markdown` bounds the start search of its rule, display math and math environment block extensions to the paragraph that can end there instead of the rest of the message, so lexing is linear in the message length and a 1,200-section message renders in 22.4 ms instead of 229.7 ms.
-- `Markdown` skips marked's setext-heading rule when no `=` or `-` underline comes before the next blank line, with identical tokens, so a 13,362-entry transcript renders in 240 ms instead of 320 ms, re-renders at a new width in 204 ms instead of 280 ms, and streaming an 8.6k-character paragraph over 360 frames costs 22 ms instead of 58 ms.
-- A `Box` with no background and no border ends each row at its ink instead of padding it with spaces to the given width, which the renderer erases anyway, so a resumed 38 MB transcript draws its first frame in 211.1 MiB instead of 223.4 MiB.
-- A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
-- The prepared-frame cache keeps each composed row's fitted string and its source in two arrays instead of one `{ raw, width, line }` record per row, so a resumed 600-turn session holds 31,652 fewer objects and 105.4 MiB of heap instead of 107.0 MiB.
-- The scroll tape records scrolled-off rows only while `tui.scrollIsolation` is on and counts them otherwise, and turning scroll isolation on after the first paint replays the history into the tape, so a session with scroll isolation off holds none of the up to 20,000 row strings the tape kept.
-- A streaming `Markdown` render checks that its text still extends the frozen prefix by reference against the text the prefix was frozen from before comparing characters, and a `Container` with one child that draws rows returns that child's rows instead of copying them, so rendering each delta of a 1,000,000-character reply costs 49.8 ms in total instead of 70.4 ms and of a 400,000-character reply 14.1 ms instead of 19.0 ms (median of four).
-- The `Markdown` render cache is keyed by the text a component holds and compares the layout on lookup instead of keying on a new string that spells the text and the layout, so a cached message is held once instead of twice: after 135 turns of 3,000-character replies the session holds 18.0 MiB of strings and objects instead of 18.6 MiB, growing 10.4 KiB per turn instead of 15.0 KiB, and serving 100 cached messages to a rebuilt transcript takes 0.033 ms instead of 0.26 ms.
-- A `Loader` whose spinner frames are single same-width grapheme clusters lays its message out against one shared frame, so a spinner tick that changes no message re-wraps nothing and costs 90 ns instead of 1,950 ns, and a streamed 4,000-character turn spends 255 ms of main-thread CPU instead of 264 ms (median of six).
-- `Box.render`, `Container.render`, `ScrollView.render`, `TabBar.render`, `Loader.render`, `Image.render`, `SettingsList` rendering and key handling, `Markdown` table layout, list items, HTML normalization, stream freezing and inline-token styling, `renderImage`, the full-paint replay in `core/paint-sequences.ts`, the Sixel probe's input handler, the `StdinBuffer` sequence splitter, the SGR coalescing, committed-prefix resync and oversized-row fit in `core/renderer.ts`, the `TUI`'s frame composition, direct writes, input dispatch, alt-screen residency, window planning and assembly and incremental update, and the editor's `wordWrapLine`, row rendering, key dispatch, typed-text insertion, yank-pop and line-span deletion are split into one function per step; behavior is unchanged.
-- Left and Right move the editor cursor without rebuilding the draft's visual-line map, which only Right at the end of the last line reads, so an arrow key on a 200-line draft costs 0.62 µs instead of 4.5 µs.
-
-### Fixed
-
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - After a resize under the `alt-arrows` scroll transport, the engine replays the transcript once instead of on every later frame, so a resumed 600-turn session at rest spends 0.06 CPU seconds per 10 seconds after a resize instead of 6.85 (median of three).
 - A frame in which two or more root children report rows dropped from native scrollback splices each child's rows out of the committed record at that child's own start, from the last child back, instead of splicing their sum at the topmost child's start, so the record no longer diverges from the terminal and forces a transcript replay on the next frame.
 - A streamed `Markdown` lexes each frame's tail from a copy of its own and drops its stream state when it seals, so a 206,000-character streamed answer holds 2.0 MiB of heap while it streams instead of 76.3 MiB, and the same heap as one render of its text once sealed.
-- A `Markdown` blockquote too narrow to keep a content cell beside its two-cell border renders without the border instead of re-wrapping deeper bordered rows at one cell, so a `>`×20 quote around 15 characters renders 7 rows in 0.4 ms at width 12 instead of 425,984 rows in 410 ms, and no quote row exceeds the render width.
+
+### Breaking Changes
+
+- `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
+
+## [1.5.7] - 2026-10-15
+
+### Changed
+
+- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
 
 ## [1.5.4] - 2026-09-24
 
