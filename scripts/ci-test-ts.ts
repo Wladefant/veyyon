@@ -538,6 +538,9 @@ export const repoScriptTests = [
 	"scripts/a-stale-tool-views-bundle-is-rebuilt-before-it-is-served.test.ts",
 	"scripts/an-exponential-retry-delay-is-computed-only-by-the-backoff-helper.test.ts",
 	"scripts/one-owner-calls-bun-strip-ansi.test.ts",
+	// The coding-agent test jobs check out one commit deep; this suite proves `--fetch` brings in the
+	// commits their suites read.
+	"scripts/a-shallow-checkout-fetches-only-the-baseline-commits-a-suite-reads.test.ts",
 ];
 
 /**

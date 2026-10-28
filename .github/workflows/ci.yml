@@ -385,11 +385,13 @@ jobs:
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 20
       steps:
+         # One commit deep: full history added about 50 s to this checkout, and the
+         # suites read no history beyond the commits `--fetch` brings in below.
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-           with:
-              fetch-depth: 0
          - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
+         - name: Fetch the commits suites read from the object store
+           run: bun scripts/git-baseline.ts --fetch
          - uses: ./.github/actions/ts-test-env
            with:
               native-result: ${{ needs.native_linux_x64.result }}
@@ -443,11 +445,13 @@ jobs:
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 40
       steps:
+         # One commit deep: full history added about 50 s to this checkout, and the
+         # suites read no history beyond the commits `--fetch` brings in below.
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-           with:
-              fetch-depth: 0
          - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
+         - name: Fetch the commits suites read from the object store
+           run: bun scripts/git-baseline.ts --fetch
          - uses: ./.github/actions/ts-test-env
            with:
               native-result: ${{ needs.native_linux_x64.result }}
