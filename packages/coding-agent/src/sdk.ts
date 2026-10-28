@@ -1123,7 +1123,6 @@ class SessionStartup {
 			tools,
 			agent: () => this.#agent,
 			getToolContext: () => this.#toolContextStore.getContext(),
-			emitEvent: event => this.#agent?.emitExternalEvent(event),
 			getEditReplaceTool: createBridgeEditToolProvider(tools, toolSession, extensionRunner),
 		});
 	}
