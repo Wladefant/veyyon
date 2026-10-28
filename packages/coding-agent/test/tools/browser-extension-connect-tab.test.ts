@@ -121,6 +121,33 @@ function createTarget(cdp: WebSocket, id = 1): Promise<{ result?: { targetId?: s
 	return created.promise;
 }
 
+/**
+ * Returns once the extension has received every frame the relay sent before this call. The relay writes to the
+ * extension socket in order, and the fake answers `Page.enable` only after it has read the frames ahead of it,
+ * so a `chrome.tabs.remove` the relay issued earlier is already recorded when the reply arrives. Without this a
+ * test reads `removedTabs()` before a wrongly issued removal lands, and a missing guard looks like a pass.
+ */
+async function extensionHasSeenEverything(cdp: WebSocket, targetId: string, id: number): Promise<void> {
+	const reply = Promise.withResolvers<{ result?: { sessionId?: string } }>();
+	const onMessage = (event: MessageEvent) => {
+		const message = JSON.parse(String(event.data));
+		if (message.id === id) reply.resolve(message);
+	};
+	cdp.addEventListener("message", onMessage);
+	cdp.send(JSON.stringify({ id, method: "Target.attachToTarget", params: { targetId, flatten: true } }));
+	const sessionId = (await reply.promise).result?.sessionId;
+	if (sessionId === undefined) throw new Error("the relay gave no session for the barrier");
+	const enabled = Promise.withResolvers<void>();
+	const onEnabled = (event: MessageEvent) => {
+		if (JSON.parse(String(event.data)).id === id + 1) enabled.resolve();
+	};
+	cdp.addEventListener("message", onEnabled);
+	cdp.send(JSON.stringify({ id: id + 1, method: "Page.enable", params: {}, sessionId }));
+	await enabled.promise;
+	cdp.removeEventListener("message", onMessage);
+	cdp.removeEventListener("message", onEnabled);
+}
+
 let dir: string;
 let extension: FakeExtension | undefined;
 let relay: ExtensionRelay | undefined;
@@ -248,6 +275,10 @@ test("an extension that drops and reconnects never has the old connect tab id re
 	const cdp = await openCdp(relay.cdpUrl);
 	try {
 		expect((await createTarget(cdp)).result?.targetId).toBe("ext-900");
+		await extensionHasSeenEverything(cdp, "ext-900", 10);
+		expect(
+			second.calls.some(call => call.method === "chrome.debugger.sendCommand" && call.params[1] === "Page.enable"),
+		).toBe(true);
 		expect(relay.tabCount).toBe(1);
 		expect(second.removedTabs()).toEqual([]);
 		expect(first.removedTabs()).toEqual([]);
@@ -267,7 +298,7 @@ test("two parallel Target.createTarget calls remove the connect tab exactly once
 	try {
 		const replies = await Promise.all([createTarget(cdp, 1), createTarget(cdp, 2)]);
 		expect(replies.map(reply => reply.result?.targetId).sort()).toEqual(["ext-900", "ext-901"]);
-		await until(() => ext.removedTabs().length >= 1, "the connect tab removal");
+		await extensionHasSeenEverything(cdp, "ext-900", 10);
 		expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
 		expect(ext.open).toBe(true);
 		expect(relay.tabCount).toBe(2);
