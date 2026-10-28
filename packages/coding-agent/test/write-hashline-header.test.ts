@@ -6,24 +6,11 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "./helpers/tool-result-text";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	};
-}
+import { makeWorkspaceToolSession } from "./helpers/tool-session";
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
 
@@ -59,7 +46,7 @@ describe("write tool hashline header", () => {
 
 	it("inserts a fresh [path#TAG] header that maps to the written content", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const content = "export const value = 42;\nexport const flag = true;\n";
 
@@ -82,7 +69,7 @@ describe("write tool hashline header", () => {
 
 	it("makes the post-write tag usable by the hashline patcher", async () => {
 		const filePath = path.join(tmpDir, "config.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const content = "export const enabled = false;\n";
 
@@ -114,7 +101,7 @@ describe("write tool hashline header", () => {
 
 	it("omits the hashline header when the edit mode is not hashline", async () => {
 		const filePath = path.join(tmpDir, "plain.txt");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		const tool = new WriteTool(session);
 		const content = "no anchors here\n";
@@ -130,7 +117,7 @@ describe("write tool hashline header", () => {
 	// content would double its token cost in wire history for the whole session.
 	it("reports only a byte-count summary, never the written content (replace mode)", async () => {
 		const filePath = path.join(tmpDir, "big.txt");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		const tool = new WriteTool(session);
 		const sentinel = "PAYLOAD_LINE_UNIQUE_MARKER_9f2a\n";
@@ -150,7 +137,7 @@ describe("write tool hashline header", () => {
 
 	it("keeps the result body bounded and content-free in hashline mode", async () => {
 		const filePath = path.join(tmpDir, "big.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const sentinel = "export const UNIQUE_TOKEN_7e10 = true;\n";
 		const content = sentinel.repeat(2000);

@@ -2,27 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 // Only the deterministic, fast disk reads — plain file line/range reads and
 // directory listings — are non-abortable: a turn interrupt that fires mid-read
@@ -36,7 +20,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 	beforeEach(() => {
 		testDir = path.join(os.tmpdir(), `read-fs-noabort-${Snowflake.next()}`);
 		fs.mkdirSync(testDir, { recursive: true });
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {

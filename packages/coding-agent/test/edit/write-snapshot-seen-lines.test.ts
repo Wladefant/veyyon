@@ -43,19 +43,7 @@ import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	} as ToolSession;
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
 
@@ -146,7 +134,7 @@ describe("write tool snapshot provenance", () => {
 
 	it("records every written line as seen, not an empty provenance set", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const result = await new WriteTool(session).execute("call-1", { path: filePath, content: TEN_LINES });
 		const match = HASHLINE_HEADER_LINE.exec(toolResultText(result).split("\n")[0] ?? "");
@@ -161,7 +149,7 @@ describe("write tool snapshot provenance", () => {
 
 	it("lets a post-write edit anchor at a line no read ever displayed", async () => {
 		const filePath = path.join(tmpDir, "config.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const writeResult = await new WriteTool(session).execute("call-1", { path: filePath, content: TEN_LINES });
 		const headerLine = toolResultText(writeResult).split("\n")[0] ?? "";
@@ -183,7 +171,7 @@ describe("write tool snapshot provenance", () => {
 		// session, and the suite would prove nothing about provenance at all.
 		const filePath = path.join(tmpDir, "partial.ts");
 		await fs.writeFile(filePath, TEN_LINES, "utf8");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const readResult = await new ReadTool(session).execute("call-1", { path: `${filePath}:1-3` });
 		const headerLine = toolResultText(readResult)

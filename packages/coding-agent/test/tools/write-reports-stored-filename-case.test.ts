@@ -29,24 +29,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveStoredPathCase } from "@veyyon/coding-agent/tools/core/path-utils";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	} as ToolSession;
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 /**
  * Whether `dir` stores names case-insensitively, decided by asking the
@@ -143,7 +130,7 @@ describe("write tool filename reporting", () => {
 		// The ordinary path, and the one that must not regress while fixing the
 		// case-insensitive one: no rewriting when there is nothing to correct.
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		await fs.writeFile(filePath, "old\n", "utf8");
 
@@ -154,7 +141,7 @@ describe("write tool filename reporting", () => {
 	it("reports the stored spelling, not the requested one, when they differ only in case", async () => {
 		const stored = path.join(tmpDir, "module.ts");
 		const requested = path.join(tmpDir, "Module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		await fs.writeFile(stored, "old\n", "utf8");
 

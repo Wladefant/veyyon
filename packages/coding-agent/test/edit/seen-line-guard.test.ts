@@ -12,19 +12,7 @@ import { removeWithRetries } from "@veyyon/utils";
 import { SearchTool } from "../../src/tools/search/search";
 import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	} as ToolSession;
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 function createBridgeSession(cwd: string, content: string): ToolSession {
 	const bridge = {
@@ -32,7 +20,7 @@ function createBridgeSession(cwd: string, content: string): ToolSession {
 		readTextFile: async () => content,
 	};
 	return {
-		...createSession(cwd),
+		...makeWorkspaceToolSession(cwd),
 		getClientBridge: () => bridge,
 	} as ToolSession;
 }
@@ -65,7 +53,7 @@ describe("read → edit seen-line guard", () => {
 	it("records the displayed range as seen and excludes far lines", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -79,7 +67,7 @@ describe("read → edit seen-line guard", () => {
 	it("rejects an edit on a line the partial read never displayed", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -94,7 +82,7 @@ describe("read → edit seen-line guard", () => {
 	it("applies an edit on a displayed line", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -106,7 +94,7 @@ describe("read → edit seen-line guard", () => {
 	it("records raw single-range reads as seen without emitting a hashline header", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const store = getFileSnapshotStore(session);
 		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [1]);
 
@@ -131,7 +119,7 @@ describe("read → edit seen-line guard", () => {
 	it("records every raw multi-range line and rejects anchors outside those ranges", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const store = getFileSnapshotStore(session);
 		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [12]);
 
@@ -163,7 +151,7 @@ describe("read → edit seen-line guard", () => {
 		const hugeLine = "x".repeat(DEFAULT_MAX_BYTES + 1);
 		const content = `${hugeLine}\nline 2\n\nline 4\n`;
 		await Bun.write(file, content);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const store = getFileSnapshotStore(session);
 		const tag = store.record(canonicalSnapshotKey(file), content, [4]);
 
@@ -257,7 +245,7 @@ describe("read → edit seen-line guard", () => {
 	it("reveals the actual line content in the rejection and unblocks a same-tag retry", async () => {
 		const file = path.join(tmpDir, "notes.txt");
 		await Bun.write(file, CONTENT);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -291,7 +279,7 @@ describe("read → edit seen-line guard", () => {
 		const file = path.join(tmpDir, "long.txt");
 		const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`);
 		await Bun.write(file, `${lines.join("\n")}\n`);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		// Partial read of the head — seenLines = 1..3 only.
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
@@ -326,7 +314,7 @@ describe("read → edit seen-line guard", () => {
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
 		await Bun.write(file, content);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -361,7 +349,7 @@ describe("read → edit seen-line guard", () => {
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
 		await Bun.write(file, content);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -397,7 +385,7 @@ describe("read → edit seen-line guard", () => {
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
 		await Bun.write(file, content);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
 		const tag = tagFromOutput(toolResultText(read));
@@ -428,7 +416,7 @@ describe("read → edit seen-line guard", () => {
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
 		await Bun.write(file, content);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		await new ReadTool(session).execute("r1", { path: `${file}:2` });
 		// The remedy the message names, run verbatim.
@@ -456,7 +444,7 @@ describe("read → edit seen-line guard", () => {
 		const lines = Array.from({ length: 120 }, (_, i) => `line ${i + 1}`);
 		lines[60] = "w".repeat(4096);
 		await Bun.write(file, `${lines.join("\n")}\n`);
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-5` });
 		const tag = tagFromOutput(toolResultText(read));

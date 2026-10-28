@@ -26,26 +26,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const TOP_LEVEL_FOOTER = "Top-level listing. Re-issue read with depth: 2";
 
@@ -71,7 +55,7 @@ describe("a directory read answers at the depth it was asked", () => {
 		for (let i = 1; i <= 8; i++) {
 			fs.writeFileSync(path.join(testDir, "many", `m${String(i).padStart(2, "0")}.txt`), "");
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -203,7 +187,7 @@ describe("a concise listing caps top-level entries and says how to see more", ()
 		for (let i = 1; i <= 105; i++) {
 			fs.writeFileSync(path.join(testDir, `file-${String(i).padStart(3, "0")}.txt`), "");
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -234,7 +218,7 @@ describe("explicit limit and traversal bounds", () => {
 		fs.writeFileSync(path.join(testDir, "lvl1", "lvl2", "f2.txt"), "");
 		fs.writeFileSync(path.join(testDir, "lvl1", "lvl2", "lvl3", "f3.txt"), "");
 		fs.writeFileSync(path.join(testDir, "lvl1", "lvl2", "lvl3", "lvl4", "f4.txt"), "");
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -305,7 +289,7 @@ describe("huge fanout and per-directory child limit", () => {
 		for (let i = 1; i <= 30; i++) {
 			fs.writeFileSync(path.join(testDir, "wide", "sub", `file-${String(i).padStart(3, "0")}.txt`), "");
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -346,7 +330,7 @@ describe("deterministic ordering and recency tie-breaking", () => {
 			fs.writeFileSync(filePath, "data");
 			fs.utimesSync(filePath, now, now);
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -394,7 +378,7 @@ describe("symlinks and loop prevention", () => {
 		} catch {
 			// Platform may not allow symlink creation without privileges (e.g. unprivileged Windows)
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -438,7 +422,7 @@ describe("hidden and gitignored entries", () => {
 		fs.writeFileSync(path.join(testDir, "dist", "bundle.js"), "console.log()");
 		fs.writeFileSync(path.join(testDir, ".git", "HEAD"), "ref: refs/heads/main");
 		fs.writeFileSync(path.join(testDir, "node_modules", "pkg", "index.js"), "");
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -479,7 +463,7 @@ describe("permission errors and unreadable directories", () => {
 				fs.chmodSync(path.join(testDir, "restricted"), 0o000);
 			} catch {}
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -516,7 +500,7 @@ describe("Unicode, accents, and special characters", () => {
 		fs.writeFileSync(path.join(testDir, "日本語", "テスト.txt"), "");
 		fs.writeFileSync(path.join(testDir, "path with spaces", "note (1).txt"), "");
 		fs.writeFileSync(path.join(testDir, "[bracket-pkg]", "index{1}.ts"), "");
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -546,7 +530,7 @@ describe("cancellation and AbortSignal contract", () => {
 		testDir = path.join(os.tmpdir(), `read-dir-abort-${Snowflake.next()}`);
 		fs.mkdirSync(path.join(testDir, "sub"), { recursive: true });
 		fs.writeFileSync(path.join(testDir, "sub", "test.txt"), "data");
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -571,7 +555,7 @@ describe("empty directories and path boundaries", () => {
 	beforeEach(() => {
 		testDir = path.join(os.tmpdir(), `read-dir-empty-${Snowflake.next()}`);
 		fs.mkdirSync(path.join(testDir, "empty_sub"), { recursive: true });
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -608,7 +592,7 @@ describe("line selector slicing on directory listings", () => {
 			fs.writeFileSync(filePath, "");
 			fs.utimesSync(filePath, fixedDate, fixedDate);
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {

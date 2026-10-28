@@ -3,23 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "./helpers/tool-result-text";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	};
-}
+import { makeWorkspaceToolSession } from "./helpers/tool-session";
 
 function details(result: { details?: { madeExecutable?: boolean } }): { madeExecutable?: boolean } {
 	return result.details ?? {};
@@ -42,7 +29,7 @@ describe("write tool shebang chmod", () => {
 
 	it("marks files starting with #! as executable and flags the result", async () => {
 		const filePath = path.join(tmpDir, "run.sh");
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 
 		const result = await tool.execute("call-1", {
 			path: filePath,
@@ -59,7 +46,7 @@ describe("write tool shebang chmod", () => {
 
 	it("does not chmod files without a shebang", async () => {
 		const filePath = path.join(tmpDir, "data.txt");
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 
 		const result = await tool.execute("call-2", {
 			path: filePath,
@@ -76,7 +63,7 @@ describe("write tool shebang chmod", () => {
 		await fs.writeFile(filePath, "#!/bin/sh\nold\n");
 		await fs.chmod(filePath, 0o755);
 
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 		const result = await tool.execute("call-3", {
 			path: filePath,
 			content: "#!/usr/bin/env python3\nprint('hi')\n",

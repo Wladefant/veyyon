@@ -25,23 +25,10 @@ import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		hasEditTool: true,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
-		enableLsp: false,
-	} as ToolSession;
-}
 
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
@@ -65,7 +52,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 		original = path.join(tmpDir, "v1", "probe.py");
 		copy = path.join(tmpDir, "v2", "probe.py");
 		await fs.writeFile(original, CONTENT);
-		session = createSession(tmpDir);
+		session = makeWorkspaceToolSession(tmpDir);
 	});
 	afterEach(async () => {
 		await removeWithRetries(tmpDir);

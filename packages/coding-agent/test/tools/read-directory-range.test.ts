@@ -2,26 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 describe("read tool directory listings honor line selectors (regression: was silently dropping offset)", () => {
 	let testDir: string;
@@ -33,7 +17,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 		for (let i = 1; i <= 60; i++) {
 			fs.writeFileSync(path.join(testDir, `file-${String(i).padStart(3, "0")}.txt`), "");
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {

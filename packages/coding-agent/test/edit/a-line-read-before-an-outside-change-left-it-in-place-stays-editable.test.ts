@@ -26,6 +26,7 @@ import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -33,20 +34,6 @@ const CONTENT = `${LINES.join("\n")}\n`;
 const FORMATTED = CONTENT.replace("line 30\n", "line 30 formatted\n");
 /** `CONTENT` with a line inserted at the top: every line moves down by one. */
 const SHIFTED = `header\n${CONTENT}`;
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		hasEditTool: true,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
-		enableLsp: false,
-	} as ToolSession;
-}
 
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
@@ -66,7 +53,7 @@ describe("a line read before an outside change left it in place stays editable",
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "seen-line-change-"));
 		file = path.join(tmpDir, "probe.py");
 		await fs.writeFile(file, CONTENT);
-		session = createSession(tmpDir);
+		session = makeWorkspaceToolSession(tmpDir);
 	});
 	afterEach(async () => {
 		await removeWithRetries(tmpDir);

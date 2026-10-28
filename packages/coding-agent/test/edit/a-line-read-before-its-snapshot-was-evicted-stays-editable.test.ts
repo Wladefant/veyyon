@@ -28,6 +28,7 @@ import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 29 ? "NEEDLE line 30" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -36,20 +37,6 @@ const OTHER_FILES = 40;
 
 function otherFile(i: number): string {
 	return path.join("other", i < OTHER_FILES / 2 ? "a" : "b", `f${i}.txt`);
-}
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		hasEditTool: true,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
-		enableLsp: false,
-	} as ToolSession;
 }
 
 function tagFromOutput(text: string, file: string): string {
@@ -74,7 +61,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		for (let i = 0; i < OTHER_FILES; i++) {
 			await fs.writeFile(path.join(tmpDir, otherFile(i)), `FILLER ${i}\nsecond line\n`);
 		}
-		session = createSession(tmpDir);
+		session = makeWorkspaceToolSession(tmpDir);
 	});
 	afterEach(async () => {
 		await removeWithRetries(tmpDir);

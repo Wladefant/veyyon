@@ -3,29 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { toolResultText } from "../helpers/tool-result-text";
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 function largeArtifactText(): string {
 	return Array.from(
@@ -47,7 +31,7 @@ describe("read tool large artifact handling", () => {
 		await Bun.write(path.join(artifactDir, "0.mcp.log"), largeArtifactText());
 		resetRegisteredArtifactDirsForTests();
 		unregisterArtifactsDir = registerArtifactsDir(artifactDir);
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(async () => {

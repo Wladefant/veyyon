@@ -48,22 +48,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	};
-}
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 /** The distinct refusal reasons `assertValidWriteContent` can state. */
 const REASONS = {
@@ -149,7 +136,7 @@ describe("a file whose own syntax looks like display output still writes", () =>
 
 	it.each(ACCEPTED)("writes %s verbatim", async (_name, filename, content) => {
 		const filePath = path.join(tmpDir, filename);
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 
 		await tool.execute("call-1", { path: filePath, content });
 
@@ -160,7 +147,7 @@ describe("a file whose own syntax looks like display output still writes", () =>
 
 	it.each(REJECTED)("still refuses %s", async (_name, content, reason) => {
 		const filePath = path.join(tmpDir, "target.ts");
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 
 		await expect(tool.execute("call-1", { path: filePath, content })).rejects.toThrow(reason);
 
@@ -169,7 +156,7 @@ describe("a file whose own syntax looks like display output still writes", () =>
 	});
 
 	it("states one of the known refusal reasons and no other", async () => {
-		const tool = new WriteTool(createSession(tmpDir));
+		const tool = new WriteTool(makeWorkspaceToolSession(tmpDir));
 		const observed = new Set<string>();
 
 		for (const [name, content] of REJECTED.map(([n, c]) => [n, c] as const)) {

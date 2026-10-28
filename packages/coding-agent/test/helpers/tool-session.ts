@@ -20,6 +20,7 @@
  * is a build error at the call site, and a new required member on `ToolSession`
  * is a single failure here rather than 46 silent stubs that no longer match.
  */
+import * as path from "node:path";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
 import { getAgentDir } from "@veyyon/utils";
@@ -66,6 +67,21 @@ export function makeToolSession(overrides: ToolSessionOverrides = {}): ToolSessi
 /** {@link makeToolSession} rooted at `cwd`, reading a fresh isolated settings store. */
 export function makeToolSessionAt(cwd: string, overrides: ToolSessionOverrides = {}): ToolSession {
 	return makeToolSession({ cwd, settings: Settings.isolated(), ...overrides });
+}
+
+/**
+ * {@link makeToolSessionAt} for a file tool working in `cwd`: a session file and an artifacts
+ * directory under `cwd`, every spawn allowed and no LSP. Output artifacts are allocated as
+ * `artifact-1` at `cwd/artifact-1.log`.
+ */
+export function makeWorkspaceToolSession(cwd: string): ToolSession {
+	return makeToolSessionAt(cwd, {
+		getSessionFile: () => path.join(cwd, "session.jsonl"),
+		getSessionSpawns: () => "*",
+		getArtifactsDir: () => path.join(cwd, "artifacts"),
+		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
+		enableLsp: false,
+	});
 }
 
 /** The members every test session starts from, `settings` aside. */
