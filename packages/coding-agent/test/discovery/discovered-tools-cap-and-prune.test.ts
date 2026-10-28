@@ -1,13 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-	Agent,
-	type AgentMessage,
-	type AgentTool,
-	type AssistantMessage,
-	type ToolResultMessage,
-	type UserMessage,
-} from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
+import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -39,7 +32,7 @@ function createTool(
 	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
 ): AgentTool {
 	const schema = type({ value: "string" });
-	const tool: AgentTool = {
+	const tool: AgentTool & { mcpServerName?: string; mcpToolName?: string } = {
 		name,
 		label: options?.mcpServer ? `${options.mcpServer}/${name}` : name,
 		description: `Description for ${name}`,
@@ -68,6 +61,18 @@ function assistantToolCall(toolName: string, callId: string): AssistantMessage {
 				arguments: { value: "test" },
 			},
 		],
+		api: "openai-responses",
+		provider: "openai",
+		model: "mock",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
 }

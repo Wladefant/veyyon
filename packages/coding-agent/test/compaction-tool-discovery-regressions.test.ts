@@ -43,16 +43,12 @@ const BRAVO_REQUEST =
 
 type AutoCompactionEnd = Extract<AgentSessionEvent, { type: "auto_compaction_end" }>;
 
-function createTool(
-	name: string,
-	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
-): AgentTool {
+function createTool(name: string, options?: { loadMode?: "essential" | "discoverable" }): AgentTool {
 	return {
 		name,
 		description: `Tool ${name}`,
 		parameters: type({ value: "string" }),
 		loadMode: options?.loadMode,
-		mcpServer: options?.mcpServer,
 		execute: async () => ({ content: [{ type: "text", text: `result from ${name}` }] }),
 	};
 }
@@ -178,8 +174,8 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 
 	it("unloads unused discovered tools after a real compact and keeps the called one in the kept window and persisted selection", async () => {
 		const readTool = createTool("read", { loadMode: "essential" });
-		const usedMcp = createTool("mcp__s__used", { mcpServer: "s" });
-		const unusedMcp = createTool("mcp__s__unused", { mcpServer: "s" });
+		const usedMcp = createTool("mcp__s__used");
+		const unusedMcp = createTool("mcp__s__unused");
 		const unusedLocal = createTool("custom_unused", { loadMode: "discoverable" });
 		const harness = await createSession([readTool], [readTool, usedMcp, unusedMcp, unusedLocal]);
 		const { session, sessionManager, model } = harness;
@@ -250,7 +246,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 
 	it("evicts the least-recently-called discovery at the default cap of 40 once tool calls mark recent use", async () => {
 		const readTool = createTool("read", { loadMode: "essential" });
-		const mcpTools = Array.from({ length: 41 }, (_, index) => createTool(`mcp__s__t${index}`, { mcpServer: "s" }));
+		const mcpTools = Array.from({ length: 41 }, (_, index) => createTool(`mcp__s__t${index}`));
 		const harness = await createSession([readTool], [readTool, ...mcpTools]);
 		const { session, sessionManager, model } = harness;
 
@@ -308,14 +304,32 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 		const model = buildModel({
 			id: "mock-model",
 			name: "Mock Model",
-			provider: "openai-responses",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "https://example.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128000,
+			maxTokens: 2048,
 		});
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "Investigate repository history", timestamp: 1000 });
 		sessionManager.appendMessage({
 			role: "assistant",
 			content: [{ type: "text", text: "history payload\n".repeat(6000) }],
+			api: "openai-responses",
+			provider: "openai",
+			model: "mock-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
 			timestamp: 2000,
 		});
 		sessionManager.appendMessage({ role: "user", content: "next step", timestamp: 3000 });
@@ -343,7 +357,7 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 				return undefined;
 			},
 		};
-		const session: CompactionSession = {
+		const session = {
 			agent: new Agent({
 				initialState: { model, systemPrompt: ["test system prompt"], messages: [], tools: [] },
 			}),
@@ -366,7 +380,7 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 				contextWindow: model.contextWindow ?? 128000,
 				percent: currentTokens / (model.contextWindow ?? 128000),
 			}),
-		};
+		} satisfies Partial<CompactionSession> as CompactionSession;
 		const host: CompactionHost = {
 			emitSessionEvent: async event => {
 				events.push(event);
@@ -391,11 +405,16 @@ describe("#685 repeated threshold passes through CompactionRuntime", () => {
 			convertToLlmForSideRequest: () => [],
 			providerSessionState: () => ({}) as never,
 			effectiveServiceTier: () => undefined,
-			baseSystemPrompt: () => "base",
+			baseSystemPrompt: () => ["base"],
 			memoryBackendContext: async () => "",
 			withPlanProtection: config => config,
 			promptCompaction: async () => undefined,
-			offloadAndApplyShakeRegions: async () => {},
+			offloadAndApplyShakeRegions: async () => ({
+				toolResultsDropped: 0,
+				blocksDropped: 0,
+				tokensFreed: 0,
+				artifactId: undefined,
+			}),
 			rebasePendingContextSnapshotAfterHistoryRewrite: () => {},
 		};
 		const runtime = new CompactionRuntime(session, host);

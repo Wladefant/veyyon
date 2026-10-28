@@ -1,13 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import {
-	Agent,
-	type AgentMessage,
-	type AgentTool,
-	type AssistantMessage,
-	type ToolResultMessage,
-	type UserMessage,
-} from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
+import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -25,27 +18,38 @@ import {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
 
+const ZERO_USAGE: AssistantMessage["usage"] = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
 function createMockModel(overrides?: Partial<Model<"openai-responses">>): Model<"openai-responses"> {
 	return buildModel({
 		id: "mock-model",
 		name: "Mock Model",
-		provider: "openai-responses",
+		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "https://example.invalid",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
+		maxTokens: 2048,
 		...overrides,
 	});
 }
 
-function createTool(
-	name: string,
-	options?: { loadMode?: "essential" | "discoverable"; mcpServer?: string },
-): AgentTool {
+function createTool(name: string, options?: { loadMode?: "essential" | "discoverable" }): AgentTool {
 	const schema = type({ value: "string" });
 	return {
 		name,
 		description: `Tool ${name}`,
 		parameters: schema,
 		loadMode: options?.loadMode,
-		mcpServer: options?.mcpServer,
 		execute: async () => ({ content: [{ type: "text", text: `result from ${name}` }] }),
 	};
 }
@@ -69,6 +73,11 @@ function assistantWithToolCall(toolName: string, callId: string): AssistantMessa
 				arguments: { value: "test" },
 			},
 		],
+		api: "openai-responses",
+		provider: "openai",
+		model: "mock-model",
+		usage: ZERO_USAGE,
+		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
 }
@@ -150,6 +159,11 @@ function createCompactionRuntimeHarness(
 		sessionManager.appendMessage({
 			role: "assistant",
 			content: [{ type: "text", text: "history payload\n".repeat(6000) }],
+			api: "openai-responses",
+			provider: "openai",
+			model: "mock-model",
+			usage: ZERO_USAGE,
+			stopReason: "stop",
 			timestamp: 2000,
 		});
 		sessionManager.appendMessage({
@@ -191,7 +205,7 @@ function createCompactionRuntimeHarness(
 		},
 	};
 
-	const session: CompactionSession = {
+	const session = {
 		agent,
 		sessionManager,
 		settings,
@@ -219,7 +233,7 @@ function createCompactionRuntimeHarness(
 			state.prunedMessages = messages;
 			if (options.pruneBreakdown) state.breakdown = options.pruneBreakdown;
 		},
-	};
+	} satisfies Partial<CompactionSession> as CompactionSession;
 
 	const host: CompactionHost = {
 		emitSessionEvent: async event => {
@@ -245,11 +259,16 @@ function createCompactionRuntimeHarness(
 		convertToLlmForSideRequest: () => [],
 		providerSessionState: () => ({}) as never,
 		effectiveServiceTier: () => undefined,
-		baseSystemPrompt: () => "base",
+		baseSystemPrompt: () => ["base"],
 		memoryBackendContext: async () => "",
 		withPlanProtection: config => config,
 		promptCompaction: async () => undefined,
-		offloadAndApplyShakeRegions: async () => {},
+		offloadAndApplyShakeRegions: async () => ({
+			toolResultsDropped: 0,
+			blocksDropped: 0,
+			tokensFreed: 0,
+			artifactId: undefined,
+		}),
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => {},
 	};
 
@@ -270,6 +289,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 				skillsTokens: 2000,
 				systemToolsTokens: 18000,
 				messagesTokens: 15000,
+				pendingMessagesTokens: 0,
 			},
 		});
 
@@ -284,6 +304,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 70000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -314,6 +335,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -336,6 +358,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 1000,
 			systemToolsTokens: 80000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 108000;
 
@@ -359,6 +382,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 1000,
 			systemToolsTokens: 15000,
 			messagesTokens: 78000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 106000;
 
@@ -382,6 +406,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 20000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -413,7 +438,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		const { runtime, state } = createCompactionRuntimeHarness(105000, 128000);
 
 		// Post compaction size = 105,000, keepRecentTokens = 10,000 -> resume boundary = 115,000
-		state.breakdown = {
+		const armed: ContextUsageBreakdown = {
 			contextWindow: 128000,
 			anchored: false,
 			usedTokens: 105000,
@@ -422,7 +447,9 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 20000,
+			pendingMessagesTokens: 0,
 		};
+		state.breakdown = armed;
 		state.currentTokens = 105000;
 
 		await runtime.runAutoCompaction("threshold", false);
@@ -430,18 +457,20 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 
 		// Context grows to 114,999 (strictly below boundary)
 		state.breakdown = {
-			...state.breakdown,
+			...armed,
 			usedTokens: 114999,
 			messagesTokens: 29999,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 114999;
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
 
 		// Context reaches 115,000 (at or above boundary)
 		state.breakdown = {
-			...state.breakdown,
+			...armed,
 			usedTokens: 115000,
 			messagesTokens: 30000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 115000;
 
@@ -461,6 +490,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 20000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -488,6 +518,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 20000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -514,6 +545,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 20000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -539,6 +571,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
 			messagesTokens: 30000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 75000;
 
@@ -560,6 +593,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -594,6 +628,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -624,6 +659,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -653,6 +689,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -679,6 +716,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 			skillsTokens: 2000,
 			systemToolsTokens: 18000,
 			messagesTokens: 15000,
+			pendingMessagesTokens: 0,
 		};
 		state.currentTokens = 105000;
 
@@ -699,8 +737,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 describe("AgentSession tool pruning after compaction (#685)", () => {
 	it("prunes uncalled discovered MCP tools and persists selection across compaction", async () => {
 		const readTool = createTool("read", { loadMode: "essential" });
-		const mcpActive = createTool("mcp__s__active", { mcpServer: "s" });
-		const mcpIdle = createTool("mcp__s__idle", { mcpServer: "s" });
+		const mcpActive = createTool("mcp__s__active");
+		const mcpIdle = createTool("mcp__s__idle");
 		const localTool = createTool("custom_local", { loadMode: "discoverable" });
 
 		const toolRegistry = new Map<string, AgentTool>([
