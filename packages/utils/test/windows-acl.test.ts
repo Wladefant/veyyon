@@ -272,6 +272,26 @@ describe("owner-only Windows ACL helpers", () => {
 			await verifyOwnerOnlyWindowsAcl(filePath);
 		});
 
+		/**
+		 * Every startup re-applies the ACL to a directory an earlier startup already protected. Windows
+		 * PowerShell's Set-Acl rejects that second write with "does not possess the 'SeSecurityPrivilege'
+		 * privilege", which crashed every launch after the first. Applying twice must succeed for both a
+		 * directory and a file, and leave the path verifiable.
+		 */
+		it("re-applies the DACL to an already protected directory and file", async () => {
+			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-"));
+			const directory = path.join(cleanupPath, "terminals");
+			await fs.mkdir(directory);
+			const filePath = path.join(directory, "record.json");
+			await fs.writeFile(filePath, "{}");
+
+			for (const target of [directory, filePath]) {
+				await applyOwnerOnlyWindowsAcl(target);
+				await applyOwnerOnlyWindowsAcl(target);
+				await verifyOwnerOnlyWindowsAcl(target);
+			}
+		});
+
 		/** Removing SYSTEM violates issue #580's required owner-plus-SYSTEM pipe and record policy. */
 		it("refuses a protected DACL after the required SYSTEM ACE is removed", async () => {
 			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-"));
