@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { handleGitHub } from "../../src/scrapers/github";
 import * as scraperTypes from "../../src/scrapers/types";
+import { requireRender } from "../helpers/scrapers";
 
 /**
  * WHY: a github.com URL renders through the reader its classified type selects: a blob as raw text,
@@ -44,13 +45,6 @@ function serveRaw(pages: Record<string, string>): string[] {
 	return requested;
 }
 
-function render(result: scraperTypes.RenderResult | scraperTypes.ScraperDegrade | null): scraperTypes.RenderResult {
-	if (result === null || scraperTypes.isScraperDegrade(result)) {
-		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
-	}
-	return result;
-}
-
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -84,7 +78,7 @@ describe("a GitHub commit URL renders the commit and its diff", () => {
 			},
 		});
 
-		const result = render(await handleGitHub("https://github.com/o/r/commit/abc1234567890def", 10));
+		const result = requireRender(await handleGitHub("https://github.com/o/r/commit/abc1234567890def", 10));
 
 		expect({ method: result.method, notes: result.notes }).toEqual({ method: "github-commit", notes: API_NOTES });
 		expect(result.content).toBe(
@@ -131,8 +125,8 @@ describe("a GitHub commit URL renders the commit and its diff", () => {
 			},
 		});
 
-		const login = render(await handleGitHub("https://github.com/o/r/commit/login", 10));
-		const nobody = render(await handleGitHub("https://github.com/o/r/commit/nobody", 10));
+		const login = requireRender(await handleGitHub("https://github.com/o/r/commit/login", 10));
+		const nobody = requireRender(await handleGitHub("https://github.com/o/r/commit/nobody", 10));
 
 		expect(login.content).toBe("# fedcba9\n\n**fedcba987654** · authored by @ada");
 		expect(nobody.content).toBe("# Tidy\n\n**0123456789ab** · authored by unknown");
@@ -153,7 +147,7 @@ describe("a GitHub tree URL renders the directory listing", () => {
 			],
 		});
 
-		const result = render(await handleGitHub("https://github.com/o/r/tree/main/docs", 10));
+		const result = requireRender(await handleGitHub("https://github.com/o/r/tree/main/docs", 10));
 
 		expect({ method: result.method, notes: result.notes }).toEqual({ method: "github-tree", notes: API_NOTES });
 		expect(raw).toEqual(["https://raw.githubusercontent.com/o/r/main/docs/README.md"]);
@@ -192,9 +186,9 @@ describe("a GitHub tree URL renders the directory listing", () => {
 			"/repos/o/lost/contents/?ref=main": [{ name: "README.md", type: "file", path: "README.md" }],
 		});
 
-		const root = render(await handleGitHub("https://github.com/o/r/tree", 10));
-		const empty = render(await handleGitHub("https://github.com/o/empty/tree", 10));
-		const lost = render(await handleGitHub("https://github.com/o/lost/tree", 10));
+		const root = requireRender(await handleGitHub("https://github.com/o/r/tree", 10));
+		const empty = requireRender(await handleGitHub("https://github.com/o/empty/tree", 10));
+		const lost = requireRender(await handleGitHub("https://github.com/o/lost/tree", 10));
 
 		expect(root.content).toBe(
 			"# o/r/(root)\n\n**Branch:** trunk\n\n## Contents\n\n```\n      readme.md (11 bytes)\n```\n\n---\n\n## README\n\nRoot readme",
@@ -227,7 +221,7 @@ describe("a GitHub repository URL renders its summary, files and README", () => 
 			"/repos/o/r/readme": { content: Buffer.from("# Hello\n").toString("base64"), encoding: "base64" },
 		});
 
-		const result = render(await handleGitHub("https://github.com/o/r", 10));
+		const result = requireRender(await handleGitHub("https://github.com/o/r", 10));
 
 		const listed = Array.from({ length: 99 }, (_, i) => `      f${i + 1}`);
 		expect({ method: result.method, notes: result.notes }).toEqual({ method: "github-repo", notes: API_NOTES });
@@ -274,7 +268,7 @@ describe("a GitHub repository URL renders its summary, files and README", () => 
 			"/repos/o/bare/readme": { content: "plain", encoding: "utf-8" },
 		});
 
-		const result = render(await handleGitHub("https://github.com/o/bare", 10));
+		const result = requireRender(await handleGitHub("https://github.com/o/bare", 10));
 
 		expect(result.content).toBe("# o/bare\n\nStars: 0 · Forks: 0 · Issues: 0\n\n---");
 	});
@@ -297,7 +291,7 @@ describe("a GitHub URL is read by the reader its type selects", () => {
 		serveRaw({ [rawUrl]: "export {};" });
 		const api = serveApi({});
 
-		const result = render(await handleGitHub("https://github.com/o/r/blob/main/src/a.ts", 10));
+		const result = requireRender(await handleGitHub("https://github.com/o/r/blob/main/src/a.ts", 10));
 
 		expect(result).toMatchObject({
 			method: "github-raw",
@@ -345,7 +339,7 @@ describe("a GitHub URL is read by the reader its type selects", () => {
 			"https://github.com/o/r/actions/runs/9",
 			"https://github.com/o/r/actions/runs/9/job/10",
 		]) {
-			const result = render(await handleGitHub(url, 10));
+			const result = requireRender(await handleGitHub(url, 10));
 			expect({ url, notes: result.notes }).toEqual({ url, notes: API_NOTES });
 			methods[url] = result.method;
 		}

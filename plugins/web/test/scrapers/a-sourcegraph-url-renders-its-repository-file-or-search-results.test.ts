@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { handleSourcegraph } from "../../src/scrapers/sourcegraph";
 import * as scraperTypes from "../../src/scrapers/types";
+import { requireRender } from "../helpers/scrapers";
 
 /**
  * WHY: a sourcegraph.com URL renders through one GraphQL endpoint, and the URL shape selects the
@@ -29,13 +30,6 @@ function answer(respond: (variables: Record<string, unknown>) => unknown): void 
 		const content = JSON.stringify(respond(request.variables));
 		return { content, contentType: "application/json", finalUrl: url, ok: true, status: 200 };
 	});
-}
-
-function render(result: scraperTypes.RenderResult | scraperTypes.ScraperDegrade | null): scraperTypes.RenderResult {
-	if (result === null || scraperTypes.isScraperDegrade(result)) {
-		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
-	}
-	return result;
 }
 
 const REPO = {
@@ -74,7 +68,7 @@ describe("a Sourcegraph search URL renders its results", () => {
 		];
 		answer(() => ({ data: { search: { results: { results, matchCount: 42, limitHit: true } } } }));
 
-		const result = render(await handleSourcegraph("https://sourcegraph.com/search?q=repo%3Aa+foo", 10));
+		const result = requireRender(await handleSourcegraph("https://sourcegraph.com/search?q=repo%3Aa+foo", 10));
 
 		expect(requests.map(r => r.variables)).toEqual([{ query: "repo:a foo" }]);
 		expect(result.method).toBe("sourcegraph-search");
@@ -98,8 +92,8 @@ describe("a Sourcegraph search URL renders its results", () => {
 			return { data: { search: { results: { results: query === "zero" ? [] : null, ...reported } } } };
 		});
 
-		const zero = render(await handleSourcegraph("https://sourcegraph.com/search?q=zero", 10));
-		const absent = render(await handleSourcegraph("https://sourcegraph.com/search?q=nothing", 10));
+		const zero = requireRender(await handleSourcegraph("https://sourcegraph.com/search?q=zero", 10));
+		const absent = requireRender(await handleSourcegraph("https://sourcegraph.com/search?q=nothing", 10));
 
 		expect(zero.content).toBe(
 			"# Sourcegraph Search\n\n**Query:** `zero`\n**Matches:** 0\n**Limit hit:** no\n\n_No results._",
@@ -119,7 +113,7 @@ describe("a Sourcegraph repository or file URL renders that repository", () => {
 	it("renders a repository by its name, dropping the revision", async () => {
 		answer(() => ({ data: { repository: REPO } }));
 
-		const result = render(await handleSourcegraph("https://sourcegraph.com/github.com/a/b@v1", 10));
+		const result = requireRender(await handleSourcegraph("https://sourcegraph.com/github.com/a/b@v1", 10));
 
 		expect(requests.map(r => r.variables)).toEqual([{ name: "github.com/a/b" }]);
 		expect(result.method).toBe("sourcegraph-repo");
@@ -130,8 +124,10 @@ describe("a Sourcegraph repository or file URL renders that repository", () => {
 		const blob = { ...REPO, commit: { blob: { content: "export const x = 1;" } } };
 		answer(() => ({ data: { repository: blob } }));
 
-		const pinned = render(await handleSourcegraph("https://sourcegraph.com/github.com/a/b@v2/-/blob/src/x.ts", 10));
-		const head = render(await handleSourcegraph("https://sourcegraph.com/github.com/a/b/-/blob/src/x.ts", 10));
+		const pinned = requireRender(
+			await handleSourcegraph("https://sourcegraph.com/github.com/a/b@v2/-/blob/src/x.ts", 10),
+		);
+		const head = requireRender(await handleSourcegraph("https://sourcegraph.com/github.com/a/b/-/blob/src/x.ts", 10));
 
 		expect(requests.map(r => r.variables)).toEqual([
 			{ name: "github.com/a/b", path: "src/x.ts", rev: "v2" },

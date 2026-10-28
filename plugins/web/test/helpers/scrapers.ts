@@ -10,3 +10,11 @@ export function asRender(result: RenderResult | ScraperDegrade | null): RenderRe
 	if (isScraperDegrade(result)) throw new Error(`unexpected scraper degrade: ${result.note}`);
 	return result;
 }
+
+/** Unwrap a special-handler result for tests that expect a successful render, failing on a non-match or a degrade. */
+export function requireRender(result: RenderResult | ScraperDegrade | null): RenderResult {
+	if (result === null || isScraperDegrade(result)) {
+		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
+	}
+	return result;
+}
