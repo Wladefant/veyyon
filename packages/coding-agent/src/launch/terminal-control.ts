@@ -52,6 +52,11 @@ type DeliveryState =
 	| { state: "delivered"; outcome: string }
 	| { state: "failed"; error: string };
 
+/** Return the platform-specific endpoint used by terminal-control servers. */
+export function terminalControlEndpoint(directory: string, nonce: string, platform = process.platform): string {
+	return platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
+}
+
 /** The socket lives in the CLI process; neither this module nor a client opens a session file. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
@@ -63,8 +68,7 @@ export async function serveTerminalControl(
 	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(directory);
 	else await fs.chmod(directory, 0o700);
 	const nonce = crypto.randomUUID();
-	const endpoint =
-		process.platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
+	const endpoint = terminalControlEndpoint(directory, nonce);
 	let token = crypto.randomBytes(32).toString("hex");
 	const recordPath = path.join(directory, `${process.pid}-${nonce}.json`);
 	const sockets = new Set<TerminalSocket>();

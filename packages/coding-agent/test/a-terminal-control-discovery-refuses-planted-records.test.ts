@@ -6,6 +6,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { terminalControlEndpoint } from "../src/launch/terminal-control";
 import { rotateTerminalControl } from "../src/launch/terminal-control-client";
 
 const roots: string[] = [];
@@ -41,7 +42,7 @@ test.each(["broad permissions", "symbolic link"] as const)("does not send rotati
 		});
 	});
 	servers.push(server);
-	const endpoint = path.join(root, "terminal.sock");
+	const endpoint = terminalControlEndpoint(root, "planted-record");
 	server.listen(endpoint);
 	await new Promise<void>((resolve, reject) => {
 		server.once("listening", resolve);
