@@ -14,6 +14,8 @@
 - Browser tabs owned by another session can no longer be reopened, reused, or run, and the tab inventory omits their names, titles, and URLs ([Refs #538](https://github.com/Wladefant/veyyon/issues/538)).
 - Fixed the coding-agent failing to parse after a merge left stray braces, a duplicated property block and a call to a removed private method in the session and task modules.
 
+- Terminal-control pipes and discovery records restrict Windows access to the owner and SYSTEM; readers refuse records in unsafe directories or at device paths before parsing ([Refs #580](https://github.com/Wladefant/veyyon/issues/580)).
+
 - Spawn model lists fall back after quota failures with global fallback disabled, and new spawns move past the shared pools to the healthy fallback tail when both are suppressed ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Explicit spawn lists stay closed when no later candidate resolves, instead of inheriting global fallback chains ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
