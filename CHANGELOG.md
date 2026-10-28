@@ -13,6 +13,7 @@
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
+- `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
 
 ### Changed
 
@@ -62,8 +63,11 @@
 - The release at dispose of the session's background jobs, owned job manager, eval kernels, session-scoped resources and MCP hold moved out of the session class into the `SessionRelease` session collaborator, and the memory backends' release into `MemoryContext` ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
+- The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
@@ -144,6 +148,7 @@
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
 - An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
 - The shell snapshot, the `local://` fallback root, the debug transcript, the `/share` HTML handed to a custom share script, the LLM request dump, PDF image extractions, git patches, task branch worktrees, screenshots, generated images, external-editor buffers, speech recordings, eval agent artifacts, the debug adapter socket and the `/debug` work-profile flamegraph are written under `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a fixed or guessable name in the shared temp directory, where another account could read them or replace them first.
+- A theme color, var or export given as a number that is not an integer from 0 to 255 fails theme validation with `"colors.<token>" must be a string or a palette index from 0 to 255` instead of loading as a missing or malformed hex color.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
