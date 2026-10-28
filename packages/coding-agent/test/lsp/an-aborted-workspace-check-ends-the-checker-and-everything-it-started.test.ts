@@ -61,8 +61,14 @@ describe.skipIf(process.platform === "win32")("an aborted workspace check", () =
 		// The checker binary is the one external boundary: `cargo` is swapped for the fake at the
 		// spawn call, and the real spawn, process supervision and abort path run as shipped.
 		const realSpawn = Bun.spawn.bind(Bun);
-		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[], options?: Bun.SpawnOptions.OptionsObject) =>
-			realSpawn(cmd[0] === "cargo" ? [fakeCargo, ...cmd.slice(1)] : cmd, options)) as typeof Bun.spawn);
+		vi.spyOn(Bun, "spawn").mockImplementation(((
+			cmd: string[],
+			options?: Bun.SpawnOptions.SpawnOptions<
+				Bun.SpawnOptions.Writable,
+				Bun.SpawnOptions.Readable,
+				Bun.SpawnOptions.Readable
+			>,
+		) => realSpawn(cmd[0] === "cargo" ? [fakeCargo, ...cmd.slice(1)] : cmd, options)) as typeof Bun.spawn);
 		let childPid: number | undefined;
 		try {
 			const controller = new AbortController();
