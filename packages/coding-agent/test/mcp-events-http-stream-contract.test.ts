@@ -200,3 +200,62 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		}
 	});
 });
+
+function rawFrame(id: string | number, data: string): void {
+	controllers.get(id)?.enqueue(encoder.encode(`data: ${data}\n\n`));
+}
+
+describe("MCP HTTP stream invalid-frame handling", () => {
+	it.each([
+		["malformed JSON", "{not json"],
+		["null JSON", "null"],
+		["scalar JSON", "17"],
+		["invalid batch member", `[null,${JSON.stringify({ jsonrpc: "2.0", method: "notifications/events/event", params: { marker: "after-invalid-member" } })}]`],
+	])("skips %s frames and continues delivering later valid notifications", async (_name, invalidFrame) => {
+		server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				const body = await request.json();
+				if (!body || typeof body !== "object" || !("id" in body)) return new Response("Invalid request", { status: 400 });
+				const id = body.id as string | number;
+				return new Response(new ReadableStream<Uint8Array>({
+					start(controller) {
+						controllers.set(id, controller);
+						controller.enqueue(encoder.encode(": open\n\n"));
+					},
+					cancel() { controllers.delete(id); },
+				}), { headers: { "Content-Type": "text/event-stream" } });
+			},
+		});
+		const transport = new HttpTransport({ type: "http", url: `http://127.0.0.1:${server.port}/mcp`, timeout: 1_000 });
+		await transport.connect();
+		const received: string[] = [];
+		const stream = transport.streamRequest("events/stream", {}, message => {
+			if ("params" in message && message.params && typeof message.params === "object" && "marker" in message.params) {
+				received.push(String(message.params.marker));
+			}
+		});
+		let doneSettled = false;
+		void stream.done.then(
+			() => { doneSettled = true; },
+			() => { doneSettled = true; },
+		);
+		try {
+			await until(() => controllers.has(stream.id));
+			push(stream.id, stream.id, "before-invalid-frame");
+			rawFrame(stream.id, invalidFrame);
+			push(stream.id, stream.id, "after-invalid-frame");
+			await until(() => received.length === 2 || doneSettled);
+			expect(received).toEqual(["before-invalid-frame", "after-invalid-frame"]);
+			expect(doneSettled).toBe(false);
+			push(stream.id, stream.id, "after-invalid-frame-and-check");
+			await until(() => received.length === 3 || doneSettled);
+			expect(received).toEqual(["before-invalid-frame", "after-invalid-frame", "after-invalid-frame-and-check"]);
+			expect(doneSettled).toBe(false);
+		} finally {
+			stream.cancel();
+			await stream.done;
+			await transport.close();
+		}
+	});
+});
