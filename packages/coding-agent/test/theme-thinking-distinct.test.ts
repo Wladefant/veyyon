@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
@@ -13,17 +14,6 @@ const THINKING_MARKER = "REASONING TRACE MARKER";
 const ANSWER_MARKER = "FINAL ANSWER MARKER";
 let previousAnsiPolicy: AnsiPolicy;
 
-function zeroUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {
 		role: "assistant",
@@ -32,7 +22,7 @@ function assistantMessage(content: AssistantMessage["content"]): AssistantMessag
 		provider: "cursor",
 		model: "cursor-model",
 		stopReason: "stop",
-		usage: zeroUsage(),
+		usage: emptyUsage(),
 		timestamp: 1,
 	};
 }
@@ -69,7 +59,7 @@ function createFixture() {
 		showWarning: vi.fn(),
 		showPinnedError: vi.fn(),
 		clearTransientSessionUi: vi.fn(),
-		lastAssistantUsage: zeroUsage(),
+		lastAssistantUsage: emptyUsage(),
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
 		// the composer refresh and the welcome dismissal whenever either was

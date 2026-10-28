@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Context, Model, ThinkingContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -22,17 +22,6 @@ import { TempDir } from "@veyyon/utils";
 
 const REASONING_TEXT = "I have partly reasoned through the implementation and should preserve this.";
 const VISIBLE_TEXT = "visible interrupted text";
-
-function emptyUsage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function baseAssistant(model: Model<Api>, content: AssistantMessage["content"]): AssistantMessage {
 	return {

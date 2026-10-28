@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Context, ToolCall, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, Context, ToolCall, ToolResultMessage } from "@veyyon/ai";
 import {
 	createInbandScanner,
 	type Dialect,
@@ -10,6 +10,7 @@ import {
 	parseInbandToolMessage,
 	renderInbandToolPrompt,
 } from "@veyyon/ai/dialect";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const TOOLS = [
 	{
@@ -47,17 +48,6 @@ const DIALECTS: readonly Dialect[] = [
 	"pi-native",
 ];
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return {
 		role: "assistant",
@@ -65,7 +55,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};

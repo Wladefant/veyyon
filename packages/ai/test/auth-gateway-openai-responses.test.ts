@@ -3,17 +3,7 @@ import { encodeResponse, encodeStream, parseRequest } from "@veyyon/ai/providers
 import type { AssistantMessage } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { Effort } from "@veyyon/catalog/effort";
-
-function zeroUsage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+import { emptyUsage } from "@veyyon/catalog/models";
 
 async function collectStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 	const reader = stream.getReader();
@@ -261,7 +251,7 @@ describe("openai-responses encodeResponse", () => {
 				},
 			],
 			usage: {
-				...zeroUsage(),
+				...emptyUsage(),
 				input: 10,
 				output: 20,
 				cacheRead: 4,
@@ -334,7 +324,7 @@ describe("openai-responses encodeResponse", () => {
 					textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
 				},
 			],
-			usage: zeroUsage(),
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 1_700_000_000_000,
 		};
@@ -368,7 +358,7 @@ describe("openai-responses encodeResponse", () => {
 			provider: "openai",
 			model: "gpt-5",
 			content: [{ type: "text", text: "partial" }],
-			usage: zeroUsage(),
+			usage: emptyUsage(),
 			stopReason: "length",
 			timestamp: 1_700_000_000_000,
 		};
@@ -390,7 +380,7 @@ describe("openai-responses encodeStream", () => {
 			provider: "openai",
 			model: "gpt-5",
 			content: [],
-			usage: zeroUsage(),
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 1_700_000_000_000,
 		};
@@ -411,7 +401,7 @@ describe("openai-responses encodeStream", () => {
 					thoughtSignature: "fc_x",
 				},
 			],
-			usage: { ...zeroUsage(), input: 1, output: 2 },
+			usage: { ...emptyUsage(), input: 1, output: 2 },
 			stopReason: "toolUse",
 			timestamp: 1_700_000_000_000,
 		};
@@ -559,7 +549,7 @@ describe("openai-responses encodeStream", () => {
 			provider: "openai",
 			model: "gpt-5",
 			content: [{ type: "text", text: "Working", textSignature }],
-			usage: { ...zeroUsage(), input: 1, output: 1 },
+			usage: { ...emptyUsage(), input: 1, output: 1 },
 			stopReason: "stop",
 			timestamp: 1_700_000_000_000,
 		};
@@ -596,7 +586,7 @@ describe("openai-responses encodeStream", () => {
 			provider: "openai",
 			model: "gpt-5",
 			content: [],
-			usage: zeroUsage(),
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 1_700_000_000_000,
 		};
@@ -666,7 +656,7 @@ describe("openai-responses encodeStream", () => {
 			provider: "openai",
 			model: "gpt-5",
 			content: [{ type: "text", text: "partial" }],
-			usage: { ...zeroUsage(), output: 1 },
+			usage: { ...emptyUsage(), output: 1 },
 			stopReason: "length",
 			timestamp: 1_700_000_000_000,
 		};
