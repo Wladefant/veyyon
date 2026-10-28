@@ -1,20 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, Model } from "@veyyon/ai/types";
+import type { Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
 import { sseFetch } from "./helpers/fetch-mock";
-
-function baseContext(): Context {
-	return {
-		messages: [
-			{
-				role: "user",
-				content: "hello",
-				timestamp: Date.now(),
-			},
-		],
-	};
-}
 
 describe("issue #959 - deepseek chat-template token leakage", () => {
 	const model: Model<"openai-completions"> = {
@@ -54,7 +43,7 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -93,7 +82,7 @@ describe("issue #959 - deepseek chat-template token leakage", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();

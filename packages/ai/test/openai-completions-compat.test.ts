@@ -20,6 +20,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
+import { sayHelloContext } from "./helpers";
 import { sseFetch } from "./helpers/fetch-mock";
 
 const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
@@ -46,18 +47,6 @@ function getNestedBoolean(value: unknown, key: string): boolean | undefined {
 	if (!obj) return undefined;
 	const property = obj[key];
 	return typeof property === "boolean" ? property : undefined;
-}
-
-function baseContext(): Context {
-	return {
-		messages: [
-			{
-				role: "user",
-				content: "hello",
-				timestamp: Date.now(),
-			},
-		],
-	};
 }
 
 function zaiGlm52Model(): Model<"openai-completions"> {
@@ -95,7 +84,7 @@ function kimiZaiModel(): Model<"openai-completions"> {
 
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
-	context: Context = baseContext(),
+	context: Context = sayHelloContext(),
 	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; cacheRetention?: CacheRetention },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
@@ -646,7 +635,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -690,7 +679,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -746,7 +735,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -836,7 +825,7 @@ describe("openai-completions compatibility", () => {
 			},
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			reasoning: "high",
 			signal: AbortSignal.abort(),
@@ -862,7 +851,7 @@ describe("openai-completions compatibility", () => {
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		streamOpenAICompletions(
 			model,
-			{ ...baseContext(), tools: [readTool] },
+			{ ...sayHelloContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
 				reasoning: "max",
@@ -900,7 +889,7 @@ describe("openai-completions compatibility", () => {
 		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
-			{ ...baseContext(), tools: [readTool] },
+			{ ...sayHelloContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
 				fetch: fetchMock,
@@ -945,7 +934,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -976,7 +965,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const stream = streamOpenAICompletions(model, baseContext(), {
+		const stream = streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		});
@@ -1014,7 +1003,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const stream = streamOpenAICompletions(model, baseContext(), {
+		const stream = streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		});
@@ -1045,7 +1034,7 @@ describe("openai-completions compatibility", () => {
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = sseFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			signal: AbortSignal.abort(),
@@ -1089,7 +1078,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -1124,10 +1113,10 @@ describe("openai-completions compatibility", () => {
 		});
 
 		const minimalPayload = toObject(
-			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "minimal" }),
+			await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "minimal" }),
 		);
 		const xhighPayload = toObject(
-			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" }),
+			await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "xhigh" }),
 		);
 
 		expect(minimalPayload ? Reflect.get(minimalPayload, "reasoning_effort") : undefined).toBe("low");
@@ -1157,10 +1146,10 @@ describe("openai-completions compatibility", () => {
 			maxTokens: 32000,
 		});
 		const collapsedMinimalPayload = toObject(
-			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "minimal" }),
+			await captureOpenAICompletionsPayload(collapsedModel, sayHelloContext(), { reasoning: "minimal" }),
 		);
 		const collapsedXhighPayload = toObject(
-			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "xhigh" }),
+			await captureOpenAICompletionsPayload(collapsedModel, sayHelloContext(), { reasoning: "xhigh" }),
 		);
 		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "model") : undefined).toBe(
 			"mimo-v2.5-pro-thinking",
@@ -1253,9 +1242,9 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		} as ModelSpec<"openai-completions">);
 
-		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
-		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
-		const maxPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "max" });
+		const highPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "high" });
+		const xhighPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "xhigh" });
+		const maxPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "max" });
 
 		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "high" });
 		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "xhigh" });
@@ -2088,7 +2077,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2128,7 +2117,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2161,7 +2150,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 		// At end-of-stream we have no way to know whether the partial is a real token,
 		// so we emit it verbatim rather than swallow legitimate text forever.
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2198,7 +2187,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2395,7 +2384,7 @@ describe("openrouterVariant request integration", () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = sseFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			signal: AbortSignal.abort(),
@@ -2415,7 +2404,7 @@ describe("openrouterVariant request integration", () => {
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = sseFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			signal: AbortSignal.abort(),
@@ -2433,7 +2422,7 @@ describe("openrouterVariant request integration", () => {
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const fetchMock = sseFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			signal: AbortSignal.abort(),
@@ -2523,7 +2512,7 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 	it("rewrites tool schemas to MFJS on native Moonshot hosts", async () => {
 		const model = moonshotKimiModel();
 		expect(model.compat.toolSchemaFlavor).toBe("moonshot-mfjs");
-		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const payload = await captureOpenAICompletionsPayload(model, { ...sayHelloContext(), tools: mfjsProbeTools });
 		const op = probeProperty(payload, "github", "op");
 		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
 		const paths = probeProperty(payload, "find", "paths");
@@ -2534,7 +2523,7 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 	it("leaves raw JSON Schema untouched on non-Moonshot hosts (flag-gated)", async () => {
 		const model = genericNonStrictModel();
 		expect(model.compat.toolSchemaFlavor).toBeUndefined();
-		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const payload = await captureOpenAICompletionsPayload(model, { ...sayHelloContext(), tools: mfjsProbeTools });
 		// The const-union → enum collapse is a universal wire optimization, not MFJS,
 		// so `op` collapses identically here; MFJS gating is proven by `paths.minItems` below.
 		const op = probeProperty(payload, "github", "op");
