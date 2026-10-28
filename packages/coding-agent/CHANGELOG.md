@@ -5,6 +5,7 @@
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+- MCP HTTP streams skip malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 ## [1.6.6] - 2026-10-28
 
 ### Fixed
