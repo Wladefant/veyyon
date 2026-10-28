@@ -1,16 +1,10 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
-import {
-	formatCostTiered as formatCost,
-	formatDuration,
-	formatNumber,
-	formatPercent,
-	normalizePremiumRequests,
-} from "@veyyon/utils";
 import { getDashboardStats, getTotalMessageCount, syncAllSessions } from "./aggregator";
 import { closeDb } from "./db";
 import { startServer } from "./server";
+import { createSyncProgressReporter, formatStatsSummary } from "./summary";
 
 export {
 	getDashboardStats,
@@ -23,6 +17,7 @@ export {
 } from "./aggregator";
 export { closeDb } from "./db";
 export { startServer } from "./server";
+export * from "./summary";
 export type {
 	AggregatedStats,
 	DashboardStats,
@@ -37,49 +32,6 @@ export type {
 	ToolTimeSeriesPoint,
 	ToolUsageStats,
 } from "./types";
-
-/**
- * Print stats summary to console.
- */
-async function printStats(): Promise<void> {
-	const stats = await getDashboardStats();
-	const { overall, byModel, byFolder } = stats;
-
-	console.log("\n=== AI Usage Statistics ===\n");
-
-	console.log("Overall:");
-	console.log(`  Requests: ${formatNumber(overall.totalRequests)} (${formatNumber(overall.failedRequests)} errors)`);
-	console.log(`  Error Rate: ${formatPercent(overall.errorRate)}`);
-	console.log(`  Total Tokens: ${formatNumber(overall.totalInputTokens + overall.totalOutputTokens)}`);
-	console.log(`  Input Tokens: ${formatNumber(overall.totalInputTokens)}`);
-	console.log(`  Output Tokens: ${formatNumber(overall.totalOutputTokens)}`);
-	console.log(`  Cache Rate: ${formatPercent(overall.cacheRate)}`);
-	console.log(`  Total Cost: ${formatCost(overall.totalCost)}`);
-	console.log(`  Premium Requests: ${formatNumber(normalizePremiumRequests(overall.totalPremiumRequests ?? 0))}`);
-	console.log(`  Avg Duration: ${overall.avgDuration !== null ? formatDuration(overall.avgDuration) : "-"}`);
-	console.log(`  Avg TTFT: ${overall.avgTtft !== null ? formatDuration(overall.avgTtft) : "-"}`);
-	if (overall.avgTokensPerSecond !== null) {
-		console.log(`  Avg Tokens/s: ${overall.avgTokensPerSecond.toFixed(1)}`);
-	}
-
-	if (byModel.length > 0) {
-		console.log("\nBy Model:");
-		for (const m of byModel.slice(0, 10)) {
-			console.log(
-				`  ${m.model}: ${formatNumber(m.totalRequests)} reqs, ${formatCost(m.totalCost)}, ${formatPercent(m.cacheRate)} cache`,
-			);
-		}
-	}
-
-	if (byFolder.length > 0) {
-		console.log("\nBy Folder:");
-		for (const f of byFolder.slice(0, 10)) {
-			console.log(`  ${f.folder}: ${formatNumber(f.totalRequests)} reqs, ${formatCost(f.totalCost)}`);
-		}
-	}
-
-	console.log("");
-}
 
 /**
  * Main CLI entry point.
@@ -118,31 +70,13 @@ Examples:
 	}
 
 	try {
-		// Sync first
-		const tty = process.stderr.isTTY === true;
+		const progress = createSyncProgressReporter(process.stderr);
 		process.stderr.write("Syncing session files...\n");
-		let lastWidth = 0;
-		let lastRender = 0;
-		const { processed, files } = await syncAllSessions({
-			onProgress: event => {
-				if (!tty) return;
-				const now = Date.now();
-				if (event.current < event.total && now - lastRender < 33) return;
-				lastRender = now;
-				const marker = "/sessions/";
-				const idx = event.sessionFile.indexOf(marker);
-				const short = idx >= 0 ? event.sessionFile.slice(idx + marker.length) : event.sessionFile;
-				const pct = ((event.current / event.total) * 100).toFixed(0).padStart(3, " ");
-				const line = `[${event.current}/${event.total}] ${pct}%  ${short}`;
-				const columns = process.stderr.columns ?? 120;
-				const clipped = line.length > columns - 1 ? `${line.slice(0, columns - 2)}\u2026` : line;
-				process.stderr.write(`\r${clipped.padEnd(lastWidth)}`);
-				lastWidth = clipped.length;
-			},
-		});
-		if (tty && lastWidth > 0) process.stderr.write(`\r${" ".repeat(lastWidth)}\r`);
+		const { processed, files } = await syncAllSessions({ onProgress: progress.onProgress });
+		progress.finish();
 		const total = await getTotalMessageCount();
-		console.log(`Synced ${processed} new entries from ${files} files (${total} total)\n`);
+		// stderr, like "Syncing…": with --json stdout holds only the JSON document.
+		process.stderr.write(`Synced ${processed} new entries from ${files} files (${total} total)\n\n`);
 
 		if (values.json) {
 			const stats = await getDashboardStats();
@@ -151,7 +85,7 @@ Examples:
 		}
 
 		if (values.sync) {
-			await printStats();
+			console.log(formatStatsSummary(await getDashboardStats()));
 			return;
 		}
 

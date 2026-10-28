@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
 - The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
 
 ## [1.5.9] - 2026-10-22
