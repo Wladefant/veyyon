@@ -128,7 +128,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 			return completedStream(reply);
 		};
 		const sideStreamFn: StreamFn = (requestModel, ctx) => {
-			process.stderr.write(`DBG285 call #${summarizerCalls + 1} msgs=${JSON.stringify(ctx.messages.map(m => [m.role, JSON.stringify(m.content).slice(0, 160)]))}\n`);
+			process.stderr.write(`DBG285 call #${summarizerCalls + 1} n=${ctx.messages.length} stack=${new Error().stack?.split("\n").slice(1, 14).map(l => l.trim()).join(" | ")} last=${JSON.stringify(ctx.messages.map(m => JSON.stringify(m.content))[ctx.messages.length - 1]?.slice(-700))}\n`);
 			const summary = summaries.shift();
 			if (!summary) throw new Error("unexpected extra summarizer call");
 			summarizerCalls++;
