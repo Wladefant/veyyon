@@ -3,6 +3,7 @@ import { isEffort } from "@veyyon/catalog/effort";
 import { emptyUsage } from "@veyyon/catalog/models";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
+import { gatewayResponseStream } from "../auth-gateway/response-stream";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
  * `stream(model, context, options)`.
@@ -677,43 +678,15 @@ export function encodeStream(
 	options?: ParsedRequest["options"],
 	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
 	const includeUsage = options?.extra?.includeStreamingUsage === true;
-	let cancelled = control?.signal?.aborted === true;
-	const markCancelled = () => {
-		cancelled = true;
-	};
-	control?.signal?.addEventListener("abort", markCancelled, { once: true });
-
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const sink: FrameSink = {
-				get cancelled() {
-					return cancelled;
-				},
-				enqueue: frame => controller.enqueue(encoder.encode(frame)),
-			};
-			const writer = new ChatCompletionStreamWriter(sink, requestedModelId, includeUsage);
-			try {
-				if (cancelled) {
-					controller.close();
-					return;
-				}
-				if (await writer.write(events)) controller.close();
-			} catch (err) {
-				if (!cancelled) {
-					writer.fail(err);
-					controller.close();
-				}
-			} finally {
-				control?.signal?.removeEventListener("abort", markCancelled);
-			}
-		},
-		cancel(reason) {
-			cancelled = true;
-			control?.signal?.removeEventListener("abort", markCancelled);
-			control?.onCancel?.(reason);
-		},
+	return gatewayResponseStream(control, out => {
+		const writer = new ChatCompletionStreamWriter(out, requestedModelId, includeUsage);
+		return {
+			run: async () => {
+				if (await writer.write(events)) out.close();
+			},
+			fail: err => writer.fail(err),
+		};
 	});
 }
 
