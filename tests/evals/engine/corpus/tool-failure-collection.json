@@ -32,6 +32,6 @@
     "Nineteen records lack a provable same-target outcome; two more have unavailable compacted recovery payloads.",
     "Neutral minimized cases preserve selector and path dialect shapes but omit original source content and full tool registries.",
     "The collection has fewer than 100 cases and no frozen hash, seed, partitions, model score, or evaluation result.",
-    "Reader tests and type checks were not run because no authorized runner path exists."
+    "Check results belong in the pull request's verification receipts, not in this collection report."
   ]
 }
