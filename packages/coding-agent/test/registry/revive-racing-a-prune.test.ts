@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 interface SessionStub {
 	session: AgentSession;
@@ -50,7 +51,7 @@ function makeSessionStub(): SessionStub {
 
 /** Let the microtask chain inside ensureLive reach its first await. */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 describe("a revive racing a prune leaks no session", () => {

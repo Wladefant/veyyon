@@ -39,6 +39,7 @@ import type { AutocompleteItem, AutocompleteProvider } from "@veyyon/utils/autoc
 import { MOTION, MotionClock } from "@veyyon/utils/motion";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { Chalk } from "chalk";
+import { drainMicrotasks } from "../../../../packages/utils/test/helpers/drain-microtasks";
 import { defaultEditorTheme, defaultSelectListTheme } from "./test-themes";
 
 const FRAME = 1000 / 60;
@@ -93,7 +94,7 @@ const PROVIDER: AutocompleteProvider = {
 
 /** Let every pending microtask run; the provider is a resolved promise, not a timer. */
 async function flush(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 function advance(clock: MotionClock, ms: number, from = 0): number {

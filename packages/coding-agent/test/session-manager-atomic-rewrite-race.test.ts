@@ -7,6 +7,7 @@ import {
 } from "@veyyon/kernel/session/session-storage";
 import type { SessionTitleUpdate } from "@veyyon/kernel/session/session-title-slot";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 interface DetachableWriter extends SessionStorageWriter {
 	detach(): void;
@@ -657,7 +658,7 @@ describe("SessionManager fence handoff across superseded rewrites", () => {
 		// epoch bookkeeping so subsequent appends took the hot path and were
 		// then detached by the newer publish.
 		storage.pauses[0].allow.resolve();
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await drainMicrotasks(20);
 
 		// Sync append during the newer rewrite: MUST still be fenced.
 		sessionManager.appendCustomEntry("during_newer", { data: "X2" });

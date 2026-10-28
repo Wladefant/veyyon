@@ -39,6 +39,7 @@ import {
 	releaseTab,
 	runInTab,
 } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 import { makeToolSession } from "../helpers/tool-session";
 
 function makeKind(socketSuffix: string): CmuxKind {
@@ -164,7 +165,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 
 			// Drain the microtask queue so any pending unhandled-rejection
 			// would have fired by the time we assert.
-			for (let i = 0; i < 8; i++) await Promise.resolve();
+			await drainMicrotasks(8);
 			expect(unhandled).toEqual([]);
 			expect(getTabsMapForTest().has("docfinal")).toBe(false);
 		} finally {
@@ -277,7 +278,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 			// error immediately, not after the run's 60_000ms timeout.
 			await expect(runPromise).rejects.toThrow(/Tab "docfinal" was closed/);
 
-			for (let i = 0; i < 8; i++) await Promise.resolve();
+			await drainMicrotasks(8);
 			expect(unhandled).toEqual([]);
 			expect(getTabsMapForTest().has("docfinal")).toBe(false);
 		} finally {

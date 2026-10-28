@@ -19,6 +19,7 @@ import { APPROVAL_SELECT_OPTIONS, ExtensionToolWrapper } from "@veyyon/coding-ag
 import { Type } from "@veyyon/kernel/registry/typebox";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { attachFaultSink, type Fault, getProjectAgentDir, logger, TempDir } from "@veyyon/utils";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 /**
  * Execution context for a test whose subject is NOT approval.
@@ -2094,7 +2095,7 @@ describe("ExtensionRunner", () => {
 			);
 
 			// Drain microtasks so the fire-and-forget emit() calls inside initialize() complete.
-			for (let i = 0; i < 5; i++) await Promise.resolve();
+			await drainMicrotasks(5);
 
 			const events = fs
 				.readFileSync(eventsPath, "utf8")

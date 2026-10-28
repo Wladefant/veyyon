@@ -28,6 +28,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 const WIDTH = 120;
 
@@ -273,7 +274,7 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Verify parking the agent does not eject the focused view
 		registry.setStatus("Worker", "parked");
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 		expect(mode.focusedAgentId).toBe("Worker");
 	});
 
@@ -479,7 +480,7 @@ describe("focused agent transcript reconstruction", () => {
 		registry.unregister("LiveWorker");
 
 		// Settle registry event and unfocus chain
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 		await terminal.waitForRender(mode.ui);
 
 		expect(mode.focusedAgentId).toBeUndefined();

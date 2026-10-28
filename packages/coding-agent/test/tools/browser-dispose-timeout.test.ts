@@ -18,6 +18,7 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as attach from "@veyyon/coding-agent/tools/web/browser/attach";
 import { type BrowserHandle, releaseBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 /** How long a release waits on a wedged `browser.close()` before killing the process tree. */
 const CLOSE_BOUND_MS = 5_000;
@@ -46,7 +47,7 @@ function makeHangingHeadlessHandle(pid: number | undefined): {
 
 /** Let the promise callbacks an advanced timer queued run to completion. */
 async function flush(): Promise<void> {
-	for (let i = 0; i < 20; i++) await Promise.resolve();
+	await drainMicrotasks(20);
 }
 
 /** Release `handle` on fake timers, recording each force-kill, and report whether it settled before and at the bound. */

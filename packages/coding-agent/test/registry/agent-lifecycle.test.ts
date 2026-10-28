@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 interface SessionStub {
 	session: AgentSession;
@@ -34,7 +35,7 @@ function makeSessionStub(dispose?: () => Promise<void>, flush?: () => Promise<vo
 
 /** Settle the async park chain (timer callback → park() → dispose → setStatus). */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 5; i++) await Promise.resolve();
+	await drainMicrotasks(5);
 }
 
 const TTL = 20;

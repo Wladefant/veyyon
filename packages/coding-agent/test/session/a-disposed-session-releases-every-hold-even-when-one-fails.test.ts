@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { SessionRelease } from "@veyyon/coding-agent/session/runtime/session-release";
 import * as ownedResources from "@veyyon/kernel/session/owned-resources";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 const EVAL_OWNER = "eval-owner-1";
 const SESSION_ID = "session-1";
@@ -151,7 +152,7 @@ describe("the MCP hold of a disposed session", () => {
 		});
 
 		vi.advanceTimersByTime(2_998);
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await drainMicrotasks(20);
 		expect(settled).toBe(false);
 
 		vi.advanceTimersByTime(2);

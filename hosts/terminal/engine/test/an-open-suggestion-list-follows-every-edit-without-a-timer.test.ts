@@ -18,6 +18,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import { Editor } from "@veyyon/tui/components/editor";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
+import { drainMicrotasks } from "../../../../packages/utils/test/helpers/drain-microtasks";
 import { defaultEditorTheme } from "./test-themes";
 
 const COMMANDS = ["mcp", "memory", "model", "settings"];
@@ -64,7 +65,7 @@ const EDITS = [
 
 /** Let every pending microtask run; the provider is a resolved promise, not a timer. */
 async function flush(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 function listed(editor: Editor): string[] | undefined {

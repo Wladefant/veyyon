@@ -14,6 +14,7 @@ import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretAuditLog } from "@veyyon/coding-agent/secrets/audit";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 import { useIsolatedConfigRoot } from "./helpers/isolated-agent-dir";
 
 useIsolatedConfigRoot();
@@ -152,7 +153,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 	};
 
 	const drainCredentialDisabledDispatch = async (): Promise<void> => {
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 	};
 
 	afterEach(() => {
@@ -565,7 +566,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 			// 4. Let the deferred flush microtask run, then the handler's async throw,
 			// then emitError, which calls our listener. A handful of microtask turns
 			// covers the await Promise.race inside #runHandlerWithTimeout.
-			for (let i = 0; i < 5; i++) await Promise.resolve();
+			await drainMicrotasks(5);
 
 			expect(errors).toHaveLength(1);
 			expect(errors[0]).toMatchObject({
