@@ -10,6 +10,7 @@
 
 ### Added
 
+- `AGENT_EVENT_TYPES` in `@veyyon/agent-core/types` lists every agent event type and fails to compile when the event union gains a type it lacks.
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
@@ -17,6 +18,14 @@
 
 ### Changed
 
+- `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
+- The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
+- `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.
+- The writethrough per-server loop drops a custom-linter check its callers already make; no user-facing change.
+- The RPC client and the agent run monitor recognize agent events through `AGENT_EVENT_TYPES` instead of their own copies of the list; no user-facing change.
+- Syncing a written file to its language servers and announcing its save share one per-server loop; no user-facing change.
+- The plugin manager runs its `bun` subcommands through the command runner the git cache refresh uses; no user-facing change.
+- `veyyon stats --summary` prints the summary and draws the sync progress line through `@veyyon/stats`, which the standalone stats entry point also uses; no user-facing change.
 - The collab wire and the HTML export build a tool call's display and a tool result's display through the same two functions instead of a copy each; no user-facing change.
 - The hook editor, hook input and MCP add wizard cards pass their whole body to the modal shell, which keeps the rows that fit, instead of planning the card chrome a second time to cut it first; no user-facing change.
 - An MCP tool with a live connection and one waiting for its server send a call, resend it after a reconnect and build its result through the same functions, and a waiting tool's failure names the source of the connection it failed on as its success does; no user-facing change.
@@ -80,11 +89,14 @@
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
+- The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 - `check:types` covers `bench/` and `scripts/`, and `bench/_key-samples.ts` types its expected key ids as `KeyId`; no user-facing change.
 - An `Editor` asks its autocomplete provider again on the edit that changes an open suggestion list instead of 100 ms later, so typing `/mo` narrows the slash command list in 3 ms instead of 105 ms and an `@` file list follows each keystroke one frame later instead of after the timer.
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
+- `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
+- The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 - `privateTempDirName(uid)` in `@veyyon/utils/app-identity` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
 - A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
@@ -96,6 +108,7 @@
 
 ### Fixed
 
+- `agent://` and `artifact://` completion skips a registered artifacts path that is a file instead of failing, as `history://` completion already did.
 - Aborting LSP workspace diagnostics ends the checker and every process it started and returns within milliseconds; it used to end only the checker and wait for its children to release the output pipes, which took 4.3 s with a child that ran for 5 s and never returned while a child kept running.
 - A socket-mode debug adapter such as dlv that exits before it is reachable fails `debug launch` with `DAP adapter exited (code N): <adapter stderr>` as soon as it exits, instead of `Adapter process exited before socket was ready` on Linux and `<adapter> did not connect within 10000ms` after the whole readiness timeout elsewhere.
 - An MCP transport that closes while the reconnection that produced it is still settling, such as a streamable-HTTP event stream that ends while the tool list is in flight, starts a new reconnection or trips the crash breaker instead of staying listed as connected, and the close of a connection a manual reconnect already replaced no longer tears down the live one.
@@ -162,6 +175,7 @@
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
+- `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
 - The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
