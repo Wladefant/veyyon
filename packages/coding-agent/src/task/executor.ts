@@ -2023,9 +2023,6 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	const { options, marks, modelPatterns, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
-	// A requested pattern that resolved to no model is handed to the session to resolve itself, with
-	// the parent's model as its auth fallback and the run's retry chain as its fallback chain.
-	const deferredPattern = !model && options.modelOverride !== undefined;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
 		agent: options.agent,
@@ -2045,10 +2042,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		bypassAllApprovals: options.bypassAllApprovals,
 		parentApprovalBypassed: options.parentApprovalBypassed,
 		model,
-		modelPattern: deferredPattern ? modelPatterns : undefined,
-		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
 		modelPatternFallbackKey: runModel.retryFallbackKey,
-		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,

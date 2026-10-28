@@ -101,6 +101,43 @@ describe("ordered agent model auth resolution", () => {
 		)).rejects.toThrow(/qwen3\.6-plus-free.*missing working credentials/);
 	});
 
+	test("does not expose a thrown provider auth error", async () => {
+		const secretLikeError = "provider rejected API key sk-fake-secret";
+		const registry = {
+			getAll: () => [unauthedTaskModel],
+			getAvailable: () => [unauthedTaskModel],
+			getApiKey: async () => {
+				throw new Error(secretLikeError);
+			},
+			isSelectorSuppressed: () => false,
+		};
+
+		let surfacedError: unknown;
+		try {
+			await resolveAgentModelChain(["qwen3.6-plus-free"], registry);
+		} catch (error) {
+			surfacedError = error;
+		}
+
+		expect(surfacedError).toBeInstanceOf(Error);
+		if (surfacedError instanceof Error) {
+			expect(surfacedError.message).toContain("missing working credentials");
+			expect(surfacedError.message).not.toContain("sk-fake-secret");
+		}
+	});
+
+	test("rejects an authenticated catalog model excluded from available models", async () => {
+		const registry = {
+			getAll: () => [unauthedTaskModel],
+			getAvailable: () => [],
+			getApiKey: async () => "sk-test-token",
+			isSelectorSuppressed: () => false,
+		};
+
+		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry))
+			.rejects.toThrow(/qwen3\.6-plus-free.*unavailable in the model registry/);
+	});
+
 	test("keeps keyless models usable", async () => {
 		const registry = {
 			getAll: () => [parentModel, unauthedTaskModel],
