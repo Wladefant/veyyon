@@ -408,6 +408,7 @@ export class MCPManager {
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
 	#eventStartupControllers = new Map<string, AbortController>();
+	#eventStartupPromises = new Map<string, Promise<void>>();
 
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
@@ -489,6 +490,11 @@ export class MCPManager {
 		this.#onEventControl = handler;
 	}
 
+	/** Promise of the current background event startup for this server, if in flight. */
+	getEventStartupPromise(serverName: string): Promise<void> | undefined {
+		return this.#eventStartupPromises.get(serverName);
+	}
+
 	async #stopServerEvents(serverName: string): Promise<void> {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		this.#eventStartupControllers.delete(serverName);
@@ -522,27 +528,19 @@ export class MCPManager {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		const controller = new AbortController();
 		this.#eventStartupControllers.set(serverName, controller);
-		let descriptors;
-		try {
-			descriptors = await listEvents(connection, { signal: controller.signal });
-		} catch (error) {
-			if (controller.signal.aborted) return;
-			logger.warn("Failed to list MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
-			return;
-		} finally {
-			if (this.#eventStartupControllers.get(serverName) === controller) {
-				this.#eventStartupControllers.delete(serverName);
+		const promise = (async () => {
+			let descriptors;
+			try {
+				descriptors = await listEvents(connection, { signal: controller.signal });
+			} catch (error) {
+				if (controller.signal.aborted) return;
+				logger.warn("Failed to list MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
+				return;
+			} finally {
+				if (this.#eventStartupControllers.get(serverName) === controller) {
+					this.#eventStartupControllers.delete(serverName);
+				}
 			}
-		}
-		if (
-			controller.signal.aborted ||
-			!this.#onEvent ||
-			this.#connections.get(serverName) !== connection
-		) {
-			return;
-		}
-		const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
-		for (const requested of config?.subscriptions ?? []) {
 			if (
 				controller.signal.aborted ||
 				!this.#onEvent ||
@@ -550,39 +548,57 @@ export class MCPManager {
 			) {
 				return;
 			}
-			const descriptor = byName.get(requested.name);
-			if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
+			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
+			for (const requested of config?.subscriptions ?? []) {
+				if (
+					controller.signal.aborted ||
+					!this.#onEvent ||
+					this.#connections.get(serverName) !== connection
+				) {
+					return;
+				}
+				const descriptor = byName.get(requested.name);
+				if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
+					const key = this.#eventKey(serverName, requested);
+					const active = this.#activeEvents.get(key);
+					if (active) this.#stopEvent(key, active);
+					continue;
+				}
+				if (requested.mode === "push" && !connection.transport.streamRequest) {
+					logger.warn("Configured MCP event push mode is unsupported by this transport", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+					});
+					continue;
+				}
 				const key = this.#eventKey(serverName, requested);
-				const active = this.#activeEvents.get(key);
-				if (active) this.#stopEvent(key, active);
-				continue;
+				if (this.#activeEvents.has(key)) continue;
+				const subscription: ActiveMCPEventSubscription = {
+					controller: new AbortController(),
+					serverName,
+					key,
+					seen: new Set(),
+					mode: requested.mode,
+					connection,
+					config: requested,
+					cursor: this.#eventCursorProvider?.(serverName, key) ?? null,
+				};
+				this.#activeEvents.set(key, subscription);
+				if (requested.mode === "poll") {
+					subscription.lifecycle = this.#pollEventLoop(serverName, connection, requested, key, subscription);
+				} else if (requested.mode === "push") {
+					this.#startEventStream(serverName, connection, requested, key, subscription);
+				} else {
+					subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+				}
 			}
-			if (requested.mode === "push" && !connection.transport.streamRequest) {
-				logger.warn("Configured MCP event push mode is unsupported by this transport", {
-					path: `mcp:${serverName}`,
-					event: requested.name,
-				});
-				continue;
-			}
-			const key = this.#eventKey(serverName, requested);
-			if (this.#activeEvents.has(key)) continue;
-			const subscription: ActiveMCPEventSubscription = {
-				controller: new AbortController(),
-				serverName,
-				key,
-				seen: new Set(),
-				mode: requested.mode,
-				connection,
-				config: requested,
-				cursor: this.#eventCursorProvider?.(serverName, key) ?? null,
-			};
-			this.#activeEvents.set(key, subscription);
-			if (requested.mode === "poll") {
-				subscription.lifecycle = this.#pollEventLoop(serverName, connection, requested, key, subscription);
-			} else if (requested.mode === "push") {
-				this.#startEventStream(serverName, connection, requested, key, subscription);
-			} else {
-				subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+		})();
+		this.#eventStartupPromises.set(serverName, promise);
+		try {
+			await promise;
+		} finally {
+			if (this.#eventStartupPromises.get(serverName) === promise) {
+				this.#eventStartupPromises.delete(serverName);
 			}
 		}
 	}
@@ -611,6 +627,13 @@ export class MCPManager {
 				error: errorMessage(error),
 			});
 			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		if (
+			subscription.controller.signal.aborted ||
+			!this.#activeEvents.has(key) ||
+			this.#connections.get(serverName) !== connection
+		) {
 			return;
 		}
 		if (!secret) {
@@ -665,7 +688,12 @@ export class MCPManager {
 				1_800_000,
 				{ signal: subscription.controller.signal },
 			);
-			if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) {
+			if (
+				subscription.controller.signal.aborted ||
+				!this.#activeEvents.has(key) ||
+				this.#connections.get(serverName) !== connection
+			) {
+				this.#webhookVerificationRoutes.delete(path);
 				subscription.unsubscribe = unsubscribeFromEvents(
 					connection,
 					requested.name,
@@ -702,19 +730,29 @@ export class MCPManager {
 			if (result.refreshBefore !== null) {
 				const refreshAt = Date.parse(result.refreshBefore) - Date.now() - 60_000;
 				subscription.timer = setTimeout(() => {
-					if (this.#activeEvents.get(key) === subscription) {
+					if (
+						!subscription.controller.signal.aborted &&
+						this.#activeEvents.get(key) === subscription &&
+						this.#connections.get(serverName) === connection
+					) {
 						subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
 					}
 				}, Math.max(1_000, refreshAt));
 			}
 		} catch (error) {
 			this.#webhookVerificationRoutes.delete(path);
+			this.#closeUnusedWebhookHost(port);
 			logger.warn("MCP webhook subscription failed", {
 				path: `mcp:${serverName}`,
 				event: requested.name,
 				error: errorMessage(error),
 			});
-			if (subscription.webhookId) {
+			if (
+				!subscription.controller.signal.aborted &&
+				this.#activeEvents.has(key) &&
+				this.#connections.get(serverName) === connection &&
+				subscription.webhookId
+			) {
 				this.#scheduleWebhookRetry(serverName, connection, requested, key, subscription);
 			} else {
 				this.#stopEvent(key, subscription);
@@ -728,9 +766,17 @@ export class MCPManager {
 		key: string,
 		subscription: ActiveMCPEventSubscription,
 	): void {
-		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return;
+		if (
+			subscription.controller.signal.aborted ||
+			!this.#activeEvents.has(key) ||
+			this.#connections.get(serverName) !== connection
+		) return;
 		subscription.timer = setTimeout(() => {
-			if (this.#activeEvents.get(key) === subscription) {
+			if (
+				!subscription.controller.signal.aborted &&
+				this.#activeEvents.get(key) === subscription &&
+				this.#connections.get(serverName) === connection
+			) {
 				subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
 			}
 		}, 5_000);

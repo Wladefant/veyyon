@@ -22,7 +22,7 @@ import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
-import { TempDir } from "@veyyon/utils";
+import { logger, TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { loadAllMCPConfigs } from "../src/mcp/config";
@@ -544,6 +544,30 @@ describe("MCP event prompt receipts and session isolation", () => {
 			expect(receipts(owner.journal)).toHaveLength(1);
 		} finally {
 			sync.mockRestore();
+		}
+	});
+
+	it("delivers the event to the active session and logs a warning when receipt fsync fails completely", async () => {
+		const owner = await realSession(temporarySetup(), undefined, true);
+		const prompt = spyOn(owner.session.agent, "prompt");
+		await owner.accept(occurrence("evt-receipt-failed"));
+		const sync = spyOn(owner.journal, "sync").mockImplementation(async () => {
+			throw new Error("permanent receipt fsync failure");
+		});
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			await owner.session.yieldQueue.flush("idle");
+			await owner.session.waitForIdle();
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(sync).toHaveBeenCalledTimes(2);
+			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
+			expect(warn).toHaveBeenCalledWith(
+				"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced",
+				expect.objectContaining({ error: "permanent receipt fsync failure" }),
+			);
+		} finally {
+			sync.mockRestore();
+			warn.mockRestore();
 		}
 	});
 

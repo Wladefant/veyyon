@@ -644,10 +644,9 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setOnEvent(onEvent);
 			manager.setOnEventCursor(onCursor);
 			await listRequested.promise;
+			const startupPromise = manager.getEventStartupPromise(serverName);
 
 			await manager.stopEvents();
-			manager.setOnEvent(undefined);
-			manager.setOnEventCursor(undefined);
 			listGate.resolve({
 				events: [
 					{ name: "orders/poll", description: "poll", inputSchema: { type: "object" }, delivery: ["poll"] },
@@ -656,12 +655,12 @@ describe("MCPManager event subscription contracts", () => {
 				],
 			});
 
+			await startupPromise;
 			await fetch(server.url, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "tools/list" }),
 			});
-			for (let i = 0; i < 20; i++) await Promise.resolve();
 			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
@@ -721,6 +720,7 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setOnEvent(onEvent);
 			manager.setOnEventCursor(onCursor);
 			await listRequested.promise;
+			const startupPromise = manager.getEventStartupPromise(serverName);
 
 			await manager.disconnectServer(serverName);
 			listGate.resolve({
@@ -731,12 +731,12 @@ describe("MCPManager event subscription contracts", () => {
 				],
 			});
 
+			await startupPromise;
 			await fetch(server.url, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "tools/list" }),
 			});
-			for (let i = 0; i < 20; i++) await Promise.resolve();
 			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
