@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
 - No user-visible change: compaction model keys and ACP model option values come from `formatModelString` instead of two private copies of it.
