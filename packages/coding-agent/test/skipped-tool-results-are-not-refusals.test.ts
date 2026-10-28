@@ -8,7 +8,7 @@ import type {
 	AgentTool,
 	SteeringQueueState,
 } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, TextContent, ToolCall, ToolResultMessage, UserMessage } from "@veyyon/ai";
+import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -20,6 +20,7 @@ import { normalizeCustomMessagePayload } from "@veyyon/coding-agent/session/mess
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { identityConverter } from "../../agent/test/helpers";
 import { loopSource, unionMembers } from "../../agent/test/support/invented-tool-result-sources";
 
 /**
@@ -47,10 +48,6 @@ import { loopSource, unionMembers } from "../../agent/test/support/invented-tool
  *  - Consumer: in `agent-session.ts`, force `const todoCallDidNotFail = false;`
  *    (the text-classifying behaviour the discriminator replaced).
  */
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 const todoSchema = type({ op: "string" });
 

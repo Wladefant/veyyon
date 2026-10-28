@@ -8,10 +8,10 @@ import type {
 	SteeringQueueState,
 	ToolChoiceDirective,
 } from "@veyyon/agent-core/types";
-import type { Message, ToolResultMessage } from "@veyyon/ai";
+import type { ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 import { loopSource, unionMembers } from "./support/invented-tool-result-sources";
 
 /**
@@ -41,10 +41,6 @@ import { loopSource, unionMembers } from "./support/invented-tool-result-sources
  * (`packages/coding-agent/test/skipped-tool-results-are-not-refusals.test.ts`) and
  * by the source lock (`./no-text-classified-tool-results.test.ts`).
  */
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 /** Details as they arrive on the wire: an opaque bag a consumer must narrow. */
 interface EmittedDetails {

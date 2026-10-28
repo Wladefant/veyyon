@@ -22,8 +22,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, ToolCall } from "@veyyon/ai";
+import type { AgentContext, AgentEvent, AgentLoopConfig, StreamFn } from "@veyyon/agent-core/types";
+import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import {
 	clearStreamingPartialJson,
@@ -32,7 +32,7 @@ import {
 } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { mulberry32 } from "../../utils/test/helpers/mulberry32";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 const NO_USAGE = {
 	input: 0,
@@ -84,10 +84,6 @@ interface Outcome {
 	finalBlockIds: string[];
 	/** Calls whose `toolcall_end` the loop read and reported before the abort. */
 	readCloses: Set<string>;
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 function planCalls(random: () => number, prefix: string): PlannedCall[] {

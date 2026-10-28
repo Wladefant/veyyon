@@ -21,7 +21,7 @@ import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-import { createAssistantMessage, createUserMessage } from "./helpers";
+import { createAssistantMessage, createUserMessage, identityConverter } from "./helpers";
 
 declare module "@veyyon/session" {
 	interface CustomAgentMessages {
@@ -34,11 +34,6 @@ declare module "@veyyon/session" {
 			timestamp: number;
 		};
 	}
-}
-
-// Simple identity converter for tests - just passes through standard messages
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 describe("agentLoop with AgentMessage", () => {

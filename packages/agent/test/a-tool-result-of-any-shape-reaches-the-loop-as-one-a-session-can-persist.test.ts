@@ -24,16 +24,14 @@ import type {
 	AgentContext,
 	AgentEvent,
 	AgentLoopConfig,
-	AgentMessage,
 	AgentTool,
 	AgentToolResult,
 } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { EMPTY_ERROR_TOOL_RESULT_TEXT } from "@veyyon/ai/types";
 import { formatCount, sanitizeText } from "@veyyon/utils";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 const BLOCKS: Record<string, unknown> = {
 	text: { type: "text", text: "found it" },
@@ -134,10 +132,6 @@ function returnedResults(): unknown[] {
 		}
 	}
 	return out;
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 const BATCH = 60;

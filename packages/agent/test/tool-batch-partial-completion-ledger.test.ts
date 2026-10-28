@@ -13,12 +13,12 @@ import type {
 	AgentTool,
 	StreamFn,
 } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { kCursorExecResolved, setStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 /**
  * A batch of tool calls that is cut short must report which calls ran and which
@@ -37,10 +37,6 @@ const NO_USAGE = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 function toolResultTexts(events: AgentEvent[]): string[] {
 	const seen = new Set<string>();

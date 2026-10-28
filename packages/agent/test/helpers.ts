@@ -1,4 +1,5 @@
-import type { AssistantMessage, UserMessage } from "@veyyon/ai";
+import type { AgentMessage } from "@veyyon/agent-core/types";
+import type { AssistantMessage, Message, UserMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
 
 export function createUserMessage(text: string): UserMessage {
@@ -19,4 +20,13 @@ export function createAssistantMessage(
 		stopReason,
 		timestamp: Date.now(),
 	};
+}
+
+/**
+ * A `convertToLlm` that passes every user, assistant and tool-result message through unchanged and
+ * drops the rest. Unlike the agent's default it keeps a provider refusal, so a suite sees exactly the
+ * messages its loop produced.
+ */
+export function identityConverter(messages: AgentMessage[]): Message[] {
+	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }

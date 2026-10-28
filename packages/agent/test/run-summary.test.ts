@@ -26,11 +26,11 @@ import {
 	emptyAgentRunSummary,
 } from "@veyyon/agent-core/run-collector";
 import { EXECUTE_TOOL_STATUS_ATTR, GenAIAttr, PiGenAIAggregateAttr } from "@veyyon/agent-core/telemetry";
-import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message } from "@veyyon/ai";
+import type { AgentEvent, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
+import type { AssistantMessage } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 interface RecordedSpan {
 	readonly name: string;
@@ -98,10 +98,6 @@ function makeFakeSpan(record: RecordedSpan): Span {
 		},
 	};
 	return span;
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 function makeUsage(

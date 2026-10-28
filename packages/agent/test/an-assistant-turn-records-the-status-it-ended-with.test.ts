@@ -16,11 +16,11 @@
  */
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from "@veyyon/agent-core/types";
-import type { AssistantMessage, AssistantTurnStatus, Message } from "@veyyon/ai";
+import type { AgentContext, AgentLoopConfig, StreamFn } from "@veyyon/agent-core/types";
+import type { AssistantMessage, AssistantTurnStatus } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 type Ending =
 	| "done"
@@ -96,10 +96,6 @@ function scriptedStream(ending: Ending, controller: AbortController): StreamFn {
 		}
 		return stream;
 	};
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 async function runTurn(ending: Ending): Promise<AssistantMessage> {

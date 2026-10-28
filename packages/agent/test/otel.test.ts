@@ -29,11 +29,10 @@ import {
 	type TelemetryHookContext,
 } from "@veyyon/agent-core/telemetry";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import type { EventStream } from "@veyyon/ai/utils/event-stream";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 const MOCK_IDENT = { id: "mock-model", provider: "mock-provider" } as const;
 
@@ -59,10 +58,6 @@ afterAll(async () => {
 	context.disable();
 	trace.disable();
 });
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 async function runAndDrain(stream: EventStream<AgentEvent, AgentMessage[]>): Promise<AgentEvent[]> {
 	const events: AgentEvent[] = [];
