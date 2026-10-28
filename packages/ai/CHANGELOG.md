@@ -2,9 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
+
 ### Fixed
+- Restored OpenCode header module parsing after upstream comment conflicts.
+- Speech transport uses withScopedTimeoutSignal instead of the removed withTimeoutSignal ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
+- Google Antigravity usage retains daily windows from the model listing when the quota summary names both counters but omits those windows ([issue](https://github.com/Wladefant/veyyon/issues/611)).
+- Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
+- A provider error carrying Go's `use of closed network connection`, which a Go gateway forwards verbatim, is retried as a dead socket instead of ending the turn (oh-my-pi 9d572fad2f5e43920fa458f248e620098608bdaf, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- An Ollama `{"error": ...}` record that arrives after the HTTP 200 response started ends the turn as an error with the provider's text, instead of a stop, an empty-completion retry or a `toolUse` (oh-my-pi 86dba86f69b7ea092801d15242337afce955185c, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- A native Responses `function_call` whose stored arguments do not parse replays as a bounded `{__parseError, __rawJson}` diagnostic, so it no longer makes every later request in the session fail (oh-my-pi 46bc9331d0df7db37bd25531ecfd4e09077288fb, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- OpenAI Codex requests rewrite every `call_id` longer than 64 characters or outside `[a-zA-Z0-9_-]` (a Cursor id joined by a newline, an id with dots) to a stable accepted id, instead of sending it and failing the turn; valid ids are sent unchanged (oh-my-pi 828008bbbcd9a9fc90c0e37f5838e5b5dfbf1d77, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- OpenAI-compatible Gemini tool continuations keep a message-level `reasoning_signature` through streaming, session restore and replay, instead of dropping it and failing the next request (oh-my-pi 40310272c2cec24f50a9f7ef822f6ebfdeaca6cc, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Gateway privacy guards credentials split across semantic SSE deltas and withholds Cursor diagnostics and raw request-debug dumps inside private requests ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
   Completed channels release safe frames before EOF. A 64-frame or 64-KiB hold limit redacts unresolved prefixes. At an `error` or `response.failed` frame, held deltas flush with every trailing credential prefix masked as `[REDACTED]`, the error frame follows once, and later deltas are still redacted.
 
@@ -17,6 +30,9 @@
 - Anthropic-compatible requests encode an empty tool result as `content: ""` instead of `content: []` on image-capable models, which strict endpoints such as Z.AI GLM reject with HTTP 400 code 1213 (oh-my-pi 4025b27c156d90dbda6fd1312e60e4895d6af3b1, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - `/login alibaba-coding-plan` with the China endpoint opens the Bailian API-key page instead of the retired DashScope console (oh-my-pi d71ff70c3d9010c5231cb9ffd181c4c866b0be1b, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Bedrock no longer sends an unused signature path, Cursor diagnostics use the intended logger, and Codex no longer exposes a dead alias.
+- Copilot premium usage follows the current premium-request path, and Muse Code refresh and key requests retain scoped timeout and abort signals.
+- DeepInfra discovery uses a scoped timeout signal.
 ## [1.5.6] - 2026-10-10
 ### Changed
 
@@ -34,6 +50,12 @@
 
 ### Fixed
 
+- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program discovery offers for the model, `daybreak_blue` before `daybreak_red`, so security work is no longer refused with `cyber_policy` for lack of the field.
+- A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
+- Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
+- An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.
+- An Anthropic-messages endpoint that answers a forced `tool_choice` with a 400 naming the field (`tool_choice: type "tool" and "any" are not supported for this model.`, or Kimi's `tool_choice 'specified' is incompatible with thinking enabled`) is retried once with `tool_choice: auto` and sent `auto` for that model for the rest of the session, instead of failing the turn.
+- Claude Opus and Sonnet 5.5 and later, Fable and Mythos on Bedrock are sent `auto` in place of a forced tool choice they reject.
 - A Bedrock, Codex, Ollama or Gemini CLI endpoint that never answers ends the turn with `Timed out after N ms waiting for the first event`, classified as a retryable timeout, instead of `Request was aborted` or `The operation timed out.`, which read as a cancellation or named no phase.
 - An OAuth account ranking whose usage fetch misses its deadline tries unblocked accounts first and blocked ones by the soonest reset, as API-key ranking already did, instead of storage order.
 - A credential ranking whose usage fetch fails clears its 5–15 s deadline timer instead of leaving it armed.
@@ -142,6 +164,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Preserved native Codex tool results during snapshot replay. Valid tool outputs stay paired with their calls instead of becoming user messages ([Refs #34](https://github.com/Wladefant/veyyon/issues/34)).
 - Rotated pinned Antigravity requests to an available sibling after a confirmed quota failure when load balancing is on. Kept the selected pin, model-scoped holds, and predicted-hold behavior ([Fixes Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Expired Antigravity quota confirmations independently of shared predicted holds, so a later peer prediction cannot displace an explicit pin after the refusal expires ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Preserved the longest confirmed Antigravity refusal when a shorter refusal arrives or completes later. Kept predicted shared deadlines separate ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).

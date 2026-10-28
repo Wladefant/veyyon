@@ -38,12 +38,11 @@ import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/c
 import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 160;
 const FRAME = 1000 / 60;
-/** MOTION.hover is 90ms; 30 frames is half a second, so a settle loop that runs out is a hang. */
-const SETTLE_FRAMES = 30;
 
 /** The card's motion gate is `TERMINAL.trueColor`, probed once at load from a real terminal. */
 const terminalCaps: { trueColor: boolean } = TERMINAL;
@@ -52,31 +51,12 @@ let policy: AnsiPolicy;
 let geometry: StubbedStdoutGeometry;
 let originalTrueColor: boolean;
 let originalColorterm: string | undefined;
-let clockNow = 0;
-let clockAnchored = false;
 
 /**
- * Advance the shared clock. The card takes the production clock — its host lends it a repaint, not
- * a clock — so frames are driven through `tick` rather than by waiting. The anchor is re-taken
- * whenever the ticker runs dry, or the next fade is handed every millisecond already spent.
+ * The card takes the production clock — its host lends it a repaint, not a clock — so frames are
+ * driven through `tick` rather than by waiting.
  */
-function advance(ms: number): void {
-	if (!clockAnchored) {
-		clockNow = performance.now();
-		clockAnchored = true;
-	}
-	clockNow += ms;
-	motionClock.tick(clockNow);
-	if (motionClock.liveCount === 0) clockAnchored = false;
-}
-
-function settle(): number {
-	for (let frame = 1; frame <= SETTLE_FRAMES; frame++) {
-		advance(FRAME);
-		if (motionClock.liveCount === 0) return frame;
-	}
-	throw new Error(`hover fade still live after ${SETTLE_FRAMES} frames`);
-}
+const { advance, settle } = useHandTickedMotion();
 
 /** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
 function bandRgb(row: string): [number, number, number] | null {
@@ -156,7 +136,6 @@ beforeEach(async () => {
 	originalTrueColor = terminalCaps.trueColor;
 	terminalCaps.trueColor = true;
 	geometry = stubStdoutGeometry({ columns: WIDTH, rows: 40 });
-	clockAnchored = false;
 });
 
 afterEach(() => {

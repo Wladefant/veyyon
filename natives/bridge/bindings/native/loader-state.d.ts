@@ -2,7 +2,11 @@ export interface EmbeddedAddonFile {
 	variant: "modern" | "baseline" | "default";
 	filename: string;
 	size?: number;
-	filePath?: string;
+	/**
+	 * SHA-256 of the `.node` bytes, hex. Identifies the build that carries the file, so an extracted
+	 * copy written by another build of the same version is not reused.
+	 */
+	sha256: string;
 	/** The archive carrying this variant. One per variant, so extracting one inflates only it. */
 	archive?: EmbeddedAddonArchive;
 }
@@ -17,7 +21,6 @@ export interface EmbeddedAddon {
 	platformTag: string;
 	version: string;
 	files: EmbeddedAddonFile[];
-	archive?: EmbeddedAddonArchive;
 }
 
 export interface DetectCompiledBinaryInput {

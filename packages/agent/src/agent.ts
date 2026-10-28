@@ -39,6 +39,7 @@ import {
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import { isProviderRefusalMessage } from "./replay-policy";
+import { type PreparedToolCall, prepareToolCall } from "./tool-call-preparation";
 import { normalizeTools } from "./tool-normalization";
 import type {
 	AgentContext,
@@ -46,6 +47,7 @@ import type {
 	AgentLoopConfig,
 	AgentMessage,
 	AgentState,
+	AgentToolCall,
 	AgentToolContext,
 	AgentTurnEndContext,
 	AnyAgentTool,
@@ -888,6 +890,18 @@ export class Agent {
 		this.#emit(event);
 	}
 
+	/**
+	 * A call a provider runs itself during the stream (Cursor's exec channel), prepared with the hooks the loop
+	 * prepares its own calls with, so the tool receives the arguments it would receive from the loop.
+	 */
+	prepareExternalToolCall(tool: AnyAgentTool, toolCall: AgentToolCall): PreparedToolCall {
+		return prepareToolCall(tool, toolCall, {
+			intentTracing: this.#resolveIntentTracing(),
+			repairToolCallArguments: this.#repairToolCallArguments,
+			transformToolCallArguments: this.#transformToolCallArguments,
+		});
+	}
+
 	// State mutators
 	setSystemPrompt(v: string[] | string) {
 		this.#state.systemPrompt = internPromptParts(typeof v === "string" ? [v] : v);
@@ -1197,7 +1211,7 @@ export class Agent {
 		options: (AgentPromptOptions & { skipInitialSteeringPoll?: boolean }) | undefined,
 	): AgentLoopConfig {
 		let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-		return {
+		const config: AgentLoopConfig = {
 			model,
 			reasoning: this.#state.thinkingLevel,
 			disableReasoning: this.#state.disableReasoning,
@@ -1236,6 +1250,7 @@ export class Agent {
 				context.systemPrompt = this.#state.systemPrompt;
 				context.tools = this.#state.tools;
 				// A mid-run handoff changes provider routing without stopping this loop.
+				// Keep the live request options aligned with session state after a handoff.
 				config.sessionId = this.#sessionId;
 				config.promptCacheKey = this.#promptCacheKey;
 				config.metadata = this.#metadataResolver ? undefined : this.#metadata;
@@ -1284,6 +1299,7 @@ export class Agent {
 			onToolUpdateAfterRun: event => this.#emit(event),
 			telemetry: this.#telemetry,
 		};
+		return config;
 	}
 
 	/**

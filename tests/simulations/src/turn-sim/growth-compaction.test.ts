@@ -12,7 +12,7 @@
  * warning repeated once per turn.
  *
  * RED PROOFS, observed rather than predicted. Restoring the unbounded budget
- * (`Math.floor(0.8 * reserveTokens)` in `buildSummaryPrompt`) reds both rows: the
+ * (`Math.floor(0.8 * reserveTokens)` in `summaryPromptParts`) reds both rows: the
  * growth row sees six turns with no compaction entry and a used-token count past
  * the window, and the refusal row sees four `auto_compaction_end` events whose
  * `errorMessage` reads "holds 16000 tokens and the summary needed 23418".

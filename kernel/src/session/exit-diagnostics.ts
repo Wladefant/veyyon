@@ -352,9 +352,9 @@ function applyMessageEntry(pending: Map<string, PendingToolCallRecord>, message:
 /**
  * Finds tool calls left pending at the end of a session branch: calls an assistant message or a
  * start marker records with no tool result after them on the branch, from the keep boundary of the
- * newest compaction on ({@link compactedHistoryEnd}). A call before that boundary is history a
- * compaction summarized and no context sends again, and its entry's payload may be in the session
- * file rather than in memory, so reading it would read the compacted history back.
+ * compaction the context applies on ({@link compactedHistoryEnd}). A call before that boundary is
+ * history a compaction summarized and no context sends again, and its entry's payload may be in the
+ * session file rather than in memory, so reading it would read the compacted history back.
  */
 export function collectPendingToolCalls(branch: readonly SessionEntry[]): PendingToolCallDiagnostic[] {
 	const pending = new Map<string, PendingToolCallRecord>();

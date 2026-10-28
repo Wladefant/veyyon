@@ -20,6 +20,20 @@ export interface SSHConnectionTarget {
 	compat?: boolean;
 }
 
+/**
+ * Whether two entries reach the same remote the same way. Probed host info and the master connection
+ * belong to that destination, so an entry that still matches keeps both.
+ */
+export function sameConnectionTarget(a: SSHConnectionTarget, b: SSHConnectionTarget): boolean {
+	return (
+		a.host === b.host &&
+		a.username === b.username &&
+		a.port === b.port &&
+		a.keyPath === b.keyPath &&
+		a.compat === b.compat
+	);
+}
+
 export type SSHHostOs = "windows" | "linux" | "macos" | "unknown";
 export type SSHHostShell = "cmd" | "powershell" | "bash" | "zsh" | "sh" | "unknown";
 export type SshPlatform = typeof process.platform;

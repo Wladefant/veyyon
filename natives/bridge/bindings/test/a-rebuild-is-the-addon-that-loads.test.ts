@@ -34,6 +34,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -213,15 +214,21 @@ describe("the embedded archives carry what the tree carries", () => {
 							"(bun --cwd=natives/bridge/bindings run build)",
 					).toBe(true);
 
+					const fromTree = fs.readFileSync(path.join(NATIVE_DIR, filename));
 					const written = extractEmbeddedAddonArchive({
 						archivePath,
-						files: [{ filename, variant: variantOf(filename) }],
+						files: [
+							{
+								filename,
+								variant: variantOf(filename),
+								sha256: createHash("sha256").update(fromTree).digest("hex"),
+							},
+						],
 						targetDir,
 					});
 
 					expect(written.map(target => path.basename(target))).toEqual([filename]);
 					const fromArchive = fs.readFileSync(path.join(targetDir, filename));
-					const fromTree = fs.readFileSync(path.join(NATIVE_DIR, filename));
 					expect(
 						fromArchive.equals(fromTree),
 						`${filename} in ${path.basename(archivePath)} is not the build in the tree; ` +

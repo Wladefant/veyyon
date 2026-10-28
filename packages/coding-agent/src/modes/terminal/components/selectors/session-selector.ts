@@ -1079,7 +1079,7 @@ export class SessionSelectorComponent extends Container {
 	 * centered shortcut chips. Transcript visible around the card.
 	 */
 	render(width: number): readonly string[] {
-		const termHeight = Math.max(14, this.#getTerminalRows());
+		const termHeight = this.#getTerminalRows();
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight, !this.#fillHeight);
 		const dims = computeModalDims(width, termHeight, sizing);
 		if (!dims) {

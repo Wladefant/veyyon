@@ -36,12 +36,12 @@ import {
 	mirrorRequestAbort,
 	resolveGatewayApiKey,
 } from "./dispatch";
+import { json } from "../utils/http-server";
 import {
 	captureRequestHeaders,
 	corsHeaders,
 	gatewayResponseHeaders,
 	isAuthorized,
-	json,
 	redactResponse,
 	withCors,
 } from "./http";

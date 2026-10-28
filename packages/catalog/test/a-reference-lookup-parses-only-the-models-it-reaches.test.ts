@@ -174,6 +174,7 @@ function collidingCandidates(seed: number): ModelReferenceCandidate[] {
 describe("the lazy reference index", () => {
 	const SEEDS = Array.from({ length: 300 }, (_, i) => i + 1);
 
+	/** The 300-seed sweep takes 0.35 s alone and 3.0 to 5.8 s in a loaded CI test bucket. */
 	it("answers every exact key and suffix alias as the eager index does", () => {
 		const mismatches: string[] = [];
 		for (const seed of SEEDS) {
@@ -206,7 +207,7 @@ describe("the lazy reference index", () => {
 			}
 		}
 		expect(mismatches).toEqual([]);
-	});
+	}, 30_000);
 
 	it("reads only the candidates a key reaches, each at most once", () => {
 		const overreads: string[] = [];

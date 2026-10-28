@@ -19,11 +19,12 @@ import { localCalendarDate } from "@veyyon/utils/local-time";
 import { formatModelString } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import { loadCapability, reset as resetCapabilities } from "../../discovery/capability";
+import type { SSHHost } from "../../discovery/capability/ssh";
 import { isMCPToolName } from "../../discovery/tool-index";
 import type { CustomTool, CustomToolContext } from "../../extensibility/custom-tools/types";
 import { CustomToolAdapter } from "../../extensibility/custom-tools/wrapper";
 import { ExtensionToolWrapper } from "../../extensibility/extensions/wrapper";
-import { invalidateHostMetadata } from "../../ssh/connection-manager";
+import { invalidateHostMetadata, type SSHConnectionTarget, sameConnectionTarget } from "../../ssh/connection-manager";
 import { usesCodexTaskPrompt } from "../../task/prompt-policy";
 import { isAutoQaEnabled } from "../../tools/agent/report-tool-issue";
 import { normalizeToolNames, TOOL } from "../../tools/core/builtin-names";
@@ -51,6 +52,44 @@ function promptModelKeyFor(
 			? "task-policy:gpt-5.6"
 			: "task-policy:default";
 	return argotTeaches?.(model) ? `${key}+argot` : key;
+}
+
+/** The hosts a loaded `ssh` tool connects to, keyed by name; empty when there is no such tool. */
+function loadedSshHosts(tool: AgentTool | undefined): ReadonlyMap<string, SSHConnectionTarget> {
+	if (!tool || !("hostsByName" in tool) || !(tool.hostsByName instanceof Map)) return new Map();
+	return tool.hostsByName;
+}
+
+/**
+ * Hosts whose probed metadata an ssh refresh drops: an entry the profile removed, an entry that now
+ * reaches a different destination, and, when the session offers ssh, a name the refresh introduces,
+ * whose record on disk can predate the entry.
+ *
+ * An entry that still reaches the same destination keeps its metadata. Dropping it deleted the
+ * profile-wide record every session reads, closed the master connection other sessions share, and
+ * rewrote the host's line of the tool description to "detecting...". The description is part of the
+ * tool definitions at the front of the prompt, so every re-root invalidated the provider prompt cache.
+ */
+function staleSshHostNames(
+	loaded: ReadonlyMap<string, SSHConnectionTarget>,
+	configured: readonly SSHHost[],
+	sshAllowed: boolean,
+): Set<string> {
+	const next = new Map<string, SSHHost>();
+	for (const host of configured) {
+		if (!next.has(host.name)) next.set(host.name, host);
+	}
+	const stale = new Set<string>();
+	for (const [name, host] of loaded) {
+		const current = next.get(name);
+		if (!current || !sameConnectionTarget(host, current)) stale.add(name);
+	}
+	if (sshAllowed) {
+		for (const name of next.keys()) {
+			if (!loaded.has(name)) stale.add(name);
+		}
+	}
+	return stale;
 }
 
 /** What {@link ToolActivation} reads from the session's public surface. */
@@ -301,22 +340,14 @@ export class ToolActivation {
 		const previousActiveToolNames = this.#session.getActiveToolNames();
 		const hadSshTool = previousSshTool !== undefined;
 		const wasActive = previousActiveToolNames.includes(TOOL.ssh);
-		const previousHostNames =
-			previousSshTool && "hostNames" in previousSshTool && Array.isArray(previousSshTool.hostNames)
-				? [...previousSshTool.hostNames]
-				: [];
-		const candidateHostNames = new Set(previousHostNames);
-		const capability = await loadCapability<{ name: string }>(TOOL.ssh, {
-			cwd: this.#session.sessionManager.getCwd(),
-		});
-		for (const host of capability.items) {
-			if (typeof host?.name === "string") {
-				candidateHostNames.add(host.name);
-			}
-		}
-		await invalidateHostMetadata(candidateHostNames);
 		const requestedToolNames = this.#host.config.requestedToolNames;
 		const sshAllowed = requestedToolNames === undefined || requestedToolNames.has(TOOL.ssh);
+		const capability = await loadCapability<SSHHost>(TOOL.ssh, {
+			cwd: this.#session.sessionManager.getCwd(),
+			agentDir: this.#session.settings.getAgentDir(),
+		});
+		const staleHostNames = staleSshHostNames(loadedSshHosts(previousSshTool), capability.items, sshAllowed);
+		if (staleHostNames.size > 0) await invalidateHostMetadata(staleHostNames);
 		const refreshedTool = await reloadSshTool();
 		if (refreshedTool) {
 			this.#host.registry.set(refreshedTool.name, refreshedTool);

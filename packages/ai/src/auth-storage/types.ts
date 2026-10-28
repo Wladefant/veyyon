@@ -8,6 +8,8 @@ import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type {
 	CredentialRankingStrategy,
+	UsageCostHistoryEntry,
+	UsageCostHistoryQuery,
 	UsageHistoryEntry,
 	UsageHistoryQuery,
 	UsageLogger,
@@ -430,6 +432,10 @@ export interface AuthCredentialStore {
 	 * `AuthStorage.listUsageHistory()` returns only rows whose account key is a digest.
 	 */
 	purgeUsageHistory?(): void;
+	/** Read recorded request-cost rows, oldest first. */
+	listUsageCosts?(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[];
+	/** Append observed request costs when the store supports durable cost history. */
+	recordUsageCosts?(entries: UsageCostHistoryEntry[]): void;
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**

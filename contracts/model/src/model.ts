@@ -191,12 +191,59 @@ export interface ModelReasoningOptions {
 	noEffortControl?: boolean;
 }
 
+/**
+ * A cyber access program the ChatGPT Codex backend accepts as `access_programs.cyber` (codex-rs
+ * `CyberAccessProgram`, wire values in snake case). `standard` is the default treatment; the two
+ * Daybreak programs are the tiers for security work.
+ */
+export type CyberAccessProgram = "standard" | "daybreak_blue" | "daybreak_red";
+
+/**
+ * Access programs the endpoint offers the signed-in caller for one model, read from Codex discovery
+ * (`available_access_programs`). Discovery grants nothing: the inference endpoint still enforces
+ * authorization on every request.
+ */
+export interface ModelAccessPrograms {
+	/** Accepted explicit selections, unknown program names dropped. An empty list is distinct from absent metadata. */
+	cyber: readonly CyberAccessProgram[];
+}
+
 // `Provider` is any provider-id string; `KnownProvider` (re-exported above) enumerates
 // the built-in model providers from the catalog descriptor table.
 export type Provider = string;
 
 /** Token budgets for each thinking level (token-based providers only) */
 export type ThinkingBudgets = { [key in Effort]?: number };
+
+export type CacheRequestTtl = "5m" | "1h" | "none" | "mixed";
+
+export interface CacheRequestRecord {
+	/** Unix timestamp (ms) when this provider attempt dispatch started. */
+	requestStartedAt: number;
+	/** Requested cache TTL derived from wire body: "5m", "1h", "none", or "mixed". */
+	requestedTtl: CacheRequestTtl;
+	/** Sequence of requested TTLs across breakpoints in document order. */
+	requestedTtls?: ("5m" | "1h")[];
+	/** Model identifier as sent on the wire. */
+	model: string;
+	/**
+	 * SHA256 hex digest of the system + tools wire serialization exactly as sent.
+	 * Note: for OAuth tokens that carry a billing-header `cch` attestation in system[0],
+	 * dynamic cch values vary the prefixHash per request according to the exact wire bytes.
+	 */
+	prefixHash: string;
+	/** Provider request ID if returned in response headers or stream. */
+	requestId?: string;
+	/** Prompt cache read tokens for this attempt. */
+	cacheRead?: number;
+	/** Prompt cache write / creation tokens for this attempt. */
+	cacheWrite?: number;
+	/** Cache-write TTL breakdown for this attempt when returned by the provider. */
+	cttl?: {
+		ephemeral5m?: number;
+		ephemeral1h?: number;
+	};
+}
 
 export interface Usage {
 	/** Non-cached conversation input tokens (matches the bucket the provider bills as new input). */
@@ -243,6 +290,11 @@ export interface Usage {
 		ephemeral5m?: number;
 		ephemeral1h?: number;
 	};
+	/**
+	 * Per-attempt prompt cache telemetry records. Safe metadata only: no prompt or
+	 * tool content strings. Preserved across in-provider retries.
+	 */
+	cacheRequests?: CacheRequestRecord[];
 	/**
 	 * Server-side tool invocations made during this turn (Anthropic web_search /
 	 * web_fetch, OpenAI built-in tools when reported). Counts requests, not tokens.
@@ -1041,6 +1093,12 @@ export interface Model<TApi extends Api = Api> {
 	 * - `"function"` or undefined: JSON function-tool with `{input: string}` (spec §1.2).
 	 */
 	applyPatchToolType?: "freeform" | "function";
+	/**
+	 * Access programs the endpoint offers the signed-in caller for this model. Caller-specific: it
+	 * states what one account may select, so only runtime discovery sets it and the bundled catalog
+	 * never carries it. Absent means discovery stated nothing.
+	 */
+	accessPrograms?: ModelAccessPrograms;
 	/**
 	 * Force OAuth-style request shaping for providers whose API key prefix doesn't
 	 * match an OAuth token (e.g. routing Anthropic traffic through a proxy that

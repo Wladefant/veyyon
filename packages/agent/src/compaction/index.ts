@@ -17,6 +17,7 @@ export * from "./remote-compaction";
 export * from "./remote-summarizer";
 export * from "./shake";
 export * from "./staged-summary";
+export * from "./summary-source";
 export * from "./threshold";
 export * from "./token-estimate";
 export * from "./utils";

@@ -6,12 +6,10 @@
  * - `veyyon --mode json "prompt"` - JSON event stream
  */
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage, ImageContent, Model } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent } from "@veyyon/ai";
 import { logger, postmortem, sanitizeText } from "@veyyon/utils";
 import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../cli/exit-codes";
 import { awaitStdoutDrain } from "../cli/stdout-drain";
-import type { ResolvedModelRoleValue } from "../config/model-resolver";
-import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
 import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
@@ -21,7 +19,6 @@ import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../slash-commands/types";
 import { flushTelemetryExport } from "../telemetry-export";
-import type { ConfiguredThinkingLevel } from "../thinking";
 import { initializeExtensions } from "./runtime-init";
 
 /**
@@ -142,15 +139,11 @@ export type PrintModeSession =
 			};
 			extensionRunner?: undefined;
 			settings?: { get(key: string): unknown };
-			model?: Model;
 			getPlanReferencePath?(): string;
 			getActiveToolNames?(): string[];
 			hasBuiltInTool?(name: string): boolean;
 			setActiveToolsByName?(names: string[]): Promise<void>;
 			setPlanModeState?(state: unknown): void;
-			resolveRoleModelWithThinking?(role: string): ResolvedModelRoleValue | undefined;
-			setThinkingLevel?(level: ConfiguredThinkingLevel): void;
-			setModelTemporary?(model: Model, level?: ConfiguredThinkingLevel): Promise<void>;
 	  });
 
 /**
@@ -268,21 +261,6 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 			session.sessionManager.appendModeChange("plan", { planFilePath });
 		}
 
-		if (typeof session.resolveRoleModelWithThinking === "function") {
-			const resolved = session.resolveRoleModelWithThinking("plan");
-			if (resolved) {
-				const transition = resolvePlanModelTransition(session.model as Model | undefined, resolved, false);
-				if (transition.kind === "thinking") {
-					session.setThinkingLevel?.(transition.thinkingLevel);
-				} else if (transition.kind === "apply") {
-					try {
-						await session.setModelTemporary?.(transition.model, transition.thinkingLevel);
-					} catch (error) {
-						logger.warn("Failed to switch to plan model for print mode", { error: String(error) });
-					}
-				}
-			}
-		}
 	}
 
 	session.subscribe(event => {

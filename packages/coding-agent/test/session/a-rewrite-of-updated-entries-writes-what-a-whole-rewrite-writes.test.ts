@@ -32,6 +32,11 @@ import { TempDir } from "@veyyon/utils";
  * title, and the title-change append dropped the layout. The rename rows assert the rewrite after a
  * rename keeps the lines before its update.
  *
+ * A cwd change (`setCwd`, `moveTo`) rewrote the whole file to change one field of the header: 2.0 s
+ * and 1.4 GB of RSS on a 321 MB session. Every tail rewrite now writes the title slot and the header
+ * again, `headBytes` of the old file in their place, and keeps the entry lines after them; a header
+ * of another length moves those lines. The cwd rows move the header longer, then shorter.
+ *
  * MEASURED (mutation matrix, each mutant applied alone):
  * - M1 `#earliestIndexOf` returns the first listed entry's index: row 1 red.
  * - M2 entry offsets counted with `line.length`: rows 1, 2, 3, 5, 7 red.
@@ -46,11 +51,19 @@ import { TempDir } from "@veyyon/utils";
  * - M6c the header line holds the title: rows 5, 6, the slot-rename resume row, and the queued tail
  *   row of `a-title-change-during-a-rewrite-is-written-once.test.ts` red.
  * - M6d the plan ignores an entry whose line is out of log order: row 5 red.
- * - M7 `rewriteTailAtomic` skips the head write: row 8 red.
- * - M8 `rewriteTailAtomic` keeps a file shorter than `keepBytes`: row 9 red.
- * - M9 `rewriteTailAtomic` publishes without the commit guard: row 10 red.
- * - M10 `rewriteTailAtomic` renames without the EPERM fallback or the guard: rows 7, 10 red.
- * - M11 the plan ignores a changed header line: the titled-header resume row red.
+ * - M7 `rewriteTailAtomic` skips the head write: the storage head rows red.
+ * - M8 `rewriteTailAtomic` keeps a file shorter than `keepBytes`: both "fewer bytes" rows red.
+ * - M9 `rewriteTailAtomic` publishes without the commit guard: both commit-guard rows red.
+ * - M10 `rewriteTailAtomic` renames without the EPERM fallback or the guard: row 7 and the
+ *   commit-guard rows red.
+ * - M11 the head length counted in characters: the UTF-8 head row red.
+ * - M12 the tail written at `keepBytes` instead of after the moved kept bytes: the longer and
+ *   shorter head rows and both cwd rows red.
+ * - M13 the plan requires the header line it loaded: the cwd rows and the titled-header resume row
+ *   red.
+ * - M14 the kept entry offsets not moved by the header's change in length: the cwd rows red.
+ * - M15 the tail lines' offsets counted from `keepBytes` instead of where the moved kept bytes end:
+ *   the titled-header resume row red.
  *
  * WHAT THIS DOES NOT CATCH: a caller that updates an entry in place and leaves it out of `updated`.
  * The manager cannot see an in-place mutation; that list is the caller's statement of what it
@@ -82,6 +95,7 @@ class RecordingStorage extends FileSessionStorage {
 				return written;
 			},
 			flush: () => writer.flush(),
+			sync: () => writer.sync(),
 			isOpen: () => writer.isOpen(),
 			close: () => writer.close(),
 			getError: () => writer.getError(),
@@ -100,6 +114,7 @@ class RecordingStorage extends FileSessionStorage {
 
 	override async rewriteTailAtomic(
 		p: string,
+		headBytes: number,
 		keepBytes: number,
 		head: string,
 		tail: SessionFileBody,
@@ -109,7 +124,7 @@ class RecordingStorage extends FileSessionStorage {
 		const hold = this.beforeTail;
 		this.beforeTail = undefined;
 		if (hold) await hold();
-		await super.rewriteTailAtomic(p, keepBytes, head, tail, options);
+		await super.rewriteTailAtomic(p, headBytes, keepBytes, head, tail, options);
 	}
 
 	override renameSync(source: string, target: string): void {
@@ -343,6 +358,38 @@ describe("a rewrite of updated entries writes what a whole rewrite writes", () =
 
 		await manager.close();
 	});
+
+	it.each([
+		{ move: "setCwd", run: (manager: SessionManager, cwd: string) => manager.setCwd(cwd) },
+		{
+			move: "moveTo",
+			run: (manager: SessionManager, cwd: string) => manager.moveTo(cwd, path.join(cwd, "sessions")),
+		},
+	])("writes the header a $move changes and keeps every entry line", async ({ run }) => {
+		using tempDir = TempDir.createSync("@veyyon-tail-cwd-");
+		const fixture = await openSession(tempDir.path(), 200);
+		const { storage, manager } = fixture;
+		// A longer header, then a shorter one, so the kept lines move both ways. The second move keeps
+		// the lines the first one moved, so a stale record of where they start corrupts it.
+		for (const name of [`moved-${"x".repeat(64)}`, "m"]) {
+			const cwd = path.join(tempDir.path(), name);
+			await fs.mkdir(cwd);
+			const size = (await fs.stat(manager.getSessionFile()!)).size;
+
+			await run(manager, cwd);
+
+			expect(storage.kept.at(-1)).toBe(size);
+			const raw = await fs.readFile(manager.getSessionFile()!, "utf8");
+			expect(JSON.parse(raw.split("\n")[1]!).cwd).toBe(cwd);
+		}
+		expect(storage.kept).toHaveLength(2);
+		expect(storage.whole).toBe(0);
+		const file = manager.getSessionFile()!;
+		const raw = await fs.readFile(file);
+		expect(raw.equals(await wholeRewrite({ ...fixture, file }))).toBe(true);
+
+		await manager.close();
+	});
 });
 
 /**
@@ -457,15 +504,7 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 			name: "holds an entry whose parent is missing",
 			alter: (raw: string, ids: string[]) => insertBefore(raw, ids[5]!, foreignLine("orphan", "re-linked", "gone")),
 		},
-		{ name: "was written by an older version", alter: (raw: string) => raw.replace('"version":3', '"version":2') },
-		{
-			name: "has a header line that carries a title",
-			alter: (raw: string) =>
-				raw.replace(
-					'{"type":"session",',
-					'{"type":"session","title":"from an earlier version","titleSource":"auto",',
-				),
-		},
+		{ name: "was written by an older version", alter: (raw: string) => raw.replace(/"version":\s*\d+/, '"version":2') },
 	])("writes the whole file on the first rewrite when the file $name", async ({ alter }) => {
 		using tempDir = TempDir.createSync("@veyyon-tail-resume-unclean-");
 		const fixture = await resumeSession(tempDir.path(), 40, { alter });
@@ -476,6 +515,34 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 		expect(storage.kept).toEqual([]);
 		const raw = await fs.readFile(file);
 		expect(raw.toString("utf8")).toContain("updated after an unclean resume");
+		expect(raw.equals(await wholeRewrite(fixture))).toBe(true);
+
+		await manager.close();
+	});
+
+	it("keeps the loaded lines of a file whose header line carries a title, and writes the header without it", async () => {
+		using tempDir = TempDir.createSync("@veyyon-tail-resume-titled-");
+		const fixture = await resumeSession(tempDir.path(), 40, {
+			alter: raw =>
+				raw.replace(
+					'{"type":"session",',
+					'{"type":"session","title":"from an earlier version","titleSource":"auto",',
+				),
+		});
+		const { file, storage, manager, ids } = fixture;
+		const before = await fs.readFile(file, "utf8");
+
+		await manager.rewriteEntries([update(manager, ids[30]!, "updated after the resume")]);
+
+		const after = await fs.readFile(file, "utf8");
+		expect(JSON.parse(after.split("\n")[1]!)).not.toHaveProperty("title");
+		// The second rewrite keeps lines the first one wrote behind the shorter header.
+		await manager.rewriteEntries([update(manager, ids[35]!, "updated again")]);
+
+		expect(storage.kept).toEqual([lineOffset(before, ids[30]!), lineOffset(after, ids[35]!)]);
+		expect(storage.whole).toBe(0);
+		expect(storage.reads).toEqual([]);
+		const raw = await fs.readFile(file);
 		expect(raw.equals(await wholeRewrite(fixture))).toBe(true);
 
 		await manager.close();
@@ -507,20 +574,32 @@ describe("a tail rewrite keeps a prefix of the file and replaces the rest", () =
 		return { dir: tempDir.path(), file, tempDir };
 	}
 
-	it("writes the head over the kept bytes and the tail after them", async () => {
-		const { file, tempDir } = await seed("0123456789abcdef");
-		using _ = tempDir;
+	it.each([
+		{ name: "as long as", headBytes: 2, head: "HE", expected: "HE23456789xyzé" },
+		{ name: "longer than", headBytes: 2, head: "HEAD", expected: "HEAD23456789xyzé" },
+		{ name: "shorter than", headBytes: 4, head: "H", expected: "H456789xyzé" },
+		// Two bytes in one character: a head measured in characters would be taken for one byte long.
+		{ name: "in UTF-8 longer than", headBytes: 1, head: "é", expected: "é123456789xyzé" },
+	])(
+		"writes a head $name the bytes it replaces, the kept bytes, and the tail after them",
+		async ({ headBytes, head, expected }) => {
+			const { file, tempDir } = await seed("0123456789abcdef");
+			using _ = tempDir;
 
-		await new FileSessionStorage().rewriteTailAtomic(file, 10, "HE", () => ["xy", "", "zé"]);
+			await new FileSessionStorage().rewriteTailAtomic(file, headBytes, 10, head, () => ["xy", "", "zé"]);
 
-		expect(await fs.readFile(file, "utf8")).toBe("HE23456789xyzé");
-	});
+			expect(await fs.readFile(file, "utf8")).toBe(expected);
+		},
+	);
 
-	it("fails and leaves the file as it was when it holds fewer bytes than it keeps", async () => {
+	it.each([
+		{ path: "in place", head: "" },
+		{ path: "shifted", head: "HEAD" },
+	])("fails and leaves the file as it was when it holds fewer bytes than it keeps ($path)", async ({ head }) => {
 		const { dir, file, tempDir } = await seed("short");
 		using _ = tempDir;
 
-		await expect(new FileSessionStorage().rewriteTailAtomic(file, 100, "", () => ["tail"])).rejects.toThrow(
+		await expect(new FileSessionStorage().rewriteTailAtomic(file, 0, 100, head, () => ["tail"])).rejects.toThrow(
 			"fewer than the 100",
 		);
 
@@ -528,11 +607,26 @@ describe("a tail rewrite keeps a prefix of the file and replaces the rest", () =
 		expect(await fs.readdir(dir)).toEqual(["session.jsonl"]);
 	});
 
-	it("publishes nothing when its commit guard fails", async () => {
+	it("fails and leaves the file as it was when its head replaces more bytes than it keeps", async () => {
 		const { dir, file, tempDir } = await seed("0123456789");
 		using _ = tempDir;
 
-		await new FileSessionStorage().rewriteTailAtomic(file, 4, "", () => ["tail"], { commitGuard: () => false });
+		await expect(new FileSessionStorage().rewriteTailAtomic(file, 6, 4, "HEAD", () => ["tail"])).rejects.toThrow(
+			"cannot replace 6 head bytes",
+		);
+
+		expect(await fs.readFile(file, "utf8")).toBe("0123456789");
+		expect(await fs.readdir(dir)).toEqual(["session.jsonl"]);
+	});
+
+	it.each([
+		{ path: "in place", head: "" },
+		{ path: "shifted", head: "HEAD" },
+	])("publishes nothing when its commit guard fails ($path)", async ({ head }) => {
+		const { dir, file, tempDir } = await seed("0123456789");
+		using _ = tempDir;
+
+		await new FileSessionStorage().rewriteTailAtomic(file, 0, 4, head, () => ["tail"], { commitGuard: () => false });
 
 		expect(await fs.readFile(file, "utf8")).toBe("0123456789");
 		expect(await fs.readdir(dir)).toEqual(["session.jsonl"]);

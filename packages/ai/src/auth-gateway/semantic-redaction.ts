@@ -23,8 +23,9 @@ export class GatewaySemanticRedactor {
 				try {
 					const value: unknown = JSON.parse(match[2]);
 					if (value && typeof value === "object" && !Array.isArray(value)) {
-						frame.value = value as Record<string, unknown>;
-						if (value.type === "error" || value.type === "response.failed") {
+						const parsed = value as Record<string, unknown>;
+						frame.value = parsed;
+						if (parsed.type === "error" || parsed.type === "response.failed") {
 							// Held deltas flush through the redaction pass with trailing prefixes masked. The unmasked prefix stays in tails, so a later continuation is still redacted.
 							errorBoundary = true;
 							final = true;
@@ -32,7 +33,7 @@ export class GatewaySemanticRedactor {
 							frame.prefix = match[1];
 							this.#slots(frame.value, frame.slots);
 							frame.completed = this.#completed(frame.value);
-							if (value.type === "done" || value.type === "response.completed") final = true;
+							if (parsed.type === "done" || parsed.type === "response.completed") final = true;
 						}
 					}
 				} catch { /* Non-JSON SSE data still passes through the byte redactor. */ }

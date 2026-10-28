@@ -2,10 +2,10 @@ import type { Database } from "bun:sqlite";
 import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { clampPassEffort } from "@veyyon/agent-core/effort-clamp";
 import type { ApiKey, Context, Model } from "@veyyon/ai";
 import { completeSimple } from "@veyyon/ai/stream";
 import { Effort } from "@veyyon/catalog/effort";
-import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
 import { emptyCost } from "@veyyon/catalog/models";
 import {
 	clampLow,
@@ -20,22 +20,9 @@ import {
 } from "@veyyon/utils";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 
-/**
- * Clamp an internal fixed memory-pass effort to the model's ladder, saying so
- * when the level moves. Memory passes request Low/Medium by convention; rows
- * with a narrower accepted set (e.g. GLM-5.2 high/max) shift the level, and a
- * silent shift is how effort drift goes unnoticed.
- */
+/** Memory passes request Low/Medium by convention; a model with a narrower ladder moves the level. */
 function clampMemoryEffort(model: Model, requested: Effort): Effort | undefined {
-	const clamped = clampThinkingLevelForModel(model, requested);
-	if (clamped !== requested) {
-		logger.warn("Memory pass effort is not accepted by the model; using the nearest supported level", {
-			model: `${model.provider}/${model.id}`,
-			requested,
-			using: clamped ?? "provider default",
-		});
-	}
-	return clamped;
+	return clampPassEffort(model, requested, "Memory pass");
 }
 
 import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";

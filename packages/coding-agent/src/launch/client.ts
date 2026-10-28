@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
+import { brokerHoldsLease } from "./broker-lease";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonBrokerTokenPath, daemonRuntimeDir } from "./paths";
 import { type DaemonProjectPresence, registerDaemonProjectPresence } from "./presence";
 import {
@@ -16,6 +17,7 @@ import {
 	type DaemonOperation,
 	type DaemonRpcResult,
 	type DaemonWireResponse,
+	parseDaemonRetiringNotice,
 	parseDaemonRpcResult,
 	parseDaemonWireResponse,
 } from "./protocol";
@@ -28,6 +30,8 @@ const CONNECT_RETRY_MS = 50;
 
 interface PendingRequest {
 	operation: DaemonOperation;
+	/** The request as written, sent again to the next broker when this one retires before answering it. */
+	line: string;
 	resolve: (result: DaemonRpcResult) => void;
 	reject: (error: Error) => void;
 	timer: NodeJS.Timeout;
@@ -145,6 +149,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	#closed = false;
 	#requestsInFlight = 0;
 	#idleTimer: NodeJS.Timeout | undefined;
+	/** Pid of the broker that announced it is retiring; the next connect waits for it to release its lease. */
+	#retiringPid: number | undefined;
 
 	constructor(projectDir: string, runtimeDir: string, token: string, options: DaemonBrokerClientOptions) {
 		this.projectDir = projectDir;
@@ -177,7 +183,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.removeAbort?.();
 				reject(new Error(`Daemon ${operation.op} request timed out`));
 			}, requestTimeoutMs(operation));
-			const pending: PendingRequest = { operation, resolve, reject, timer };
+			const line = `${JSON.stringify({ id, token: this.#token, operation })}\n`;
+			const pending: PendingRequest = { operation, line, resolve, reject, timer };
 			if (signal) {
 				const abort = (): void => {
 					if (!this.#pending.delete(id)) return;
@@ -188,7 +195,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.removeAbort = () => signal.removeEventListener("abort", abort);
 			}
 			this.#pending.set(id, pending);
-			socket.write(`${JSON.stringify({ id, token: this.#token, operation })}\n`);
+			socket.write(line);
 			return await promise;
 		} finally {
 			this.#requestsInFlight--;
@@ -217,6 +224,16 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 
 	async #connectOnce(): Promise<void> {
+		const deadline = Date.now() + BROKER_CONNECT_TIMEOUT_MS;
+		const retiring = this.#retiringPid;
+		if (retiring !== undefined) {
+			// A retiring broker keeps accepting connections until it exits, answering none of them, and
+			// a replacement spawned before it releases its lease exits at once. Wait for the release.
+			while (Date.now() < deadline && (await brokerHoldsLease(this.#runtimeDir, retiring))) {
+				await Bun.sleep(CONNECT_RETRY_MS);
+			}
+			this.#retiringPid = undefined;
+		}
 		try {
 			this.#bindSocket(await openSocket(this.#endpoint, 250));
 			return;
@@ -226,7 +243,6 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			// lease selects one winner before any candidate touches the socket.
 		}
 		this.#spawnBroker();
-		const deadline = Date.now() + BROKER_CONNECT_TIMEOUT_MS;
 		let lastError: Error | undefined;
 		while (Date.now() < deadline) {
 			if (this.#closed) throw new Error("Daemon broker client is closed");
@@ -265,23 +281,26 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	#bindSocket(socket: net.Socket): void {
 		if (this.#closed) {
 			socket.destroy();
-			throw new Error("Daemon broker client is closed");
+			return;
 		}
 		this.#socket = socket;
 		this.#buffer = "";
 		socket.setEncoding("utf8");
-		socket.on("data", chunk => this.#onData(chunk));
+		socket.on("data", chunk => {
+			if (this.#socket === socket) this.#onData(socket, chunk);
+		});
 		socket.on("error", () => {
 			// The close handler rejects pending requests with one stable error.
 		});
 		socket.on("close", () => {
+			// A socket replaced after a retiring notice closes with its requests already re-sent.
 			if (this.#socket !== socket) return;
 			this.#socket = undefined;
 			this.#rejectPending(new Error("Daemon broker connection closed"));
 		});
 	}
 
-	#onData(chunk: string | Buffer): void {
+	#onData(socket: net.Socket, chunk: string | Buffer): void {
 		this.#buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
 		for (;;) {
 			const newline = this.#buffer.indexOf("\n");
@@ -292,6 +311,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			let response: DaemonWireResponse;
 			try {
 				const decoded: unknown = JSON.parse(line);
+				const retiringPid = parseDaemonRetiringNotice(decoded);
+				if (retiringPid !== undefined) {
+					// Every line after the notice answers a request the broker did not act on.
+					this.#retire(socket, retiringPid);
+					return;
+				}
 				response = parseDaemonWireResponse(decoded);
 			} catch (error) {
 				this.#rejectPending(error instanceof Error ? error : new Error(String(error)));
@@ -312,6 +337,27 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.reject(error instanceof Error ? error : new Error(String(error)));
 			}
 		}
+	}
+
+	/** Leave the broker running as `pid`, which is retiring, and send what it left unanswered to the next one. */
+	#retire(socket: net.Socket, pid: number): void {
+		this.#socket = undefined;
+		this.#buffer = "";
+		socket.destroy();
+		this.#retiringPid = pid;
+		const unanswered = Array.from(this.#pending.keys());
+		if (this.#closed || unanswered.length === 0) return;
+		this.#connect().then(
+			() => {
+				const next = this.#socket;
+				if (!next) return;
+				for (const id of unanswered) {
+					const pending = this.#pending.get(id);
+					if (pending) next.write(pending.line);
+				}
+			},
+			error => this.#rejectPending(error instanceof Error ? error : new Error(String(error))),
+		);
 	}
 
 	#scheduleIdleDisconnect(): void {

@@ -21,7 +21,7 @@ import { processHandle } from "@veyyon/utils/native-process";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
 import { acquireBrokerLease, releaseBrokerLease } from "./broker-lease";
-import { appendDaemonCompletion, readDaemonCompletions } from "./completions";
+import { appendDaemonCompletion, type RetainedDaemonCompletion, readDaemonCompletions } from "./completions";
 import {
 	daemonBrokerEndpoint,
 	daemonBrokerTokenPath,
@@ -33,6 +33,7 @@ import {
 } from "./paths";
 import { hasLiveDaemonProjectPresence, pruneDeadDaemonRuntimeDirs } from "./presence";
 import {
+	DAEMON_BROKER_RETIRING_ERROR,
 	DAEMON_CLEANUP_WAIT_ENV,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
@@ -48,6 +49,7 @@ import {
 	type DaemonSpec,
 	type DaemonTerminationOwner,
 	DEFAULT_CLEANUP_WAIT_MS,
+	daemonBrokerRetiringNotice,
 	parseDaemonSnapshot,
 	parseDaemonSpec,
 	parseDaemonWireRequest,
@@ -164,6 +166,11 @@ function terminalState(state: DaemonSnapshot["state"]): boolean {
 	return state === "exited" || state === "failed";
 }
 
+/** A detached process that has started keeps running when its broker exits; the next broker recovers it. */
+function outlivesBroker(record: ManagedDaemon): boolean {
+	return record.spec.detached && !record.stopRequested && record.snapshot.pid !== undefined;
+}
+
 /** Mirror per-condition readiness progress into the snapshot so clients can see which condition is unmet. */
 function syncReadyPending(record: ManagedDaemon): void {
 	if (record.snapshot.state !== "starting") {
@@ -195,6 +202,59 @@ async function fileTextSlice(filePath: string, head: boolean): Promise<string> {
 		if (isEnoent(error)) return "";
 		throw error;
 	}
+}
+
+/** The lines of sanitized log text a reader asked for: those matching `grep`, then the first or last `lines`. */
+function selectLogLines(text: string, head: boolean, lines: number, grep?: string): string {
+	let selected = text;
+	if (grep) {
+		let pattern: RegExp;
+		try {
+			pattern = new RegExp(grep, "u");
+		} catch (error) {
+			throw new Error(`Invalid log regex: ${errorMessage(error)}`);
+		}
+		selected = selected
+			.split("\n")
+			.filter(line => pattern.test(line))
+			.join("\n");
+	}
+	const options = { maxLines: lines, maxBytes: 256 * 1024 };
+	return head ? truncateHead(selected, options).content : truncateTail(selected, options).content;
+}
+
+function waitPattern(source: string): RegExp {
+	try {
+		return new RegExp(source, "u");
+	} catch (error) {
+		throw new Error(`Invalid wait regex: ${errorMessage(error)}`);
+	}
+}
+
+/** The snapshot of a generation the broker no longer holds, rebuilt from its retained completion record. */
+function retainedSnapshot(completion: RetainedDaemonCompletion): DaemonSnapshot {
+	return {
+		name: completion.name,
+		id: completion.id,
+		state: completion.state,
+		createdAt: completion.createdAt,
+		startedAt: completion.startedAt,
+		exitedAt: completion.exitedAt,
+		exitCode: completion.exitCode,
+		signal: completion.signal,
+		exitReason: completion.exitReason,
+		restartCount: completion.restartCount,
+		outputBytes: completion.outputBytes,
+		owner: completion.owner,
+		terminatedBy: completion.terminatedBy,
+		persist: completion.spec.persist,
+		detached: completion.spec.detached,
+	};
+}
+
+/** A retained completion as `list` returns it, without the state and spec only the broker reads. */
+function listedCompletion({ state: _state, spec: _spec, ...record }: RetainedDaemonCompletion): DaemonCompletionRecord {
+	return record;
 }
 
 class DaemonLog {
@@ -264,24 +324,7 @@ class DaemonLog {
 		const terminalText = head
 			? truncateHeadBytes(combined, LOG_READ_BYTES).text
 			: truncateTailBytes(combined, LOG_READ_BYTES).text;
-		let text = sanitizeText(terminalText);
-		if (grep) {
-			let pattern: RegExp;
-			try {
-				pattern = new RegExp(grep, "u");
-			} catch (error) {
-				throw new Error(`Invalid log regex: ${errorMessage(error)}`);
-			}
-			text = text
-				.split("\n")
-				.filter(line => pattern.test(line))
-				.join("\n");
-		}
-		const options = { maxLines: lines, maxBytes: 256 * 1024 };
-		return {
-			text: head ? truncateHead(text, options).content : truncateTail(text, options).content,
-			terminalText,
-		};
+		return { text: selectLogLines(sanitizeText(terminalText), head, lines, grep), terminalText };
 	}
 
 	async #rotate(): Promise<void> {
@@ -439,6 +482,8 @@ export class DaemonBroker {
 	#server: net.Server | undefined;
 	#idleTimer: NodeJS.Timeout | undefined;
 	#shuttingDown = false;
+	/** Requests being acted on. The broker does not retire under one. */
+	#inFlight = 0;
 
 	constructor(
 		projectDir: string,
@@ -480,6 +525,10 @@ export class DaemonBroker {
 	): Promise<void> {
 		if (this.#shuttingDown) return this.#finished.promise;
 		this.#shuttingDown = true;
+		// From here no request is acted on. Every connection is told before anything awaits, so a
+		// client sends what it has pending to the next broker instead of losing it with this one.
+		const notice = daemonBrokerRetiringNotice(process.pid);
+		for (const socket of this.#sockets) socket.write(notice);
 		clearTimeout(this.#idleTimer);
 		this.#idleTimer = undefined;
 		for (const timer of this.#cleanupTimers.values()) clearTimeout(timer);
@@ -519,6 +568,7 @@ export class DaemonBroker {
 
 	#accept(socket: net.Socket): void {
 		this.#sockets.add(socket);
+		if (this.#shuttingDown) socket.write(daemonBrokerRetiringNotice(process.pid));
 		let authenticated = false;
 		let buffer = "";
 		socket.setEncoding("utf8");
@@ -561,8 +611,16 @@ export class DaemonBroker {
 			const request = parseDaemonWireRequest(decoded);
 			id = request.id;
 			if (request.token !== this.#token) throw new Error("Daemon broker authentication failed");
+			if (this.#shuttingDown) throw new Error(DAEMON_BROKER_RETIRING_ERROR);
 			onAuthenticated();
-			const result = await this.#dispatch(request.operation);
+			this.#inFlight++;
+			let result: DaemonRpcResult;
+			try {
+				result = await this.#dispatch(request.operation);
+			} finally {
+				this.#inFlight--;
+				this.#scheduleIdleShutdown();
+			}
 			socket.write(`${JSON.stringify({ id, ok: true, result })}\n`);
 			if (request.operation.op === "shutdown") {
 				setTimeout(
@@ -608,7 +666,7 @@ export class DaemonBroker {
 					daemons: Array.from(this.#records.values())
 						.sort((left, right) => left.snapshot.createdAt - right.snapshot.createdAt)
 						.map(record => record.snapshot),
-					completions: await this.#completionRecords(),
+					completions: (await this.#retainedCompletions()).map(listedCompletion),
 				};
 			}
 			case "logs":
@@ -618,17 +676,20 @@ export class DaemonBroker {
 			case "send":
 				return this.#send(operation);
 			case "stop":
-				return this.#serialized(operation.name, async () => {
-					const record = this.#record(operation.name);
-					await this.#stopRecord(record, operation.timeoutMs);
-					return { op: "stop", daemon: record.snapshot };
+				return this.#serialized(operation.name, async (): Promise<DaemonRpcResult> => {
+					const found = await this.#lookup(operation.name);
+					// A purged generation is over; stopping it again is a no-op, as it is before the purge.
+					if (!("snapshot" in found)) return { op: "stop", daemon: retainedSnapshot(found) };
+					await this.#stopRecord(found, operation.timeoutMs);
+					return { op: "stop", daemon: found.snapshot };
 				});
 			case "restart":
 				return this.#serialized(operation.name, () => this.#restart(operation.name));
 			case "describe": {
-				const record = this.#record(operation.name);
-				await this.#refreshDetached(record);
-				return { op: "describe", daemon: record.snapshot, spec: record.spec };
+				const found = await this.#lookup(operation.name);
+				if (!("snapshot" in found)) return { op: "describe", daemon: retainedSnapshot(found), spec: found.spec };
+				await this.#refreshDetached(found);
+				return { op: "describe", daemon: found.snapshot, spec: found.spec };
 			}
 			case "shutdown":
 				return { op: "shutdown" };
@@ -636,7 +697,18 @@ export class DaemonBroker {
 	}
 
 	async #start(spec: DaemonSpec, owner?: string): Promise<DaemonRpcResult> {
-		if (this.#shuttingDown) throw new Error("Daemon broker is shutting down; no daemon can start");
+		const record = await this.#admit(spec, owner);
+		let readyTimedOut = false;
+		if (spec.ready && !terminalState(record.snapshot.state)) {
+			const ready = await this.#waitUntil(record, () => record.snapshot.state === "ready", spec.ready.timeoutMs);
+			readyTimedOut = !ready && !terminalState(record.snapshot.state);
+		}
+		await record.persistQueue;
+		return { op: "start", daemon: record.snapshot, readyTimedOut };
+	}
+
+	/** Validate `spec`, register a fresh record under its name, and launch its first generation. */
+	async #admit(spec: DaemonSpec, owner: string | undefined): Promise<ManagedDaemon> {
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(spec.name)) {
 			throw new Error("Daemon name must be 1-48 letters, numbers, dots, underscores, or hyphens");
 		}
@@ -705,13 +777,7 @@ export class DaemonBroker {
 		syncReadyPending(record);
 		this.#records.set(spec.name, record);
 		await this.#launch(record);
-		let readyTimedOut = false;
-		if (spec.ready && !terminalState(record.snapshot.state)) {
-			const ready = await this.#waitUntil(record, () => record.snapshot.state === "ready", spec.ready.timeoutMs);
-			readyTimedOut = !ready && !terminalState(record.snapshot.state);
-		}
-		await record.persistQueue;
-		return { op: "start", daemon: record.snapshot, readyTimedOut };
+		return record;
 	}
 
 	async #launch(record: ManagedDaemon): Promise<void> {
@@ -864,12 +930,14 @@ export class DaemonBroker {
 		record.drained = Promise.all([
 			this.#drain(record, generation, process.stdout),
 			this.#drain(record, generation, process.stderr),
-		]).catch(error =>
-			logger.warn("Daemon output stream failed; output observation is lost, the process is not settled", {
-				name: record.snapshot.name,
-				error: errorMessage(error),
-			}),
-		);
+		])
+			.then(() => undefined)
+			.catch(error =>
+				logger.warn("Daemon output stream failed; output observation is lost, the process is not settled", {
+					name: record.snapshot.name,
+					error: errorMessage(error),
+				}),
+			);
 		void process.exited
 			.then(exitCode => this.#settle(record, generation, exitCode))
 			.catch(error => this.#settle(record, generation, undefined, errorMessage(error)));
@@ -1093,7 +1161,7 @@ export class DaemonBroker {
 			!record.stopRequested &&
 			(record.spec.restart === "always" || (record.spec.restart === "on-failure" && failed));
 		if (shouldRestart && !this.#shuttingDown) {
-			this.#queueCompletion(record);
+			this.#queueCompletion(record, failed ? "failed" : "exited");
 			const uptime = Date.now() - record.snapshot.startedAt;
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
 			record.snapshot.restartCount++;
@@ -1130,11 +1198,15 @@ export class DaemonBroker {
 		await Promise.race([record.drained, sleep(250)]);
 		await record.log?.close();
 		record.log = undefined;
-		this.#queueCompletion(record);
-		record.snapshot.state = failed && !record.stopRequested ? "failed" : "exited";
+		const state = failed && !record.stopRequested ? "failed" : "exited";
+		this.#queueCompletion(record, state);
+		record.snapshot.state = state;
 		persist(record);
 		this.#scheduleCleanup(record);
-		if (record.spec.persist) this.#scheduleIdleShutdown();
+		// The process that ended may have been the last thing this broker supervised, or the persistent
+		// daemon that held it up past the last client, so the idle reaper is re-armed here rather than
+		// only on client close.
+		this.#scheduleIdleShutdown();
 	}
 
 	/** Terminate and prove the generation's tree dead. Nothing spawned means nothing to prove. */
@@ -1231,7 +1303,20 @@ export class DaemonBroker {
 	}
 
 	async #logs(operation: Extract<DaemonOperation, { op: "logs" }>): Promise<DaemonRpcResult> {
-		const record = this.#record(operation.name);
+		const found = await this.#lookup(operation.name);
+		const lines = clampLow(Math.floor(operation.lines), 1, 1_000);
+		if (!("snapshot" in found)) {
+			// The log files went with the purge; the retained tail is the output that is left.
+			return {
+				op: "logs",
+				name: found.name,
+				text: selectLogLines(found.outputTail, operation.head, lines, operation.grep),
+				cursor: found.outputBytes,
+				timedOut: false,
+				state: found.state,
+			};
+		}
+		const record = found;
 		await this.#refreshDetached(record);
 		const cursor = operation.cursor ?? record.snapshot.outputBytes;
 		let timedOut = false;
@@ -1243,7 +1328,6 @@ export class DaemonBroker {
 			);
 			timedOut = !changed;
 		}
-		const lines = clampLow(Math.floor(operation.lines), 1, 1_000);
 		const output = record.log
 			? await record.log.read(operation.head, lines, operation.grep)
 			: await DaemonLog.readFiles(
@@ -1265,17 +1349,21 @@ export class DaemonBroker {
 	}
 
 	async #wait(operation: Extract<DaemonOperation, { op: "wait" }>): Promise<DaemonRpcResult> {
-		const record = this.#record(operation.name);
+		const found = await this.#lookup(operation.name);
+		const pattern = operation.pattern ? waitPattern(operation.pattern) : undefined;
+		if (!("snapshot" in found)) {
+			// A purged generation is over: an exit wait is met, a ready wait never will be, and a
+			// pattern can match only the retained tail.
+			const daemon = retainedSnapshot(found);
+			if (pattern) {
+				const match = pattern.exec(found.outputTail);
+				return { op: "wait", daemon, matched: match?.[0].slice(0, 500), timedOut: !match };
+			}
+			return { op: "wait", daemon, timedOut: operation.for !== "exit" };
+		}
+		const record = found;
 		await this.#refreshDetached(record);
 		let matched: string | undefined;
-		let pattern: RegExp | undefined;
-		if (operation.pattern) {
-			try {
-				pattern = new RegExp(operation.pattern, "u");
-			} catch (error) {
-				throw new Error(`Invalid wait regex: ${errorMessage(error)}`);
-			}
-		}
 		const condition = (): boolean => {
 			if (pattern) {
 				const match = pattern.exec(record.readinessBuffer);
@@ -1291,7 +1379,9 @@ export class DaemonBroker {
 	}
 
 	async #send(operation: Extract<DaemonOperation, { op: "send" }>): Promise<DaemonRpcResult> {
-		const record = this.#record(operation.name);
+		const found = await this.#lookup(operation.name);
+		if (!("snapshot" in found)) throw new Error(`Daemon ${operation.name} is ${found.state}`);
+		const record = found;
 		await this.#refreshDetached(record);
 		if (terminalState(record.snapshot.state) || record.snapshot.state === "stopping") {
 			throw new Error(`Daemon ${operation.name} is ${record.snapshot.state}`);
@@ -1379,8 +1469,14 @@ export class DaemonBroker {
 	}
 
 	async #restart(name: string): Promise<DaemonRpcResult> {
-		if (this.#shuttingDown) throw new Error("Daemon broker is shutting down; restart is refused");
-		const record = this.#record(name);
+		const found = await this.#lookup(name);
+		if (!("snapshot" in found)) {
+			// The purged generation is over, so there is nothing to stop: launch its spec again.
+			const relaunched = await this.#admit(found.spec, found.owner);
+			await relaunched.persistQueue;
+			return { op: "restart", daemon: relaunched.snapshot };
+		}
+		const record = found;
 		await this.#stopRecord(record, 2_000, {
 			owner: "operator-restart",
 			reason: "stopped by launch restart to start a new generation",
@@ -1440,9 +1536,18 @@ export class DaemonBroker {
 		return condition();
 	}
 
-	#record(name: string): ManagedDaemon {
-		const record = this.#records.get(name);
-		if (record) return record;
+	/**
+	 * The live record for `name`, or once the broker has purged it, the newest retained completion
+	 * of that name. A name with neither is unknown.
+	 */
+	async #lookup(name: string): Promise<ManagedDaemon | RetainedDaemonCompletion> {
+		const live = this.#records.get(name);
+		if (live) return live;
+		const retained = (await this.#retainedCompletions()).findLast(completion => completion.name === name);
+		// A start under this name during the store read is the record to answer with.
+		const started = this.#records.get(name);
+		if (started) return started;
+		if (retained) return retained;
 		const names = Array.from(this.#records.keys());
 		throw new Error(`Unknown daemon ${name}${names.length ? `. Available: ${names.join(", ")}` : ""}`);
 	}
@@ -1453,13 +1558,9 @@ export class DaemonBroker {
 	 * The write is serialized through `#completionsQueue` so concurrent settles
 	 * cannot interleave a read-modify-write of the store.
 	 */
-	#queueCompletion(record: ManagedDaemon): void {
-		// One completion per generation. A restart armed by a settle may have queued it, and a stop that settles
-		// the same generation must not queue it again.
-		if (record.completedGeneration === record.generation) return;
-		record.completedGeneration = record.generation;
+	#queueCompletion(record: ManagedDaemon, state: RetainedDaemonCompletion["state"]): void {
 		const snapshot = record.snapshot;
-		const completion: DaemonCompletionRecord = {
+		const completion: RetainedDaemonCompletion = {
 			name: snapshot.name,
 			id: snapshot.id,
 			owner: snapshot.owner,
@@ -1473,6 +1574,8 @@ export class DaemonBroker {
 			restartCount: snapshot.restartCount,
 			outputBytes: snapshot.outputBytes,
 			outputTail: "",
+			state,
+			spec: record.spec,
 		};
 		this.#completionsQueue = this.#completionsQueue
 			.then(async () => {
@@ -1495,12 +1598,12 @@ export class DaemonBroker {
 	}
 
 	/**
-	 * The retained completion records for the `list` result. A store that
-	 * cannot be read — corrupt, or written by another schema version — is
-	 * rejected rather than served: the caller gets no records and a log line,
-	 * never a stale one.
+	 * The retained completion records, oldest first. A store that cannot be
+	 * read — corrupt, or written by another schema version — is rejected
+	 * rather than served: the caller gets no records and a log line, never a
+	 * stale one.
 	 */
-	async #completionRecords(): Promise<DaemonCompletionRecord[]> {
+	async #retainedCompletions(): Promise<RetainedDaemonCompletion[]> {
 		await this.#completionsQueue;
 		try {
 			return await readDaemonCompletions(this.#runtimeDir);
@@ -1578,11 +1681,9 @@ export class DaemonBroker {
 				if (detached && spec.ready?.port !== undefined && snapshot.state !== "ready") {
 					void this.#pollPort(record, record.generation, spec.ready);
 				}
-				// A daemon the dead broker never settled never got a completion
-				// record; the recovery kill above IS its terminal transition, so
-				// retain it here. One already terminal on disk was recorded by the
-				// broker that settled it.
-				if (!detached && !wasTerminal) this.#queueCompletion(record);
+				// Recovery marks an unfinished non-detached record failed without claiming
+				// ownership of the old process tree. Retain that terminal state.
+				if (!detached && !wasTerminal) this.#queueCompletion(record, "failed");
 				if (terminalState(snapshot.state) && !snapshot.ownershipUncertain) {
 					this.#scheduleCleanup(record);
 				}
@@ -1596,53 +1697,75 @@ export class DaemonBroker {
 		}
 	}
 
+	/** True while a process this broker started depends on it: one that is not over and does not outlive it. */
+	#supervising(): boolean {
+		for (const record of this.#records.values()) {
+			if (!terminalState(record.snapshot.state) && !outlivesBroker(record)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Arm the idle reaper. A connected client holds the broker up only while it supervises a process; a
+	 * broker with nothing to supervise retires after the grace whoever is connected, and its clients
+	 * reach the next broker on their next request.
+	 */
 	#scheduleIdleShutdown(): void {
-		if (this.#shuttingDown || this.#clients.size > 0) return;
+		if (this.#shuttingDown) return;
 		clearTimeout(this.#idleTimer);
+		this.#idleTimer = undefined;
+		if (this.#clients.size > 0 && this.#supervising()) return;
 		this.#idleTimer = setTimeout(() => {
 			this.#idleTimer = undefined;
-			void (async () => {
-				if (this.#clients.size > 0 || this.#shuttingDown) return;
-				// Presence protects running daemons, not an empty broker for every
-				// project a long-lived Main has ever contacted.
-				const liveDaemon = Array.from(this.#records.values()).some(
-					record => !record.spec.detached && !terminalState(record.snapshot.state),
-				);
-				if (liveDaemon && (await hasLiveDaemonProjectPresence(this.#runtimeDir))) {
-					this.#scheduleIdleShutdown();
-					return;
-				}
-				if (this.#clients.size > 0 || this.#shuttingDown) return;
-				const livePersistent = Array.from(this.#records.values()).some(
-					record => record.spec.persist && !terminalState(record.snapshot.state),
-				);
-				if (!livePersistent) {
-					await this.shutdown({
-						owner: "idle-reaper",
-						reason:
-							"the last tool socket disconnected and the idle grace elapsed with no persistent daemon and no running daemon protected by live project presence",
-						at: Date.now(),
-					});
-					return;
-				}
-				// A persistent sibling keeps the broker alive, not the
-				// `last-client-exit` daemons beside it: those end with the last
-				// client, as their lifetime states. The reaper then re-arms so the
-				// broker exits once the persistent daemon is gone too.
-				const reapAt = Date.now();
-				for (const record of this.#records.values()) {
-					if (record.spec.persist || record.spec.detached || terminalState(record.snapshot.state)) continue;
-					await this.#stopRecord(record, 2_000, {
-						owner: "idle-reaper",
-						reason:
-							"the last veyyon client disconnected and the idle grace elapsed; its lifetime is last-client-exit, so it was stopped while a persistent daemon kept the broker alive",
-						signal: "SIGTERM",
-						at: reapAt,
-					});
-				}
-				this.#scheduleIdleShutdown();
-			})();
+			void this.#reapIdle();
 		}, this.#idleGraceMs);
+	}
+
+	async #reapIdle(): Promise<void> {
+		// A request being acted on re-arms the reaper when it completes.
+		if (this.#shuttingDown || this.#inFlight > 0) return;
+		if (!this.#supervising()) {
+			await this.shutdown({
+				owner: "idle-reaper",
+				reason: "the idle grace elapsed with no process left to supervise",
+				at: Date.now(),
+			});
+			return;
+		}
+		if (this.#clients.size > 0) return;
+		if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {
+			this.#scheduleIdleShutdown();
+			return;
+		}
+		if (this.#clients.size > 0 || this.#shuttingDown) return;
+		const livePersistent = Array.from(this.#records.values()).some(
+			record => record.spec.persist && !terminalState(record.snapshot.state),
+		);
+		if (!livePersistent) {
+			await this.shutdown({
+				owner: "idle-reaper",
+				reason:
+					"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
+				at: Date.now(),
+			});
+			return;
+		}
+		// A persistent sibling keeps the broker alive, not the
+		// `last-client-exit` daemons beside it: those end with the last
+		// client, as their lifetime states. The reaper then re-arms so the
+		// broker exits once the persistent daemon is gone too.
+		const reapAt = Date.now();
+		for (const record of this.#records.values()) {
+			if (record.spec.persist || record.spec.detached || terminalState(record.snapshot.state)) continue;
+			await this.#stopRecord(record, 2_000, {
+				owner: "idle-reaper",
+				reason:
+					"the last veyyon client disconnected and the idle grace elapsed; its lifetime is last-client-exit, so it was stopped while a persistent daemon kept the broker alive",
+				signal: "SIGTERM",
+				at: reapAt,
+			});
+		}
+		this.#scheduleIdleShutdown();
 	}
 }
 

@@ -438,9 +438,9 @@ const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
 	tierFamily("gemini-3.6-flash", "Gemini 3.6 Flash", GEMINI_3_FLASH_FAMILY_EFFORTS),
 	tierFamily("claude-opus-5-5", "Claude Opus 5.5", [Effort.Low, Effort.Medium, Effort.High]),
 	tierFamily("claude-sonnet-5-5", "Claude Sonnet 5.5", [Effort.Low, Effort.Medium, Effort.High]),
-	geminiTieredFlashFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
-	geminiTieredFlashFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
-	geminiTieredFlashFamily("gemini-3.6-flash-tiered", "Gemini 3.6 Flash Tiered", "gemini-3.6-flash-tiered"),
+	geminiLevelFamily("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.8-flash-tiered"),
+	geminiLevelFamily("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini-3.7-flash-tiered"),
+	geminiLevelFamily("gemini-3.6-flash-tiered", "Gemini 3.6 Flash Tiered", "gemini-3.6-flash-tiered"),
 	{
 		// Legacy static family — covers stale snapshots and caches. Stale ids are
 		// unverified against the budget-mode CCA contract; keep them on level.

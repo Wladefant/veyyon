@@ -134,8 +134,8 @@ export { applyOpenRouterRoutingVariant } from "./openai-shared";
 
 type OpenAICompletionsReasoningField = NonNullable<ResolvedOpenAICompat["reasoningContentField"]>;
 
-type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
-type GeminiMessageThoughtSignature = { field: GeminiMessageThoughtSignatureField; signature: string };
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature" | "reasoning_signature";
+export type GeminiMessageThoughtSignature = { field: GeminiMessageThoughtSignatureField; signature: string };
 type GeminiThoughtSignatureNamespace = "google" | "vertex";
 type GeminiThoughtSignatureExtraContent = Partial<
 	Record<GeminiThoughtSignatureNamespace, { thought_signature: string }>
@@ -147,6 +147,7 @@ const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamesp
 const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
 	"thinking_signature",
 	"thought_signature",
+	"reasoning_signature",
 ];
 function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
@@ -162,7 +163,7 @@ function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSig
 	return undefined;
 }
 
-function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtSignature | undefined {
+export function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtSignature | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	for (const field of GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS) {
 		const signature = Reflect.get(value, field);
@@ -171,7 +172,7 @@ function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtS
 	return undefined;
 }
 
-function parseStoredThoughtSignature(thoughtSignature: string | undefined): unknown {
+export function parseStoredThoughtSignature(thoughtSignature: string | undefined): unknown {
 	if (!thoughtSignature) return undefined;
 	try {
 		return JSON.parse(thoughtSignature);
@@ -180,12 +181,12 @@ function parseStoredThoughtSignature(thoughtSignature: string | undefined): unkn
 	}
 }
 
-type StoredGeminiSignature = {
+export type StoredGeminiSignature = {
 	perCall?: unknown;
 	message?: Partial<Record<GeminiMessageThoughtSignatureField, string>>;
 };
 
-function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature | undefined {
+export function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const perCall = Reflect.get(value, "perCall");
 	const envelopeMessage = getGeminiMessageThoughtSignature(Reflect.get(value, "message"));
@@ -198,6 +199,13 @@ function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature |
 	const legacyMessage = getGeminiMessageThoughtSignature(value);
 	if (legacyMessage) return { message: { [legacyMessage.field]: legacyMessage.signature } };
 	return { perCall: value };
+}
+
+export function mergeStoredGeminiSignature(existing: string | undefined, update: StoredGeminiSignature): string {
+	const merged = normalizeStoredGeminiSignature(parseStoredThoughtSignature(existing)) ?? {};
+	if (update.perCall !== undefined) merged.perCall = update.perCall;
+	if (update.message) merged.message = update.message;
+	return JSON.stringify(merged);
 }
 
 type OpenAICompletionsAssistantMessageParam = ChatCompletionAssistantMessageParam &
@@ -850,7 +858,7 @@ async function runOpenAICompletionsAttempt(
 	try {
 		const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 		const { idleTimeoutMs, firstEventTimeoutMs, requestTimeoutMs } = openAICompletionsTimeouts(model, options);
-		const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = createRequestSetup(
+		const { baseUrl, headers, query, requestHeaders } = createRequestSetup(
 			model,
 			context,
 			apiKey,
@@ -893,12 +901,9 @@ async function runOpenAICompletionsAttempt(
 			},
 		}).open();
 		await notifyProviderResponse(options, openaiHandle.response, model, openaiHandle.requestId);
-		if (copilotPremiumRequests !== undefined) {
-			output.usage.premiumRequests = copilotPremiumRequests;
-		}
 		stream.push({ type: "start", partial: output });
 		const activeTurn = new OpenAICompletionsTurn(output, stream, policy.stream, rawUsage =>
-			parseChunkUsage(rawUsage, model, copilotPremiumRequests),
+			parseChunkUsage(rawUsage, model, undefined),
 		);
 		turn = activeTurn;
 		const timedOpenaiStream = iterateWithIdleTimeout(openaiHandle.events, {
