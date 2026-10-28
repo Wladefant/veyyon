@@ -1220,9 +1220,14 @@ describe("secrets stay out of logs", () => {
 				const cdp = await CdpTestClient.connect(relay.cdpUrl);
 				await cdp.send("Target.setDiscoverTargets", { discover: true });
 				await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-				await cdp.send("Target.createTarget", { url: "about:blank" });
-				await until(() => cdp.events.some(event => event.method === "Target.attachedToTarget"), "session attach");
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				// Auto-attach also reports the adopted connect tab, which `Target.createTarget` closes once the new tab is attached.
+				const created = await cdp.send("Target.createTarget", { url: "about:blank" });
+				const createdTargetId = created.result?.targetId;
+				const attachedToCreated = (event: CdpMessage): boolean =>
+					event.method === "Target.attachedToTarget" &&
+					(event.params?.targetInfo as { targetId?: string } | undefined)?.targetId === createdTargetId;
+				await until(() => cdp.events.some(attachedToCreated), "session attach");
+				const sessionId = String(cdp.events.find(attachedToCreated)?.params?.sessionId);
 				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
 				const method = `Runtime.${token}`;
 				const release = ext.delayNext(method);
