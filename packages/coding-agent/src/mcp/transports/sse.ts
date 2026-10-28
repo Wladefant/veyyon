@@ -330,14 +330,14 @@ export class LegacySseTransport implements MCPTransport {
 	): Promise<Response> {
 		const endpointUrl = this.#endpointUrl;
 		if (!endpointUrl) throw new Error(mcpNotConnectedMessage({ url: this.#config.url }, "POST"));
-		let headers: Record<string, string> = {
+		const postHeaders = (): Record<string, string> => ({
 			"Content-Type": "application/json",
 			Accept: "application/json, text/event-stream",
 			...this.#config.headers,
-		};
+		});
 		let response = await fetch(endpointUrl, {
 			method: "POST",
-			headers,
+			headers: postHeaders(),
 			body: JSON.stringify(body),
 			signal,
 		});
@@ -348,11 +348,6 @@ export class LegacySseTransport implements MCPTransport {
 		if (!refreshedHeaders) return response;
 		await response.body?.cancel();
 		this.#config.headers = refreshedHeaders;
-		headers = {
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			...this.#config.headers,
-		};
 		let retryBody: typeof body = body;
 		if ("params" in body) {
 			const retryParams = await rebuildMCPToolCallParamsForAttempt(body.params);
@@ -360,7 +355,7 @@ export class LegacySseTransport implements MCPTransport {
 		}
 		response = await fetch(endpointUrl, {
 			method: "POST",
-			headers,
+			headers: postHeaders(),
 			body: JSON.stringify(retryBody),
 			signal,
 		});

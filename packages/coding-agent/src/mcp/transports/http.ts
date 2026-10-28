@@ -30,6 +30,12 @@ import {
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
 
+/** The content headers of a JSON-RPC POST, which the server may answer as JSON or as an SSE stream. */
+const JSON_RPC_POST_HEADERS: Readonly<Record<string, string>> = {
+	"Content-Type": "application/json",
+	Accept: "application/json, text/event-stream",
+};
+
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 
 type MCPToolArgsAttemptFactory = () => Promise<Record<string, unknown>>;
@@ -117,6 +123,17 @@ export class HttpTransport implements MCPTransport {
 	}
 
 	/**
+	 * Headers for one request: `base`, then the configured headers (which may replace a base header
+	 * and carry refreshed auth), then the session id the server assigned, if any. A fresh object per
+	 * call, so an auth retry may merge refreshed headers into it.
+	 */
+	#requestHeaders(base: Readonly<Record<string, string>>): Record<string, string> {
+		const headers: Record<string, string> = { ...base, ...this.config.headers };
+		if (this.#sessionId) headers["Mcp-Session-Id"] = this.#sessionId;
+		return headers;
+	}
+
+	/**
 	 * Start SSE listener for server-initiated messages.
 	 * Resolves once the SSE connection is established (or fails/unsupported).
 	 * Message reading continues in the background.
@@ -126,14 +143,7 @@ export class HttpTransport implements MCPTransport {
 		if (this.#sseConnection) return;
 
 		this.#sseConnection = new AbortController();
-		const headers: Record<string, string> = {
-			Accept: "text/event-stream",
-			...this.config.headers,
-		};
-
-		if (this.#sessionId) {
-			headers["Mcp-Session-Id"] = this.#sessionId;
-		}
+		const headers = this.#requestHeaders({ Accept: "text/event-stream" });
 
 		let response: Response | null;
 		let timedOut = false;
@@ -271,15 +281,7 @@ export class HttpTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const headers: Record<string, string> = {
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			...this.config.headers,
-		};
-
-		if (this.#sessionId) {
-			headers["Mcp-Session-Id"] = this.#sessionId;
-		}
+		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
 
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
 		const operation = createMCPTimeout(timeout, options?.signal);
@@ -418,14 +420,7 @@ export class HttpTransport implements MCPTransport {
 	 */
 	async #sendServerResponse(body: ServerRequestResponse): Promise<void> {
 		if (!this.#connected) return;
-		const headers: Record<string, string> = {
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			...this.config.headers,
-		};
-		if (this.#sessionId) {
-			headers["Mcp-Session-Id"] = this.#sessionId;
-		}
+		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
 		const operation = createMCPTimeout(timeout);
 		try {
@@ -483,15 +478,7 @@ export class HttpTransport implements MCPTransport {
 			params: params ?? {},
 		};
 
-		const headers: Record<string, string> = {
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			...this.config.headers,
-		};
-
-		if (this.#sessionId) {
-			headers["Mcp-Session-Id"] = this.#sessionId;
-		}
+		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
 
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
 		const operation = createMCPTimeout(timeout);
@@ -550,14 +537,9 @@ export class HttpTransport implements MCPTransport {
 			const timeout = resolveMCPTimeoutMs(this.config.timeout);
 			const operation = createMCPTimeout(timeout);
 			try {
-				const headers: Record<string, string> = {
-					...this.config.headers,
-					"Mcp-Session-Id": this.#sessionId,
-				};
-
 				await fetch(this.config.url, {
 					method: "DELETE",
-					headers,
+					headers: this.#requestHeaders({}),
 					signal: operation.signal,
 				});
 				operation.clear();
