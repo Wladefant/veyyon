@@ -197,18 +197,12 @@ describe("config hot reload", () => {
 	it("changes new spawn routing and preserves existing forks", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(
-			file,
-			"agent:\n  sharedModel: true\n  model: openai/old\ndefaultEffort:\n  '*': low\n",
-		);
+		await fs.writeFile(file, "agent:\n  sharedModel: true\n  model: openai/old\ndefaultEffort:\n  '*': low\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const existing = settings.forkWithRuntimeOverrides();
 		const resolve = (store: Settings) => resolveAgentModel({ settings: store, agentName: "task" }).patterns;
 		expect(resolve(settings)).toEqual(["openai/old"]);
-		await fs.writeFile(
-			file,
-			"agent:\n  sharedModel: true\n  model: openai/new\ndefaultEffort:\n  '*': low\n",
-		);
+		await fs.writeFile(file, "agent:\n  sharedModel: true\n  model: openai/new\ndefaultEffort:\n  '*': low\n");
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
 		expect(resolve(existing)).toEqual(["openai/old"]);
@@ -256,15 +250,9 @@ describe("config hot reload", () => {
 	it("retains startup defaultModel without blocking direct lane changes", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(
-			file,
-			"defaultModel: openai/old\nagent:\n  model: openai/old\n",
-		);
+		await fs.writeFile(file, "defaultModel: openai/old\nagent:\n  model: openai/old\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		await fs.writeFile(
-			file,
-			"defaultModel: openai/new\nagent:\n  model: openai/new\n",
-		);
+		await fs.writeFile(file, "defaultModel: openai/new\nagent:\n  model: openai/new\n");
 		const result = await settings.reloadConfig();
 		expect(result.restartRequired).toContain("defaultModel");
 		expect(settings.get("defaultModel")).toBe("openai/old");
@@ -330,9 +318,7 @@ describe("config hot reload", () => {
 		expect(session.isAdvisorActive()).toBe(true);
 		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-old");
 		expect(session.model?.id).toBe("main-model");
-		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-			"openai/main-model",
-		]);
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual(["openai/main-model"]);
 
 		await writeAdvisor("advisor-new");
 
@@ -355,9 +341,7 @@ describe("config hot reload", () => {
 		expect(session.getAdvisorAgent()?.state.model.id).toBe("advisor-new");
 		expect(session.model?.id).toBe("main-model");
 		expect(session.agent.state.model.id).toBe("main-model");
-		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual([
-			"openai/main-model",
-		]);
+		expect(resolveAgentModel({ settings: existingFork, agentName: "task" }).patterns).toEqual(["openai/main-model"]);
 		expect(existingFork.get("agent.helpers")).toEqual({
 			advisor: { model: "openai/advisor-old" },
 		});
@@ -633,8 +617,9 @@ describe("config hot reload", () => {
 		current[segments[segments.length - 1]] = value;
 	}
 
-	// WHY: /reload-config applies spawn routing plus the compaction group and nothing else. A path that
-	// is in the schema but in neither set must come back restart-required with its old value kept.
+	// WHY: /reload-config applies spawn routing, the compaction group and the discovered-tool cap
+	// (tools.maxDiscoveredTools) and nothing else. A path that is in the schema but in none of those
+	// sets must come back restart-required with its old value kept.
 	// CLASS: the table is pinned to the schema's own `compaction.*` paths by exact equality, so a new
 	// compaction setting turns this red until someone records a before/after for it. GAP: it does not
 	// prove that a running session re-reads the value; that is each consumer's own contract.
@@ -661,10 +646,13 @@ describe("config hot reload", () => {
 		{ path: "compaction.idleTimeoutSeconds", before: 300, after: 600 },
 		{ path: "compaction.supersedeReads", before: true, after: false },
 		{ path: "compaction.dropUseless", before: true, after: false },
+		{ path: "tools.maxDiscoveredTools", before: 40, after: 80 },
 	];
 
-	it("covers every compaction setting the schema declares", () => {
-		expect(COMPACTION_RELOAD_CASES.map(row => row.path).sort()).toEqual([...groupSettingPaths("compaction")].sort());
+	it("covers every compaction setting the schema declares plus the discovered-tool cap", () => {
+		expect(COMPACTION_RELOAD_CASES.map(row => row.path).sort()).toEqual(
+			[...groupSettingPaths("compaction"), "tools.maxDiscoveredTools"].sort(),
+		);
 	});
 
 	it("reloads every compaction setting from disk with an applied or unchanged outcome", async () => {
@@ -684,7 +672,8 @@ describe("config hot reload", () => {
 
 		expect(result.restartRequired).toEqual([]);
 		for (const row of COMPACTION_RELOAD_CASES) {
-			const expected = row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
+			const expected =
+				row.retired || JSON.stringify(row.before) === JSON.stringify(row.after) ? "unchanged" : "applied";
 			expect(result.outcomes).toContainEqual({ path: row.path, status: expected });
 			if (!row.retired) expect(settings.get(row.path as SettingPath)).toEqual(row.after);
 		}

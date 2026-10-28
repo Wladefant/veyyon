@@ -70,8 +70,8 @@ import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { SynchronizedSession } from "../checkpoints/synchronized-session";
 import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
+import { SynchronizedSession } from "../checkpoints/synchronized-session";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
@@ -831,6 +831,7 @@ export class AgentSession {
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
+		nonMessageBreakdown: () => computeNonMessageBreakdown(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
@@ -1529,9 +1530,12 @@ export class AgentSession {
 						}
 					}
 					if (!persisted) {
-						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event", {
-							error: errorMessage(lastError),
-						});
+						logger.warn(
+							"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event",
+							{
+								error: errorMessage(lastError),
+							},
+						);
 					}
 				}
 			},
@@ -1567,14 +1571,34 @@ export class AgentSession {
 			thunks.push(() => this.#ttsr.takePendingToolReminders());
 			return thunks;
 		});
+		// A tool the agent started with is protected, except one the session file restored through
+		// discovery: the SDK puts the restored selection into the agent's initial tools, and
+		// protecting those would make every reloaded discovered tool immune to the cap and to pruning.
+		const restoredByDiscovery = new Set(config.initialSelectedMCPToolNames ?? []);
+		const requestedNames = new Set(config.requestedToolNames ?? []);
+		const protectedToolNames =
+			config.protectedToolNames ??
+			new Set(
+				[...requestedNames, ...this.agent.state.tools.map(t => t.name)].filter(
+					name => !isMCPToolName(name) && (requestedNames.has(name) || !restoredByDiscovery.has(name)),
+				),
+			);
 		this.#discovery = new ToolDiscovery(
 			{
 				registry: this.#toolRegistry,
 				activeToolNames: () => this.getActiveToolNames(),
 				discoveryModeFor: toolCount => resolveEffectiveToolDiscoveryMode(this.settings, toolCount),
+				maxDiscoveredTools: () => this.settings.get("tools.maxDiscoveredTools"),
+				sessionMessages: () => this.messages,
 			},
-			config,
+			{
+				...config,
+				protectedToolNames,
+			},
 		);
+		if (this.#discovery.restoredCapDrops.size > 0) {
+			this.agent.setTools(this.agent.state.tools.filter(tool => !this.#discovery.restoredCapDrops.has(tool.name)));
+		}
 		this.#toolActivation = new ToolActivation(this, {
 			registry: this.#toolRegistry,
 			discovery: this.#discovery,
@@ -1585,7 +1609,7 @@ export class AgentSession {
 		});
 		const persistInitialMCPToolSelection =
 			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
-		if (this.#discovery.mcpEnabled && persistInitialMCPToolSelection) {
+		if (this.#discovery.mcpEnabled && (persistInitialMCPToolSelection || this.#discovery.restoredCapDrops.size > 0)) {
 			const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
 			if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], currentSelectedMCPToolNames)) {
 				this.sessionManager.appendMCPToolSelection(currentSelectedMCPToolNames);
@@ -4157,6 +4181,7 @@ export class AgentSession {
 	 * variant forced the rebuild.
 	 */
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
+		this.#compaction.resetAutoCompactionGuard("model_change");
 		const currentEditMode = resolveActiveEditMode(this.settings, this.model);
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes(TOOL.edit);
 		// The system prompt selects model-specific policy even when it does not display the model id.
@@ -4188,10 +4213,7 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredMCPTools(toolNames: string[]): Promise<string[]> {
-		const activation = this.#discovery.planMCPActivation(toolNames);
-		if (!activation) return [];
-		await this.setActiveToolsByName(activation.nextActive);
-		return activation.activated;
+		return this.activateDiscoveredTools(toolNames.filter(isMCPToolName));
 	}
 
 	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
@@ -4213,26 +4235,45 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		const mcpNames = toolNames.filter(isMCPToolName);
-		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
-		const activated: string[] = [];
-
-		if (mcpNames.length > 0) {
-			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
-			activated.push(...activatedMcp);
+		const plan = this.#discovery.planActivation(toolNames, {
+			messages: this.messages,
+		});
+		if (!plan.changed) return [];
+		this.#discovery.applyActivation(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
 		}
+		return plan.activated;
+	}
 
-		// Built-ins and custom tools that are in the registry but not currently active.
-		if (nonMcpNames.length > 0) {
-			const newlyAdded = this.#discovery.selectLocal(nonMcpNames);
-			activated.push(...newlyAdded);
-			if (newlyAdded.length > 0) {
-				await this.setActiveToolsByName(this.getActiveToolNames().concat(newlyAdded));
-				this.#discovery.invalidate();
-			}
+	/** Apply a hot-reloaded lower cap to active schemas and the saved selection. */
+	async enforceDiscoveredToolCap(): Promise<void> {
+		const plan = this.#discovery.planCapReduction();
+		if (!plan.changed) return;
+		this.#discovery.applyPrune(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
 		}
+	}
 
-		return [...new Set(activated)];
+	/**
+	 * Prune search-activated tools after history compaction that were not called in `messages`.
+	 * Default, config, and protected tools are never pruned.
+	 * Persists the reduced selection through `mcp_tool_selection`.
+	 */
+	async pruneDiscoveredToolsAfterCompaction(messages: readonly AgentMessage[]): Promise<void> {
+		const plan = this.#discovery.planCompactionPrune(messages);
+		if (!plan.changed) return;
+		this.#discovery.applyPrune(plan);
+		await this.setActiveToolsByName(plan.nextActive);
+		const selection = this.#discovery.selectedDiscovered();
+		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
+			this.sessionManager.appendMCPToolSelection(selection);
+		}
 	}
 
 	/** The approval rung this session enforces; see {@link SessionApprovals.effectiveMode}. */
@@ -4956,12 +4997,7 @@ export class AgentSession {
 					undefined,
 					ownershipMarker && ownershipPath
 						? (resumeToken, epoch) =>
-								persistSessionResumeCapability(
-									ownershipPath,
-									ownershipMarker,
-									resumeToken,
-									epoch,
-								)
+								persistSessionResumeCapability(ownershipPath, ownershipMarker, resumeToken, epoch)
 						: undefined,
 				);
 				const previous = this.agent.beforeToolCall;
@@ -4969,7 +5005,9 @@ export class AgentSession {
 					if (this.sessionManager.getSessionId() !== cloudSessionId) {
 						await this.#cloudOwnership!.close();
 						if (ownershipMarker)
-							throw new ToolAdmissionFatalError("Transferred session identity changed; tool admission is blocked");
+							throw new ToolAdmissionFatalError(
+								"Transferred session identity changed; tool admission is blocked",
+							);
 						return previous?.(context, signal);
 					}
 					try {

@@ -873,6 +873,9 @@ export const SETUP_HANDLERS = {
 		handle: async (_command, runtime) => {
 			try {
 				const result = await runtime.settings.reloadConfig();
+				if (result.changed.some(change => change.path === "tools.maxDiscoveredTools")) {
+					await runtime.session.enforceDiscoveredToolCap();
+				}
 				const ruleLines = await runtime.session.reloadRules();
 				let extensionRunner: { reloadExtensions: () => Promise<ExtensionReloadResult[]> } | undefined;
 				try {

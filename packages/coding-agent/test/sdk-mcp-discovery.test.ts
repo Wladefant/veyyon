@@ -464,6 +464,77 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		expect(await session.activateDiscoveredTools(["debug"])).toEqual(["debug"]);
 		expect(session.getActiveToolNames()).toContain("debug");
 	});
+	it("resumes only MCP selections that fit the discovery cap in inline descriptors", async () => {
+		const customTools = [
+			createMcpCustomTool("mcp__github_create_issue", "github", "create_issue"),
+			createMcpCustomTool("mcp__slack_post_message", "slack", "post_message"),
+			createMcpCustomTool("mcp__linear_create_issue", "linear", "create_issue"),
+		];
+		const firstManager = SessionManager.create(tempDir, tempDir);
+		const { session: firstSession } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: firstManager,
+			settings: Settings.isolated({ "mcp.discoveryMode": true }),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read", "search_tool_bm25"],
+			customTools,
+		});
+		await firstSession.activateDiscoveredMCPTools(customTools.map(tool => tool.name));
+		expect(firstSession.getSelectedMCPToolNames()).toEqual(customTools.map(tool => tool.name));
+		const sessionFile = firstSession.sessionFile;
+		expect(sessionFile).toBeDefined();
+		await firstSession.sessionManager.rewriteEntries();
+		await firstSession.dispose();
+
+		const resumedManager = await SessionManager.open(sessionFile!, tempDir);
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: resumedManager,
+			settings: Settings.isolated({
+				"mcp.discoveryMode": true,
+				"tools.maxDiscoveredTools": 1,
+				inlineToolDescriptors: "on",
+			}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read", "search_tool_bm25"],
+			customTools,
+		});
+		try {
+			const activeNames = session.getActiveToolNames();
+			const prompt = session.systemPrompt.join("\n");
+			expect(activeNames).toContain("mcp__linear_create_issue");
+			expect(activeNames).not.toContain("mcp__github_create_issue");
+			expect(activeNames).not.toContain("mcp__slack_post_message");
+			expect(prompt).toContain("# Tool: mcp__linear_create_issue");
+			expect(prompt).not.toContain("# Tool: mcp__github_create_issue");
+			expect(prompt).not.toContain("# Tool: mcp__slack_post_message");
+			expect(session.getSelectedMCPToolNames()).toEqual(["mcp__linear_create_issue"]);
+			expect(session.sessionManager.buildSessionContext().selectedMCPToolNames).toEqual([
+				"mcp__linear_create_issue",
+			]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("restores explicit MCP, thinking, and service-tier entries when resuming without rewriting the session file", async () => {
 		const firstManager = SessionManager.create(tempDir, tempDir);
 		const { session: firstSession } = await createAgentSession({

@@ -22,6 +22,10 @@
 ### Added
 
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
+- Added `tools.maxDiscoveredTools` (default 40), which caps active discovered tools and evicts the least recently used ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+
+### Fixed
+- Compaction unloads discovered tools the retained transcript did not use, and automatic compaction stops looping when fixed context stays over the threshold ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Complete opt-in draft MCP Events polling, push streams, and verified webhook subscription lifecycles ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Route configured per-server MCP Events notices as untrusted data to the owning session ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
 - Discover project skills from repository directories (.agents/skills, .github/skills, .claude/skills) with whole-folder trust verification ([Refs #469](https://github.com/Wladefant/veyyon/issues/469)).
@@ -86,7 +90,7 @@
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
-- `/reload-config` also applies the compaction settings; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
+- `/reload-config` also applies the compaction settings and `tools.maxDiscoveredTools`; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).

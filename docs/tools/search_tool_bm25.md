@@ -74,7 +74,7 @@
 ## Side Effects
 - Session state
   - Adds matched tools to the active session tool set through `activateDiscoveredTools()` / `activateDiscoveredMCPTools()`.
-  - Updates discovered-tool selection state so repeated searches accumulate selections instead of replacing them.
+  - Updates discovered-tool selection state up to `tools.maxDiscoveredTools` (default 40), evicting the least recently used (LRU) activated tools when exceeded. Context compaction also unloads search-activated tools not called in the retained recent transcript.
   - Invalidates the cached discoverable search index when newly activated built-ins change the hidden corpus (`packages/coding-agent/src/session/agent-session.ts`).
   - Tool availability changes before the next model call in the same turn; the prompt text says this explicitly.
 - User-visible prompts / interactive UI
@@ -83,6 +83,7 @@
 
 ## Limits & Caps
 - Default result cap: `8` (`DEFAULT_LIMIT` in `packages/coding-agent/src/tools/search/search-tool-bm25.ts`).
+- Active discovered tools cap: `40` (`tools.maxDiscoveredTools`), evicting least recently used (LRU) activated tools when new activations exceed the limit.
 - `limit` must be a positive integer; no tool-level upper bound beyond corpus size.
 - Card collapsed list cap: `5` (`COLLAPSED_MATCH_LIMIT` in `packages/coding-agent/src/tools/search/search-tool-bm25-view.ts`).
 - Card truncation widths:
