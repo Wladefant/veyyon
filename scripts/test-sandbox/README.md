@@ -84,6 +84,13 @@ bash scripts/test-sandbox/leak-proof.sh             # the red run, every availab
 Package scripts wrap the common ones: `test:sandbox:probe`, `test:sandbox:build`,
 `test:sandbox:remote:build`, `test:sandbox:proof`.
 
+`--build` does nothing when `veyyon-test-guest:<bun version>` already carries the current
+stamp in its `dev.veyyon.guest-stamp` label. The stamp is the bun version and the sha256 of
+`guest/Dockerfile` and `guest/guest-init.sh`; `guest/build-guest.sh --print-stamp` prints it.
+CI gets the image through `.github/actions/test-sandbox-image`, which restores it from the
+Actions cache under a key derived from the stamp, and builds and saves it on a push to
+`main` when the cache has none.
+
 ## The remote rung
 
 Set `VEYYON_SANDBOX_REMOTE_HOST=<user>@<host-or-address>` to enable it; there is no

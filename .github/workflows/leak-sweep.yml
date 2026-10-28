@@ -62,7 +62,7 @@ jobs:
         # unreachable. The tracer spawns one `bun test` per file, so both the
         # self-tests and the sweep itself have to run inside the boundary or
         # every file reports "could not run" and the sweep measures nothing.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Tracer self-tests
         # Fail loudly on a broken tracer rather than sweeping 3,200 files and calling them
         # all clean.
@@ -97,7 +97,7 @@ jobs:
       - name: Build the test sandbox image
         # Same gate as the sweep job: the measurement spawns `bun test` runs,
         # and each of those faces the refusal on a bare runner.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Gate self-tests
         # The arithmetic first. A slope taken from the endpoints, or a peak summed across
         # workers, reports health it did not measure.

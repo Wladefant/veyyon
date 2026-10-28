@@ -225,7 +225,7 @@ jobs:
         # without leak-checking anything. The tracer spawns one `bun test` per
         # file, and those children face the same gate, so the whole tracer runs
         # inside the boundary rather than only its self-tests.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Tracer self-tests
         # The tracer's own contract tests, so a broken tracer fails loudly here instead
         # of silently reporting every changed suite as clean.
@@ -307,6 +307,6 @@ jobs:
       - name: Build the test sandbox image
         # Same reason as the `test` job: `bun run test:scripts` routes through
         # scripts/test-sandbox/run.sh, which refuses to run anything on the bare runner.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Repo script test suites
         run: bun run test:scripts

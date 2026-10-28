@@ -281,6 +281,8 @@ describe("every pipeline in .github runs with pipefail", () => {
 		expect(piping.map(step => `${step.file}::${step.job}::${step.name}`).sort()).toEqual([
 			"actions/bun-install::runs::Install bun when absent",
 			"actions/ensure-rust-toolchain::runs::(unnamed)",
+			"actions/test-sandbox-image::runs::Export the guest image",
+			"actions/test-sandbox-image::runs::Load the guest image",
 			"checks.yml::secrets::Install gitleaks",
 			"ci.yml::native_artifact_lookup::Compute native source hash",
 			"ci.yml::native_artifact_lookup::Find prior main build with matching native artifacts",

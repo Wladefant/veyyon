@@ -37,7 +37,7 @@ jobs:
         # unreachable, so the boundary has to exist before the soak starts.
         # This nightly was green until that gate landed and would otherwise
         # fail on the refusal without running a single seed.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Run the full seed corpus
         # hashline is pure TypeScript (no native addon), so no build step is
         # needed. The soak env makes seedBand yield every seed in every band.

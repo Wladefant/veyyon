@@ -105,7 +105,7 @@ jobs:
         # boundary a workstation does. Without this the two suites below exit 1
         # on the refusal before running a single assertion, which is how this
         # job went red the moment the gate landed.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Checker self-tests
         run: bash scripts/test-sandbox/run.sh bun test scripts/check-doc-links.test.ts scripts/check-doc-freshness.test.ts scripts/check-doc-imports.test.ts scripts/check-doc-paths.test.ts scripts/gen-example-js.test.ts scripts/docs-book-pin.test.ts scripts/gen-settings-reference.test.ts scripts/settings-doc-coherence.test.ts
       # The two package maps (ARCHITECTURE.md, AGENTS.md) must describe every package
@@ -157,7 +157,7 @@ jobs:
       - name: Build the test sandbox image
         # Same refusal as the link-check job above: the gate is unconditional,
         # so this suite needs the boundary built before it can run.
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Docs examples match the real CLI
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/docs-examples.test.ts
 
@@ -172,7 +172,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: ./.github/actions/bun-install
       - name: Build the test sandbox image
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image
       - name: Install mdbook
         # Explicit Bash enables pipefail so tar cannot mask a failed download.
         shell: bash

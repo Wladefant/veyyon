@@ -17,7 +17,7 @@
 #                       /boot/vmlinuz-* on this workstation is mode 0600 root-only.
 #   .build/rootfs.img   An uncompressed cpio initramfs of the veyyon-test-guest
 #                       image, with Alpine's matching kernel modules grafted in.
-#   .build/stamp        The cache key. Rebuild happens only when it changes.
+#   .build/stamp        The stamp the kernel and initramfs were built from.
 #
 # WHY AN INITRAMFS AND NOT AN EXT4 DISK
 # -------------------------------------
@@ -44,6 +44,11 @@
 # change a single byte of this image and keying on it would force pointless
 # multi-minute rebuilds.
 #
+# The image holds the stamp it was built from in its `dev.veyyon.guest-stamp`
+# label, so an image brought in with `docker load` from a cache is current without
+# a build. `--print-stamp` prints the stamp and `--print-image` the image tag, for a
+# caller that keys such a cache on them.
+#
 # NETWORK
 # -------
 # This script needs network the first time, to pull alpine and apt-get git into the
@@ -63,26 +68,38 @@ KERNEL_IMAGE="veyyon-test-kernel:alpine3.21"
 log() { printf '[build-guest] %s\n' "$*" >&2; }
 die() { printf '[build-guest] error: %s\n' "$*" >&2; exit 2; }
 
+# The image label and the cache key: see THE CACHE KEY above.
+STAMP_LABEL="dev.veyyon.guest-stamp"
+STAMP="bun=${BUN_VERSION} dockerfile=$(sha256sum "${GUEST_DIR}/Dockerfile" | cut -d' ' -f1) init=$(sha256sum "${GUEST_DIR}/guest-init.sh" | cut -d' ' -f1)"
+case "${1:-}" in
+	"") ;;
+	--print-stamp) printf '%s\n' "$STAMP"; exit 0 ;;
+	--print-image) printf '%s\n' "$GUEST_IMAGE"; exit 0 ;;
+	*) die "unknown argument '$1'. Usage: build-guest.sh [--print-stamp | --print-image]" ;;
+esac
+
 command -v docker >/dev/null 2>&1 || die "docker is required to build the guest rootfs, and it is the only tool on this host that can (debootstrap, mkosi and podman are absent)"
 HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
 : "${HOST_HOME:=${HOME}}"
 docker version --format '{{.Server.Version}}' >/dev/null 2>&1 || die "the docker daemon is not reachable by uid $(id -u)"
 
-STAMP="bun=${BUN_VERSION} dockerfile=$(sha256sum "${GUEST_DIR}/Dockerfile" | cut -d' ' -f1) init=$(sha256sum "${GUEST_DIR}/guest-init.sh" | cut -d' ' -f1)"
-# Up to date means: the stamp matches, the userland image the docker rung runs still
-# exists, and IF this host can boot the microVM AND was asked for it, its artifacts
-# exist and have passed a boot check. A host with no KVM never had those artifacts
-# and must not be told it is stale forever because of it, and neither must a
-# userland-only build on a host that happens to have KVM, which is the remote case.
+# Up to date means: the image the docker rung runs exists and was built from this
+# stamp, and IF this host can boot the microVM AND was asked for it, its artifacts
+# were built from this stamp and have passed a boot check. A host with no KVM never
+# had those artifacts and must not be told it is stale forever because of it, and
+# neither must a userland-only build on a host that happens to have KVM, which is
+# the remote case.
+image_stamp() {
+	docker image inspect --format "{{ index .Config.Labels \"${STAMP_LABEL}\" }}" "${GUEST_IMAGE}" 2>/dev/null || :
+}
 microvm_artifacts_ok() {
 	[ "${VEYYON_SANDBOX_USERLAND_ONLY:-0}" = "1" ] && return 0
 	{ [ -r /dev/kvm ] && [ -w /dev/kvm ] && command -v qemu-system-x86_64 >/dev/null 2>&1; } || return 0
-	[ -f "${BUILD_DIR}/vmlinuz" ] && [ -f "${BUILD_DIR}/rootfs.img" ] && [ -f "${BUILD_DIR}/boot-verified" ]
+	[ -f "${BUILD_DIR}/stamp" ] && [ "$(cat "${BUILD_DIR}/stamp")" = "$STAMP" ] \
+		&& [ -f "${BUILD_DIR}/vmlinuz" ] && [ -f "${BUILD_DIR}/rootfs.img" ] && [ -f "${BUILD_DIR}/boot-verified" ]
 }
-if [ -f "${BUILD_DIR}/stamp" ] && [ "$(cat "${BUILD_DIR}/stamp")" = "$STAMP" ] \
-	&& docker image inspect "${GUEST_IMAGE}" >/dev/null 2>&1 \
-	&& microvm_artifacts_ok; then
-	log "up to date (${BUILD_DIR})"
+if [ "$(image_stamp)" = "$STAMP" ] && microvm_artifacts_ok; then
+	log "up to date (${GUEST_IMAGE})"
 	exit 0
 fi
 
@@ -112,9 +129,8 @@ fi
 
 if [ "$CAN_BOOT_MICROVM" = 0 ]; then
 	log "building guest userland (${GUEST_IMAGE})"
-	docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
-	rm -f "${BUILD_DIR}/boot-verified" "${BUILD_DIR}/vmlinuz" "${BUILD_DIR}/rootfs.img"
-	printf '%s' "$STAMP" > "${BUILD_DIR}/stamp"
+	docker build --build-arg "BUN_VERSION=${BUN_VERSION}" --label "${STAMP_LABEL}=${STAMP}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+	rm -f "${BUILD_DIR}/boot-verified" "${BUILD_DIR}/vmlinuz" "${BUILD_DIR}/rootfs.img" "${BUILD_DIR}/stamp"
 	log "done. The docker rung is ready; the microvm rung will report itself unavailable."
 	exit 0
 fi
@@ -141,7 +157,7 @@ trap - EXIT
 
 # --- 2. guest userland ------------------------------------------------------
 log "building guest userland (${GUEST_IMAGE})"
-docker build --build-arg "BUN_VERSION=${BUN_VERSION}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
+docker build --build-arg "BUN_VERSION=${BUN_VERSION}" --label "${STAMP_LABEL}=${STAMP}" -t "${GUEST_IMAGE}" "${GUEST_DIR}" >&2
 
 # --- 3. initramfs -----------------------------------------------------------
 # Built by a root process inside the guest image itself, over its own filesystem,
