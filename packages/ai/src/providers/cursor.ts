@@ -762,7 +762,7 @@ class CursorRunStream {
 		this.#pendingMessages.add(handled);
 		handled
 			.catch(error => {
-				// `log` writes nothing unless DEBUG_CURSOR is set, so a failure inside a handler (an
+				// `logCursorDiagnostic` writes nothing unless DEBUG_CURSOR is set, so a failure inside a handler (an
 				// exec handler that threw, a malformed interaction update, a checkpoint that could not
 				// be applied) is reported here and fails the turn at once.
 				logger.warn("Cursor server message handler failed", {
@@ -1762,7 +1762,10 @@ async function handleExecServerMessage(
 			result: { case: "success", value: create(McpStateSuccessSchema, { servers }) },
 		});
 		sendExecReply(h2Request, execMsg, { case: "mcpStateExecResult", value: mcpStateResult });
-		log("execClient", "mcpStateExecResult", { servers: servers.length, requested: serverIdentifiers.length });
+		void logCursorDiagnostic("execClient", "mcpStateExecResult", {
+			servers: servers.length,
+			requested: serverIdentifiers.length,
+		});
 		return;
 	}
 
