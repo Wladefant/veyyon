@@ -3,10 +3,10 @@ import { streamAzureOpenAIResponses } from "@veyyon/ai/providers/azure-openai-re
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import { streamSimple } from "@veyyon/ai/stream";
-import type { Context, FetchImpl, Model, TextContent } from "@veyyon/ai/types";
+import type { FetchImpl, Model, TextContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { waitForDelayOrAbort } from "./helpers";
+import { sayHelloContext, waitForDelayOrAbort } from "./helpers";
 import { sseResponse } from "./helpers/fetch-mock";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
@@ -38,12 +38,6 @@ const ollamaChatModel: Model<"ollama-chat"> = buildModel({
 	contextWindow: 128000,
 	maxTokens: 8192,
 });
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 function getRequestSignal(input: string | URL | Request, init: RequestInit | undefined): AbortSignal | undefined {
 	if (init?.signal) {
@@ -328,7 +322,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("surfaces the OpenAI responses first-event timeout message instead of a generic abort", async () => {
 		await expectFirstEventTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -339,7 +333,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("times out OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
 		await expectRequestSetupTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -360,7 +354,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		});
 
 		try {
-			const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+			const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 				apiKey: "test-key",
 				fetch: fetchMock,
 			}).result();
@@ -390,7 +384,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		const fetchMock = createDelayedFetch(30, createOllamaChatSuccessResponse);
 
 		try {
-			const result = await streamSimple(ollamaChatModel, baseContext(), {
+			const result = await streamSimple(ollamaChatModel, sayHelloContext(), {
 				apiKey: "test-key",
 				fetch: fetchMock,
 			}).result();
@@ -422,7 +416,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		});
 
 		try {
-			const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+			const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 				apiKey: "test-key",
 				streamIdleTimeoutMs: 5_000,
 				fetch: fetchMock,
@@ -449,7 +443,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		const fetchMock: FetchImpl = (input: string | URL | Request, init?: RequestInit) =>
 			Promise.resolve(createNoProgressOpenAIResponsesStream(getRequestSignal(input, init)));
 
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			streamFirstEventTimeoutMs: 1_000,
 			streamIdleTimeoutMs: 20,
@@ -475,7 +469,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		abortTimer.unref();
 
 		try {
-			const result = await streamSimple(openAIResponsesModel, baseContext(), {
+			const result = await streamSimple(openAIResponsesModel, sayHelloContext(), {
 				apiKey: "test-key",
 				signal: controller.signal,
 				streamFirstEventTimeoutMs: 20,
@@ -493,7 +487,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("surfaces the OpenAI completions first-event timeout message", async () => {
 		await expectFirstEventTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+				streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -504,7 +498,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("times out OpenAI completions before the stream opens and forwards the budget to the SDK request", async () => {
 		await expectRequestSetupTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+				streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -522,7 +516,7 @@ describe("OpenAI-family first-event timeouts", () => {
 					cancelled = true;
 				}),
 			);
-		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			streamFirstEventTimeoutMs: 20,
 			fetch: fetchMock,
@@ -535,7 +529,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("surfaces the Azure OpenAI responses first-event timeout message", async () => {
 		await expectFirstEventTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
@@ -548,7 +542,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("times out Azure OpenAI responses before the stream opens and forwards the budget to the SDK request", async () => {
 		await expectRequestSetupTimeout(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
@@ -568,7 +562,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		abortTimer.unref();
 
 		try {
-			const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+			const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 				apiKey: "test-key",
 				azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 				azureApiVersion: "v1",
@@ -588,7 +582,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("keeps caller aborts as aborted for OpenAI responses", async () => {
 		await expectCallerAbort(
 			(signal, streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					signal,
 					streamFirstEventTimeoutMs,
@@ -601,7 +595,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("keeps caller aborts as aborted for OpenAI completions", async () => {
 		await expectCallerAbort(
 			(signal, streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+				streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 					apiKey: "test-key",
 					signal,
 					streamFirstEventTimeoutMs,
@@ -614,7 +608,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("keeps caller aborts as aborted for Azure OpenAI responses", async () => {
 		await expectCallerAbort(
 			(signal, streamFirstEventTimeoutMs, fetchMock) =>
-				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
@@ -629,7 +623,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("does not arm the first-event watchdog before OpenAI responses stream setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+				streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -641,7 +635,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("does not arm the first-event watchdog before OpenAI completions stream setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+				streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 					apiKey: "test-key",
 					streamFirstEventTimeoutMs,
 					fetch: fetchMock,
@@ -653,7 +647,7 @@ describe("OpenAI-family first-event timeouts", () => {
 	it("does not arm the first-event watchdog before Azure OpenAI responses setup finishes", async () => {
 		await expectDelayedRequestSetupSucceeds(
 			(streamFirstEventTimeoutMs, fetchMock) =>
-				streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+				streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 					apiKey: "test-key",
 					azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 					azureApiVersion: "v1",
@@ -686,7 +680,7 @@ describe("OpenAI-family first-event timeouts", () => {
 			// Intentionally no response.completed/incomplete — simulates premature provider disconnect.
 		]);
 		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -731,7 +725,7 @@ describe("OpenAI-family first-event timeouts", () => {
 			},
 		]);
 		const fetch: FetchImpl = () => Promise.resolve(completedResponse);
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch,
 		}).result();
@@ -773,7 +767,7 @@ describe("OpenAI-family first-event timeouts", () => {
 			// Intentionally no response.completed/incomplete — simulates premature provider disconnect.
 		]);
 		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
-		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, baseContext(), {
+		const result = await streamAzureOpenAIResponses(azureOpenAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			azureBaseUrl: azureOpenAIResponsesModel.baseUrl,
 			azureApiVersion: "v1",
@@ -818,7 +812,7 @@ describe("OpenAI-family first-event timeouts", () => {
 			},
 		]);
 		const fetchMock: FetchImpl = () => Promise.resolve(incompleteResponse);
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -846,7 +840,7 @@ describe("OpenAI-family first-event timeouts", () => {
 		});
 
 		const fetchMock = () => Promise.resolve(createNoProgressOpenAIResponsesStream(undefined));
-		const result = await streamOpenAIResponses(customResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(customResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock as any,
 		}).result();

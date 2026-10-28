@@ -3,6 +3,7 @@ import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { requestUrl } from "./helpers/fetch-mock";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -11,13 +12,6 @@ afterEach(() => {
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
-
-function getRequestUrl(input: string | URL | Request): string {
-	if (input instanceof Request) {
-		return input.url;
-	}
-	return typeof input === "string" ? input : input.toString();
-}
 
 function getRequestHeader(
 	input: string | URL | Request,
@@ -48,7 +42,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 	it("uses model baseUrl for chat completions", async () => {
 		const requestedUrls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			return createUnauthorizedResponse();
 		});
 
@@ -65,7 +59,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 	it("uses model baseUrl for responses API", async () => {
 		const requestedUrls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			return createUnauthorizedResponse();
 		});
 
@@ -83,7 +77,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		const requestedUrls: string[] = [];
 		const requestedAuthHeaders: Array<string | null> = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			requestedAuthHeaders.push(getRequestHeader(input, init, "Authorization"));
 			return createUnauthorizedResponse();
 		});
@@ -103,7 +97,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		const requestedUrls: string[] = [];
 		const requestedAuthHeaders: Array<string | null> = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			requestedAuthHeaders.push(getRequestHeader(input, init, "Authorization"));
 			return createUnauthorizedResponse();
 		});
@@ -123,7 +117,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		const requestedUrls: string[] = [];
 		const requestedAuthHeaders: Array<string | null> = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			requestedAuthHeaders.push(getRequestHeader(input, init, "Authorization"));
 			return createUnauthorizedResponse();
 		});
@@ -143,7 +137,7 @@ describe("GitHub Copilot OpenAI transport base URL", () => {
 		const requestedUrls: string[] = [];
 		const requestedAuthHeaders: Array<string | null> = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-			requestedUrls.push(getRequestUrl(input));
+			requestedUrls.push(requestUrl(input));
 			requestedAuthHeaders.push(getRequestHeader(input, init, "Authorization"));
 			return createUnauthorizedResponse();
 		});

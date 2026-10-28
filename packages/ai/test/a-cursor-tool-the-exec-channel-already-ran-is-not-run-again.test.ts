@@ -29,15 +29,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { create } from "@bufbuild/protobuf";
-import {
-	type BlockState,
-	createCursorUsageAccount,
-	handleServerMessage,
-	type InteractionUpdateView,
-	processInteractionUpdate,
-	type ToolCallState,
-} from "@veyyon/ai/providers/cursor";
-import type { AssistantMessage, CursorExecHandlers, Model, ToolResultMessage } from "@veyyon/ai/types";
+import { handleServerMessage, type InteractionUpdateView, processInteractionUpdate } from "@veyyon/ai/providers/cursor";
+import type { AssistantMessage, CursorExecHandlers, ToolResultMessage } from "@veyyon/ai/types";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import {
@@ -45,6 +38,7 @@ import {
 	ExecServerMessageSchema,
 	McpArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { newBlockState } from "./helpers/cursor-stream-harness";
 
 const TOOL_CALL_ID = "call-mcp-1";
 
@@ -65,44 +59,6 @@ function cursorAssistantMessage(): AssistantMessage {
 		},
 		stopReason: "stop",
 		timestamp: 0,
-	};
-}
-
-function newBlockState(output: AssistantMessage): BlockState {
-	let textBlock: BlockState["currentTextBlock"] = null;
-	let thinkingBlock: BlockState["currentThinkingBlock"] = null;
-	let toolCall: ToolCallState | null = null;
-	return {
-		usage: createCursorUsageAccount(
-			{
-				id: "cursor-composer-2.5",
-				provider: "cursor",
-				api: "cursor-agent",
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			} as Model<"cursor-agent">,
-			output,
-		),
-		get currentTextBlock() {
-			return textBlock;
-		},
-		get currentThinkingBlock() {
-			return thinkingBlock;
-		},
-		get currentToolCall() {
-			return toolCall;
-		},
-		firstTokenTime: undefined,
-		setTextBlock: b => {
-			textBlock = b;
-		},
-		setThinkingBlock: b => {
-			thinkingBlock = b;
-		},
-		setToolCall: t => {
-			toolCall = t;
-		},
-		setFirstTokenTime: () => {},
-		execDispatches: new Map(),
 	};
 }
 

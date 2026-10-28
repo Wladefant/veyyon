@@ -21,6 +21,7 @@ import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
+import { createCodexTestContext, createCodexTestToken } from "./helpers";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
@@ -54,14 +55,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function createCodexTestToken(accountId = "acc_test"): string {
-	const payload = Buffer.from(
-		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-		"utf8",
-	).toBase64();
-	return `aaa.${payload}.bbb`;
-}
-
 function createCodexTestModel(baseUrl?: string, id = "gpt-5.3-codex-spark"): Model<"openai-codex-responses"> {
 	return buildModel({
 		id,
@@ -76,13 +69,6 @@ function createCodexTestModel(baseUrl?: string, id = "gpt-5.3-codex-spark"): Mod
 		contextWindow: 128000,
 		maxTokens: 128000,
 	});
-}
-
-function createCodexTestContext(): Context {
-	return {
-		systemPrompt: ["You are a helpful assistant."],
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

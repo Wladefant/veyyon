@@ -14,8 +14,9 @@ import { Flag } from "@veyyon/ai/error/flag";
 import { classify } from "@veyyon/ai/error/flags";
 import { providerFinishErrorMessage } from "@veyyon/ai/error/provider";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
 
 /** Raised on a turn the turn domain is willing to send again. */
 function turnRetries(message: string | undefined): boolean {
@@ -26,12 +27,6 @@ const completionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 function createSseFetch(events: unknown[]): FetchImpl {
 	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
@@ -71,7 +66,7 @@ describe("finish_reason: error", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -108,7 +103,7 @@ describe("finish_reason: error", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();

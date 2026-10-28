@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Model } from "@veyyon/ai/types";
+import type { Context, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import type { ModelSpec } from "@veyyon/catalog/types";
@@ -67,6 +67,30 @@ export function createCodexModel(
 		...(efforts ? { reasoningOptions: { efforts } } : {}),
 		...spec,
 	});
+}
+
+/** One user turn saying hello, the smallest context a provider stream accepts. */
+export function sayHelloContext(): Context {
+	return {
+		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+	};
+}
+
+/** {@link sayHelloContext} with the system prompt a Codex request carries. */
+export function createCodexTestContext(): Context {
+	return {
+		systemPrompt: ["You are a helpful assistant."],
+		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+	};
+}
+
+/** A JWT-shaped Codex access token whose payload names `accountId` as the ChatGPT account. */
+export function createCodexTestToken(accountId = "acc_test"): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+		"utf8",
+	).toBase64();
+	return `aaa.${payload}.bbb`;
 }
 
 export interface AuthGatewayE2EStatus {

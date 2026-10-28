@@ -1,4 +1,4 @@
-import type { FetchImpl } from "../../src/types";
+import type { FetchImpl, Model } from "../../src/types";
 
 type FetchHandler = (input: string | URL | Request, init?: RequestInit) => Response | Promise<Response>;
 
@@ -50,4 +50,22 @@ export function googleOkSse(): Response {
 			usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
 		},
 	]);
+}
+
+/** The URL a fetch was called with, whichever of the three input forms carried it. */
+export function requestUrl(input: string | URL | Request): string {
+	if (typeof input === "string") return input;
+	if (input instanceof URL) return input.toString();
+	return input.url;
+}
+
+/** A chat-completions chunk that ends the turn with `finish_reason: "stop"` and no delta. */
+export function chatCompletionsStopChunk(model: Model<"openai-completions">): unknown {
+	return {
+		id: "chatcmpl-minimax-cn",
+		object: "chat.completion.chunk",
+		created: 0,
+		model: model.id,
+		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+	};
 }

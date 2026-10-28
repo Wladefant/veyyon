@@ -45,8 +45,8 @@ import {
 	GrepArgsSchema,
 	HeartbeatUpdateSchema,
 	InteractionUpdateSchema,
-	TurnEndedUpdateSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { turnEndedFrame } from "./helpers/cursor-h2-server";
 
 /** Advance the fake clock in small steps, draining the microtasks each probe schedules. */
 async function advance(totalMs: number, stepMs = 10): Promise<void> {
@@ -54,18 +54,6 @@ async function advance(totalMs: number, stepMs = 10): Promise<void> {
 		vi.advanceTimersByTime(stepMs);
 		for (let drain = 0; drain < 20; drain++) await Promise.resolve();
 	}
-}
-
-function turnEndedFrame(): Buffer {
-	const message = create(AgentServerMessageSchema, {
-		message: {
-			case: "interactionUpdate",
-			value: create(InteractionUpdateSchema, {
-				message: { case: "turnEnded", value: create(TurnEndedUpdateSchema, {}) },
-			}),
-		},
-	});
-	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 function heartbeatFrame(): Buffer {

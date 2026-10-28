@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { sseFetch } from "./helpers/fetch-mock";
+import { chatCompletionsStopChunk, sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -39,16 +39,6 @@ function toolCallChunk(model: Model<"openai-completions">, fn: Record<string, un
 	};
 }
 
-function stopChunk(model: Model<"openai-completions">): unknown {
-	return {
-		id: "chatcmpl-minimax-cn",
-		object: "chat.completion.chunk",
-		created: 0,
-		model: model.id,
-		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-	};
-}
-
 // Regression coverage for #2080: when MiniMax-compatible hosts fragment
 // object-shaped `function.arguments` across multiple deltas, the old
 // "block.partialArgs = rawArgs" assignment threw away every chunk but the
@@ -69,7 +59,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 			toolCallChunk(model, {
 				arguments: { input: 'const out = await executeTool("nuke", { path: "x" }, ctx);' },
 			}),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -104,7 +94,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 			toolCallChunk(model, {
 				arguments: { input: "[foo.ts#A1B2]\nSWAP 91.=91:\n+new" },
 			}),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -128,7 +118,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
 			toolCallChunk(model, { arguments: { dryRun: true } }),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -172,7 +162,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 					["__proto__"]: { polluted: true },
 				},
 			}),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -217,7 +207,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 			toolCallChunk(model, {
 				arguments: { input: 'const out = await executeTool("nuke", { path: "x" }, ctx);' },
 			}),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -246,7 +236,7 @@ describe("issue #2080 - MiniMax multi-chunk object tool arguments", () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
 		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "edit", arguments: { input: "[foo.ts#A1B2]\nDEL 5" } }),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 

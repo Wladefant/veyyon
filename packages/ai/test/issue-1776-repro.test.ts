@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { sseFetch } from "./helpers/fetch-mock";
+import { chatCompletionsStopChunk, sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -39,22 +39,12 @@ function toolCallChunk(model: Model<"openai-completions">, fn: Record<string, un
 	};
 }
 
-function stopChunk(model: Model<"openai-completions">): unknown {
-	return {
-		id: "chatcmpl-minimax-cn",
-		object: "chat.completion.chunk",
-		created: 0,
-		model: model.id,
-		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-	};
-}
-
 describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 	it("preserves object-shaped streamed tool arguments without a serialization round-trip", async () => {
 		const model = getBundledModel<"openai-completions">("minimax-code-cn", "MiniMax-M3");
 		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "bash", arguments: { command: "printf '%s\\n' ok" } }),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -74,7 +64,7 @@ describe("issue #1776 - MiniMax object-shaped tool arguments", () => {
 		const fetchMock = sseFetch([
 			toolCallChunk(model, { name: "bash", arguments: '{"command":' }),
 			toolCallChunk(model, { arguments: ' "printf ok"}' }),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 

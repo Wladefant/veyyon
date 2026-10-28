@@ -1,14 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { create, fromJson, type JsonValue } from "@bufbuild/protobuf";
 import {
-	type BlockState,
 	buildCursorHistoryForTest,
 	buildCursorSystemPromptJsons,
-	createCursorUsageAccount,
 	handleServerMessage,
 	resolveExecHandler,
 	streamCursor,
-	type ToolCallState,
 } from "@veyyon/ai/providers/cursor";
 import { emptyGrepPatternRejection } from "@veyyon/ai/providers/cursor-exec-results";
 import {
@@ -26,6 +23,7 @@ import {
 	ExecServerMessageSchema,
 	ReadArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { newBlockState } from "./helpers/cursor-stream-harness";
 
 // Two tests here install a process-wide Cursor override. Left behind, one answers every later test
 // file in the bucket; `packages/ai/test/helpers/provider-override-tripwire.ts` fails the test that
@@ -425,44 +423,6 @@ function cursorAssistantMessage(): AssistantMessage {
 		},
 		stopReason: "stop",
 		timestamp: 0,
-	};
-}
-
-function newBlockState(output: AssistantMessage): BlockState {
-	let textBlock: BlockState["currentTextBlock"] = null;
-	let thinkingBlock: BlockState["currentThinkingBlock"] = null;
-	let toolCall: ToolCallState | null = null;
-	return {
-		usage: createCursorUsageAccount(
-			{
-				id: "cursor-composer-2.5",
-				provider: "cursor",
-				api: "cursor-agent",
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			} as Model<"cursor-agent">,
-			output,
-		),
-		get currentTextBlock() {
-			return textBlock;
-		},
-		get currentThinkingBlock() {
-			return thinkingBlock;
-		},
-		get currentToolCall() {
-			return toolCall;
-		},
-		firstTokenTime: undefined,
-		setTextBlock: b => {
-			textBlock = b;
-		},
-		setThinkingBlock: b => {
-			thinkingBlock = b;
-		},
-		setToolCall: t => {
-			toolCall = t;
-		},
-		setFirstTokenTime: () => {},
-		execDispatches: new Map(),
 	};
 }
 

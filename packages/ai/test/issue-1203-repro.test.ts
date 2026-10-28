@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { sseFetch } from "./helpers/fetch-mock";
+import { chatCompletionsStopChunk, sseFetch } from "./helpers/fetch-mock";
 
 function baseContext(): Context {
 	return {
@@ -26,16 +26,6 @@ function minimaxChunk(model: Model<"openai-completions">, content: string): unkn
 	};
 }
 
-function stopChunk(model: Model<"openai-completions">): unknown {
-	return {
-		id: "chatcmpl-minimax-cn",
-		object: "chat.completion.chunk",
-		created: 0,
-		model: model.id,
-		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-	};
-}
-
 describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 	it("parses minimax-code-cn <think> content into a thinking block", async () => {
 		const model = getBundledModel("minimax-code-cn", "MiniMax-M2.5") as Model<"openai-completions">;
@@ -44,7 +34,7 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 			minimaxChunk(model, "hidden reasoning"),
 			minimaxChunk(model, "</think>"),
 			minimaxChunk(model, "visible answer"),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -93,7 +83,7 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 					},
 				],
 			},
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
@@ -161,7 +151,7 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 					},
 				],
 			},
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 

@@ -34,16 +34,7 @@ import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-re
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import { mapOptionsForApi, streamSimple } from "@veyyon/ai/stream";
-import type {
-	Context,
-	FetchImpl,
-	KnownApi,
-	Message,
-	Model,
-	SimpleStreamOptions,
-	Tool,
-	ToolChoice,
-} from "@veyyon/ai/types";
+import type { Context, KnownApi, Message, Model, SimpleStreamOptions, Tool, ToolChoice } from "@veyyon/ai/types";
 import { carryRequiredToolCall, openAIToolCallForce, type WireToolCallForce } from "@veyyon/ai/utils/tool-choice";
 import { buildModel } from "@veyyon/catalog/build";
 import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
@@ -51,7 +42,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
-import { sseResponse } from "./helpers/fetch-mock";
+import { mockFetch, sseResponse } from "./helpers/fetch-mock";
 
 const NAMED_INSTRUCTION = "This turn must call the `respond` tool.";
 const ANY_INSTRUCTION = "This turn must call one of the available tools.";
@@ -87,10 +78,6 @@ interface Streamish {
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-function asFetch(implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): FetchImpl {
-	return Object.assign(implementation, { preconnect: fetch.preconnect });
-}
-
 function genaiChunk(text: string): Record<string, unknown> {
 	return {
 		candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }],
@@ -101,7 +88,7 @@ function genaiChunk(text: string): Record<string, unknown> {
 type Start = (onPayload: (payload: unknown) => undefined, signal: AbortSignal) => Streamish;
 
 /** Never reached once the capture aborts, and answers without the network if a flow outruns it. */
-const STUB_FETCH = asFetch(async () => new Response("", { status: 503 }));
+const STUB_FETCH = mockFetch(async () => new Response("", { status: 503 }));
 
 async function capture(start: Start, wanted: (payload: unknown) => boolean = () => true): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -239,7 +226,7 @@ function bedrockSetup(label: string, id: string, forces: boolean): Setup {
 					model,
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
-						fetch: asFetch(async () => new Response("", { status: 200 })),
+						fetch: mockFetch(async () => new Response("", { status: 200 })),
 					}),
 				),
 			),
@@ -256,7 +243,7 @@ function completionsSetup(label: string, model: Model<"openai-completions">, for
 					model,
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
-						fetch: asFetch(async () => sseResponse(["[DONE]"])),
+						fetch: mockFetch(async () => sseResponse(["[DONE]"])),
 					}),
 				),
 			),
@@ -288,7 +275,7 @@ function responsesSetup(label: string, model: Model<"openai-responses">, forces:
 					model,
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
-						fetch: asFetch(async () => sseResponse(["[DONE]"])),
+						fetch: mockFetch(async () => sseResponse(["[DONE]"])),
 					}),
 				),
 			),
@@ -303,7 +290,7 @@ function openrouterSetup(label: string, model: Model, forces: boolean): Setup {
 			capture((onPayload, signal) =>
 				streamSimple(model, requestContext(), {
 					apiKey: "test-key",
-					fetch: asFetch(async () => sseResponse(["[DONE]"])),
+					fetch: mockFetch(async () => sseResponse(["[DONE]"])),
 					signal,
 					toolChoice,
 					onPayload,
@@ -335,7 +322,7 @@ function geminiCliSetup(label: string, provider: string, id: string, forces: boo
 					requestContext(),
 					mapped(model, toolChoice, onPayload, signal, {
 						apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-						fetch: asFetch(async () => sseResponse([{ response: genaiChunk("hi") }])),
+						fetch: mockFetch(async () => sseResponse([{ response: genaiChunk("hi") }])),
 					}),
 				),
 			),
@@ -467,7 +454,9 @@ const CASES: Record<KnownApi, ApiCase> = {
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
 								apiKey: token,
-								fetch: asFetch(async () => sseResponse([{ type: "response.output_text.delta", delta: "hi" }])),
+								fetch: mockFetch(async () =>
+									sseResponse([{ type: "response.output_text.delta", delta: "hi" }]),
+								),
 							}),
 						);
 					}),
@@ -498,7 +487,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							model,
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
-								fetch: asFetch(async () => sseResponse([genaiChunk("hi")])),
+								fetch: mockFetch(async () => sseResponse([genaiChunk("hi")])),
 							}),
 						);
 					}),
@@ -525,7 +514,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							contextWindow: 200_000,
 							maxTokens: 32_000,
 						});
-						const fetchImpl = asFetch(async input => {
+						const fetchImpl = mockFetch(async input => {
 							const url = input instanceof Request ? input.url : String(input);
 							if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 								return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
@@ -577,7 +566,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							model,
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
-								fetch: asFetch(
+								fetch: mockFetch(
 									async () =>
 										new Response(
 											`${JSON.stringify({ message: { role: "assistant", content: "hi" }, done: true, done_reason: "stop" })}\n`,
@@ -645,7 +634,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 							model,
 							requestContext(),
 							mapped(model, toolChoice, onPayload, signal, {
-								fetch: asFetch(async input =>
+								fetch: mockFetch(async input =>
 									String(input).includes("GetUserJwt") ? new Response(authResponse) : new Response(emptyFrame),
 								),
 							}),
@@ -676,7 +665,7 @@ const CASES: Record<KnownApi, ApiCase> = {
 								maxTokens: 8_192,
 								supportsTools: true,
 							});
-							const fetchImpl = asFetch(async input => {
+							const fetchImpl = mockFetch(async input => {
 								const url = String(input);
 								if (url.includes("/api/graphql")) {
 									return new Response(

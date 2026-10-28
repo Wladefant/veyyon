@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
 import { sseResponse } from "./helpers/fetch-mock";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
@@ -10,12 +11,6 @@ const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 describe("StreamOptions.fetch override", () => {
 	it("routes openai-completions requests through the override", async () => {
@@ -46,7 +41,7 @@ describe("StreamOptions.fetch override", () => {
 			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: customFetch,
 		}).result();
@@ -98,7 +93,7 @@ describe("StreamOptions.fetch override", () => {
 			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: customFetch,
 		}).result();

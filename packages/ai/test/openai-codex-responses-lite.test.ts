@@ -11,12 +11,12 @@ import {
 	streamOpenAICodexResponses,
 } from "@veyyon/ai/providers/openai-codex-responses";
 import { isOpenAIResponsesProgressEvent } from "@veyyon/ai/providers/openai-shared";
-import type { CodexCompactionRequestContext, Context, FetchImpl, ProviderSessionState } from "@veyyon/ai/types";
+import type { CodexCompactionRequestContext, FetchImpl, ProviderSessionState } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { CODEX_CLIENT_VERSION } from "@veyyon/catalog/wire/codex";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
-import { createCodexModel } from "./helpers";
+import { createCodexModel, createCodexTestContext, createCodexTestToken } from "./helpers";
 
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -27,21 +27,6 @@ beforeEach(() => {
 afterEach(() => {
 	vi.restoreAllMocks();
 });
-
-function createCodexTestToken(accountId = "acc_test"): string {
-	const payload = Buffer.from(
-		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-		"utf8",
-	).toBase64();
-	return `aaa.${payload}.bbb`;
-}
-
-function createCodexTestContext(): Context {
-	return {
-		systemPrompt: ["You are a helpful assistant."],
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 function createCodexSse(events: Array<Record<string, unknown>>): string {
 	return `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
