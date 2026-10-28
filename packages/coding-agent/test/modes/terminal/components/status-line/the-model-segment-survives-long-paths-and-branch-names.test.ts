@@ -16,7 +16,9 @@
  *   - Location pressure is REAL, not asserted into existence: the session's cwd is
  *     a fixture directory whose `.git/HEAD` names a 63-column branch, so `path`
  *     and `git` together fill most of the row on any machine. `git.head.resolveSync`
- *     reads that file, so the branch needs no git process and no network.
+ *     reads that file, so the branch needs no git process and no network. The
+ *     `git status`, default-branch and `gh` lookups a row starts are stubbed, and
+ *     every row is disposed after its test, so no lookup outlives the test.
  *   - The shed order is observed as an INVARIANT over a full width sweep rather
  *     than pinned at the three widths in the report: the set of right-group parts
  *     on screen must always be a suffix of the documented ranking, and a part that
@@ -35,7 +37,7 @@
  * `status-line-running-agents.test.ts` owns that contract. Nothing here checks
  * the text inside a segment -- colour, provider icon, or thinking-level suffix.
  */
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -47,6 +49,7 @@ import { BASE_MODE_STATES } from "@veyyon/coding-agent/modes/terminal/components
 import type { StatusLinePreset } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
+import * as git from "@veyyon/coding-agent/utils/git";
 import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
@@ -106,8 +109,13 @@ const makeTempDir = useTrackedTempDirs("veyyon-statusline-wide-location-");
 
 let wideCwd = "";
 
-function makeSession(modelId: string) {
-	return makeStatusLineProducer({ cwd: () => wideCwd, modelId });
+/** Every row a test built; `afterEach` disposes them. */
+const rows: StatusLineComponent[] = [];
+
+function makeRow(modelId: string): StatusLineComponent {
+	const row = new StatusLineComponent(makeStatusLineProducer({ cwd: () => wideCwd, modelId }));
+	rows.push(row);
+	return row;
 }
 
 /** The right edge of the location zone on the line just rendered, in columns. */
@@ -140,9 +148,20 @@ beforeAll(async () => {
 	writeFileSync(path.join(wideCwd, ".git", "HEAD"), `ref: refs/heads/${WIDE_BRANCH}\n`);
 });
 
+beforeEach(() => {
+	vi.spyOn(git.status, "summary").mockResolvedValue(null);
+	vi.spyOn(git.branch, "default").mockResolvedValue(null);
+	vi.spyOn(git.github, "run").mockResolvedValue({ exitCode: 1, stdout: "", stderr: "" });
+});
+
+afterEach(() => {
+	for (const row of rows.splice(0)) row.dispose();
+	vi.restoreAllMocks();
+});
+
 describe("the model segment survives long paths and branch names", () => {
 	it("keeps the model on the footline at 80, 100 and 120 columns by shortening the location instead", () => {
-		const statusLine = new StatusLineComponent(makeSession("claude-3-7-sonnet"));
+		const statusLine = makeRow("claude-3-7-sonnet");
 
 		// The unpressured line first: this is the width the location zone WANTS,
 		// and it is what makes the assertions below non-vacuous.
@@ -185,7 +204,7 @@ describe("the model segment survives long paths and branch names", () => {
 		// part widens the exemption below, and that is a decision, not a detail.
 		expect(Object.keys(FLOOR_SPENDABLE).sort()).toEqual(SPENDABLE_ON_THE_FLOOR);
 
-		const statusLine = new StatusLineComponent(makeSession("gpt-4o"));
+		const statusLine = makeRow("gpt-4o");
 
 		const shed = new Set<string>();
 		let sawTheFloorSpendSomething = false;
@@ -230,7 +249,7 @@ describe("the model segment survives long paths and branch names", () => {
 	});
 
 	it("keeps the model when the owner pins content to the location line's right edge", () => {
-		const statusLine = new StatusLineComponent(makeSession("deepseek-r1"));
+		const statusLine = makeRow("deepseek-r1");
 
 		// `location_right` (rank 4) outranks the model, so it is the model that has
 		// to survive alongside it rather than instead of it.
@@ -241,7 +260,7 @@ describe("the model segment survives long paths and branch names", () => {
 	});
 
 	it("never overlaps two slots or runs one past the terminal edge while the location is truncated", () => {
-		const statusLine = new StatusLineComponent(makeSession("claude-3-5-haiku"));
+		const statusLine = makeRow("claude-3-5-haiku");
 
 		for (let width = 130; width >= 8; width--) {
 			expect(statusLine.renderQuietLine(width, { locationRight: "mcp 3/3" })).not.toBeNull();
@@ -265,7 +284,7 @@ describe("the model segment survives long paths and branch names", () => {
 		expect(declaring).toEqual(PRESETS_DECLARING_MODEL);
 
 		for (const preset of declaring) {
-			const statusLine = new StatusLineComponent(makeSession("claude-3-7-sonnet"));
+			const statusLine = makeRow("claude-3-7-sonnet");
 			statusLine.updateSettings({ preset } as never);
 			expect(statusLine.renderQuietLine(80)).not.toBeNull();
 			expect([...renderedIds(statusLine.getQuietSegmentBounds())]).toContain("model");
