@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, TUI } from "@veyyon/tui";
 import { settleFrames } from "./helpers/settle-frames";
+import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2088
@@ -64,13 +65,6 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 	}
 }
 
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// The engine is asked whether it still owes a frame rather than being given a
-	// fixed sleep; see `hosts/terminal/engine/test/helpers/settle-frames.ts` for the two
-	// flakes the fixed-sleep and counter-sampling shapes produced.
-	await settleFrames(term, tui);
-}
-
 /**
  * Wait until `condition` holds, polling the real scheduler, then settle the term.
  *
@@ -94,16 +88,6 @@ async function waitUntil(label: string, condition: () => boolean, timeoutMs = 5_
 		if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${label}`);
 		await Bun.sleep(1);
 	}
-}
-
-function captureWrites(term: VirtualTerminal): string[] {
-	const writes: string[] = [];
-	const realWrite = term.write.bind(term);
-	vi.spyOn(term, "write").mockImplementation((data: string) => {
-		writes.push(data);
-		realWrite(data);
-	});
-	return writes;
 }
 
 function visible(term: VirtualTerminal): string[] {
@@ -166,7 +150,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const baselineRedraws = tui.fullRedraws;
 				const writes = captureWrites(term);
@@ -188,7 +172,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				// After the settle window the single coalesced render fires at the
 				// final geometry — exactly one paint covering 80×10.
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
 				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
@@ -205,7 +189,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const baselineRedraws = tui.fullRedraws;
 				const baselinePaints = tui.resizeViewportPaints;
@@ -230,7 +214,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 				// Once the drag goes quiet the full replay fires.
 				await waitUntil("the deferred authoritative full paint", () => tui.fullRedraws > baselineRedraws);
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(visible(term)).toEqual(expectedViewport);
 			} finally {
 				tui.stop();
@@ -245,7 +229,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
 
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = captureWrites(term);
 			term.resize(80, 10);
@@ -270,7 +254,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const baselineRedraws = tui.fullRedraws;
 				const writes = captureWrites(term);
@@ -296,7 +280,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				// After the settle window: exactly one forced render lands, at
 				// the new geometry, with the streamed token visible.
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
 				expect(visible(term).at(-1)).toBe("line-19 streamed");
 			} finally {
@@ -313,7 +297,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const baselineRedraws = tui.fullRedraws;
 				const writes = captureWrites(term);
@@ -335,7 +319,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				// After the window: exactly one settled paint at the final
 				// geometry.
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
 				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
@@ -352,7 +336,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const baselineRedraws = tui.fullRedraws;
 				const writes = captureWrites(term);
@@ -369,7 +353,7 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 				expect(writes.length).toBe(0);
 
 				await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(tui.fullRedraws - baselineRedraws).toBe(1);
 				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
 			} finally {
@@ -420,7 +404,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 				try {
 					tui.start();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 
 					const baselineRedraws = tui.fullRedraws;
 					const writes = captureWrites(term);
@@ -435,7 +419,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 					// The settled paint repaints at the new geometry without clearing
 					// native scrollback, so the pane keeps its history.
 					await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-					await settle(term, tui);
+					await settleFrames(term, tui);
 					const out = writes.join("");
 					expect(out.length).toBeGreaterThan(0);
 					expect(out).not.toContain(ED3);
@@ -457,7 +441,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 				try {
 					tui.start();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 
 					const baselineRedraws = tui.fullRedraws;
 					const writes = captureWrites(term);
@@ -468,7 +452,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 					expect(tui.fullRedraws).toBe(baselineRedraws);
 
 					await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
-					await settle(term, tui);
+					await settleFrames(term, tui);
 					const out = writes.join("");
 					expect(out.length).toBeGreaterThan(0);
 					expect(out).not.toContain(ED3);
@@ -489,7 +473,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const writes = captureWrites(term);
 				term.resize(80, 10);
@@ -497,7 +481,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 				// window: the assertion is that ED3 is emitted at all, and a fixed sleep
 				// that lands early on a loaded runner fails a correct implementation.
 				await waitUntil("the deferred scrollback clear (ED3)", () => writes.join("").includes(ED3));
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				const out = writes.join("");
 				expect(out).toContain(ED3);
 			} finally {
@@ -513,7 +497,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				// Capture only the resize-driven paint; the initial paint never
 				// clears scrollback, so any ED3 in `out` belongs to the resize.
@@ -522,7 +506,7 @@ describe("multiplexer detection gates ED3 on resize", () => {
 				const writes = captureWrites(term);
 				term.resize(80, 10);
 				await waitUntil("the deferred scrollback clear (ED3)", () => writes.join("").includes(ED3));
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				const out = writes.join("");
 				expect(out).toContain(ED3);
 				expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));

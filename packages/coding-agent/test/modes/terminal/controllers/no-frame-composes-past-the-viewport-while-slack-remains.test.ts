@@ -61,6 +61,7 @@ import { HomeAnchorLayout } from "@veyyon/coding-agent/modes/terminal/controller
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, Container, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
 import { settleFrames } from "../../../../../../hosts/terminal/engine/test/helpers/settle-frames";
+import { lastPaintedRow } from "../../../../../../hosts/terminal/engine/test/helpers/terminal-output";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
 
 /** A block whose height is set from the test, the way live content changes it. */
@@ -81,13 +82,6 @@ class Composer implements Component, Focusable {
 	render(): string[] {
 		return [`> ask anything${CURSOR_MARKER}`];
 	}
-}
-
-function lastPaintedRow(term: VirtualTerminal): number {
-	return term
-		.getViewport()
-		.map(row => Bun.stripANSI(row).trimEnd())
-		.reduce((last, row, i) => (row.trim().length > 0 ? i : last), -1);
 }
 
 /** One observed state: what the content asked for, and the frames it composed. */

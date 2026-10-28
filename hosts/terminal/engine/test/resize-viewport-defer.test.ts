@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI, type ViewportTailProvider } from "@veyyon/tui";
+import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Outside a multiplexer a resize used to erase-and-replay the whole transcript
@@ -124,16 +125,6 @@ class DeferScheduler implements RenderScheduler {
 		}
 		await term.flush();
 	}
-}
-
-function captureWrites(term: VirtualTerminal): string[] {
-	const writes: string[] = [];
-	const realWrite = term.write.bind(term);
-	vi.spyOn(term, "write").mockImplementation((data: string) => {
-		writes.push(data);
-		realWrite(data);
-	});
-	return writes;
 }
 
 function visible(term: VirtualTerminal): string[] {

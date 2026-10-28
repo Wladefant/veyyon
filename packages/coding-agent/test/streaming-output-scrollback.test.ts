@@ -130,15 +130,6 @@ function streamingPrefixes(text: string, step: number): string[] {
 	return prefixes;
 }
 
-async function settleFrame(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// These integration tests use the production TUI scheduler rather than the
-	// drainable unit-test scheduler, so the frame timer must elapse for the real
-	// differential renderer to write to the Ghostty-backed terminal. The engine
-	// reports when it owes no further frame; the fixed 45ms sleep this replaced was
-	// a bet on that timer, and the same bet flaked two other suites in a full sweep.
-	await settleFrames(term, tui);
-}
-
 function plainScrollBuffer(term: VirtualTerminal): string[] {
 	return term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
 }
@@ -263,14 +254,14 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 
 		try {
 			tui.start();
-			await settleFrame(term, tui);
+			await settleFrames(term, tui);
 
 			for (const partialThinking of streamingPrefixes(thinking, 300)) {
 				assistant.updateContent(makeAssistantMessage([{ type: "thinking", thinking: partialThinking }]), {
 					transient: true,
 				});
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			for (const partialText of streamingPrefixes(text, 300)) {
@@ -282,7 +273,7 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 					{ transient: true },
 				);
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const midStreamRows = plainScrollBuffer(term);
@@ -293,7 +284,7 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 			assistant.markTranscriptBlockFinalized();
 			for (let i = 0; i < 2; i++) {
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const finalRows = plainScrollBuffer(term);
@@ -326,13 +317,13 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 
 		try {
 			tui.start();
-			await settleFrame(term, tui);
+			await settleFrames(term, tui);
 
 			component.updateResult(makeEvalProbeResult(output, "running"), true);
 			component.setExpanded(true);
 			for (let i = 0; i < 3; i++) {
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const midRunRows = plainScrollBuffer(term);
@@ -341,7 +332,7 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 			component.updateResult(makeEvalProbeResult(output, "complete"), false);
 			for (let i = 0; i < 2; i++) {
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const settledRows = plainScrollBuffer(term);
@@ -353,7 +344,7 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 
 			for (let i = 0; i < 2; i++) {
 				tui.requestRender();
-				await settleFrame(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const repeatedRows = plainScrollBuffer(term);

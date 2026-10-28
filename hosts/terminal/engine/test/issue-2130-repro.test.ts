@@ -47,14 +47,6 @@ class StreamingLiveRegion implements Component, NativeScrollbackLiveRegion {
 	}
 }
 
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// Was `nextTick` + a fixed `Bun.sleep` + flush, i.e. a bet on how long the
-	// throttled frame takes. That bet loses under a loaded sweep (see
-	// `hosts/terminal/engine/test/helpers/settle-frames.ts`), so the engine is asked
-	// instead, through its `renderPending` signal.
-	await settleFrames(term, tui);
-}
-
 async function withTmuxEnv<T>(run: () => T | Promise<T>): Promise<T> {
 	const saved = { TMUX: Bun.env.TMUX, STY: Bun.env.STY, ZELLIJ: Bun.env.ZELLIJ };
 	Bun.env.TMUX = "tmux-2130";
@@ -89,7 +81,7 @@ describe("issue #2130: tmux rewind/branch leaves the viewport anchored to the pa
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				// Stream a tall reply so `#planLiveRegionPinnedRender` ramps
 				// `#scrollbackHighWater` past the viewport boundary.
@@ -97,7 +89,7 @@ describe("issue #2130: tmux rewind/branch leaves the viewport anchored to the pa
 				for (let chunk = 5; chunk <= tall.length; chunk += 5) {
 					stream.setLines(tall.slice(0, chunk));
 					tui.requestRender();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 				}
 
 				// Branch/rewind: the coding-agent replaces the transcript with
@@ -107,7 +99,7 @@ describe("issue #2130: tmux rewind/branch leaves the viewport anchored to the pa
 				// the viewport (4 rows vs height = 8).
 				stream.setLines(["A", "B", "C", "D"]);
 				tui.requestRender(true, { clearScrollback: true });
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				// Any subsequent frame after the rewind would re-route through
 				// `#planLiveRegionPinnedRender`. Before the fix the stale
@@ -117,7 +109,7 @@ describe("issue #2130: tmux rewind/branch leaves the viewport anchored to the pa
 				// `lines.length` and wrote eight blank rows.
 				stream.setLines(["A", "B", "C", "D", "E"]);
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
 
