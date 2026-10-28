@@ -51,6 +51,12 @@ import {
 	selectConnected,
 	withRelocation,
 } from "./element-identity";
+import {
+	bindExtensionTimeouts,
+	ExtensionTimeoutTransport,
+	isExtensionRelayEndpoint,
+	openExtensionTimeoutTransport,
+} from "./extension-timeout-transport";
 import { fillViaHandle } from "./fill";
 import { releaseHandle, releaseHandles } from "./handle-release";
 import { hasTextSelector } from "./has-text";
@@ -571,7 +577,6 @@ function toActionableHandle(handle: ElementHandle, actions: HandleActions): Acti
 			});
 		return enriched;
 	}
-	const { click, hover, tap } = handle;
 	// Pointer actions aim in one evaluation, so a node the page redraws between puppeteer's round
 	// trips still receives them (see pointerPoint). A node in a child frame keeps puppeteer's path,
 	// which adds the frame offsets.
@@ -1241,11 +1246,21 @@ export class WorkerCore {
 			this.#mode = payload.mode === "attach" && payload.present ? "headless" : payload.mode;
 			this.#visible = payload.mode === "headless" ? payload.visible === true : payload.present?.visible === true;
 			const puppeteer = await loadPuppeteer();
+			const extensionTransport = isExtensionRelayEndpoint(payload.browserWSEndpoint)
+				? port
+					? new ExtensionTimeoutTransport(new PortTransport(port))
+					: await openExtensionTimeoutTransport(payload.browserWSEndpoint)
+				: undefined;
 			this.#browser = await puppeteer.connect({
-				...(port ? { transport: new PortTransport(port) } : { browserWSEndpoint: payload.browserWSEndpoint }),
+				...(extensionTransport
+					? { transport: extensionTransport }
+					: port
+						? { transport: new PortTransport(port) }
+						: { browserWSEndpoint: payload.browserWSEndpoint }),
 				defaultViewport: null,
 				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 			});
+			if (extensionTransport) bindExtensionTimeouts(this.#browser, extensionTransport);
 			// Realm setup is done: puppeteer loaded and browser connected. Sent before
 			// page acquisition so the supervisor's cold-start budget bounds only the
 			// realm setup; page creation and the first navigation run under the ready

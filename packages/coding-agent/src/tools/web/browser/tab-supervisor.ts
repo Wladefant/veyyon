@@ -16,6 +16,7 @@ import { pickElectronTarget } from "./attach";
 import { CmuxTab, runCmuxCode } from "./cmux/cmux-tab";
 import { mapWaitUntil } from "./cmux/rpc";
 import { type ConnectionRelay, openConnectionRelay } from "./connection-relay";
+import { redactTabInventoryUrl } from "./extension-policy";
 import { DEFAULT_VIEWPORT } from "./launch";
 import {
 	type BrowserHandle,
@@ -27,7 +28,6 @@ import {
 	releaseOrphanBrowsers,
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
-import { redactTabInventoryUrl } from "./extension-policy";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -998,7 +998,8 @@ export async function releaseTabForOwner(
 	if (!tab) return false;
 	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
 	const tabId = approvedExtensionTabId(tab);
-	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
+	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId))
+		return releaseTab(name, opts);
 	throw new ToolError(
 		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact Chrome tab ID in approved_tab_ids only for an ownerless relay-controlled tab.`,
 	);
@@ -1053,7 +1054,7 @@ async function buildInitPayload(
 	browserContextId: string | undefined,
 	onExtensionPageCreated: (page: Page) => void,
 ): Promise<WorkerInitPayload> {
-	const browserWSEndpoint = browser.browser.wsEndpoint();
+	const browserWSEndpoint = browser.relay?.cdpUrl ?? browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	if (browser.kind.kind === "headless") {
 		return {
@@ -1211,7 +1212,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 	await terminateWorker(oldWorker, "recycle-timed-out");
 	// A tab whose release or kill began is not given a new worker: nothing would ever stop it.
 	if (tab.teardown) return;
-	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
+	const browserWSEndpoint = tab.browser.relay?.cdpUrl ?? tab.browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	// A tab of a browser this process launched: its new worker sends the page its identity and viewport.
 	const present: TabPresentation | undefined =

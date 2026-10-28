@@ -13,6 +13,7 @@
  * Extension protocol: Playwright Extension 0.4.0, relay protocol version 2 (Apache-2.0).
  * `chrome.tabs.remove` does not answer on the wire, so teardown never waits for it.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 import * as path from "node:path";
@@ -32,6 +33,7 @@ import {
 } from "./extension-policy";
 
 const EXTENSION_CALL_TIMEOUT_MS = 15_000;
+const MAX_EXTENSION_CALL_TIMEOUT_MS = 120_000;
 const DETACH_TIMEOUT_MS = 2_000;
 const CDP_ERROR_CODE = -32000;
 const METHOD_NOT_FOUND_CODE = -32601;
@@ -157,12 +159,12 @@ interface PendingCall {
 	reject: (error: Error) => void;
 	timer: NodeJS.Timeout;
 }
-
 const cdpRequestSchema = type({
 	id: "number",
 	method: "string",
 	"params?": "Record<string, unknown>",
 	"sessionId?": "string",
+	"relayTimeoutMs?": "number",
 });
 
 const extensionMessageSchema = type({
@@ -263,6 +265,7 @@ export class ExtensionRelay {
 	/** Isolated worlds (`debuggee:contextId`) whose guard failed; commands on them are refused. */
 	readonly #unguardedWorlds = new Set<string>();
 	readonly #pending = new Map<number, PendingCall>();
+	readonly #callTimeouts = new AsyncLocalStorage<number>();
 	#bootstrapUrl: string | undefined;
 	/** The tab id of the connect page this relay's own consent URL opened. Only this tab is ever closed by `closeConnectTab`. */
 	#connectTabId: number | undefined;
@@ -550,33 +553,50 @@ export class ExtensionRelay {
 		if (request instanceof type.errors) return;
 		const client = ws.data.clientId === undefined ? undefined : this.#clients.get(ws.data.clientId);
 		if (!client) return;
-		void this.#handleCdp(client, request.id, request.method, request.params ?? {}, request.sessionId);
+		void this.#handleCdp(
+			client,
+			request.id,
+			request.method,
+			request.params ?? {},
+			request.sessionId,
+			request.relayTimeoutMs,
+		);
 	}
 
 	// ----- Extension RPC -----------------------------------------------------------------
 
-	#call(method: string, params: unknown[], timeoutMs = EXTENSION_CALL_TIMEOUT_MS): Promise<unknown> {
+	#call(
+		method: string,
+		params: unknown[],
+		timeoutMs = this.#callTimeouts.getStore() ?? EXTENSION_CALL_TIMEOUT_MS,
+	): Promise<unknown> {
 		const ws = this.#extension;
 		if (!ws) return Promise.reject(new Error("The extension is not connected."));
 		const id = this.#nextCallId++;
-		return new Promise<unknown>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				const debuggee = params[0];
-				const cdpMethod = method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string" ? params[1] : undefined;
-				this.#log("extension RPC timed out", {
-					port: this.port,
-					method,
-					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
-					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
-						? { tabId: debuggee.tabId }
-						: {}),
-				});
-				this.#pending.delete(id);
-				reject(new Error(`The extension did not answer ${method} within ${Math.round(timeoutMs / 1000)} s.`));
-			}, timeoutMs);
-			this.#pending.set(id, { resolve, reject, timer });
-			ws.send(JSON.stringify({ id, method, params }));
-		});
+		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+		const timer = setTimeout(() => {
+			const debuggee = params[0];
+			const cdpMethod =
+				method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string"
+					? params[1]
+					: undefined;
+			this.#log("extension RPC timed out", {
+				port: this.port,
+				method,
+				...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
+				...(typeof debuggee === "object" &&
+				debuggee !== null &&
+				"tabId" in debuggee &&
+				typeof debuggee.tabId === "number"
+					? { tabId: debuggee.tabId }
+					: {}),
+			});
+			this.#pending.delete(id);
+			reject(new Error(`The extension did not answer ${method} within ${Math.round(timeoutMs / 1000)} s.`));
+		}, timeoutMs);
+		this.#pending.set(id, { resolve, reject, timer });
+		ws.send(JSON.stringify({ id, method, params }));
+		return promise;
 	}
 
 	/** Send a command and never wait for its reply (`chrome.tabs.remove` has none). */
@@ -971,16 +991,31 @@ export class ExtensionRelay {
 		method: string,
 		params: Record<string, unknown>,
 		sessionId: string | undefined,
+		relayTimeoutMs: number | undefined,
 	): Promise<void> {
+		const timeoutMs =
+			relayTimeoutMs !== undefined && Number.isFinite(relayTimeoutMs) && relayTimeoutMs > 0
+				? Math.min(relayTimeoutMs, MAX_EXTENSION_CALL_TIMEOUT_MS)
+				: EXTENSION_CALL_TIMEOUT_MS;
 		try {
-			const result =
+			const result = await this.#callTimeouts.run(timeoutMs, () =>
 				sessionId === undefined
-					? await this.#browserCommand(client, method, params)
-					: await this.#sessionCommand(sessionId, client, method, params);
+					? this.#browserCommand(client, method, params)
+					: this.#sessionCommand(sessionId, client, method, params),
+			);
 			this.#reply(client, id, sessionId, { result });
 		} catch (error) {
-			const mappedTabId = sessionId === undefined ? undefined : client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId);
-			const clientTabId = mappedTabId ?? (method === "Target.createTarget" ? undefined : typeof params.targetId === "string" ? this.#tabByTargetId(params.targetId)?.tabId : undefined);
+			const mappedTabId =
+				sessionId === undefined
+					? undefined
+					: (client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId));
+			const clientTabId =
+				mappedTabId ??
+				(method === "Target.createTarget"
+					? undefined
+					: typeof params.targetId === "string"
+						? this.#tabByTargetId(params.targetId)?.tabId
+						: undefined);
 			this.#log("CDP client command failed", {
 				port: this.port,
 				clientId: client.id,

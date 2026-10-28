@@ -9,15 +9,10 @@ import type { CmuxKind } from "./cmux/rpc";
 import { CmuxSocketClient } from "./cmux/socket-client";
 import type { ExtensionRelay } from "./extension-relay";
 import { type ExtensionKind, openExtensionSession } from "./extension-session";
+import { bindExtensionTimeouts, openExtensionTimeoutTransport } from "./extension-timeout-transport";
 import type { HostIdentity } from "./host-identity";
 import * as launch from "./launch";
-import {
-	BROWSER_PROTOCOL_TIMEOUT_MS,
-	type LaunchedBrowser,
-	launchHeadlessBrowser,
-	loadPuppeteer,
-	type UserAgentOverride,
-} from "./launch";
+import { BROWSER_PROTOCOL_TIMEOUT_MS, type LaunchedBrowser, loadPuppeteer } from "./launch";
 import { preparePersistentProfile, profileLock, profileLockedError, removeProfile } from "./profiles";
 
 export type PuppeteerBrowserKind =
@@ -229,11 +224,13 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		const relay = await openExtensionSession(kind, { signal: opts.signal });
 		try {
 			const puppeteer = await loadPuppeteer();
+			const transport = await openExtensionTimeoutTransport(relay.cdpUrl);
 			const browser = await puppeteer.connect({
-				browserWSEndpoint: relay.cdpUrl,
+				transport,
 				defaultViewport: null,
 				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 			});
+			bindExtensionTimeouts(browser, transport);
 			return {
 				key: browserKey(kind),
 				kind,

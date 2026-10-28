@@ -4,12 +4,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
-import {
-	buildConnectUrl,
-	ExtensionRelay,
-	type NavigationAudit,
-} from "@veyyon/coding-agent/tools/web/browser/extension-relay";
 import { logger, setAgentDir } from "@veyyon/utils";
+import { buildConnectUrl, ExtensionRelay, type NavigationAudit } from "../../src/tools/web/browser/extension-relay";
 
 const EXTENSION_TOKEN = "extension-token-SECRET-0123456789";
 
@@ -131,11 +127,18 @@ class CdpTestClient {
 		return new CdpTestClient(ws);
 	}
 
-	send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<CdpMessage> {
+	send(
+		method: string,
+		params: Record<string, unknown> = {},
+		sessionId?: string,
+		relayTimeoutMs?: number,
+	): Promise<CdpMessage> {
 		const id = this.#nextId++;
 		const { promise, resolve } = Promise.withResolvers<CdpMessage>();
 		this.#pending.set(id, resolve);
-		this.#ws.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }));
+		this.#ws.send(
+			JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }), relayTimeoutMs }),
+		);
 		return promise;
 	}
 
@@ -300,6 +303,116 @@ afterEach(async () => {
 	await relay?.close();
 	relay = undefined;
 	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/**
+ * WHY: slow Runtime.callFunctionOn calls lost the caller's deadline at the extension seam.
+ * Sweep default, shorter, longer and capped deadlines with concurrent requests. This does not
+ * simulate host CPU saturation or prove Chrome latency.
+ */
+describe("request-scoped extension deadlines", () => {
+	for (const timeout of [undefined, 5_000, 40_000, 200_000, 0, -1]) {
+		test(`honors ${timeout ?? "default"} ms without changing another call`, async () => {
+			const { ext, cdp } = await connected();
+			await cdp.send("Target.createTarget", { url: "about:blank" });
+			const sessionId = String(
+				cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+			);
+			const release = ext.delayNext("Runtime.callFunctionOn");
+			const releaseDefault = ext.delayNext("Network.enable");
+			let now = 0;
+			const timers = new Map<NodeJS.Timeout, { at: number; fire: () => void }>();
+			const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((fire: () => void, ms = 0) => {
+				const handle = {} as NodeJS.Timeout;
+				timers.set(handle, { at: now + ms, fire });
+				return handle;
+			}) as typeof setTimeout);
+			const clearSpy = spyOn(globalThis, "clearTimeout").mockImplementation(handle => {
+				timers.delete(handle as NodeJS.Timeout);
+			});
+			const advance = (ms: number): void => {
+				now += ms;
+				for (const [handle, timer] of timers) {
+					if (timer.at > now) continue;
+					timers.delete(handle);
+					timer.fire();
+				}
+			};
+			try {
+				let settled = false;
+				const call = cdp.send(
+					"Runtime.callFunctionOn",
+					{ functionDeclaration: "() => 1", awaitPromise: true },
+					sessionId,
+					timeout,
+				);
+				void call.then(() => {
+					settled = true;
+				});
+				const other = cdp.send("Network.enable", {}, sessionId);
+				await until(() => timers.size === 2, "both request timers");
+				const effective = timeout !== undefined && timeout > 0 ? Math.min(timeout, 120_000) : 15_000;
+				advance(Math.min(effective, 15_000) - 1);
+				await new Promise<void>(resolve => setImmediate(resolve));
+				expect(settled).toBe(false);
+				advance(1);
+				if (effective <= 15_000) {
+					expect((await call).error?.message).toContain(`within ${effective / 1000} s`);
+					advance(15_000 - effective);
+				} else {
+					expect((await other).error?.message).toContain("within 15 s");
+					await new Promise<void>(resolve => setImmediate(resolve));
+					expect(settled).toBe(false);
+					advance(effective - 15_000 - 1);
+					await new Promise<void>(resolve => setImmediate(resolve));
+					expect(settled).toBe(false);
+					advance(1);
+					expect((await call).error?.message).toContain(`within ${effective / 1000} s`);
+				}
+				expect((await other).error?.message).toContain("within 15 s");
+				expect(ext.calls.find(call => call.params[1] === "Runtime.callFunctionOn")?.params).toEqual([
+					{ tabId: 100 },
+					"Runtime.callFunctionOn",
+					{ functionDeclaration: "() => 1", awaitPromise: true },
+				]);
+			} finally {
+				timerSpy.mockRestore();
+				clearSpy.mockRestore();
+				release();
+				releaseDefault();
+				cdp.close();
+				ext.close();
+			}
+		});
+	}
+
+	test("accepts a reply after 15 seconds with a 40-second deadline", async () => {
+		const { ext, cdp } = await connected();
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const release = ext.delayNext("Runtime.callFunctionOn");
+		let fire: (() => void) | undefined;
+		let duration: number | undefined;
+		const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number) => {
+			fire = handler;
+			duration = ms;
+			return {} as NodeJS.Timeout;
+		}) as typeof setTimeout);
+		try {
+			const call = cdp.send("Runtime.callFunctionOn", { functionDeclaration: "() => 1" }, sessionId, 40_000);
+			await until(() => fire !== undefined, "request timer");
+			// At virtual 15,001 ms only a wrong 15-second timer is due.
+			if (duration !== undefined && duration <= 15_001) fire?.();
+			release();
+			expect((await call).result).toEqual({});
+			expect(duration).toBe(40_000);
+		} finally {
+			timerSpy.mockRestore();
+			release();
+			cdp.close();
+			ext.close();
+		}
+	});
 });
 
 describe("connection rules", () => {
@@ -1174,9 +1287,13 @@ describe("secrets stay out of logs", () => {
 				const rejected = await cdp.send(hostileMethod);
 				expect(rejected.error?.code).toBe(-32601);
 				await cdp.send("Target.createTarget", { url: "about:blank" });
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				const sessionId = String(
+					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+				);
 				ext.failNext("Runtime.evaluate");
-				expect((await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error).toBeDefined();
+				expect(
+					(await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error,
+				).toBeDefined();
 				const joined = lines.join("\n");
 				expect(joined).toContain('"port":');
 				expect(joined).toContain('"cdpMethod":"Runtime.evaluate"');

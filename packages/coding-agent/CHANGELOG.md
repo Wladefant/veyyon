@@ -5,6 +5,11 @@
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+
+### Fixed
+
+- Extension relay calls honor request-scoped CDP timeouts up to 120 seconds and keep 15 seconds as the default ([Refs #680](https://github.com/Wladefant/veyyon/issues/680), [Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
+
 ## [1.6.6] - 2026-10-28
 
 ### Fixed
