@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `applyOwnerOnlyWindowsAcl` failing with `SeSecurityPrivilege` when it re-applied the owner-only ACL to an already protected path, which ended every Windows launch after the first.
+
 ## [1.6.3] - 2026-10-28
 
 ### Fixed

@@ -93,7 +93,9 @@ foreach ($principal in @($identity, $system)) {
   )
   [void]$acl.AddAccessRule($rule)
 }
-Set-Acl -LiteralPath $target -AclObject $acl -ErrorAction Stop
+# Set-Acl refuses to rewrite a DACL it already protected, demanding SeSecurityPrivilege for the SACL it
+# never changes; SetAccessControl persists only the owner and DACL sections this object modified.
+$item.SetAccessControl($acl)
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
@@ -107,7 +109,6 @@ if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL targe
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
-
 
 /** Apply a protected DACL granting full control only to the current user and LocalSystem. */
 export async function applyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {
