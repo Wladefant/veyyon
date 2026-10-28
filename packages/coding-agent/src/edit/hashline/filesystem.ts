@@ -226,13 +226,8 @@ export class HashlineFilesystem extends Filesystem {
 			return { text: finalContent };
 		}
 
-		const diagnostics = await this.#writethrough(
-			absolutePath,
-			finalContent,
-			this.#signal,
-			Bun.file(absolutePath),
-			this.#batchRequest,
-			dst => (dst === absolutePath ? this.#beginDeferredDiagnosticsForPath(absolutePath) : undefined),
+		const diagnostics = await this.#writethrough(absolutePath, finalContent, this.#signal, this.#batchRequest, dst =>
+			dst === absolutePath ? this.#beginDeferredDiagnosticsForPath(absolutePath) : undefined,
 		);
 		invalidateFsScanAfterWrite(absolutePath);
 		this.#diagnosticsByPath.set(relativePath, diagnostics);

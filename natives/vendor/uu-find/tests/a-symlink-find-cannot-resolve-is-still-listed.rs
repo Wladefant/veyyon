@@ -65,7 +65,7 @@ fn run_in(cwd: &Path, args: &[&str]) -> (i32, Vec<String>, String) {
 
 	let io = ScopeIo {
 		stdin:                 Box::new(std::io::empty()),
-		stdin_fd:              None,
+		fds:                   Vec::new(),
 		stdin_is_search_input: false,
 		stdout:                Box::new(SharedWriter { buf: stdout_buf.clone() }),
 		stdout_is_terminal:    false,

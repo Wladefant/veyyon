@@ -1730,6 +1730,7 @@ message ExecServerMessage {
       RecordScreenArgs record_screen_args = 21;
       ComputerUseArgs computer_use_args = 22;
       WriteShellStdinArgs write_shell_stdin_args = 23;
+      McpStateExecArgs mcp_state_exec_args = 36;
    }
 }
 
@@ -1755,6 +1756,7 @@ message ExecClientMessage {
       RecordScreenResult record_screen_result = 21;
       ComputerUseResult computer_use_result = 22;
       WriteShellStdinResult write_shell_stdin_result = 23;
+      McpStateExecResult mcp_state_exec_result = 36;
    }
 }
 
@@ -2186,6 +2188,43 @@ message ReadMcpResourceRejected {
 
 message ReadMcpResourceNotFound {
    string uri = 1;
+}
+
+// Asks the client for the state of its MCP servers: every server, or the ones
+// named in `server_identifiers`.
+message McpStateExecArgs {
+   repeated string server_identifiers = 1;
+   bool kick_only = 2;
+}
+
+message McpStateExecResult {
+   oneof result {
+      McpStateSuccess success = 1;
+      McpStateError error = 2;
+      McpStateRejected rejected = 3;
+   }
+}
+
+message McpStateSuccess {
+   repeated McpStateServer servers = 1;
+}
+
+message McpStateServer {
+   string server_name = 1;
+   string server_identifier = 2;
+   optional string plugin = 3;
+   optional string marketplace = 4;
+   repeated McpToolDefinition tools = 5;
+   repeated McpInstructions instructions = 6;
+   optional string status = 7;
+}
+
+message McpStateError {
+   string error = 1;
+}
+
+message McpStateRejected {
+   string reason = 1;
 }
 
 message McpToolDefinition {

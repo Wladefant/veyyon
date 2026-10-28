@@ -23,14 +23,14 @@
  * its own output, so a candidate whose window holds one segment holds the whole
  * staged compaction, whatever the span's size.
  *
- * The module is pure: it turns messages into segment texts and summaries into
- * merge groups. `compaction.ts` owns the provider round trip.
+ * The module is pure: it turns a measured span into segment texts and summaries into merge
+ * groups. `compaction.ts` owns the provider round trip.
  */
 
 import type { Message, Model } from "@veyyon/ai";
-import type { Dialect } from "@veyyon/ai/dialect";
-import { clampLow } from "@veyyon/utils";
+import { clampLow, TimeSlice } from "@veyyon/utils";
 import { countTokens } from "../tokenizer";
+import type { SummarySource } from "./summary-source";
 import { serializeConversationForSummary } from "./utils";
 
 /**
@@ -72,8 +72,9 @@ export interface SummarySegment {
 }
 
 /**
- * Divide provider-visible messages into consecutive segments that each stay within
- * `budgetTokens` of serialized conversation text.
+ * Divide the source's messages into consecutive segments that each stay within `budgetTokens` of
+ * serialized conversation text, yielding to the event loop between segments whenever `slice` is
+ * due.
  *
  * A segment never opens on a tool result: the result attaches to the assistant call
  * that produced it, even when that pushes the segment past its budget, because a
@@ -81,17 +82,19 @@ export interface SummarySegment {
  * larger than the budget forms a segment of its own for the same reason: the cut is
  * between messages and never inside one.
  */
-export function planSummarySegments(
-	messages: Message[],
-	dialect: Dialect | undefined,
+export async function planSummarySegments(
+	source: SummarySource,
 	budgetTokens: number,
-): SummarySegment[] {
+	slice: TimeSlice = new TimeSlice(),
+): Promise<SummarySegment[]> {
 	const budget = Math.max(1, Math.floor(budgetTokens));
+	const { messages, messageTokens, dialect } = source;
 	const groups: Message[][] = [];
 	let current: Message[] = [];
 	let currentTokens = 0;
-	for (const message of messages) {
-		const tokens = countTokens(serializeConversationForSummary([message], dialect));
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		const tokens = messageTokens[index];
 		const opensSegment = current.length > 0 && currentTokens + tokens > budget && message.role !== "toolResult";
 		if (opensSegment) {
 			groups.push(current);
@@ -102,10 +105,13 @@ export function planSummarySegments(
 		currentTokens += tokens;
 	}
 	if (current.length > 0) groups.push(current);
-	return groups.map((group, position) => {
+	const segments: SummarySegment[] = [];
+	for (const group of groups) {
+		if (slice.due) await slice.yield();
 		const text = serializeConversationForSummary(group, dialect);
-		return { index: position + 1, count: groups.length, text, tokens: countTokens(text) };
-	});
+		segments.push({ index: segments.length + 1, count: groups.length, text, tokens: countTokens(text) });
+	}
+	return segments;
 }
 
 /**

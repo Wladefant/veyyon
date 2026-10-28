@@ -16,6 +16,10 @@
 
 - Sync upstream changes from santhreal/veyyon.
 
+### Fixed
+
+- An async atomic write keeps its staged file in exit cleanup until rename finishes, so an exit during replacement does not leave a temp file behind.
+
 ## [1.5.6] - 2026-10-10
 
 ### Breaking Changes
@@ -28,6 +32,9 @@
 - `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
 - `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
 - `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
+- `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
+- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`; the package root does not re-export them.
+- `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
 
 ### Changed
 
@@ -35,12 +42,15 @@
 
 ### Fixed
 
+- `stallSampler` replaces its profile on every busy watchdog tick, so the functions JSC's sampling profiler caught, and every provider request context and body their closures captured, are released within one tick instead of held up to 10 s: the heap left after a full collection over a 40-prompt mixed-tool session peaks at 69 to 71 MB instead of 173 to 177 MB.
 - `RotatingLogFile` keeps a full log file under one generation when two processes rotate it at once, instead of leaving a second generation that repeats every line of it.
 - `RotatingLogFile` no longer deletes a fresh live log file another process starts while a rotation releases the full one, which lost every line written to it.
 - `fetchWithRetry` ends with the signal's `TimeoutError` when a deadline aborts it, instead of a generic `AbortError: Request was aborted` that reported the timeout as a cancellation.
 - A killed child process gets SIGKILL after a 1s grace when the native addon cannot load, so a child that ignores SIGTERM no longer holds a timeout, an abort or a dispose open forever.
 - A child spawned with a timeout no longer keeps the process alive until that timeout elapses after the child has already exited.
 - `postmortem.quit` clears its 5 s stdout-drain timer when the drain finishes first.
+- `trimEngine` no longer holds the event loop while it returns the C allocator's free pages: the longest loop pause during the walk of a fragmented 1.6 GiB heap drops from 72 to 83 ms to 4.9 to 9.5 ms.
+- An async atomic write interrupted by SIGTERM, SIGINT, SIGHUP, a fatal error or `process.exit` removes its staged `.<file>.<pid>.<n>.tmp` file at exit instead of leaving it beside the target: 40 launches stopped with SIGTERM leave 0 such files in the profile cache, against 10 from 40 before.
 
 ### Removed
 

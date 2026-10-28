@@ -39,7 +39,7 @@ import { openaiWebsocketPreference } from "./config/openai-websockets-mode";
 import type { PromptTemplate } from "./config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "./config/provider-globals";
 import { Settings } from "./config/settings";
-import { CursorExecHandlers } from "./cursor";
+import { type CursorExecHandlers, cursorExecHandlersForAgent } from "./cursor";
 import { createBridgeEditToolProvider } from "./cursor-bridge-tools";
 import { initializeWithSettings } from "./discovery";
 import { type Rule, setActiveRules } from "./discovery/capability/rule";
@@ -1118,11 +1118,11 @@ class SessionStartup {
 			toolSession,
 			extensionRunner,
 		});
-		this.#cursorExecHandlers = new CursorExecHandlers({
+		this.#cursorExecHandlers = cursorExecHandlersForAgent({
 			cwd: this.#cwd,
 			tools,
+			agent: () => this.#agent,
 			getToolContext: () => this.#toolContextStore.getContext(),
-			emitEvent: event => this.#agent?.emitExternalEvent(event),
 			getEditReplaceTool: createBridgeEditToolProvider(tools, toolSession, extensionRunner),
 		});
 	}

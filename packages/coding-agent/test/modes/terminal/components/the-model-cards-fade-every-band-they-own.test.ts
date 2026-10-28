@@ -47,6 +47,7 @@ import type { AccountInventory } from "@veyyon/coding-agent/session/account-inve
 import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL, type TUI } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -62,33 +63,12 @@ let policy: AnsiPolicy;
 let geometry: StubbedStdoutGeometry;
 let originalTrueColor: boolean;
 let originalColorterm: string | undefined;
-let clockNow = 0;
-let clockAnchored = false;
 
 /**
- * Advance the shared clock by `ms`. The cards take the production clock (their hosts hand them a
- * repaint, not a clock), so frames are driven through its public `tick` rather than by waiting.
- * The anchor is re-taken whenever the ticker restarts: a clock that runs dry re-bases on the wall
- * clock, and a harness counting from its own first anchor would land a 90ms fade in one step.
+ * The cards take the production clock (their hosts hand them a repaint, not a clock), so frames are
+ * driven through its public `tick` rather than by waiting.
  */
-function advance(ms: number): void {
-	if (!clockAnchored) {
-		clockNow = performance.now();
-		clockAnchored = true;
-	}
-	clockNow += ms;
-	motionClock.tick(clockNow);
-	if (motionClock.liveCount === 0) clockAnchored = false;
-}
-
-/** Run frames until nothing is animating. Returns the frames it took. */
-function settle(): number {
-	for (let frame = 1; frame <= SETTLE_FRAMES; frame++) {
-		advance(FRAME);
-		if (motionClock.liveCount === 0) return frame;
-	}
-	throw new Error(`hover fade still live after ${SETTLE_FRAMES} frames`);
-}
+const { advance, settle } = useHandTickedMotion();
 
 /** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
 function bandRgb(row: string): [number, number, number] | null {
@@ -249,7 +229,6 @@ beforeEach(async () => {
 	originalTrueColor = terminalCaps.trueColor;
 	terminalCaps.trueColor = true;
 	geometry = stubStdoutGeometry({ columns: WIDTH, rows: ROWS });
-	clockAnchored = false;
 });
 
 afterEach(() => {

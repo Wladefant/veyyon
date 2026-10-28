@@ -680,6 +680,9 @@ pub(crate) fn execute_external_command(
 			  .join(" ")
 	);
 
+	if let Some(observer) = context.params.spawn_observer() {
+		observer.before_spawn();
+	}
 	match sys::process::spawn(cmd) {
 		Ok(child) => {
 			// Retrieve the pid.

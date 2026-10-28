@@ -53,7 +53,7 @@ fn run_xargs(
 	let code = veyyon_uutils_ctx::scope(
 		veyyon_uutils_ctx::ScopeIo {
 			stdin: Box::new(io::Cursor::new(stdin.to_vec())),
-			stdin_fd: None,
+			fds: Vec::new(),
 			stdin_is_search_input: false,
 			stdout: Box::new(out.clone()),
 			// A capture buffer is not a terminal.

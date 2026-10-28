@@ -210,7 +210,7 @@ export class ModalSelectListComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const termHeight = Math.max(14, this.#getTerminalRows());
+		const termHeight = this.#getTerminalRows();
 		const sizing = this.#sizing(termHeight);
 		const dims = computeModalDims(width, termHeight, sizing);
 		if (!dims) {

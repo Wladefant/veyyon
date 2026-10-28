@@ -71,6 +71,33 @@ function removeTempSync(tmpPath: string): void {
 	fs.rmSync(tmpPath, { force: true, recursive: true });
 }
 
+// Temps an async write has reserved and not yet finished with. A process that exits
+// mid-write (SIGTERM, SIGINT, SIGHUP, a fatal error, `process.exit`) would leave each one beside
+// its target for good: its name holds a dead pid, so no later writer reuses or removes it. The
+// exit listener removes them; SIGKILL and power loss still leave one. A name joins the set before
+// its exclusive open is issued, since the exit can land while the open is on the thread pool and
+// file already exists; a name with this pid in it is this process's or a dead one's. Keep a
+// temp tracked until its rename (including the Windows backup-and-restore replace) finishes.
+const pendingTemps = new Set<string>();
+let exitListenerInstalled = false;
+
+function trackPendingTemp(tmpPath: string): void {
+	if (!exitListenerInstalled) {
+		exitListenerInstalled = true;
+		process.on("exit", removePendingTemps);
+	}
+	pendingTemps.add(tmpPath);
+}
+
+function removePendingTemps(): void {
+	for (const tmpPath of pendingTemps) {
+		try {
+			removeTempSync(tmpPath);
+		} catch {}
+	}
+	pendingTemps.clear();
+}
+
 async function reserveTempFile(
 	dir: string,
 	targetBasename: string,
@@ -79,9 +106,11 @@ async function reserveTempFile(
 ): Promise<{ handle: fsp.FileHandle; tmpPath: string }> {
 	for (;;) {
 		const tmpPath = nextTempPath(dir, targetBasename);
+		trackPendingTemp(tmpPath);
 		try {
 			return { handle: await fsp.open(tmpPath, "wx", mode), tmpPath };
 		} catch (error) {
+			pendingTemps.delete(tmpPath);
 			if (isFsError(error) && error.code === "EEXIST") continue;
 			throw withTargetInMessage(error, target, tmpPath);
 		}
@@ -530,7 +559,9 @@ async function atomicWriteFileWithImpl(
 		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
 		await assertReplaceableTarget(target);
 		await renameTempOverTarget(tmpPath, target, requireAtomicReplace);
+		pendingTemps.delete(tmpPath);
 	} catch (error) {
+		pendingTemps.delete(tmpPath);
 		await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
 		throw withTargetInMessage(error, target, tmpPath);
 	}

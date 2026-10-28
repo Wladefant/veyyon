@@ -12,7 +12,7 @@ import {
 	type KernelMode,
 } from "../executor-base";
 import { checkPythonKernelAvailability, type KernelDisplayOutput, PythonKernel } from "./kernel";
-import { resolveExplicitPythonRuntime } from "./runtime";
+import { resolveExplicitPythonRuntime, resolveVenvPath } from "./runtime";
 
 export type { KernelDisplayOutput };
 
@@ -37,6 +37,8 @@ const driver = createKernelExecutionDriver<PythonExecutorOptions, PythonKernel>(
 	kernelClass: PythonKernel,
 	checkKernelAvailability: checkPythonKernelAvailability,
 	resolveInterpreterPath: (interpreter, cwd) => resolveExplicitPythonRuntime(interpreter, cwd, {}).pythonPath,
+	// A project `.venv` or `venv` selects the interpreter, so a cwd with its own venv needs its own kernel.
+	resolveDefaultRuntimeScope: cwd => resolveVenvPath(cwd) ?? "",
 });
 export const {
 	disposeAll: disposeAllKernelSessions,

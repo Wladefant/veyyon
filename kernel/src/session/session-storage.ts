@@ -54,6 +54,14 @@ export interface PinnedSessionReader {
 	readonly identity: string;
 	/** The UTF-8 text of `length` bytes starting at byte `offset`. Throws on a short read. */
 	read(offset: number, length: number): string;
+	/**
+	 * Visit each newline-terminated line from byte `from` on, in order: the first `headBytes` bytes of
+	 * the line decoded as UTF-8, its byte offset, and its length including the newline. A last line
+	 * with no newline yet is not visited. Returns the offset just past the last line visited, where a
+	 * scan for lines written later resumes. Reads in fixed-size chunks, so a scan of the whole object
+	 * holds one chunk and the heads, never the object.
+	 */
+	scanLines(from: number, headBytes: number, visit: (head: string, offset: number, length: number) => void): number;
 	/** Release the handle. Later reads throw. */
 	close(): void;
 }
@@ -139,6 +147,56 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 	}
 }
 
+/**
+ * Bytes a shifted tail rewrite moves per read. Copying 321MB of a session through a 1MiB buffer
+ * took 58-65ms against 53-61ms for an in-kernel copy of the whole file, and an 8MiB buffer
+ * 107-496ms.
+ */
+const COPY_CHUNK_BYTES = 1 << 20;
+
+function keptBytesMissing(size: number, keepBytes: number): Error {
+	return new Error(`Session file holds ${size} bytes, fewer than the ${keepBytes} a tail rewrite keeps`);
+}
+
+/** Write `text` at byte `position` of `handle`, and return how many bytes that took. */
+async function writeTextAt(
+	handle: fs.promises.FileHandle,
+	tempPath: string,
+	text: string,
+	position: number,
+): Promise<number> {
+	if (text.length === 0) return 0;
+	const { bytesWritten } = await handle.write(text, position, "utf-8");
+	const bytes = Buffer.byteLength(text, "utf-8");
+	if (bytesWritten !== bytes) throw new Error(`Short write to ${tempPath}: ${bytesWritten} of ${bytes} bytes`);
+	return bytes;
+}
+
+/** Copy bytes `from` up to `to` of the file at `source` to byte `at` of `target`. */
+async function copyRange(
+	source: string,
+	target: fs.promises.FileHandle,
+	from: number,
+	to: number,
+	at: number,
+): Promise<void> {
+	const input = await fs.promises.open(source, "r");
+	try {
+		const { size } = await input.stat();
+		if (size < to) throw keptBytesMissing(size, to);
+		const buffer = Buffer.allocUnsafe(Math.min(COPY_CHUNK_BYTES, to - from));
+		for (let position = from; position < to; ) {
+			const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, to - position), position);
+			if (bytesRead === 0) throw keptBytesMissing(position, to);
+			const { bytesWritten } = await target.write(buffer, 0, bytesRead, at + position - from);
+			if (bytesWritten !== bytesRead) throw new Error(`Short write: ${bytesWritten} of ${bytesRead} bytes`);
+			position += bytesRead;
+		}
+	} finally {
+		await input.close();
+	}
+}
+
 export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
@@ -197,17 +255,19 @@ export interface SessionStorage {
 	writeText(path: string, content: string): Promise<void>;
 	writeTextAtomic(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void>;
 	/**
-	 * Replace `path` atomically with a copy of its first `keepBytes` bytes, `head` written over the
-	 * start of that copy, and `tail` after it. `commitGuard` applies as it does to
-	 * {@link writeTextAtomic}.
+	 * Replace `path` atomically with `head`, then the file's bytes from `headBytes` up to
+	 * `keepBytes`, then `tail`: `head` takes the place of the first `headBytes` bytes. `commitGuard`
+	 * applies as it does to {@link writeTextAtomic}.
 	 *
-	 * OPTIONAL: a session rewrite that changed only its last entries uses this to keep the bytes
-	 * before them instead of serializing the whole transcript again. A backend without it, or one
-	 * whose paths name no object that can be copied, publishes the whole body through
-	 * {@link writeTextAtomic}. Fails when the file holds fewer than `keepBytes` bytes.
+	 * OPTIONAL: a session rewrite that changed only its header and its last entries uses this to keep
+	 * the bytes of every entry before them instead of serializing the whole transcript again. A
+	 * backend without it, or one whose paths name no object that can be copied, publishes the whole
+	 * body through {@link writeTextAtomic}. Fails when the file holds fewer than `keepBytes` bytes or
+	 * `headBytes` exceeds `keepBytes`.
 	 */
 	rewriteTailAtomic?(
 		path: string,
+		headBytes: number,
 		keepBytes: number,
 		head: string,
 		tail: SessionFileBody,
@@ -252,6 +312,9 @@ const pinnedReaderRegistry = new FinalizationRegistry<number>(fd => {
 	}
 });
 
+/** Bytes a {@link FilePinnedSessionReader.scanLines} pass reads at a time. */
+const SCAN_CHUNK_BYTES = 1 << 20;
+
 class FilePinnedSessionReader implements PinnedSessionReader {
 	readonly identity: string;
 	#fd: number | undefined;
@@ -277,6 +340,29 @@ class FilePinnedSessionReader implements PinnedSessionReader {
 			filled += read;
 		}
 		return buffer.toString("utf-8");
+	}
+
+	scanLines(from: number, headBytes: number, visit: (head: string, offset: number, length: number) => void): number {
+		const fd = this.#fd;
+		if (fd === undefined) throw new Error("Pinned session reader is closed");
+		const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
+		let lineStart = from;
+		let position = from;
+		for (;;) {
+			const read = fs.readSync(fd, chunk, 0, chunk.length, position);
+			if (read === 0) return lineStart;
+			const view = chunk.subarray(0, read);
+			for (let newline = view.indexOf(10); newline !== -1; newline = view.indexOf(10, newline + 1)) {
+				const end = position + newline + 1;
+				const bytes = Math.min(headBytes, end - lineStart);
+				const start = lineStart - position;
+				// A line that began in an earlier chunk has its head read on its own.
+				const head = start >= 0 ? view.toString("utf-8", start, start + bytes) : this.read(lineStart, bytes);
+				visit(head, lineStart, end - lineStart);
+				lineStart = end;
+			}
+			position += read;
+		}
 	}
 
 	close(): void {
@@ -621,36 +707,40 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	/**
-	 * The copy is a reflink where the filesystem supports one (btrfs, XFS, APFS) and an in-kernel
-	 * copy elsewhere, so the kept bytes never pass through this process.
+	 * A head as long as the bytes it replaces is written over a copy of the file, which is a reflink
+	 * where the filesystem supports one (btrfs, XFS, APFS) and an in-kernel copy elsewhere, so the kept
+	 * bytes never pass through this process. A head of another length moves every kept byte, which no
+	 * reflink can express, so those bytes are copied through one reused buffer behind the new head.
 	 */
 	async rewriteTailAtomic(
 		fpath: string,
+		headBytes: number,
 		keepBytes: number,
 		head: string,
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	): Promise<void> {
+		if (headBytes > keepBytes) {
+			throw new Error(`A tail rewrite cannot replace ${headBytes} head bytes when it keeps only ${keepBytes}`);
+		}
 		const tempPath = stagingPath(fpath);
+		const headLength = Buffer.byteLength(head, "utf-8");
 		try {
-			await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
-			const handle = await fs.promises.open(tempPath, "r+");
+			const inPlace = headLength === headBytes;
+			if (inPlace) await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
+			const handle = await fs.promises.open(tempPath, inPlace ? "r+" : "w");
 			try {
-				const { size } = await handle.stat();
-				if (size < keepBytes) {
-					throw new Error(`Session file holds ${size} bytes, fewer than the ${keepBytes} a tail rewrite keeps`);
+				if (inPlace) {
+					const { size } = await handle.stat();
+					if (size < keepBytes) throw keptBytesMissing(size, keepBytes);
+					await handle.truncate(keepBytes);
+				} else {
+					await copyRange(fpath, handle, headBytes, keepBytes, headLength);
 				}
-				await handle.truncate(keepBytes);
-				if (head.length > 0) await handle.write(head, 0, "utf-8");
-				let position = keepBytes;
+				await writeTextAt(handle, tempPath, head, 0);
+				let position = keepBytes - headBytes + headLength;
 				for (const chunk of sessionBodyChunks(tail)) {
-					if (chunk.length === 0) continue;
-					const { bytesWritten } = await handle.write(chunk, position, "utf-8");
-					const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-					if (bytesWritten !== chunkBytes) {
-						throw new Error(`Short write to ${tempPath}: ${bytesWritten} of ${chunkBytes} bytes`);
-					}
-					position += chunkBytes;
+					position += await writeTextAt(handle, tempPath, chunk, position);
 				}
 			} finally {
 				await handle.close();
