@@ -11,6 +11,7 @@ import {
 } from "@veyyon/coding-agent/session/runtime/tool-discovery";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
+import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 
 function createMockModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -49,6 +50,21 @@ function createTool(
 	}
 	return tool;
 }
+function createCustomMcpTool(name: string): CustomTool {
+	const schema = type({ value: "string" });
+	return {
+		name,
+		label: name,
+		description: `Description for ${name}`,
+		parameters: schema,
+		mcpServerName: "s",
+		mcpToolName: name.replace(/^mcp__s__/, ""),
+		async execute() {
+			return { content: [{ type: "text", text: `${name} output` }] };
+		},
+	};
+}
+
 
 function assistantToolCall(toolName: string, callId: string): AssistantMessage {
 	return {
@@ -891,5 +907,105 @@ describe("AgentSession integration: cap, prune, persistence, and reload", () => 
 
 		// Default tool is kept, and the 2 most recent search tools (mcp__s__t2, mcp__s__t3) are kept; mcp__s__t1 is bounded/dropped
 		expect(session2.getSelectedDiscoveredToolNames()).toEqual(["mcp__s__default", "mcp__s__t2", "mcp__s__t3"]);
+	});
+	it("shrinks persisted resumed schemas to the cap and persists the reduced selection", async () => {
+		const readTool = createTool("read", { loadMode: "essential" });
+		const mcpTools = ["mcp__s__t1", "mcp__s__t2", "mcp__s__t3"].map(name => createCustomMcpTool(name));
+		const toolRegistry = new Map<string, AgentTool>([[readTool.name, readTool]]);
+		const sessionManager = SessionManager.inMemory();
+		const agent = new Agent({
+			initialState: {
+				model: createMockModel(),
+				systemPrompt: ["initial"],
+				tools: [readTool],
+				messages: [],
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"mcp.discoveryMode": true,
+				"tools.maxDiscoveredTools": 3,
+			}),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
+		});
+		sessions.push(session);
+		await session.refreshMCPTools(mcpTools);
+		await session.activateDiscoveredTools(mcpTools.map(tool => tool.name));
+		const persisted = sessionManager.buildSessionContext().selectedMCPToolNames;
+		expect(persisted).toEqual(["mcp__s__t1", "mcp__s__t2", "mcp__s__t3"]);
+		const restoredTools = [readTool, ...mcpTools.map(tool => toolRegistry.get(tool.name)!)];
+		const resumedAgent = new Agent({
+			initialState: {
+				model: createMockModel(),
+				systemPrompt: ["initial"],
+				tools: restoredTools,
+				messages: sessionManager.buildSessionContext().messages,
+			},
+		});
+		const resumedSession = new AgentSession({
+			agent: resumedAgent,
+			sessionManager,
+			settings: Settings.isolated({
+				"mcp.discoveryMode": true,
+				"tools.maxDiscoveredTools": 1,
+			}),
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			initialSelectedMCPToolNames: persisted,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
+		});
+		sessions.push(resumedSession);
+
+		expect(resumedAgent.state.tools.map(tool => tool.name)).toEqual(["read", "mcp__s__t3"]);
+		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__s__t3"]);
+	});
+
+	it("shrinks active schemas and persists selection when a hot reload lowers the cap", async () => {
+		const readTool = createTool("read", { loadMode: "essential" });
+		const mcpTools = ["mcp__s__t1", "mcp__s__t2", "mcp__s__t3"].map(name => createCustomMcpTool(name));
+		const toolRegistry = new Map<string, AgentTool>([[readTool.name, readTool]]);
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"mcp.discoveryMode": true,
+			"tools.maxDiscoveredTools": 3,
+		});
+		const agent = new Agent({
+			initialState: {
+				model: createMockModel(),
+				systemPrompt: ["initial"],
+				tools: [readTool],
+				messages: [],
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry: {} as never,
+			toolRegistry,
+			mcpDiscoveryEnabled: true,
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
+		});
+		sessions.push(session);
+		await session.refreshMCPTools(mcpTools);
+		await session.activateDiscoveredTools(mcpTools.map(tool => tool.name));
+		expect(agent.state.tools.map(tool => tool.name)).toEqual([
+			"read",
+			"mcp__s__t1",
+			"mcp__s__t2",
+			"mcp__s__t3",
+		]);
+
+		settings.set("tools.maxDiscoveredTools", 1);
+		await session.refreshMCPTools(mcpTools);
+
+		expect(agent.state.tools.map(tool => tool.name)).toEqual(["read", "mcp__s__t3"]);
+		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__s__t3"]);
 	});
 });

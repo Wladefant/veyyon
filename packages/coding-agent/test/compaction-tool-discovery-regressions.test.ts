@@ -11,6 +11,7 @@
  * `pruneDiscoveredToolsAfterCompaction`; the prune runs inside `session.compact()`.
  */
 
+import * as fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@veyyon/agent-core";
@@ -243,6 +244,53 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 		expect(persisted).toContain(usedMcp.name);
 		expect(persisted).not.toContain(unusedMcp.name);
 		expect(persisted).not.toContain(unusedLocal.name);
+	});
+
+	it("rebuilds plan, todo, and advisor state after real history compaction", async () => {
+		const readTool = createTool("read", { loadMode: "essential" });
+		const harness = await createSession([readTool], [readTool]);
+		const { session, sessionManager, model } = harness;
+		const planPath = path.join(tempDir.path(), "approved-plan.md");
+		await fs.writeFile(planPath, "Approved plan\n");
+		session.setPlanReferencePath(planPath);
+		session.markPlanReferenceSent();
+
+		const authoritativePhases = [{ name: "Work", tasks: [{ content: "landed task", status: "in_progress" as const }] }];
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "todo-call",
+			toolName: "todo",
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			details: { phases: authoritativePhases },
+			timestamp: Date.now(),
+		});
+		session.setTodoPhases([{ name: "Work", tasks: [{ content: "stale task", status: "pending" }] }]);
+
+		harness.queueReply(assistantMessage(model, ALPHA_REPLY.repeat(1000), 100, 10));
+		harness.queueReply(assistantMessage(model, "continued after compaction", 120, 10));
+		harness.queueSummary("LOCAL-SUMMARY: earlier work condensed");
+		await session.prompt(ALPHA_REQUEST);
+
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected the configured advisor to start");
+		advisor.state.messages.push({ role: "user", content: "stale advisor history", timestamp: 1 });
+
+		await session.compact();
+
+		expect(session.getTodoPhases()).toEqual(authoritativePhases);
+		expect(session.formatAdvisorHistoryAsText()).not.toContain("stale advisor history");
+		expect(session.getPlanReferencePath()).toBe(planPath);
+
+		await session.prompt("Continue from the approved plan");
+		expect(session.agent.state.messages.some(message =>
+			message.role === "custom" && message.customType === "plan-mode-reference",
+		)).toBe(true);
 	});
 
 	it("evicts the least-recently-called discovery at the default cap of 40 once tool calls mark recent use", async () => {
