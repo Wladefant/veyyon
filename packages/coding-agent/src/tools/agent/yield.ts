@@ -14,7 +14,7 @@ import {
 	tryEnforceStrictSchema,
 } from "@veyyon/ai/utils/schema";
 import { errorMessage, isRecord } from "@veyyon/utils";
-import { subprocessToolRegistry, YIELD_TOOL_NAME } from "../../task/subprocess-tool-registry";
+import { subprocessToolRegistry, YIELD_TOOL_NAME, yieldResultEndsRun } from "../../task/subprocess-tool-registry";
 import type { ToolSession } from "..";
 import { buildOutputValidator, formatAllValidationIssues } from "../core/output-schema-validator";
 
@@ -501,16 +501,5 @@ subprocessToolRegistry.register<YieldDetails>(YIELD_TOOL_NAME, {
 			schemaOverridden: record.schemaOverridden === true ? true : undefined,
 		};
 	},
-	shouldTerminate: event => {
-		if (event.isError) return false;
-		const details = event.result?.details;
-		if (!details || typeof details !== "object") return true;
-		const record = details as Record<string, unknown>;
-		return !(
-			record.status === "success" &&
-			Array.isArray(record.type) &&
-			record.type.length > 0 &&
-			record.type.every(item => typeof item === "string")
-		);
-	},
+	shouldTerminate: yieldResultEndsRun,
 });

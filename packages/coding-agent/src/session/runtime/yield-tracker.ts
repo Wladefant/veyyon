@@ -11,6 +11,7 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
+import { yieldResultEndsRun } from "../../task/subprocess-tool-registry";
 import { TOOL } from "../../tools/core/builtin-names";
 
 /** The fields of a tool result that decide whether it ended the run. */
@@ -85,21 +86,9 @@ export class YieldTracker {
 	}
 }
 
-/**
- * Whether a tool result ends the run: a `yield` that did not fail, unless its details hold
- * `status: "success"` with a non-empty `type` list of strings.
- */
+/** Whether a tool result ends the run: a `yield` result that {@link yieldResultEndsRun} accepts. */
 function isTerminalYieldToolResult(event: YieldToolResult): boolean {
-	if (event.toolName !== TOOL.yield || event.isError) return false;
-	const details = event.result?.details;
-	if (!details || typeof details !== "object") return true;
-	const record = details as Record<string, unknown>;
-	return !(
-		record.status === "success" &&
-		Array.isArray(record.type) &&
-		record.type.length > 0 &&
-		record.type.every(item => typeof item === "string")
-	);
+	return event.toolName === TOOL.yield && yieldResultEndsRun(event);
 }
 
 function lastCallIsYield(message: AssistantMessage, toolCallId: string): boolean {
