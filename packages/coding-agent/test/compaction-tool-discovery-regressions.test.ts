@@ -127,8 +127,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 			if (!reply) throw new Error("unexpected extra provider call");
 			return completedStream(reply);
 		};
-		const sideStreamFn: StreamFn = (requestModel, ctx) => {
-			process.stderr.write(`DBG285 call #${summarizerCalls + 1} n=${ctx.messages.length} stack=${new Error().stack?.split("\n").slice(1, 14).map(l => l.trim()).join(" | ")} last=${JSON.stringify(ctx.messages.map(m => JSON.stringify(m.content))[ctx.messages.length - 1]?.slice(-700))}\n`);
+		const sideStreamFn: StreamFn = requestModel => {
 			const summary = summaries.shift();
 			if (!summary) throw new Error("unexpected extra summarizer call");
 			summarizerCalls++;
@@ -203,7 +202,10 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 			timestamp: Date.now(),
 		});
 		harness.queueReply(assistantMessage(model, "done", 120, 10));
+		// The cut lands inside the BRAVO turn, so compaction summarizes the history (cache-aligned)
+		// and the turn prefix in parallel: two summarizer calls, one per span.
 		harness.queueSummary("LOCAL-SUMMARY: the alpha turn condensed");
+		harness.queueSummary("LOCAL-SUMMARY: the bravo turn prefix condensed");
 
 		await session.prompt(ALPHA_REQUEST);
 		await session.prompt(BRAVO_REQUEST);
@@ -211,7 +213,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 
 		await session.compact();
 
-		expect(harness.summarizerCalls()).toBe(1);
+		expect(harness.summarizerCalls()).toBe(2);
 		const compactions = sessionManager
 			.getBranch()
 			.filter((entry): entry is CompactionEntry => entry.type === "compaction");
