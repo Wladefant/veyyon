@@ -209,8 +209,8 @@ function assertNotPlanMode(session: ToolSession): void {
 	}
 }
 
-function renderAgentPrompt(assignment: string): string {
-	return prompt.render(agentPrompts["agent/user-prompt"].text, { assignment: assignment.trim() });
+function renderAgentPrompt(assignment: string, parentAgentId: string): string {
+	return prompt.render(agentPrompts["agent/user-prompt"].text, { assignment: assignment.trim(), parentAgentId });
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -438,7 +438,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				fallbackModelPattern: options.session.getModelString?.(),
 				sessionModelPattern: parentActiveModelPattern,
 				taskDepth: (options.session.taskDepth ?? 0) + 1,
-				spawnId: nextSpawnId(`eval:${options.session.getSessionId?.() ?? "session"}:${options.session.getAgentId?.() ?? MAIN_AGENT_ID}`),
+				spawnId: nextSpawnId(
+					`eval:${options.session.getSessionId?.() ?? "session"}:${options.session.getAgentId?.() ?? MAIN_AGENT_ID}`,
+				),
 				modelRegistry: options.session.modelRegistry,
 			});
 	if ("unresolved" in resolvedModel && resolvedModel.unresolved) {
@@ -533,7 +535,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const baseRunOptions: ExecutorOptions = {
 		cwd: options.session.cwd,
 		agent: effectiveAgent,
-		task: renderAgentPrompt(assignment),
+		task: renderAgentPrompt(assignment, options.session.getAgentId?.() ?? MAIN_AGENT_ID),
 		assignment,
 		description: trimToUndefined(parsed.label),
 		index: 0,
@@ -641,7 +643,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 							id,
 							agent: effectiveAgent.name,
 							agentSource: effectiveAgent.source,
-							task: renderAgentPrompt(assignment),
+							task: renderAgentPrompt(assignment, options.session.getAgentId?.() ?? MAIN_AGENT_ID),
 							assignment,
 							description: trimToUndefined(parsed.label),
 							exitCode: 1,
