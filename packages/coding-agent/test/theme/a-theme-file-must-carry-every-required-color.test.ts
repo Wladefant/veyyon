@@ -39,8 +39,15 @@ function completeTheme(): Record<string, unknown> {
 	return { name: "sweep", colors };
 }
 
-/** Values a color token may never hold. A number is a valid color value and is not in this list. */
-const NOT_A_COLOR = [true, null, {}, [], () => {}] as const;
+/**
+ * Values a color token may never hold. A palette index is a number, so a number outside the 0..255
+ * integers `#rrggbb` and `38;5;N` can express is in this list: accepted, it rendered as a hex string
+ * of the wrong length (`300` became `#2b02b02b0`), as the text `undefined` (`-1`), or as an escape
+ * no terminal reads (packed RGB `0xff8800` became `38;5;16746496`).
+ */
+const NOT_A_COLOR = [true, null, {}, [], () => {}, 256, -1, 1.5, 0xff8800] as const;
+
+const NOT_A_COLOR_PROBLEM = "must be a string or a palette index from 0 to 255";
 
 describe("the token lists the sweep runs over", () => {
 	/**
@@ -79,9 +86,9 @@ describe("a complete theme file", () => {
 		expect(validateThemeJson(completeTheme())).toEqual({ missingColors: [], problems: [] });
 	});
 
-	it("accepts a numeric color value", () => {
+	it("accepts a palette index as a color value", () => {
 		const theme = completeTheme();
-		(theme.colors as Record<string, unknown>).accent = 0xff8800;
+		(theme.colors as Record<string, unknown>).accent = 208;
 		expect(validateThemeJson(theme)).toEqual({ missingColors: [], problems: [] });
 	});
 
@@ -107,7 +114,7 @@ describe("every required color token", () => {
 			(theme.colors as Record<string, unknown>)[token] = true;
 			expect(validateThemeJson(theme)).toEqual({
 				missingColors: [],
-				problems: [`"colors.${token}" must be a string or a number`],
+				problems: [`"colors.${token}" ${NOT_A_COLOR_PROBLEM}`],
 			});
 		});
 	}
@@ -124,7 +131,7 @@ describe("every optional color token", () => {
 		it(`is reported when "${token}" is present and not a color`, () => {
 			const theme = completeTheme();
 			(theme.colors as Record<string, unknown>)[token] = [];
-			expect(validateThemeJson(theme).problems).toContain(`"colors.${token}" must be a string or a number`);
+			expect(validateThemeJson(theme).problems).toContain(`"colors.${token}" ${NOT_A_COLOR_PROBLEM}`);
 		});
 	}
 });
@@ -134,7 +141,16 @@ describe("a value that is not a color", () => {
 		it(`is refused as ${typeof value === "object" ? JSON.stringify(value) : String(value)}`, () => {
 			const theme = completeTheme();
 			(theme.colors as Record<string, unknown>).text = value;
-			expect(validateThemeJson(theme).problems).toEqual(['"colors.text" must be a string or a number']);
+			expect(validateThemeJson(theme).problems).toEqual([`"colors.text" ${NOT_A_COLOR_PROBLEM}`]);
+		});
+	}
+
+	/** The two ends of the palette are colors; a range check written as `< 255` or `> 0` refuses one. */
+	for (const index of [0, 255]) {
+		it(`accepts palette index ${index}`, () => {
+			const theme = completeTheme();
+			(theme.colors as Record<string, unknown>).text = index;
+			expect(validateThemeJson(theme)).toEqual({ missingColors: [], problems: [] });
 		});
 	}
 });
@@ -160,14 +176,16 @@ describe("a file that is not a theme", () => {
 
 describe("the rest of the file", () => {
 	it("refuses a non-color palette var", () => {
-		expect(validateThemeJson({ ...completeTheme(), vars: { base: false } }).problems).toEqual([
-			'"vars" must map each name to a string or a number',
-		]);
+		for (const base of [false, 300]) {
+			expect(validateThemeJson({ ...completeTheme(), vars: { base } }).problems).toEqual([
+				'"vars" must map each name to a string or a palette index from 0 to 255',
+			]);
+		}
 	});
 
 	it("refuses an export ground that is not a color", () => {
 		expect(validateThemeJson({ ...completeTheme(), export: { cardBg: {} } }).problems).toEqual([
-			'"export.cardBg" must be a string or a number',
+			`"export.cardBg" ${NOT_A_COLOR_PROBLEM}`,
 		]);
 	});
 

@@ -51,6 +51,7 @@
 - How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
+- The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
 
 ### Fixed
 
@@ -112,6 +113,7 @@
 - Fixed a run that failed after one or more tool steps (a credential lookup or provider call that threw) being settled on its earlier tool-use reply, so a transient failure there is now retried and `session_stop` hooks receive the failure.
 - An @-mentioned image is encoded for the active model, so a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and other `stb`-backed local servers) receives PNG or JPEG instead of WebP, and with `images.autoResize` off the mention goes through the same canonical re-encode as the read tool.
 - The shell snapshot, the `local://` fallback root, the debug transcript, the `/share` HTML handed to a custom share script, the LLM request dump, PDF image extractions, git patches, task branch worktrees, screenshots, generated images, external-editor buffers, speech recordings, eval agent artifacts, the debug adapter socket and the `/debug` work-profile flamegraph are written under `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a fixed or guessable name in the shared temp directory, where another account could read them or replace them first.
+- A theme color, var or export given as a number that is not an integer from 0 to 255 fails theme validation with `"colors.<token>" must be a string or a palette index from 0 to 255` instead of loading as a missing or malformed hex color.
 
 ### Removed
 

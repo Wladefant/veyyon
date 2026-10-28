@@ -26,7 +26,6 @@ import { onAutoThemeMappingChanged, onColorBlindModeChanged, onSymbolPresetChang
 // the top of both files.
 import { getBuiltinTheme, getBuiltinThemeNames, hasBuiltinTheme } from "./builtin-themes";
 import {
-	ansi256ToHex,
 	bgAnsi,
 	type ColorMode,
 	detectColorMode,
@@ -38,6 +37,7 @@ import {
 	type ThemeBg,
 	type ThemeColor,
 	type ThemeJson,
+	themePaletteHex,
 	validateThemeJson,
 } from "./color";
 import { lavaText } from "./shimmer";
@@ -942,12 +942,12 @@ function resolveThemeExportColors(themeJson: ThemeJson): {
 	const vars = themeJson.vars ?? {};
 	const resolve = (value: string | number | undefined): string | undefined => {
 		if (value === undefined) return undefined;
-		if (typeof value === "number") return ansi256ToHex(value);
+		if (typeof value === "number") return themePaletteHex(value);
 		if (value === "" || value.startsWith("#")) return value;
 		const varName = value.startsWith("$") ? value.slice(1) : value;
 		if (varName in vars) {
 			const resolved = resolveVarRefs(varName, vars);
-			return typeof resolved === "number" ? ansi256ToHex(resolved) : resolved;
+			return typeof resolved === "number" ? themePaletteHex(resolved) : resolved;
 		}
 		return value;
 	};
@@ -980,7 +980,7 @@ export async function getResolvedThemeColors(themeName?: string): Promise<Record
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
 		if (typeof value === "number") {
-			cssColors[key] = ansi256ToHex(value);
+			cssColors[key] = themePaletteHex(value);
 		} else if (value === "") {
 			// Empty means default terminal color - use sensible fallback for HTML
 			cssColors[key] = defaultText;
