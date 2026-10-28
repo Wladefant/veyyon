@@ -347,7 +347,6 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		return migrateRawSettings(raw, this);
 	}
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Settings Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -440,7 +439,7 @@ export class Settings extends SettingsStore {
 		return settingsOrThrow();
 	}
 
-	/** Reload advisor and spawn routing without rebinding Main or existing workers. */
+	/** Reload spawn routing and compaction settings without rebinding Main or existing workers. */
 	reloadConfig() {
 		return this.reloadSelectedConfig(
 			[
@@ -451,6 +450,7 @@ export class Settings extends SettingsStore {
 				"agent.sharedModel",
 				"agent.thinkingLevel",
 				"agent.maxConcurrency",
+				...groupSettingPaths("compaction"),
 			],
 			{
 				defaultEffort:

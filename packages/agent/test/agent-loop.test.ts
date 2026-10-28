@@ -4,6 +4,7 @@ import {
 	agentLoopContinue,
 	agentLoopDetailed,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
+	ToolAdmissionFatalError,
 } from "@veyyon/agent-core/agent-loop";
 import type {
 	AgentContext,
@@ -2736,6 +2737,59 @@ describe("agentLoopContinue with AgentMessage", () => {
 			expect(toolEnd.isError).toBe(true);
 			expect(JSON.stringify(toolEnd.result)).toContain("policy: blocked");
 		}
+	});
+
+	// WHY: a `beforeToolCall` throw used to reach the model as an ordinary tool error and trigger another sample.
+	// A ToolAdmissionFatalError ends the run after the batch results; every other throw stays recoverable.
+	// Gap: parallel batches are covered only through the single-call shape.
+	describe("beforeToolCall throws", () => {
+		async function runWithHookError(error: Error) {
+			const toolSchema = type({ value: "string" });
+			const executed: string[] = [];
+			const tool: AgentTool<typeof toolSchema, { value: string }> = {
+				name: "echo",
+				label: "Echo",
+				description: "Echo tool",
+				parameters: toolSchema,
+				async execute(_toolCallId, params) {
+					executed.push(params.value);
+					return { content: [{ type: "text", text: params.value }], details: { value: params.value } };
+				},
+			};
+			const mock = createMockModel({
+				responses: [
+					{ content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }] },
+					{ content: ["done"] },
+				],
+			});
+			const config: AgentLoopConfig = {
+				model: mock.model,
+				convertToLlm: identityConverter,
+				beforeToolCall: async () => {
+					throw error;
+				},
+			};
+			const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+			const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, mock.stream);
+			const events: AgentEvent[] = [];
+			for await (const event of stream) events.push(event);
+			return { executed, events, messages: await stream.result() };
+		}
+
+		it("ends the run after the tool result when the error is a ToolAdmissionFatalError", async () => {
+			const { executed, events, messages } = await runWithHookError(new ToolAdmissionFatalError("lease lost"));
+			expect(executed).toEqual([]);
+			expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult"]);
+			const toolEnd = events.find(e => e.type === "tool_execution_end");
+			expect(JSON.stringify(toolEnd)).toContain("lease lost");
+			expect(events.at(-1)?.type).toBe("agent_end");
+		});
+
+		it("re-samples the model when the error is an ordinary Error", async () => {
+			const { executed, messages } = await runWithHookError(new Error("transient"));
+			expect(executed).toEqual([]);
+			expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		});
 	});
 
 	it("passes beforeToolCall args mutations into tool.execute without revalidation", async () => {

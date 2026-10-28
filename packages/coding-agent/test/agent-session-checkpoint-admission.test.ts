@@ -178,10 +178,12 @@ test("fenced tool never executes after lease loss", async () => {
 	expect(getRenewals()).toBeGreaterThanOrEqual(2);
 });
 
-// Defect: agent-loop.ts:2802 reinvokes model after beforeToolCall lease-loss throw
-// catches the lease loss error and treats it as a recoverable tool error rather than aborting.
+// WHY: a lease-loss throw from beforeToolCall used to reach the model as an ordinary tool error, so the model was
+// re-sampled and kept calling tools against a fence it could not lift. The run now ends after the batch results.
+// Class: every `beforeToolCall` admission failure of a synchronized session. Gap: a plain (non-fatal) hook throw is
+// still a recoverable tool error and is covered by agent-loop tests, not here.
 // SAFETY: cap the mock at 25 calls before returning plaintext stop to prevent runaway loops.
-test.failing(
+test(
 	"production prompt and tool admission both stop when the cloud lease is lost",
 	async () => {
 		const { session, getExecutions, getRenewals, getStreamCount } = await createCheckpointHarness(

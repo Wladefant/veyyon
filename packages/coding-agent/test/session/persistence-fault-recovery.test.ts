@@ -485,8 +485,12 @@ describe("a persistence fault does not end the transcript", () => {
 		expect(storage.atomicWrites).toBe(atomicBefore);
 
 		await manager.flush().catch(() => undefined);
-		// The first append started the retry and the other nineteen joined it.
-		expect(storage.atomicWrites - atomicBefore).toBe(1);
+		// The twenty appends cost one background publish between them: the first append started the retry and the
+		// other nineteen joined it. `flush()` takes its own attempt on the rewrite that is still pending, so the
+		// count is one or two. What the row bounds is that it does not grow with the burst; a publish per entry is 20.
+		const publishes = storage.atomicWrites - atomicBefore;
+		expect(publishes).toBeGreaterThanOrEqual(1);
+		expect(publishes).toBeLessThanOrEqual(2);
 		expect(storage.syncWrites).toBe(syncBefore);
 
 		// The burst is not lost to the bound: the next healthy attempt writes all of it.
