@@ -5,6 +5,11 @@
 ### Fixed
 
 - Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+## [1.6.4] - 2026-10-28
+
+### Fixed
+
+- Fixed the Windows binary exiting a few seconds after startup with `The owner-only Windows ACL operation failed (... SeSecurityPrivilege ...)` once its terminal ownership directory had been protected by an earlier launch.
 
 ## [1.6.3] - 2026-10-28
 
