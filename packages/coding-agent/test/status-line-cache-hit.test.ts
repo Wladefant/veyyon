@@ -31,18 +31,13 @@ function ctxWith(usage: Partial<SegmentContext["usageStats"]>): SegmentContext {
 	} as unknown as SegmentContext;
 }
 
-// ANSI is irrelevant to the rate math; strip it before asserting the number.
-function plain(text: string): string {
-	return stripVTControlCharacters(text);
-}
-
 describe("cache_hit status-line segment", () => {
 	it("computes hit rate over the full prompt (DeepSeek miss lives in input)", () => {
 		// DeepSeek: cacheRead = hit, input = miss, cacheWrite = 0.
 		// 800 / (800 + 0 + 200) = 80.00%.
 		const result = renderSegment("cache_hit", ctxWith({ cacheRead: 800, cacheWrite: 0, input: 200 }));
 		expect(result.visible).toBe(true);
-		expect(plain(result.content)).toContain("80.00%");
+		expect(stripVTControlCharacters(result.content)).toContain("80.00%");
 	});
 
 	it("counts uncached input in the denominator alongside cacheWrite (Anthropic/OpenRouter)", () => {
@@ -50,7 +45,7 @@ describe("cache_hit status-line segment", () => {
 		// (Dropping uncached input here would overstate the rate as 66.67%.)
 		const result = renderSegment("cache_hit", ctxWith({ cacheRead: 600, cacheWrite: 300, input: 100 }));
 		expect(result.visible).toBe(true);
-		expect(plain(result.content)).toContain("60.00%");
+		expect(stripVTControlCharacters(result.content)).toContain("60.00%");
 	});
 
 	it("is hidden until there is a cache read, even with uncached input", () => {
@@ -76,7 +71,7 @@ describe("token and cache count status-line segments", () => {
 			);
 			const shown = renderSegment(id, ctxWith({ ...others, [field]: 12_345 }));
 			expect(shown.visible).toBe(true);
-			expect(plain(shown.content)).toBe(withIcon(icon(), formatNumber(12_345)));
+			expect(stripVTControlCharacters(shown.content)).toBe(withIcon(icon(), formatNumber(12_345)));
 			expect(shown.content).toBe(theme.fg(color, withIcon(icon(), formatNumber(12_345))));
 			const hidden = renderSegment(id, ctxWith({ ...others, [field]: 0 }));
 			expect(hidden).toEqual({ content: "", visible: false });

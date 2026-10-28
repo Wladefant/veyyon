@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import {
 	EMBER,
 	emberBandEscape,
@@ -15,11 +16,6 @@ import {
  *  values themselves. */
 const fgTrue = (band: number) => `\x1b[38;2;${EMBER[band].join(";")}m`;
 
-/** Strip SGR escapes so we can assert on the glyph geometry. */
-function strip(s: string): string {
-	return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 const BASE = {
 	cols: 64,
 	rows: 24,
@@ -35,12 +31,12 @@ describe("renderSunField geometry", () => {
 		const out = renderSunField(BASE);
 		expect(out.length).toBe(BASE.rows);
 		for (const line of out) {
-			expect([...strip(line)].length).toBe(BASE.cols);
+			expect([...stripVTControlCharacters(line)].length).toBe(BASE.cols);
 		}
 	});
 
 	test("the centre is a solid disc and the far corners are empty ground", () => {
-		const grid = renderSunField(BASE).map(strip);
+		const grid = renderSunField(BASE).map(stripVTControlCharacters);
 		// Dead centre is the hottest band -> full block.
 		expect(grid[BASE.cy][BASE.cx]).toBe("█");
 		// Corners are well outside 1.26R -> spaces.
@@ -49,7 +45,7 @@ describe("renderSunField geometry", () => {
 	});
 
 	test("glyph density strictly falls off with radius (core denser than rim denser than void)", () => {
-		const grid = renderSunField(BASE).map(strip);
+		const grid = renderSunField(BASE).map(stripVTControlCharacters);
 		const filled = (y0: number, y1: number, x0: number, x1: number) => {
 			let n = 0;
 			for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (grid[y][x] !== " ") n++;
@@ -71,7 +67,7 @@ describe("renderSunField geometry", () => {
 	test("radius scales the disc: a bigger radius fills strictly more cells", () => {
 		const count = (radius: number) =>
 			renderSunField({ ...BASE, radius })
-				.map(strip)
+				.map(stripVTControlCharacters)
 				.join("")
 				.split("")
 				.filter(c => c !== " ").length;
@@ -113,23 +109,23 @@ describe("renderSunField colour", () => {
 
 describe("renderSunField ripples", () => {
 	test("an active flare perturbs the field vs the same frame with none", () => {
-		const still = renderSunField(BASE).map(strip).join("");
+		const still = renderSunField(BASE).map(stripVTControlCharacters).join("");
 		const rippled = renderSunField({
 			...BASE,
 			ripples: [{ x: BASE.cx, y: BASE.cy, age: 0.2, amp: 1 }],
 		})
-			.map(strip)
+			.map(stripVTControlCharacters)
 			.join("");
 		expect(rippled).not.toBe(still);
 	});
 
 	test("an expired ripple (age past the window) has no effect", () => {
-		const still = renderSunField(BASE).map(strip).join("");
+		const still = renderSunField(BASE).map(stripVTControlCharacters).join("");
 		const expired = renderSunField({
 			...BASE,
 			ripples: [{ x: BASE.cx, y: BASE.cy, age: 99, amp: 1 }],
 		})
-			.map(strip)
+			.map(stripVTControlCharacters)
 			.join("");
 		expect(expired).toBe(still);
 	});
@@ -155,13 +151,13 @@ describe("renderSunField edge sizes (the UI can pass anything — never crash)",
 				out = renderSunField(opts);
 			}).not.toThrow();
 			expect(out.length).toBe(opts.rows);
-			for (const line of out) expect([...strip(line)].length).toBe(opts.cols);
+			for (const line of out) expect([...stripVTControlCharacters(line)].length).toBe(opts.cols);
 		});
 	}
 
 	test("zero radius still produces a valid (tiny or empty) hot spot, never NaN glyphs", () => {
 		const out = renderSunField({ ...BASE, radius: 0 })
-			.map(strip)
+			.map(stripVTControlCharacters)
 			.join("");
 		expect(out).not.toContain("NaN");
 		expect(out).not.toContain("undefined");
@@ -172,13 +168,13 @@ describe("sunMark (the launch-signature recipe)", () => {
 	test("rests at a full round disc: centre is solid, sized to the slot", () => {
 		const out = sunMark(16, 7, { trueColor: true });
 		expect(out.length).toBe(7);
-		for (const line of out) expect([...strip(line)].length).toBe(16);
-		expect(strip(out[3])).toContain("█");
+		for (const line of out) expect([...stripVTControlCharacters(line)].length).toBe(16);
+		expect(stripVTControlCharacters(out[3])).toContain("█");
 	});
 
 	const fill = (lines: string[]) =>
 		lines
-			.map(strip)
+			.map(stripVTControlCharacters)
 			.join("")
 			.split("")
 			.filter(c => c !== " ").length;
@@ -253,7 +249,7 @@ describe("renderSunsetField (the sunset finale)", () => {
 
 	test("the horizon is one solid rule of `cols` dashes", () => {
 		const out = renderSunsetField(BASE_SUNSET);
-		expect(strip(out[DEFAULT_HORIZON])).toBe("─".repeat(40));
+		expect(stripVTControlCharacters(out[DEFAULT_HORIZON])).toBe("─".repeat(40));
 		expect(out[DEFAULT_HORIZON]).toContain("\x1b[38;2;251;192;109m"); // the hot horizon color
 	});
 
@@ -264,7 +260,7 @@ describe("renderSunsetField (the sunset finale)", () => {
 
 	test("a custom horizonY moves the rule and the empty ground with it", () => {
 		const out = renderSunsetField({ ...BASE_SUNSET, horizonY: 3 });
-		expect(strip(out[3])).toBe("─".repeat(40));
+		expect(stripVTControlCharacters(out[3])).toBe("─".repeat(40));
 		expect(out[4]).toBe("");
 	});
 
@@ -272,7 +268,7 @@ describe("renderSunsetField (the sunset finale)", () => {
 		const above = renderSunsetField(BASE_SUNSET).slice(0, DEFAULT_HORIZON);
 		const joined = above.join("");
 		expect(joined).toContain("\x1b[48;2;"); // truecolor background = sky
-		expect(strip(joined)).toMatch(/[░▒▓█]/); // an ember glyph = the sun cap above the line
+		expect(stripVTControlCharacters(joined)).toMatch(/[░▒▓█]/); // an ember glyph = the sun cap above the line
 	});
 
 	test("is deterministic for a fixed time", () => {
@@ -298,8 +294,8 @@ describe("renderEmberField (the churn texture)", () => {
 	test("returns a full `rows` × `cols` grid of ramp glyphs", () => {
 		const out = renderEmberField(BASE_EMBER);
 		expect(out.length).toBe(4);
-		for (const line of out) expect([...strip(line)].length).toBe(24);
-		expect([...strip(out.join(""))].every(c => GLYPH_SET.has(c))).toBe(true);
+		for (const line of out) expect([...stripVTControlCharacters(line)].length).toBe(24);
+		expect([...stripVTControlCharacters(out.join(""))].every(c => GLYPH_SET.has(c))).toBe(true);
 	});
 
 	test("is deterministic for a fixed time and seed", () => {
@@ -311,7 +307,7 @@ describe("renderEmberField (the churn texture)", () => {
 	});
 
 	test("a higher base raises the heat — more solid cells", () => {
-		const solids = (lines: string[]) => [...strip(lines.join(""))].filter(c => c === "█").length;
+		const solids = (lines: string[]) => [...stripVTControlCharacters(lines.join(""))].filter(c => c === "█").length;
 		const cool = solids(renderEmberField({ ...BASE_EMBER, base: 0.1 }));
 		const hot = solids(renderEmberField({ ...BASE_EMBER, base: 0.95 }));
 		expect(hot).toBeGreaterThan(cool);

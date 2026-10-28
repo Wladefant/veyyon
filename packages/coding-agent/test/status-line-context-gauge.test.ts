@@ -98,10 +98,6 @@ function gaugeContext(overrides: GaugeOverrides = {}): SegmentContext {
 	} as unknown as SegmentContext;
 }
 
-function plain(text: string): string {
-	return stripVTControlCharacters(text);
-}
-
 describe("formatContextUsage", () => {
 	/** One unit on both sides of the slash. `47.3%/200,000` was not a ratio of
 	 * anything: no arithmetic relates a percent to a token count that way. */
@@ -249,8 +245,8 @@ describe("context_total segment", () => {
 				autoCompactEnabled: true,
 			}),
 		);
-		expect(plain(rendered.content)).toContain("200K");
-		expect(plain(rendered.content)).not.toContain("170K");
+		expect(stripVTControlCharacters(rendered.content)).toContain("200K");
+		expect(stripVTControlCharacters(rendered.content)).not.toContain("170K");
 	});
 
 	it("hides itself when the window is unknown", () => {
@@ -269,7 +265,7 @@ describe("context_pct segment", () => {
 			"context_pct",
 			gaugeContext({ contextTokens: 50_000, contextWindow: 200_000, contextLimit: 200_000, bar: true }),
 		);
-		const text = plain(rendered.content);
+		const text = stripVTControlCharacters(rendered.content);
 		expect(text).toContain("▰▰▰▰▰▰▱▱");
 		expect(text).toContain("75% left");
 	});
@@ -277,7 +273,7 @@ describe("context_pct segment", () => {
 	/** The bar empties as the session grows: the same gauge at 90% used shows one
 	 * remaining cell, not seven filled ones. */
 	it("shows less bar the less room there is", () => {
-		const nearlyFull = plain(
+		const nearlyFull = stripVTControlCharacters(
 			renderSegment(
 				"context_pct",
 				gaugeContext({ contextTokens: 180_000, contextWindow: 200_000, contextLimit: 200_000, bar: true }),
@@ -289,7 +285,7 @@ describe("context_pct segment", () => {
 
 	/** A fresh session is all room, and reads as such. */
 	it("shows a full bar at the start of a session", () => {
-		const fresh = plain(
+		const fresh = stripVTControlCharacters(
 			renderSegment("context_pct", gaugeContext({ contextTokens: 0, contextLimit: 200_000, bar: true })).content,
 		);
 		expect(fresh).toContain("▰▰▰▰▰▰▰▰");
@@ -299,7 +295,9 @@ describe("context_pct segment", () => {
 	/** Right after a compaction the percentage is unknown; the gauge says so
 	 * instead of printing a number it does not have. */
 	it("admits an unknown percentage in bar mode", () => {
-		const unknown = plain(renderSegment("context_pct", gaugeContext({ contextPercent: null, bar: true })).content);
+		const unknown = stripVTControlCharacters(
+			renderSegment("context_pct", gaugeContext({ contextPercent: null, bar: true })).content,
+		);
 		expect(unknown).toContain("? left");
 	});
 });
