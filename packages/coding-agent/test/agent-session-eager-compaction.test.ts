@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
-import type { Model, TextContent } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as codexSessionState from "@veyyon/ai/providers/openai-codex/session-state";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -15,6 +15,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool, USER_TODO_EDIT_CUSTOM_TYPE } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
@@ -63,11 +64,6 @@ type Harness = {
 	waitForCall: WaitForCall;
 };
 
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
-
 function getToolChoiceName(choice: unknown): string | undefined {
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
@@ -79,13 +75,7 @@ function getToolChoiceName(choice: unknown): string | undefined {
 }
 
 function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) return "";
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	return "content" in message ? contentText(message.content) : "";
 }
 
 function createAssistantResponse(text: string) {

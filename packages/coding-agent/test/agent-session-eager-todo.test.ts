@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
-import type { AssistantMessage, Context, TextContent, ToolCall } from "@veyyon/ai";
+import type { AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -14,6 +14,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -34,11 +35,6 @@ type ObservedPromptCall = {
 };
 
 const SESSION_STATE_PREFIX = "<session-state>";
-
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
 
 function getToolChoiceName(choice: unknown): string | undefined {
 	if (!choice) return undefined;
@@ -87,19 +83,7 @@ function createAssistantMessageWithThinking(text: string, thinking: string): Ass
 }
 
 function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) {
-		return "";
-	}
-	if (typeof message.content === "string") {
-		return message.content;
-	}
-	if (!Array.isArray(message.content)) {
-		return "";
-	}
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	return "content" in message ? contentText(message.content) : "";
 }
 
 /**
@@ -110,13 +94,7 @@ function getMessageText(message: AgentMessage): string {
  * the assertion passes while the real request leaves for the network.
  */
 function firstMessageText(context: Context): string {
-	const content = context.messages[0]?.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(isTextContentBlock)
-		.map(block => block.text)
-		.join("\n");
+	return contentText(context.messages[0]?.content);
 }
 
 describe("AgentSession eager todo enforcement", () => {
