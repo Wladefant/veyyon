@@ -17,7 +17,11 @@ import {
 	type CompactionHost,
 	type CompactionSession,
 } from "@veyyon/coding-agent/session/runtime/compaction-runtime";
-import { COMPACTION_CHECK_NONE } from "@veyyon/kernel/session/agent-session-compaction-policy";
+import {
+	COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION,
+	COMPACTION_CHECK_NONE,
+	compactionDeadEndWarning,
+} from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
 
@@ -89,6 +93,23 @@ interface TestHarnessState {
 	pruneCallCount: number;
 	prunedMessages: readonly AgentMessage[] | undefined;
 	promptGeneration: number;
+}
+
+/** The warnings this suite is about: the guard's own notice, not the generic dead-end one. */
+function guardWarnings(state: TestHarnessState) {
+	return state.notices.filter(
+		n => n.category === "compaction" && n.level === "warning" && n.message.startsWith("Automatic compaction is paused"),
+	);
+}
+
+/**
+ * A pass that leaves context over the bar emits the guard notice once, and the pre-existing
+ * dead-end notice at most once, so a third duplicate notice is still caught.
+ */
+function expectOneGuardNoticeAndAtMostOneDeadEnd(state: TestHarnessState): void {
+	expect(guardWarnings(state)).toHaveLength(1);
+	expect(state.notices.filter(n => n.message === compactionDeadEndWarning()).length).toBeLessThanOrEqual(1);
+	expect(state.notices.filter(n => n.category === "compaction" && n.level === "warning").length).toBeLessThanOrEqual(2);
 }
 
 function createCompactionRuntimeHarness(
@@ -262,14 +283,14 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 
 		// Trigger an auto-compaction pass that completes successfully and evaluates the guard
 		const outcome = await runtime.runAutoCompaction("threshold", false);
-		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+		expect(outcome).toBe(COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION);
 
 		// Guard should now be armed and suppressing auto-compaction
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
 
 		// Exactly one warning notice was emitted naming "system prompt"
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(1);
+		expectOneGuardNoticeAndAtMostOneDeadEnd(state);
+		const compactionWarnings = guardWarnings(state);
 		expect(compactionWarnings[0].message).toContain("system prompt");
 		expect(compactionWarnings[0].message).toContain("105,000");
 		expect(compactionWarnings[0].message).toContain("100,000");
@@ -315,8 +336,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		await runtime.runAutoCompaction("threshold", false);
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
 
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(1);
+		expectOneGuardNoticeAndAtMostOneDeadEnd(state);
+		const compactionWarnings = guardWarnings(state);
 		expect(compactionWarnings[0].message).toContain("tool definitions");
 	});
 
@@ -338,8 +359,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		await runtime.runAutoCompaction("threshold", false);
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
 
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(1);
+		expectOneGuardNoticeAndAtMostOneDeadEnd(state);
+		const compactionWarnings = guardWarnings(state);
 		expect(compactionWarnings[0].message).toContain("history");
 	});
 
@@ -361,7 +382,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		// First pass: arms the guard
 		await runtime.runAutoCompaction("threshold", false);
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
-		expect(state.notices.length).toBe(1);
+		expectOneGuardNoticeAndAtMostOneDeadEnd(state);
+		const noticesAfterFirstPass = state.notices.length;
 
 		state.emittedEvents.length = 0;
 
@@ -378,7 +400,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		expect(skippedEndEvents.length).toBe(1);
 
 		// No second warning notice emitted
-		expect(state.notices.length).toBe(1);
+		expect(state.notices.length).toBe(noticesAfterFirstPass);
 	});
 
 	it("remains suppressed while context grows below keepRecentTokens boundary and resumes at boundary", async () => {
@@ -498,20 +520,21 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 	});
 
 	it("does not arm guard when post-compaction context falls below threshold", async () => {
-		const { runtime, state } = createCompactionRuntimeHarness(85000, 128000);
+		const { runtime, state } = createCompactionRuntimeHarness(75000, 128000);
 
-		// Post-compaction context is 85,000, which is strictly below the 100,000 threshold
+		// Post-compaction context is 75,000: under the 100,000 threshold and under the 80,000
+		// recovery band, so neither the guard nor the dead-end notice applies.
 		state.breakdown = {
 			contextWindow: 128000,
 			anchored: false,
-			usedTokens: 85000,
+			usedTokens: 75000,
 			systemPromptTokens: 30000,
 			systemContextTokens: 0,
 			skillsTokens: 0,
 			systemToolsTokens: 15000,
-			messagesTokens: 40000,
+			messagesTokens: 30000,
 		};
-		state.currentTokens = 85000;
+		state.currentTokens = 75000;
 
 		await runtime.runAutoCompaction("threshold", false);
 
@@ -567,7 +590,7 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		state.currentTokens = 105000;
 
 		const outcome = await runtime.runAutoCompaction("threshold", false);
-		expect(outcome).toBe(COMPACTION_CHECK_NONE);
+		expect(outcome).toBe(COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION);
 
 		// Post-compaction tool pruning was called during #applyCompaction
 		expect(state.pruneCallCount).toBeGreaterThan(0);
@@ -576,8 +599,8 @@ describe("CompactionRuntime auto-compaction loop guard (#685)", () => {
 		expect(runtime.isAutoCompactionSuppressed()).toBe(true);
 
 		// Warning notice is emitted
-		const compactionWarnings = state.notices.filter(n => n.category === "compaction" && n.level === "warning");
-		expect(compactionWarnings.length).toBe(1);
+		expectOneGuardNoticeAndAtMostOneDeadEnd(state);
+		const compactionWarnings = guardWarnings(state);
 		expect(compactionWarnings[0].message).toContain("Automatic compaction is paused");
 	});
 
@@ -697,7 +720,7 @@ describe("AgentSession tool pruning after compaction (#685)", () => {
 			modelRegistry: {} as never,
 			toolRegistry,
 			mcpDiscoveryEnabled: true,
-			rebuildSystemPrompt: () => "system prompt",
+			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
 
 		// Activate all three discovered tools
