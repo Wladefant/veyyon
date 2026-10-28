@@ -149,7 +149,9 @@ test("a history replay and late delivery replay larger than the send limit waits
 		).length;
 		if (settled >= deliveryCount) allSettled.resolve();
 	});
-	cleanup.push(() => seeder.destroy());
+	cleanup.push(() => {
+		seeder.destroy();
+	});
 	accept?.(seeder as unknown as transport.TerminalSocket);
 
 	for (let index = 0; index < deliveryCount; index++) {
