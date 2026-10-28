@@ -41,7 +41,7 @@ import {
 	requireNonEmpty,
 } from "./gh-format";
 import { parseIssueUrl } from "./gh-url";
-import { type CacheStatus, getOrFetchView, resolveGithubCacheAuthKey } from "./github-cache";
+import { type CacheLookupResult, getOrFetchView, resolveGithubCacheAuthKey } from "./github-cache";
 
 const FILE_PREVIEW_LIMIT = 50;
 
@@ -92,18 +92,7 @@ export const GH_ISSUE_FIELDS = [
 	"url",
 ];
 
-export const GH_ISSUE_FIELDS_NO_COMMENTS = [
-	"author",
-	"body",
-	"createdAt",
-	"labels",
-	"number",
-	"state",
-	"stateReason",
-	"title",
-	"updatedAt",
-	"url",
-];
+export const GH_ISSUE_FIELDS_NO_COMMENTS = GH_ISSUE_FIELDS.filter(field => field !== "comments");
 
 export const GH_ISSUE_STATE_REASON_FIELD = "stateReason";
 
@@ -162,24 +151,7 @@ export const GH_PR_FIELDS = [
 	"url",
 ];
 
-export const GH_PR_FIELDS_NO_COMMENTS = [
-	"author",
-	"baseRefName",
-	"body",
-	"createdAt",
-	"files",
-	"headRefName",
-	"isDraft",
-	"labels",
-	"mergeStateStatus",
-	"number",
-	"reviews",
-	"reviewDecision",
-	"state",
-	"title",
-	"updatedAt",
-	"url",
-];
+export const GH_PR_FIELDS_NO_COMMENTS = GH_PR_FIELDS.filter(field => field !== "comments");
 
 export interface GhComment {
 	author?: GhUser | null;
@@ -591,14 +563,6 @@ export interface PrViewLookupOptions {
 	cacheAuthKey?: string | null;
 }
 
-export interface ViewLookupResult<T> {
-	rendered: string;
-	sourceUrl: string | undefined;
-	payload: T;
-	status: CacheStatus;
-	fetchedAt: number;
-}
-
 async function fetchIssueViewFresh(
 	cwd: string,
 	repo: string | undefined,
@@ -638,7 +602,7 @@ async function fetchPrViewFresh(
  * Cache-aware issue/view fetcher. Used by both the `github` tool op and the
  * `issue://` protocol handler so a single shared row services both surfaces.
  */
-export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<ViewLookupResult<GhIssueViewData>> {
+export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<CacheLookupResult<GhIssueViewData>> {
 	const identifier = requireNonEmpty(options.issue, "issue");
 	if (identifier.startsWith("-")) {
 		throw new ToolError(`invalid issue identifier: ${identifier}. Pass an issue number or URL.`);
@@ -671,7 +635,7 @@ export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<
 		return { ...fresh, status: "miss", fetchedAt: Date.now() };
 	}
 
-	const lookup = await getOrFetchView<GhIssueViewData>({
+	return getOrFetchView<GhIssueViewData>({
 		repo,
 		kind: "issue",
 		number: cacheNumber,
@@ -680,13 +644,6 @@ export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<
 		authKey,
 		fetchFresh: doFetch,
 	});
-	return {
-		rendered: lookup.rendered,
-		sourceUrl: lookup.sourceUrl,
-		payload: lookup.payload,
-		status: lookup.status,
-		fetchedAt: lookup.fetchedAt,
-	};
 }
 
 /**
@@ -694,11 +651,11 @@ export async function getOrFetchIssue(options: IssueViewLookupOptions): Promise<
  * branch-name / current-branch lookups bypass the cache entirely upstream
  * (see `executePrView`).
  */
-export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLookupResult<GhPrViewData>> {
+export async function getOrFetchPr(options: PrViewLookupOptions): Promise<CacheLookupResult<GhPrViewData>> {
 	const includeComments = options.includeComments ?? true;
 	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
 	const doFetch = () => fetchPrViewFresh(options.cwd, options.repo, options.number, includeComments, options.signal);
-	const lookup = await getOrFetchView<GhPrViewData>({
+	return getOrFetchView<GhPrViewData>({
 		repo: options.repo,
 		kind: "pr",
 		number: options.number,
@@ -707,13 +664,6 @@ export async function getOrFetchPr(options: PrViewLookupOptions): Promise<ViewLo
 		authKey,
 		fetchFresh: doFetch,
 	});
-	return {
-		rendered: lookup.rendered,
-		sourceUrl: lookup.sourceUrl,
-		payload: lookup.payload,
-		status: lookup.status,
-		fetchedAt: lookup.fetchedAt,
-	};
 }
 
 export interface PrDiffFile {
@@ -985,7 +935,7 @@ async function fetchPrDiffFresh(
  * per-file slice variants of `pr://<n>/diff` share one `gh pr diff`
  * invocation.
  */
-export async function getOrFetchPrDiff(options: PrDiffLookupOptions): Promise<ViewLookupResult<PrDiffPayload>> {
+export async function getOrFetchPrDiff(options: PrDiffLookupOptions): Promise<CacheLookupResult<PrDiffPayload>> {
 	const authKey = options.cacheAuthKey === undefined ? (resolveGithubCacheAuthKey() ?? null) : options.cacheAuthKey;
 	const doFetch = () => fetchPrDiffFresh(options.cwd, options.repo, options.number, options.signal);
 	const lookup = await getOrFetchView<PrDiffPayload>({
@@ -997,12 +947,6 @@ export async function getOrFetchPrDiff(options: PrDiffLookupOptions): Promise<Vi
 		authKey,
 		fetchFresh: doFetch,
 	});
-	return {
-		rendered: lookup.rendered,
-		sourceUrl: lookup.sourceUrl,
-		// Rehydrate the unified text from `rendered` (stored once per row).
-		payload: { unified: lookup.rendered, files: lookup.payload.files },
-		status: lookup.status,
-		fetchedAt: lookup.fetchedAt,
-	};
+	// Rehydrate the unified text from `rendered` (stored once per row).
+	return { ...lookup, payload: { unified: lookup.rendered, files: lookup.payload.files } };
 }
