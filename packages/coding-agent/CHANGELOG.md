@@ -41,8 +41,8 @@
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
-- Extension browser sessions close the connect tab they opened, by tab id, once the first browser tab is attached. A failed open still removes it, a reused operator Chrome and its other tabs stay untouched, and a relay owned by another process closes it through `POST /control/<secret>/close-connect-tab` ([Refs #641](https://github.com/Wladefant/veyyon/pull/641#issuecomment-6278404345)).
-- Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
+- Extension browser sessions close the connect tab they opened, by tab id, once the first browser tab is attached. A reused operator Chrome and its other tabs stay untouched ([PR](https://github.com/Wladefant/veyyon/pull/644)).
+- Extension browser sessions remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - MCP event notices remain queued after prompt rejection and are fsynced with their durable prompt receipt before delivery is acknowledged ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).

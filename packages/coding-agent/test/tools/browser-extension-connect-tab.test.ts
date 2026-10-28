@@ -2,15 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { extensionStateDir, PLAYWRIGHT_EXTENSION_ID, writeExtensionToken } from "@veyyon/coding-agent/tools/web/browser/extension-policy";
-import { buildConnectUrl, ExtensionRelay } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
+import { writeExtensionToken } from "@veyyon/coding-agent/tools/web/browser/extension-policy";
+import { ExtensionRelay } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
 import { openExtensionSession } from "@veyyon/coding-agent/tools/web/browser/extension-session";
 import { setAgentDir } from "@veyyon/utils";
 
 const INSTANCE = "connect-tab";
 const CONNECT_TAB = 42;
 const OPERATOR_TAB = 7;
-const POPUP_TAB = 77;
 
 interface Call {
 	method: string;
@@ -23,6 +22,7 @@ class FakeExtension {
 	readonly #ws: WebSocket;
 	readonly #failing: Set<string>;
 	readonly #attached = new Set<number>();
+	#nextTab = 900;
 
 	private constructor(ws: WebSocket, failing: Set<string>) {
 		this.#ws = ws;
@@ -72,7 +72,7 @@ class FakeExtension {
 			return;
 		}
 		let result: unknown = {};
-		if (message.method === "chrome.tabs.create") result = { id: 900 };
+		if (message.method === "chrome.tabs.create") result = { id: this.#nextTab++ };
 		if (cdp === "Target.getTargetInfo") result = { targetInfo: { targetId: "main-frame" } };
 		this.#ws.send(JSON.stringify({ id: message.id, result }));
 	}
@@ -110,14 +110,14 @@ async function openCdp(cdpUrl: string): Promise<WebSocket> {
 	return cdp;
 }
 
-/** Asks the relay for a new target over CDP and returns its reply. */
-function createTarget(cdp: WebSocket): Promise<{ result?: { targetId?: string } }> {
+/** Asks the relay for a new target over CDP and returns its reply. Replies are matched by `id`. */
+function createTarget(cdp: WebSocket, id = 1): Promise<{ result?: { targetId?: string } }> {
 	const created = Promise.withResolvers<{ result?: { targetId?: string } }>();
-	cdp.onmessage = event => {
+	cdp.addEventListener("message", event => {
 		const message = JSON.parse(String(event.data));
-		if (message.id === 1) created.resolve(message);
-	};
-	cdp.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "about:blank" } }));
+		if (message.id === id) created.resolve(message);
+	});
+	cdp.send(JSON.stringify({ id, method: "Target.createTarget", params: { url: "about:blank" } }));
 	return created.promise;
 }
 
@@ -195,7 +195,6 @@ test("a removed connect tab is never removed again when a working tab attaches",
 	const cdp = await openCdp(relay.cdpUrl);
 	try {
 		expect((await createTarget(cdp)).result?.targetId).toBe("ext-900");
-		expect(await relay.closeConnectTab()).toBe(false);
 		expect(ext.removedTabs()).toEqual([]);
 		expect(relay.tabCount).toBe(1);
 	} finally {
@@ -233,40 +232,46 @@ test("a connect that never opened a tab removes nothing from the operator's Chro
 	expect(ext.removedTabs()).toEqual([]);
 });
 
-test("the control endpoint closes the adopted connect tab by id, and only once a working tab is attached", async () => {
-	const bootstrap = {
-		extensionId: PLAYWRIGHT_EXTENSION_ID,
-		protocolVersion: 2,
-		token: "t-0123456789",
-		clientName: "veyyon",
-	};
-	relay = ExtensionRelay.start({ instance: INSTANCE, bootstrap });
-	const stateFile = fs.readdirSync(extensionStateDir()).find(name => name.endsWith(".relay.json"));
-	if (!stateFile) throw new Error("the relay wrote no state file");
-	const state: { port: number; control: string } = JSON.parse(
-		fs.readFileSync(path.join(extensionStateDir(), stateFile), "utf8"),
+test("an extension that drops and reconnects never has the old connect tab id removed", async () => {
+	relay = await openExtensionSession(
+		{ kind: "extension", instanceId: INSTANCE },
+		{ timeoutMs: 3000, launchConnect: reusedOperatorChrome({ openConnectTab: true }) },
 	);
-	const closeUrl = `http://127.0.0.1:${state.port}/control/${state.control}/close-connect-tab`;
-	extension = await FakeExtension.connect(relay.extensionUrl);
+	const first = extension;
+	if (!first) throw new Error("the fake extension never connected");
+	first.close();
+	await until(() => relay?.extensionConnected === false, "the relay to notice the dropped extension");
+	// Chrome may hand id 42 to an operator tab by now. The reconnected extension never saw the connect tab.
+	const second = await FakeExtension.connect(relay.extensionUrl);
+	extension = second;
+	await until(() => relay?.extensionConnected === true, "the extension to reconnect");
+	const cdp = await openCdp(relay.cdpUrl);
+	try {
+		expect((await createTarget(cdp)).result?.targetId).toBe("ext-900");
+		expect(relay.tabCount).toBe(1);
+		expect(second.removedTabs()).toEqual([]);
+		expect(first.removedTabs()).toEqual([]);
+	} finally {
+		cdp.close();
+	}
+});
+
+test("two parallel Target.createTarget calls remove the connect tab exactly once", async () => {
+	relay = await openExtensionSession(
+		{ kind: "extension", instanceId: INSTANCE },
+		{ timeoutMs: 3000, launchConnect: reusedOperatorChrome({ openConnectTab: true }) },
+	);
 	const ext = extension;
-	// Before the connect page appears there is nothing to close.
-	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: false });
-	const connectUrl = buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl });
-	ext.emit("chrome.tabs.onCreated", [{ id: OPERATOR_TAB, url: "https://operator.example/inbox" }]);
-	ext.emit("chrome.tabs.onCreated", [{ id: CONNECT_TAB, url: connectUrl }]);
-	await until(() => relay?.tabCount === 1, "the connect tab adoption");
-	// The connect tab is the only attached tab, so closing it would drop the socket. The endpoint refuses.
-	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: false });
-	expect(ext.removedTabs()).toEqual([]);
-	expect(ext.open).toBe(true);
-	// A popup the connect tab opened is a working tab. Once it is attached, the endpoint closes the connect tab.
-	ext.emit("chrome.tabs.onCreated", [{ id: POPUP_TAB, openerTabId: CONNECT_TAB, url: "https://example.com/" }]);
-	await until(() => relay?.tabCount === 2, "the popup adoption");
-	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: true });
-	await until(() => ext.removedTabs().length === 1, "the connect tab removal");
-	expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
-	expect(ext.open).toBe(true);
-	// A second call finds nothing left, so no other tab is ever removed.
-	expect(await (await fetch(closeUrl, { method: "POST" })).json()).toEqual({ closed: false });
-	expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
+	if (!ext) throw new Error("the fake extension never connected");
+	const cdp = await openCdp(relay.cdpUrl);
+	try {
+		const replies = await Promise.all([createTarget(cdp, 1), createTarget(cdp, 2)]);
+		expect(replies.map(reply => reply.result?.targetId).sort()).toEqual(["ext-900", "ext-901"]);
+		await until(() => ext.removedTabs().length >= 1, "the connect tab removal");
+		expect(ext.removedTabs()).toEqual([[CONNECT_TAB]]);
+		expect(ext.open).toBe(true);
+		expect(relay.tabCount).toBe(2);
+	} finally {
+		cdp.close();
+	}
 });

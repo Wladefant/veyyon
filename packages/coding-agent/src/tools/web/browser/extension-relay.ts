@@ -376,7 +376,7 @@ export class ExtensionRelay {
 	 * Close the connect tab this relay adopted, by its exact tab id. Never touches another tab or the browser.
 	 * Returns false when no connect tab is held, or when it is the only attached tab: closing that one drops the socket.
 	 */
-	async closeConnectTab(): Promise<boolean> {
+	async #closeConnectTab(): Promise<boolean> {
 		const tabId = this.#connectTabId;
 		if (tabId === undefined) return false;
 		await this.#bootstrapReady?.catch(() => undefined);
@@ -484,9 +484,6 @@ export class ExtensionRelay {
 			if (parts[2] === "disconnect" && req.method === "POST") {
 				const detached = await this.disconnect();
 				return Response.json({ detached });
-			}
-			if (parts[2] === "close-connect-tab" && req.method === "POST") {
-				return Response.json({ closed: await this.closeConnectTab() });
 			}
 		}
 		return new Response("not found", { status: 404 });
@@ -1154,7 +1151,7 @@ export class ExtensionRelay {
 		const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
 		if (created instanceof type.errors) throw new Error("The extension returned no tab.");
 		const tab = await this.#registerTab(created.id, false, created.windowId);
-		await this.closeConnectTab();
+		await this.#closeConnectTab();
 		if (url !== "about:blank") {
 			this.#audit(tab.tabId, url, decision);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId: tab.tabId }, "Page.navigate", { url }]);
