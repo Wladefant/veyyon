@@ -3,7 +3,6 @@ import {
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	gitLabDuoWorkflowModelManagerOptions,
-	openAICodexModelCacheProviderId,
 	openaiCodexModelManagerOptions,
 	zaiModelManagerOptions,
 } from "../src/provider-models/special";

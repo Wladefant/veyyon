@@ -7,7 +7,7 @@
  * SQLite store, never POSTs the broker sentinel to an OpenAI token endpoint.
  */
 import * as os from "node:os";
-import type { AuthStorage, FetchImpl, Model, OAuthAccess } from "@veyyon/ai";
+import type { AuthStorage, FetchImpl, Model } from "@veyyon/ai";
 import { withOAuthAccess } from "@veyyon/ai/auth-retry";
 import { resolveCodexAccessPrograms } from "@veyyon/ai/providers/openai-codex/access-programs";
 import { getBundledChatModels } from "@veyyon/catalog/models";
