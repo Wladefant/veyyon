@@ -17,6 +17,7 @@
 
 ### Changed
 
+- The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
 - `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
 - The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
 - A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
@@ -68,6 +69,7 @@
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
+- The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
@@ -151,6 +153,7 @@
 - A theme color, var or export given as a number that is not an integer from 0 to 255 fails theme validation with `"colors.<token>" must be a string or a palette index from 0 to 255` instead of loading as a missing or malformed hex color.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
+- An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
