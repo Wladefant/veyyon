@@ -6,6 +6,7 @@ import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, po
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
+import { ProducerOutputGuard } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
 import {
@@ -503,6 +504,7 @@ export async function executeWithKernelBase<
 
 	const settings = await Settings.init();
 	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText),
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
@@ -522,6 +524,15 @@ export async function executeWithKernelBase<
 	const abortShield = createBridgeAbortShield(options?.signal);
 
 	const collectDisplay = (output: KernelDisplayOutput): void => {
+		if (output.type === "json") {
+			try {
+				const serialized = JSON.stringify(output.data);
+				const filtered = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText).sanitize(serialized);
+				output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+			} catch {
+				output = { type: "json", data: "[credential output withheld]" };
+			}
+		}
 		if (output.type === "status") {
 			if (output.event.op === "env" && "value" in output.event) {
 				output = {

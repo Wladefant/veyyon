@@ -8,6 +8,7 @@
 
 ### Fixed
 - Speech transport uses withScopedTimeoutSignal instead of the removed withTimeoutSignal ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
+- Google Antigravity usage retains daily windows from the model listing when the quota summary names both counters but omits those windows ([issue](https://github.com/Wladefant/veyyon/issues/611)).
 - Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
@@ -151,6 +152,7 @@
 - Sent the install-derived `x-opencode-session` header and the Veyyon user agent on OpenCode Go usage polls and on OpenCode gateway model discovery ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 
 ### Fixed
+- Preserved native Codex tool results during snapshot replay. Valid tool outputs stay paired with their calls instead of becoming user messages ([Refs #34](https://github.com/Wladefant/veyyon/issues/34)).
 - Rotated pinned Antigravity requests to an available sibling after a confirmed quota failure when load balancing is on. Kept the selected pin, model-scoped holds, and predicted-hold behavior ([Fixes Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Expired Antigravity quota confirmations independently of shared predicted holds, so a later peer prediction cannot displace an explicit pin after the refusal expires ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).
 - Preserved the longest confirmed Antigravity refusal when a shorter refusal arrives or completes later. Kept predicted shared deadlines separate ([Refs Wladefant/veyyon#520](https://github.com/Wladefant/veyyon/issues/520)).

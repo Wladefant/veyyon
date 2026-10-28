@@ -6,6 +6,7 @@
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
+- Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
 - Browser session cleanup continues after one tab release or orphan browser disposal fails.
@@ -19,6 +20,10 @@
 - Spawn model lists fall back after quota failures with global fallback disabled, and new spawns move past the shared pools to the healthy fallback tail when both are suppressed ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Explicit spawn lists stay closed when no later candidate resolves, instead of inheriting global fallback chains ([issue](https://github.com/Wladefant/veyyon/issues/613)).
 - Project plugins load only from the `installPath` entries of a project registry the operator has approved, through both the plugin loader and the Claude-plugin roots. The project directory's `package.json`, lockfile and `node_modules` are no longer read for project plugins. A registry whose directory resolves outside the project is refused, and an approval from a nested directory reaches the gate ([Refs #633](https://github.com/Wladefant/veyyon/issues/633)).
+- Project plugin approvals now cover the exact registry bytes and every named in-project install folder, so payload changes require approval again ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Relative project plugin install paths now resolve once from the registry directory and use the same absolute path for approval, discovery and LSP configuration ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Project-scoped marketplace installs now keep payloads inside the owning project so trust can approve them without allowing profile-cache paths ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
+- Project plugins no longer use LSP commands from ancestor marketplace catalogs outside their approved payload ([Refs #666](https://github.com/Wladefant/veyyon/issues/666)).
 - Argot teaches its handle table to a model named in `argot.encode.models` with a thinking selector (`provider/id:high`), drops or restores the table when a model switch crosses the allowlist, and records a deliberately untaught model as decode-only instead of logging an `ABSENT` handle table ([#648](https://github.com/Wladefant/veyyon/issues/648))
 - Closing a launch client during broker connection now rejects pending requests and destroys late sockets, so an empty broker can exit after its configured grace when all clients close ([Refs #517](https://github.com/Wladefant/veyyon/issues/517)).
 - Reviewer prompts now enforce exact-head, gate-safe, verdict-only reviews and declare `task`, `qa-verifier`, and `haiku` as child roles ([#566](https://github.com/Wladefant/veyyon/issues/566)).
