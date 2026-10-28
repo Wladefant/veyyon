@@ -585,7 +585,6 @@ export function renderRootChangelog(sources, { forkPointVersion = FORK_POINT_VER
 	})();
 
 	const parts = ["# Changelog", "", ROOT_GENERATED_BANNER, ""];
-	const seen = new Set();
 	for (const version of orderedVersions) {
 		const sections = byVersion.get(version);
 		const date = dates.get(version);
@@ -594,19 +593,12 @@ export function renderRootChangelog(sources, { forkPointVersion = FORK_POINT_VER
 		for (const name of names) {
 			const items = sections.get(name);
 			if (!items.length) continue;
-			const uniqueItems = [];
-			for (const item of items) {
-				if (!seen.has(item)) {
-					seen.add(item);
-					uniqueItems.push(item);
-				}
-			}
-			if (!uniqueItems.length) continue;
 			parts.push(`### ${name}`, "");
-			for (const item of uniqueItems) parts.push(`- ${item}`);
+			for (const item of items) parts.push(`- ${item}`);
 			parts.push("");
 		}
 	}
+
 	return `${parts.join("\n").trimEnd()}\n\n${upstreamNoteMarkdown(forkPointVersion)}\n`;
 }
 

@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- Deduplicate cross-release bullet points during root changelog generation.
+- The root-changelog uniqueness check now applies per release; no user-facing change.
 - Deduplicate terminal deliveries by message id, retain accepted outcomes across daemon reconnects, replay missed events by subscriber cursor, and provide streaming snapshots to reconnecting subscribers ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 
 ## [1.6.1] - 2026-10-28
@@ -1748,6 +1748,7 @@
 - Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
 - A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
 - A swarm file whose agent entry has no mapping (`writer:` with no fields) fails with `Agent 'writer' must be a mapping with 'role' and 'task'` instead of a `TypeError` reading `role` of null.
+- Job, task and eval durations and `web_search` source ages in the HTML export and web transcript print through `formatDuration` and `formatAge` from `@veyyon/utils`, so `65000` reads `1m5s` and an age of 30 seconds reads `just now`, as in the terminal.
 - An `Editor` evaluates the text at the cursor when its first autocomplete provider attaches, so an `@` mention, `#` action, slash command or shortcode typed before then opens its suggestions or is rewritten instead of being ignored until the next keystroke.
 - A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
 - `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
