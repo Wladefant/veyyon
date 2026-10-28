@@ -4,6 +4,7 @@
 
 ### Changed
 
+- An MCP tool with a live connection and one waiting for its server send a call, resend it after a reconnect and build its result through the same functions, and a waiting tool's failure names the source of the connection it failed on as its success does; no user-facing change.
 - The reftable HEAD lookup, the LSP document open and the eval kernel's result each have one implementation shared by their sync and async or success and cancellation paths; no user-facing change.
 - The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
 - `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
