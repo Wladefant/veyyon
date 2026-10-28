@@ -808,7 +808,7 @@ describe("MCPManager event subscription contracts", () => {
 		const realSetTimeout = globalThis.setTimeout;
 		const refreshTimers: number[] = [];
 		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-			handler: TimerHandler,
+			handler: Parameters<typeof globalThis.setTimeout>[0],
 			delay?: number,
 			...args: unknown[]
 		) => {

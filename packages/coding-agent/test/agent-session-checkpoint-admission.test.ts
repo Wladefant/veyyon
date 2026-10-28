@@ -62,6 +62,7 @@ async function createCheckpointHarness(
 	settings.setDefaultModel(`${model.provider}/${model.id}`);
 	const sessionManager = SessionManager.create(tempDir.path(), join(tempDir.path(), "sessions"));
 	const sessionFile = sessionManager.getSessionFile();
+	if (!sessionFile) throw new Error("SessionManager did not create the checkpoint session file");
 	const sessionId = sessionManager.getSessionId();
 	await sessionManager.ensureOnDisk();
 	const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "handoff-1", transferEpoch: 7 };
@@ -71,7 +72,6 @@ async function createCheckpointHarness(
 	await writeFile(
 		join(sessionsDirectory, "checkpoint-ownership.json"),
 		JSON.stringify({
-			version: 1,
 			sessionId,
 			...identity,
 			claimToken: "a-long-enough-single-use-claim",
@@ -88,7 +88,7 @@ async function createCheckpointHarness(
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test-token";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32, 9).toString("base64");
 	let renewals = 0;
-	globalThis.fetch = async (input, init) => {
+	globalThis.fetch = Object.assign(async (input, init) => {
 		const action = new URL(String(input)).pathname.split("/").pop();
 		const parsed: unknown = init?.body ? JSON.parse(String(init.body)) : undefined;
 		const ownerNode =
@@ -109,7 +109,7 @@ async function createCheckpointHarness(
 		if (action === "renew")
 			return Response.json({ ownerNode, epoch: 8, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "" });
 		return Response.json({ error: "unexpected checkpoint operation" }, { status: 404 });
-	};
+	}, { preconnect: originalFetch.preconnect });
 	let executions = 0;
 	const tool: AgentTool = {
 		name: "probe",

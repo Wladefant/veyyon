@@ -29,6 +29,7 @@ import type {
 	ClientBridgeTerminalExitStatus,
 	ClientBridgeTerminalHandle,
 } from "@veyyon/kernel/session/client-bridge";
+import type { ShellConfig } from "@veyyon/utils/procmgr";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
@@ -73,7 +74,7 @@ interface FixtureDir {
 }
 
 let fixtures: FixtureDir;
-let shellConfig: { shell: string; args: string[]; prefix?: string | undefined };
+let shellConfig: ShellConfig;
 
 beforeAll(async () => {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "acp-noninteractive-"));

@@ -7,7 +7,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { groupSettingPaths } from "@veyyon/kernel/settings/store";
 import { resolveEffort } from "../src/config/effort-resolver";
 import type { ModelRegistry } from "../src/config/model-registry";
-import { type SettingPath, Settings } from "../src/config/settings";
+import { type SettingPath, type SettingValue, Settings } from "../src/config/settings";
 import { InputController, type InputControllerContext } from "../src/modes/terminal/controllers/input-controller";
 import { AgentSession } from "../src/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
@@ -624,7 +624,12 @@ describe("config hot reload", () => {
 	// compaction setting turns this red until someone records a before/after for it. GAP: it does not
 	// prove that a running session re-reads the value; that is each consumer's own contract.
 	// Retired keys are folded into `compaction.threshold` on read, so a reload reports them unchanged.
-	const COMPACTION_RELOAD_CASES: readonly { path: string; before: unknown; after: unknown; retired?: true }[] = [
+	const COMPACTION_RELOAD_CASES: readonly {
+		path: string;
+		before: SettingValue<SettingPath>;
+		after: SettingValue<SettingPath>;
+		retired?: true;
+	}[] = [
 		{ path: "compaction.enabled", before: true, after: false },
 		{ path: "compaction.remote", before: true, after: false },
 		{ path: "compaction.midTurnEnabled", before: true, after: false },
@@ -711,7 +716,7 @@ describe("config hot reload", () => {
 		{ category: "credential", path: "firecrawl.apiKey", before: "dummy-key-initial", after: "dummy-key-updated" },
 	] as const;
 
-	it.each(RESTART_REQUIRED_BOUNDARY_CASES)(
+	it.each([...RESTART_REQUIRED_BOUNDARY_CASES])(
 		"retains old value and reports restart-required for $path ($category)",
 		async ({ path: settingPath, before, after }) => {
 			const dir = dirs();

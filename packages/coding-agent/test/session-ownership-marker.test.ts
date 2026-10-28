@@ -7,7 +7,6 @@ import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../s
 const roots: string[] = [];
 const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "transfer-uuid", transferEpoch: 7 };
 const marker = {
-	version: 1 as const,
 	sessionId: "transfer",
 	...identity,
 	claimToken: "a-claim-capability-long-enough",
