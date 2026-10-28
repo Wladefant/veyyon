@@ -95,6 +95,7 @@ class RecordingStorage extends FileSessionStorage {
 				return written;
 			},
 			flush: () => writer.flush(),
+			sync: () => writer.sync(),
 			isOpen: () => writer.isOpen(),
 			close: () => writer.close(),
 			getError: () => writer.getError(),
@@ -503,7 +504,7 @@ describe("a resumed session's first rewrite keeps the lines before its earliest 
 			name: "holds an entry whose parent is missing",
 			alter: (raw: string, ids: string[]) => insertBefore(raw, ids[5]!, foreignLine("orphan", "re-linked", "gone")),
 		},
-		{ name: "was written by an older version", alter: (raw: string) => raw.replace('"version":3', '"version":2') },
+		{ name: "was written by an older version", alter: (raw: string) => raw.replace(/"version":\s*\d+/, '"version":2') },
 	])("writes the whole file on the first rewrite when the file $name", async ({ alter }) => {
 		using tempDir = TempDir.createSync("@veyyon-tail-resume-unclean-");
 		const fixture = await resumeSession(tempDir.path(), 40, { alter });

@@ -38,6 +38,8 @@ export interface SessionStorageWriter {
 	append(line: string): Promise<void>;
 	/** Resolve once all queued appends complete. No fsync. */
 	flush(): Promise<void>;
+	/** Flush appends and make them durable at the storage backend. */
+	sync(): Promise<void>;
 	/** False once close() has begun/finished. */
 	isOpen(): boolean;
 	close(): Promise<void>;
@@ -411,6 +413,9 @@ export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	async flush(): Promise<void> {
 		this.ensureNoError();
 	}
+	async sync(): Promise<void> {
+		await this.flush();
+	}
 
 	isOpen(): boolean {
 		return !this.#closed;
@@ -454,6 +459,14 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 		} catch (err) {
 			throw this.recordError(err);
+		}
+	}
+	async sync(): Promise<void> {
+		await this.flush();
+		try {
+			fs.fsyncSync(this.#fd);
+		} catch (error) {
+			throw this.recordError(error);
 		}
 	}
 

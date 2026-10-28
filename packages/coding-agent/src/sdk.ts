@@ -132,7 +132,22 @@ export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools
 export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
-export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export type {
+	MCPEventCallback,
+	MCPEventDeliveryMode,
+	MCPEventDescriptor,
+	MCPEventOccurrence,
+	MCPEventStatePayload,
+	MCPEventsListResult,
+	MCPEventsPollResult,
+	MCPEventWebhookConfig,
+	MCPManager,
+	MCPServerConfig,
+	MCPServerConnection,
+	MCPServerEventsConfig,
+	MCPServerEventSubscriptionConfig,
+	MCPToolsLoadResult,
+} from "./mcp";
 export type { Tool } from "./tools";
 export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -185,7 +200,9 @@ import { openSessionMCP, type SessionMCP, wireReactiveMCPManager } from "./sessi
 import {
 	buildAsyncResultBatchMessage,
 	buildLateDiagnosticsBatchMessage,
+	buildMcpEventBatchMessage,
 	buildMcpNotificationBatchMessage,
+	type McpEventEntry,
 	type McpNotificationEntry,
 } from "./session/factory-notices";
 import {
@@ -1621,6 +1638,9 @@ class SessionStartup {
 		}
 		session.yieldQueue.register<McpNotificationEntry>("mcp-notification", {
 			build: buildMcpNotificationBatchMessage,
+		});
+		session.yieldQueue.register<McpEventEntry>("mcp-event", {
+			build: buildMcpEventBatchMessage,
 		});
 		session.yieldQueue.register<DeferredDiagnosticsEntry>(LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, {
 			isStale: entry => entry.isStale(),

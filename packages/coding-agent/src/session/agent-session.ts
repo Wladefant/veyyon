@@ -1515,6 +1515,24 @@ export class AgentSession {
 				const first = messages[0];
 				if (!first) return;
 				await this.agent.prompt(messages.length === 1 ? first : messages);
+				if (messages.some(message => message.role === "custom" && message.customType === "mcp-event")) {
+					let persisted = false;
+					let lastError: unknown;
+					for (let attempt = 0; attempt < 2 && !persisted; attempt++) {
+						try {
+							await this.sessionManager.ensureOnDisk();
+							await this.sessionManager.sync();
+							persisted = true;
+						} catch (error) {
+							lastError = error;
+						}
+					}
+					if (!persisted) {
+						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event", {
+							error: errorMessage(lastError),
+						});
+					}
+				}
 			},
 			scheduleIdleFlush: run => {
 				this.#postPrompt.schedule(

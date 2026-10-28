@@ -141,6 +141,7 @@ class FlakyFileStorage extends FileSessionStorage {
 				await Promise.all(queued);
 				await inner.flush();
 			},
+			sync: () => inner.sync(),
 			isOpen: () => inner.isOpen(),
 			close: () => inner.close(),
 			getError: () => inner.getError(),
