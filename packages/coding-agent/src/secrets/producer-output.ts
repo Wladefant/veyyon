@@ -19,6 +19,7 @@ function isInventory(text: string): boolean {
 	if (ENV_TABLE_HEADER.test(text)) return true;
 	let assignments = 0;
 	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
 		assignments = ENV_ASSIGNMENT.test(line) ? assignments + 1 : 0;
 		if (assignments >= 3) return true;
 	}
@@ -87,16 +88,17 @@ export class ProducerOutputGuard {
 		const normalized = sanitizeText(record);
 		if (this.sanitize(record) === BLOCKED_OUTPUT_RECORD) return this.#block() + newline;
 		const assignment = ENV_ASSIGNMENT.test(normalized);
+		const separator = this.#candidate.length > 0 && !normalized.trim();
 		let prefix = "";
-		if (this.#candidate && !this.#structured && !assignment) prefix = this.#flushCandidate();
+		if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
 		if (this.#withholding) return prefix;
 		if (!this.#structured && /^\s*[[{]/.test(normalized)) this.#structured = true;
-		if (this.#structured || assignment) {
+		if (this.#structured || assignment || separator) {
 			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
 				return prefix + this.#block() + newline;
 			this.#candidate += record + newline;
 			if (!this.#structured) {
-				if (++this.#assignments >= 3) return prefix + this.#block() + newline;
+				if (assignment && ++this.#assignments >= 3) return prefix + this.#block() + newline;
 				return prefix;
 			}
 			// Track quoted delimiters too: a path or value can contain braces.

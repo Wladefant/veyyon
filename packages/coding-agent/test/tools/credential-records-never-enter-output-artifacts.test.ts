@@ -132,7 +132,7 @@ for (const record of [
 ]) {
 	test(`recognizes credential label form: ${record.split(/[=:]/)[0]}`, () => {
 		const guard = new ProducerOutputGuard();
-		expect(guard.push(`${record}\n`)).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+		expect(guard.push(record + "\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
 		expect(guard.finish()).toBe("");
 	});
 }

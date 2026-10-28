@@ -1,5 +1,5 @@
 // WHY: Shell environment inventories can expose credential values while staying syntactically benign.
-// This guards inventory-shaped output only; executeBash persistence is covered by the credential-records test.
+// This guards inventory-shaped output, not encoded output, arbitrary prose, or non-text channels.
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -15,6 +15,7 @@ afterEach(async () => {
 
 for (const inventory of [
 	"PATH=ghp_FAKE012345678901234567890123456789\nHOME=/safe/home\nCUSTOM=ordinary-value",
+	"PATH=ghp_FAKE012345678901234567890123456789\n\nHOME=/safe/home\nCUSTOM=ordinary-value",
 	'{\n  "PATH": "ghp_FAKE012345678901234567890123456789",\n  "HOME": "/safe/home",\n  "CUSTOM": "ordinary-value"\n}',
 	'{"PATH":"ghp_FAKE012345678901234567890123456789","HOME":"/safe/home","CUSTOM":"ordinary-value"}',
 	"{'PATH': 'ghp_FAKE012345678901234567890123456789', 'HOME': '/safe/home', 'CUSTOM': 'ordinary-value'}",
@@ -32,7 +33,7 @@ for (const inventory of [
 			spillThreshold: 1,
 			onChunk: chunk => live.push(chunk),
 		});
-		for (const character of inventory + "\n") sink.push(character);
+		for (const character of `${inventory}\n`) sink.push(character);
 		const result = await sink.dumpWithArtifactStatus();
 		const persisted = await fs.readFile(artifactPath, "utf8");
 		const replay = new OutputSink({ outputGuard: new ProducerOutputGuard() });
