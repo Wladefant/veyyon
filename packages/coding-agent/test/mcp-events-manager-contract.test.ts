@@ -656,11 +656,7 @@ describe("MCPManager event subscription contracts", () => {
 			});
 
 			await startupPromise;
-			await fetch(server.url, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "tools/list" }),
-			});
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
 			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
@@ -732,11 +728,7 @@ describe("MCPManager event subscription contracts", () => {
 			});
 
 			await startupPromise;
-			await fetch(server.url, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "tools/list" }),
-			});
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
 			const subscriptionMethods = server.requests.map(r => r.method).filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
 			expect(onEvent).not.toHaveBeenCalled();
@@ -745,6 +737,119 @@ describe("MCPManager event subscription contracts", () => {
 			await manager.stopEvents();
 			server.stop();
 			delete process.env.MCP_EVENTS_DELAYED_SECRET;
+		}
+	});
+	it("does not arm a webhook refresh timer if disconnected while recording event cursor", async () => {
+		const cursorGate = Promise.withResolvers<void>();
+		const cursorStarted = Promise.withResolvers<void>();
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+
+		const server = fakeMcpServer({
+			delivery: ["webhook"],
+			webhookSubscribe: async () => ({
+				id: "webhook-refresh-race",
+				cursor: "wh-cursor",
+				refreshBefore: new Date(Date.now() + 600_000).toISOString(),
+			}),
+		});
+
+		const manager = new MCPManager(process.cwd());
+		const serverName = "cursor-race-server";
+		process.env.MCP_EVENTS_RACE_SECRET = CALLBACK_SECRET;
+
+		try {
+			await connect(
+				manager,
+				serverName,
+				managerConfig(server, {
+					enabled: true,
+					subscriptions: [
+						{
+							name: EVENT_NAME,
+							mode: "webhook",
+							webhook: {
+								callbackUrl: "https://callback.example.test/events/race",
+								secretRef: "$MCP_EVENTS_RACE_SECRET",
+								listenPort,
+							},
+						},
+					],
+				}),
+			);
+
+			manager.setOnEvent(vi.fn());
+			manager.setOnEventCursor(async () => {
+				cursorStarted.resolve();
+				await cursorGate.promise;
+			});
+
+			await cursorStarted.promise;
+			const disconnectPromise = manager.disconnectServer(serverName);
+			cursorGate.resolve();
+			await disconnectPromise;
+
+			expect(manager.getEventStartupPromise(serverName)).toBeUndefined();
+		} finally {
+			await manager.stopEvents();
+			server.stop();
+			delete process.env.MCP_EVENTS_RACE_SECRET;
+		}
+	});
+
+	it("drops invalid event occurrences with a warning and advances the poll cursor without wedging the loop", async () => {
+		let pollCount = 0;
+		const secondPollRequested = Promise.withResolvers<void>();
+		const server = fakeMcpServer({
+			delivery: ["poll"],
+			poll: () => {
+				pollCount++;
+				if (pollCount === 1) {
+					return {
+						events: [
+							{ ...event("mismatched-name", "cursor-0"), name: "other/unsubscribed-event" },
+							event("valid-1", "cursor-1"),
+						],
+						cursor: "cursor-1",
+						hasMore: true,
+						nextPollMs: 100,
+					};
+				}
+				secondPollRequested.resolve();
+				return { events: [], cursor: "cursor-2", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+
+		const manager = new MCPManager(process.cwd());
+		const onEvent = vi.fn().mockResolvedValue("accepted");
+		const onCursor = vi.fn();
+		const serverName = "invalid-event-server";
+		manager.setOnEvent(onEvent);
+		manager.setOnEventCursor(onCursor);
+
+		try {
+			await connect(
+				manager,
+				serverName,
+				managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				}),
+			);
+
+			await secondPollRequested.promise;
+
+			expect(onEvent).toHaveBeenCalledTimes(1);
+			expect(onEvent).toHaveBeenCalledWith(
+				serverName,
+				expect.objectContaining({ eventId: "valid-1", name: EVENT_NAME }),
+				expect.any(String),
+			);
+			expect(onCursor).toHaveBeenCalledWith(serverName, expect.any(String), "cursor-1");
+		} finally {
+			await manager.stopEvents();
+			server.stop();
 		}
 	});
 });

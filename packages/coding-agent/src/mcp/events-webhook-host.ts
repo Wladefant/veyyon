@@ -23,8 +23,12 @@ export function startMCPWebhookHost(receiver: MCPWebhookReceiver, port: number):
 		},
 	});
 	server.unref();
+	const boundPort = server.port;
+	if (typeof boundPort !== "number" || boundPort <= 0) {
+		throw new Error("Bun server failed to bind port");
+	}
 	return {
-		port: server.port ?? port,
+		port: boundPort,
 		async close() {
 			await server.stop(true);
 		},

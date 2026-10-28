@@ -285,7 +285,9 @@ export interface MCPEventStatePayload {
  * Returns true if event subscriptions are explicitly enabled and configured on the server config.
  * Disabled or empty config causes no event requests.
  */
-export function isMCPEventsEnabled(config?: MCPServerEventsConfig): boolean {
+export function isMCPEventsEnabled(
+	config?: MCPServerEventsConfig,
+): config is MCPServerEventsConfig & { subscriptions: MCPServerEventSubscriptionConfig[] } {
 	return config?.enabled === true && Array.isArray(config.subscriptions) && config.subscriptions.length > 0;
 }
 

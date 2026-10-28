@@ -562,7 +562,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 			expect(sync).toHaveBeenCalledTimes(2);
 			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
 			expect(warn).toHaveBeenCalledWith(
-				"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced",
+				"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event",
 				expect.objectContaining({ error: "permanent receipt fsync failure" }),
 			);
 		} finally {

@@ -495,6 +495,16 @@ export class MCPManager {
 		return this.#eventStartupPromises.get(serverName);
 	}
 
+	/** Number of active event subscriptions for this server, or across all servers if omitted. */
+	getActiveEventSubscriptionCount(serverName?: string): number {
+		if (serverName === undefined) return this.#activeEvents.size;
+		let count = 0;
+		for (const key of this.#activeEvents.keys()) {
+			if (key.startsWith(`${serverName}\0`)) count++;
+		}
+		return count;
+	}
+
 	async #stopServerEvents(serverName: string): Promise<void> {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		this.#eventStartupControllers.delete(serverName);
@@ -525,6 +535,7 @@ export class MCPManager {
 		config: MCPServerConfig["events"],
 	): Promise<void> {
 		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		const eventsConfig = config;
 		this.#eventStartupControllers.get(serverName)?.abort();
 		const controller = new AbortController();
 		this.#eventStartupControllers.set(serverName, controller);
@@ -549,7 +560,7 @@ export class MCPManager {
 				return;
 			}
 			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
-			for (const requested of config?.subscriptions ?? []) {
+			for (const requested of eventsConfig.subscriptions) {
 				if (
 					controller.signal.aborted ||
 					!this.#onEvent ||
@@ -727,6 +738,13 @@ export class MCPManager {
 				});
 			}
 			await this.#recordEventCursor(subscription, result.cursor ?? null);
+			if (
+				subscription.controller.signal.aborted ||
+				!this.#activeEvents.has(key) ||
+				this.#connections.get(serverName) !== connection
+			) {
+				return;
+			}
 			if (result.refreshBefore !== null) {
 				const refreshAt = Date.parse(result.refreshBefore) - Date.now() - 60_000;
 				subscription.timer = setTimeout(() => {
@@ -819,7 +837,11 @@ export class MCPManager {
 	): Promise<boolean> {
 		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
 		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
-			throw new Error("MCP event occurrence is invalid or does not match its subscription");
+			logger.warn("Skipping invalid MCP event occurrence", {
+				path: `mcp:${serverName}`,
+				event: (event as unknown as Record<string, unknown>)?.name,
+			});
+			return false;
 		}
 		if (!this.#onEvent) throw new Error("MCP event callback is not configured");
 		const hasEventCursor = event.cursor !== undefined || cursor !== undefined;

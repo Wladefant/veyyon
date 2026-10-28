@@ -1534,7 +1534,7 @@ export class AgentSession {
 						}
 					}
 					if (!persisted) {
-						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced", {
+						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event", {
 							error: errorMessage(lastError),
 						});
 					}
