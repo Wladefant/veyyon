@@ -13,6 +13,7 @@
 
 ### Changed
 
+- `sgrCarryAfter` reads SGR parameters in place instead of through a regular expression and a split; no user-facing change.
 - `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
 - The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
