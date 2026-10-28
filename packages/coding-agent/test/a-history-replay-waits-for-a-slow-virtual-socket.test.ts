@@ -124,7 +124,9 @@ afterEach(async () => {
 
 test("a history replay and late delivery replay larger than the send limit waits for a slow virtual socket instead of destroying it", async () => {
 	const socket = new SlowVirtualSocket();
-	cleanup.push(() => socket.destroy());
+	cleanup.push(() => {
+		socket.destroy();
+	});
 	let accept: ((peer: transport.TerminalSocket) => void) | undefined;
 	const spy = spyOn(transport, "createTerminalControlTransport").mockImplementation(async (endpoint, onConnection) => {
 		accept = onConnection;
@@ -155,7 +157,9 @@ test("a history replay and late delivery replay larger than the send limit waits
 		const settled = seeder.frames.filter(frame => frame.event?.kind === "delivery" && frame.event.state === "delivered").length;
 		if (settled >= deliveryCount) allSettled.resolve();
 	});
-	cleanup.push(() => seeder.destroy());
+	cleanup.push(() => {
+		seeder.destroy();
+	});
 	accept?.(seeder as unknown as transport.TerminalSocket);
 
 	for (let index = 0; index < deliveryCount; index++) {
