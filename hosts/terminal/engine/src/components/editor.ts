@@ -915,14 +915,15 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		return Math.max(1, visibleHeight - 1);
 	}
 
-	#updateScrollOffset(layoutWidth: number, layoutLines: LayoutLine[], visibleHeight: number): void {
+	#updateScrollOffset(layoutLines: LayoutLine[], visibleHeight: number): void {
 		if (layoutLines.length <= visibleHeight) {
 			this.#scrollOffset = 0;
 			return;
 		}
 
-		const visualLines = this.#buildVisualLineMap(layoutWidth);
-		const cursorLine = this.#findCurrentVisualLine(visualLines);
+		// The row the frame paints the cursor on is the row scrolled into view.
+		const cursorRow = layoutLines.findIndex(line => line.hasCursor);
+		const cursorLine = cursorRow === -1 ? layoutLines.length - 1 : cursorRow;
 		if (cursorLine < this.#scrollOffset) {
 			this.#scrollOffset = cursorLine;
 		} else if (cursorLine >= this.#scrollOffset + visibleHeight) {
@@ -943,7 +944,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 		const layoutLines = this.#layoutText(layoutWidth);
 		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
-		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
+		this.#updateScrollOffset(layoutLines, visibleContentHeight);
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
 
 		const result: string[] = [];
