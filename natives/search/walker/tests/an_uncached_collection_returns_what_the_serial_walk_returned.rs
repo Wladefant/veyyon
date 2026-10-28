@@ -104,7 +104,10 @@ fn build(root: &Path, with_git: bool) {
 
 /// Restores `locked/` so the scratch tree can be removed. Declared after the
 /// tree, so it drops first.
-struct Unlock(Vec<PathBuf>);
+struct Unlock(
+	#[cfg_attr(not(unix), allow(dead_code, reason = "only unix makes `locked/` unreadable"))]
+	Vec<PathBuf>,
+);
 
 impl Drop for Unlock {
 	fn drop(&mut self) {
