@@ -310,6 +310,31 @@ test("a busy rejection does not retain the message id after the delivery queue d
 	expect(accepted.result).toMatchObject({ accepted: true, messageId: "busy-retry", state: "pending" });
 });
 
+test("a busy rejection of a plain delivery leaves its message id retryable", async () => {
+	const gate = Promise.withResolvers<void>();
+	const delivered: string[] = [];
+	const owner = await serve(async text => {
+		delivered.push(text);
+		if (text === "queued") await gate.promise;
+		return "done";
+	});
+	const client = connect(owner);
+	for (let index = 0; index < 64; index++) {
+		client.send({ id: `fill-${index}`, op: "deliver", text: "queued", mode: "auto", ack: true, messageId: `fill-${index}` });
+		await client.next(frame => frame.id === `fill-${index}`);
+	}
+	client.send({ id: "plain-busy", op: "deliver", text: "plain retry", mode: "auto", messageId: "plain-retry" });
+	const rejected = await client.next(frame => frame.id === "plain-busy");
+	expect(rejected.ok).toBe(false);
+	expect(rejected.error).toContain("Terminal busy");
+	gate.resolve();
+	for (let index = 0; index < 64; index++) await client.next(frame => frame.event?.kind === "delivery");
+	client.send({ id: "plain-again", op: "deliver", text: "plain retry", mode: "auto", messageId: "plain-retry" });
+	const retried = await client.next(frame => frame.id === "plain-again");
+	expect(retried).toMatchObject({ ok: true, result: "done" });
+	expect(delivered.filter(text => text === "plain retry")).toHaveLength(1);
+});
+
 
 test("message ids and delivery announcements stay within their accepting session", async () => {
 	const identity = { sessionId: "sess-before-switch" };
