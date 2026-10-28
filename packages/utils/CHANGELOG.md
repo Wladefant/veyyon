@@ -13,6 +13,7 @@
 
 ### Changed
 
+- The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
 - `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - `privateTempDirName(uid)` in `@veyyon/utils/app-identity` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
