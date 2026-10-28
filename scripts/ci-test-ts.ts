@@ -999,12 +999,24 @@ export async function runTestCommandsInSequence(commands: TestCommand[]): Promis
 //   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
 //   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
 //   alone did not prevent it — the crash predates this knob.
+//
+// `BUN_JSC_maxNumWasmFastMemories=256` raises JSC's count of WebAssembly
+// memories it keeps in guard-page mode from 8. Past that count every new
+// `WebAssembly.Instance` first runs a synchronous full collection to reclaim
+// an abandoned one, and every `VirtualTerminal` builds a Ghostty instance, so
+// a terminal-heavy file paid one stop-the-world collection per terminal. A
+// slot reserves about 4 GiB of address space and no memory: 256 slots take
+// 1 TiB of the 128 TiB x86-64 user space, and a reservation that fails falls
+// back to bounds-checked memory. The composer sweep took 41.2 s with 8 slots
+// and 27.6 s with 256 at 6 cases at once, and 8.5 s at the 24 at once the
+// raised budget allows.
 function buildChildEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
 		GITHUB_ACTIONS: "",
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
+		BUN_JSC_maxNumWasmFastMemories: "256",
 		HOME: SANDBOX_HOME,
 		VEYYON_TEST_REAL_CONFIG_ROOT: REAL_CONFIG_ROOT,
 	};

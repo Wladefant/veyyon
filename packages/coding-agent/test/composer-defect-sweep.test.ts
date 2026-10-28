@@ -133,10 +133,13 @@ describe("renderer composer defect oracle sweep", () => {
 
 	// Run sweep across the cross-product. Each case builds its own TUI and terminal and spends most of
 	// its time waiting on frame timers in settleFrames, so cases run concurrently. Each case's terminal
-	// also holds a Ghostty WASM instance of about 7 MB until the collector reclaims it, so cases past a
-	// few at once add collection work instead of overlap: on one machine the 4,203 cases took 164 s one
-	// after another, 63 s at bun's default of 20 at once, and 38 s at `CASES_AT_ONCE`.
-	const CASES_AT_ONCE = 6;
+	// holds a Ghostty WASM instance, and JSC keeps only `maxNumWasmFastMemories` WebAssembly memories
+	// (8 by default) before each new instance forces a full collection to reclaim one. Cases past
+	// three quarters of that budget add collection work instead of overlap: with 8 slots the 4,203
+	// cases took 164 s one after another, 63 s at 20 at once and 38 s at 6. `scripts/ci-test-ts.ts`
+	// raises the budget to 256, where 24 at once takes 8.5 s and more at once gains nothing.
+	const fastMemorySlots = Number(process.env.BUN_JSC_maxNumWasmFastMemories) || 8;
+	const CASES_AT_ONCE = Math.min(24, Math.max(1, Math.floor((fastMemorySlots * 3) / 4)));
 	const caseSlots = new Semaphore(CASES_AT_ONCE);
 	for (const mode of modeVariants) {
 		for (const width of WIDTHS) {
