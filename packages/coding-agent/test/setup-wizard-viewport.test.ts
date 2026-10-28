@@ -29,6 +29,7 @@
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import * as os from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as importScanModule from "@veyyon/coding-agent/discovery/import-scan";
 import {
@@ -80,7 +81,7 @@ beforeAll(async () => {
 const BODY_ROWS_AT_30 = 18;
 
 function hasRow(frame: readonly string[], text: string): boolean {
-	return frame.some(row => row.replace(/\x1b\[[0-9;]*m/g, "").includes(text));
+	return frame.some(row => stripVTControlCharacters(row).includes(text));
 }
 
 function makeContext(rows: number): SetupWizardContext {

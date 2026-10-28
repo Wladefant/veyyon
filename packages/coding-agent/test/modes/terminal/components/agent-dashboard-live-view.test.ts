@@ -11,14 +11,13 @@
  * Enter now hands the main view to that agent's live session.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 /**
  * Register an agent the way the task executor does: `displayName` is the
@@ -47,7 +46,7 @@ afterEach(() => {
 });
 
 function frameOf(dashboard: AgentDashboard): string {
-	return dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+	return stripVTControlCharacters(dashboard.render(120).join("\n"));
 }
 
 /**
@@ -60,7 +59,7 @@ function frameOf(dashboard: AgentDashboard): string {
  * array length instead made them pass for a card of any size.
  */
 function cardRows(lines: readonly string[]): number {
-	const drawn = lines.map(line => line.replace(ANSI_PATTERN, "").trimEnd());
+	const drawn = lines.map(line => stripVTControlCharacters(line).trimEnd());
 	const first = drawn.findIndex(line => line.length > 0);
 	if (first < 0) return 0;
 	let last = drawn.length - 1;
@@ -322,7 +321,7 @@ describe("Card chrome", () => {
 		const lines = dashboard.render(100);
 
 		expect(lines.length).toBe(30);
-		const plain = lines.map(line => line.replace(ANSI_PATTERN, "")).join("\n");
+		const plain = lines.map(line => stripVTControlCharacters(line)).join("\n");
 		expect(plain).toContain("Agent Dashboard");
 		expect(plain).toContain("esc close");
 		dashboard.dispose();
@@ -339,7 +338,7 @@ describe("Card chrome", () => {
 		const shrunk = dashboard.render(100);
 
 		expect(shrunk.length).toBe(18);
-		expect(shrunk.map(line => line.replace(ANSI_PATTERN, "")).join("\n")).toContain("esc close");
+		expect(shrunk.map(line => stripVTControlCharacters(line)).join("\n")).toContain("esc close");
 		dashboard.dispose();
 	});
 
@@ -361,7 +360,7 @@ describe("Card chrome", () => {
 		const lines = dashboard.render(100);
 
 		expect(cardRows(lines)).toBeLessThan(20);
-		const plain = lines.map(line => line.replace(ANSI_PATTERN, "")).join("\n");
+		const plain = lines.map(line => stripVTControlCharacters(line)).join("\n");
 		expect(plain).toContain("Live (4)");
 		expect(plain).toContain("esc close");
 		dashboard.dispose();
@@ -381,7 +380,7 @@ describe("Card chrome", () => {
 		for (let index = 0; index < 4; index++) registerSub(`${index}-Sub`, "reviewer");
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 
-		const drawn = dashboard.render(100).map(line => line.replace(ANSI_PATTERN, "").trimEnd());
+		const drawn = dashboard.render(100).map(line => stripVTControlCharacters(line).trimEnd());
 
 		expect(drawn.length).toBe(40);
 		const above = drawn.findIndex(line => line.length > 0);

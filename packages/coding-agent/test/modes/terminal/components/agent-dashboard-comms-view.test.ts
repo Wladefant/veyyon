@@ -13,6 +13,7 @@
  * messages. Every fold is announced with the count it hid, and Ctrl+O unfolds.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { codeNameFor } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-activity";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -22,7 +23,6 @@ import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 /** Right arrow: Live -> Comms. */
 const RIGHT = "\x1b[C";
 const UP = "\x1b[A";
@@ -76,7 +76,7 @@ function commsCard(options: { expandKeys?: readonly ["ctrl+o"] } = {}): {
 		expandKeys: options.expandKeys ?? ["ctrl+o"],
 	});
 	dashboard.handleInput(RIGHT);
-	return { dashboard, frame: () => dashboard.render(120).join("\n").replace(ANSI_PATTERN, "") };
+	return { dashboard, frame: () => stripVTControlCharacters(dashboard.render(120).join("\n")) };
 }
 
 describe("Comms stream", () => {
@@ -203,7 +203,7 @@ describe("Truncation and Ctrl+O", () => {
 		dashboard.handleInput(RIGHT);
 
 		dashboard.handleInput("\x0f");
-		const shown = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(shown).toContain("6 more lines");
 		expect(shown).not.toContain("body line 8");

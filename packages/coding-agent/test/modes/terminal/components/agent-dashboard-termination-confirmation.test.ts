@@ -14,6 +14,7 @@
  * constants into the suite.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import type { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
@@ -23,7 +24,6 @@ import type { TUI } from "@veyyon/tui";
 import { sgrMotion, sgrPress } from "../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const WIDTH = 120;
 
 let geometry: StubbedStdoutGeometry;
@@ -93,7 +93,7 @@ afterEach(() => {
 
 /** Rendered terminal cells without SGR styling, preserving their screen coordinates. */
 function renderedLines(component: RenderedComponent): string[] {
-	return component.render(WIDTH).map(line => line.replace(ANSI_PATTERN, ""));
+	return component.render(WIDTH).map(line => stripVTControlCharacters(line));
 }
 
 /** The whole visible card as an operator reads it. */

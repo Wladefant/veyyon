@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
@@ -122,14 +123,10 @@ function wheelUp(viewer: AgentTranscriptViewer, row: number, col: number): void 
 	viewer.handleInput(`\x1b[<64;${col + 1};${row + 1}M`);
 }
 
-function strip(line: string): string {
-	return line.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 /** Screen position of the `[x]` close glyph. */
 function closeGlyphAt(rows: string[]): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = strip(rows[row]!).indexOf("[x]");
+		const col = stripVTControlCharacters(rows[row]!).indexOf("[x]");
 		if (col !== -1) return { row, col: col + 1 };
 	}
 	throw new Error("the card drew no close glyph");
@@ -138,7 +135,7 @@ function closeGlyphAt(rows: string[]): { row: number; col: number } {
 /** Screen position of a footer chip's label. */
 function chipAt(rows: string[], label: string): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = strip(rows[row]!).indexOf(label);
+		const col = stripVTControlCharacters(rows[row]!).indexOf(label);
 		if (col !== -1) return { row, col };
 	}
 	throw new Error(`the card drew no "${label}" chip`);
@@ -146,7 +143,7 @@ function chipAt(rows: string[], label: string): { row: number; col: number } {
 
 /** First transcript row of the painted card, as text. */
 function bodyText(rows: string[]): string {
-	return rows.map(strip).join("\n");
+	return rows.map(stripVTControlCharacters).join("\n");
 }
 
 describe("the transcript card answers the pointer", () => {

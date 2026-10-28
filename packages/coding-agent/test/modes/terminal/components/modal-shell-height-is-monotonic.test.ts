@@ -31,6 +31,7 @@
  * private, is already covered.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import * as modalGeometry from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import {
 	computeModalDims,
@@ -356,7 +357,7 @@ describe("Content-sized cards are unaffected", () => {
 
 		// `renderModalShell` paints the whole AREA, so the card is the run of rows
 		// between its borders rather than the length of what it returned.
-		const plain = card.lines.map(line => line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""));
+		const plain = card.lines.map(line => stripVTControlCharacters(line));
 		const top = plain.findIndex(line => line.includes("┌"));
 		const bottom = plain.findLastIndex(line => line.includes("└"));
 

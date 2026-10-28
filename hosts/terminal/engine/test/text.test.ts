@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Text } from "@veyyon/tui/components/text";
 import { visibleWidth } from "@veyyon/utils/width";
 
@@ -55,8 +56,7 @@ describe("Text component", () => {
 		streaming.setText(`${red}first line\nstill red tail`);
 		const rows = streaming.render(20);
 		const freshRows = new Text(`${red}first line\nstill red tail`, 0, 0).render(20);
-		const strip = (line: string) => line.replace(/\x1b\[[0-9;:]*m/g, "");
-		expect(rows.map(strip)).toEqual(freshRows.map(strip));
+		expect(rows.map(stripVTControlCharacters)).toEqual(freshRows.map(stripVTControlCharacters));
 		const tailRow = rows.find(line => line.includes("still red tail"));
 		expect(tailRow).toBeDefined();
 		expect(tailRow?.startsWith(red)).toBe(true);

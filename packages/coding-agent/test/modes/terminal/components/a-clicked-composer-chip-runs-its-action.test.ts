@@ -19,6 +19,7 @@
  * a-footer-click-target-holds-the-mouse-in-a-session-that-never-scrolls.test.ts.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
 import {
@@ -62,12 +63,8 @@ function setupBar(): { bar: ComposerShortcutsBar; lines: string[]; clicked: stri
 
 // Chips pack in visual columns; the styled row prepends SGR bytes, so
 // measure positions on the plain text instead of the rendered string.
-function plainOf(line: string): string {
-	return line.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 function chipCol(lines: string[], label: string): number {
-	const col = plainOf(lines[0]!).indexOf(label);
+	const col = stripVTControlCharacters(lines[0]!).indexOf(label);
 	expect(col).toBeGreaterThanOrEqual(COMPOSER_INSET_COLS);
 	return col;
 }
@@ -94,7 +91,7 @@ describe("composer chip clicks", () => {
 		// interrupt label, before the background chip's key prefix).
 		click(bar, chipCol(lines, "interrupt") + "interrupt".length + 2);
 		// The empty tail past the last chip.
-		click(bar, plainOf(lines[0]!).length + 5);
+		click(bar, stripVTControlCharacters(lines[0]!).length + 5);
 		// A release report is not a click.
 		const release = clickAt(dequeueCol + 1);
 		bar.routeMouse({ ...release.event, release: true, leftClick: false }, release.line, release.col);

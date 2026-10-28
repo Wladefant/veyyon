@@ -17,6 +17,7 @@
  * suite), and colour (the theme's).
  */
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { SgrMouseEvent } from "@veyyon/utils/mouse";
 import { Form, type FormField, type FormTheme } from "../src/components/form";
 import { CURSOR_MARKER } from "../src/tui";
@@ -462,7 +463,7 @@ describe("a form field answers the keys and the pointer its kind takes", () => {
 		]);
 		form.focused = true;
 		// Style bytes off; the cursor marker stays, so its column can be read.
-		const line = (form.render(40)[0] ?? "").replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+		const line = stripVTControlCharacters(form.render(40)[0] ?? "");
 		// The caret is the cursor marker on the cell at the value column, and the
 		// placeholder follows it on the same row.
 		expect(line.indexOf(CURSOR_MARKER)).toBe("▸ T  ".length);

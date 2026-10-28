@@ -19,6 +19,7 @@
  * numbers copied out of a layout that will move.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -26,7 +27,6 @@ import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { sgrPress } from "../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const WIDTH = 120;
 
 let geometry: StubbedStdoutGeometry;
@@ -64,7 +64,7 @@ function wheel(direction: "up" | "down", row = 10, col = 20): string {
 
 /** The 0-based screen row of the rendered line containing `needle`. */
 function rowOf(dashboard: AgentDashboard, needle: string): number {
-	const index = dashboard.render(WIDTH).findIndex(line => line.replace(ANSI_PATTERN, "").includes(needle));
+	const index = dashboard.render(WIDTH).findIndex(line => stripVTControlCharacters(line).includes(needle));
 	if (index < 0) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return index;
 }
@@ -73,7 +73,7 @@ function rowOf(dashboard: AgentDashboard, needle: string): number {
 function colOf(dashboard: AgentDashboard, needle: string): number {
 	const line = dashboard
 		.render(WIDTH)
-		.map(raw => raw.replace(ANSI_PATTERN, ""))
+		.map(raw => stripVTControlCharacters(raw))
 		.find(text => text.includes(needle));
 	if (!line) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return line.indexOf(needle);
@@ -111,7 +111,7 @@ describe("Clicking a roster row", () => {
 
 		const cursorRow = dashboard
 			.render(WIDTH)
-			.map(line => line.replace(ANSI_PATTERN, ""))
+			.map(line => stripVTControlCharacters(line))
 			.find(line => line.includes(theme.nav.cursor));
 		expect(cursorRow).toContain("scout");
 		dashboard.dispose();
@@ -178,7 +178,7 @@ describe("Clicking a view tab", () => {
 
 		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Comms (0)")));
 
-		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("No agent traffic yet.");
+		expect(stripVTControlCharacters(dashboard.render(WIDTH).join("\n"))).toContain("No agent traffic yet.");
 		dashboard.dispose();
 	});
 
@@ -190,7 +190,7 @@ describe("Clicking a view tab", () => {
 
 		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Live (1)")));
 
-		const shown = dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(WIDTH).join("\n"));
 		expect(shown).toContain("reviewer");
 		expect(shown).not.toContain("No agent traffic yet.");
 		dashboard.dispose();
@@ -204,7 +204,7 @@ describe("Clicking a view tab", () => {
 
 		dashboard.handleInput(sgrPress(stripRow, WIDTH - 12));
 
-		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("reviewer");
+		expect(stripVTControlCharacters(dashboard.render(WIDTH).join("\n"))).toContain("reviewer");
 		dashboard.dispose();
 	});
 });
@@ -242,7 +242,7 @@ describe("The scroll wheel", () => {
 		const cursorRow = () =>
 			dashboard
 				.render(WIDTH)
-				.map(line => line.replace(ANSI_PATTERN, ""))
+				.map(line => stripVTControlCharacters(line))
 				.find(line => line.includes(theme.nav.cursor));
 
 		dashboard.handleInput(wheel("down"));

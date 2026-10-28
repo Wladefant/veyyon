@@ -14,14 +14,13 @@
  * been unmounted for the rest of the session.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, type Mock, setSystemTime, test, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geometry: StubbedStdoutGeometry;
 
@@ -122,7 +121,7 @@ describe("What the ticker is for", () => {
 		setSystemTime(new Date("2026-07-26T12:00:00Z"));
 		registerSub("A");
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
-		const frame = () => dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const frame = () => stripVTControlCharacters(dashboard.render(120).join("\n"));
 		// One second in: under a minute reads as "just now" rather than a count.
 		setSystemTime(new Date("2026-07-26T12:00:01Z"));
 		expect(frame()).toContain("just now");

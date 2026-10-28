@@ -18,6 +18,7 @@
  *     static borderAccent ember, never a different color, never a half-ramp.
  */
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { ThemeJson } from "@veyyon/coding-agent/theme/color";
 import { getDefaultThemes } from "@veyyon/coding-agent/theme/defaults";
 import { LAVA_TUNING, lavaAnsi, lavaText } from "@veyyon/coding-agent/theme/shimmer";
@@ -85,7 +86,7 @@ describe("lava — flow across cells", () => {
 		const opens = out.match(/\x1b\[38;2;/g) ?? [];
 		expect(opens).toHaveLength(2);
 		expect(out.endsWith("\x1b[39m")).toBe(true);
-		expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("❯❯");
+		expect(stripVTControlCharacters(out)).toBe("❯❯");
 	});
 });
 

@@ -15,6 +15,7 @@
  * outcome under the no-background-paint default.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import {
 	type FramedMessage,
 	framedRendererSubject,
@@ -43,7 +44,7 @@ beforeAll(async () => {
  */
 function plain(lines: readonly string[]): string {
 	return lines
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.filter(line => !/^[┌└][─┐┘]*[┐┘]$/.test(line.trim()))
 		.map(line => line.replace(/^│ ?/, "").replace(/ *│$/, "").trimEnd())
 		.join("\n");

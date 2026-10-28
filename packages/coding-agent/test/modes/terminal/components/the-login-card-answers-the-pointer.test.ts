@@ -20,6 +20,7 @@
  */
 
 import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { LoginDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/login-dialog";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
@@ -51,7 +52,7 @@ function click(dialog: LoginDialogComponent, row: number, col: number): void {
 /** Screen position of the `[x]` close glyph in the rendered card. */
 function closeGlyphAt(rows: string[]): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = rows[row]!.replace(/\x1b\[[0-9;]*m/g, "").indexOf("[x]");
+		const col = stripVTControlCharacters(rows[row]!).indexOf("[x]");
 		if (col !== -1) return { row, col: col + 1 };
 	}
 	throw new Error("the card drew no close glyph");
@@ -60,7 +61,7 @@ function closeGlyphAt(rows: string[]): { row: number; col: number } {
 /** Screen position of a footer chip's label in the rendered card. */
 function chipAt(rows: string[], label: string): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = rows[row]!.replace(/\x1b\[[0-9;]*m/g, "").indexOf(label);
+		const col = stripVTControlCharacters(rows[row]!).indexOf(label);
 		if (col !== -1) return { row, col };
 	}
 	throw new Error(`the card drew no "${label}" chip`);
