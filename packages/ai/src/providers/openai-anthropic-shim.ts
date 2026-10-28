@@ -57,6 +57,26 @@ export function streamOpenAIAnthropicShim(
 				...(config.extraHeaders?.() ?? {}),
 				...options?.headers,
 			};
+			// The caller's options both wires take unchanged.
+			const forwarded = {
+				apiKey,
+				temperature: options?.temperature,
+				topP: options?.topP,
+				topK: options?.topK,
+				minP: options?.minP,
+				presencePenalty: options?.presencePenalty,
+				repetitionPenalty: options?.repetitionPenalty,
+				maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
+				signal: options?.signal,
+				headers: mergedHeaders,
+				sessionId: options?.sessionId,
+				onPayload: options?.onPayload,
+				onResponse: options?.onResponse,
+				onSseEvent: options?.onSseEvent,
+				fetch: options?.fetch,
+				serviceTier: options?.serviceTier,
+			};
+			let innerStream: AssistantMessageEventStream;
 
 			if (format === "anthropic") {
 				// The Anthropic-shape copy is the same model on a second wire, so it keeps the
@@ -97,38 +117,15 @@ export function streamOpenAIAnthropicShim(
 					? resolveThinkingBudget(reasoningEffort, ANTHROPIC_THINKING_BUDGETS, options?.thinkingBudgets)
 					: undefined;
 
-				const innerStream = streamAnthropic(anthropicModel, context, {
-					apiKey,
-					temperature: options?.temperature,
-					topP: options?.topP,
-					topK: options?.topK,
-					minP: options?.minP,
-					presencePenalty: options?.presencePenalty,
-					repetitionPenalty: options?.repetitionPenalty,
-					maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
-					signal: options?.signal,
-					headers: mergedHeaders,
-					sessionId: options?.sessionId,
-					onPayload: options?.onPayload,
-					onResponse: options?.onResponse,
-					onSseEvent: options?.onSseEvent,
-					fetch: options?.fetch,
+				innerStream = streamAnthropic(anthropicModel, context, {
+					...forwarded,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
 					// An adaptive or budget-effort transport sends the selected effort as
 					// `output_config.effort`; a plain budget transport sends only the budget.
 					reasoning: reasoningEffort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
-					serviceTier: options?.serviceTier,
 				});
-
-				for await (const event of innerStream) {
-					stream.push(event);
-				}
-				// An inner that ends without a terminal event must still settle this
-				// stream; a result-less end rejects innerStream.result() into the
-				// catch, which emits a terminal error. Otherwise consumers park forever.
-				if (!stream.done) stream.end(await innerStream.result());
 			} else {
 				const openaiModel: Model<"openai-completions"> = config.openaiBaseUrl
 					? buildModel({
@@ -147,36 +144,21 @@ export function streamOpenAIAnthropicShim(
 						: undefined;
 				const forcedOn = offSelection?.forcedByModel === true;
 				const reasoningEffort = forcedOn ? offSelection.effort : options?.reasoning;
-				const innerStream = streamOpenAICompletions(openaiModel, context, {
-					apiKey,
-					temperature: options?.temperature,
-					topP: options?.topP,
-					topK: options?.topK,
-					minP: options?.minP,
-					presencePenalty: options?.presencePenalty,
-					repetitionPenalty: options?.repetitionPenalty,
-					maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
-					signal: options?.signal,
-					headers: mergedHeaders,
-					sessionId: options?.sessionId,
-					onPayload: options?.onPayload,
-					onResponse: options?.onResponse,
-					onSseEvent: options?.onSseEvent,
-					fetch: options?.fetch,
+				innerStream = streamOpenAICompletions(openaiModel, context, {
+					...forwarded,
 					reasoning: reasoningEffort,
 					toolChoice: options?.toolChoice,
-					serviceTier: options?.serviceTier,
 					disableReasoning: forcedOn ? undefined : options?.disableReasoning,
 				});
-
-				for await (const event of innerStream) {
-					stream.push(event);
-				}
-				// An inner that ends without a terminal event must still settle this
-				// stream; a result-less end rejects innerStream.result() into the
-				// catch, which emits a terminal error. Otherwise consumers park forever.
-				if (!stream.done) stream.end(await innerStream.result());
 			}
+
+			for await (const event of innerStream) {
+				stream.push(event);
+			}
+			// An inner that ends without a terminal event must still settle this
+			// stream; a result-less end rejects innerStream.result() into the
+			// catch, which emits a terminal error. Otherwise consumers park forever.
+			if (!stream.done) stream.end(await innerStream.result());
 		} catch (err) {
 			stream.push({
 				type: "error",

@@ -7,8 +7,17 @@
  * tools, and the complete `ResponseStreamEvent` union. Request-option and
  * pagination plumbing, parsed-output generics, the input-tokens API, and
  * websocket event types are omitted. Names mirror the SDK exactly so call
- * sites only swap import paths.
+ * sites only swap import paths. The shared types the Chat Completions wire
+ * also references are defined once, in `openai-chat-wire.ts`.
  */
+
+import type {
+	ChatModel,
+	Metadata,
+	ReasoningEffort,
+	ResponseFormatJSONObject,
+	ResponseFormatText,
+} from "./openai-chat-wire";
 
 // ─── Responses API ────────────────────────────────────────
 /**
@@ -5846,85 +5855,6 @@ export interface ResponseCreateParamsStreaming extends ResponseCreateParamsBase 
 }
 
 // ─── Shared types (from resources/shared.d.ts) ────────────────────────────────────────
-export type ChatModel =
-	| "gpt-5.4"
-	| "gpt-5.4-mini"
-	| "gpt-5.4-nano"
-	| "gpt-5.4-mini-2026-03-17"
-	| "gpt-5.4-nano-2026-03-17"
-	| "gpt-5.3-chat-latest"
-	| "gpt-5.2"
-	| "gpt-5.2-2025-12-11"
-	| "gpt-5.2-chat-latest"
-	| "gpt-5.2-pro"
-	| "gpt-5.2-pro-2025-12-11"
-	| "gpt-5.1"
-	| "gpt-5.1-2025-11-13"
-	| "gpt-5.1-codex"
-	| "gpt-5.1-mini"
-	| "gpt-5.1-chat-latest"
-	| "gpt-5"
-	| "gpt-5-mini"
-	| "gpt-5-nano"
-	| "gpt-5-2025-08-07"
-	| "gpt-5-mini-2025-08-07"
-	| "gpt-5-nano-2025-08-07"
-	| "gpt-5-chat-latest"
-	| "gpt-4.1"
-	| "gpt-4.1-mini"
-	| "gpt-4.1-nano"
-	| "gpt-4.1-2025-04-14"
-	| "gpt-4.1-mini-2025-04-14"
-	| "gpt-4.1-nano-2025-04-14"
-	| "o4-mini"
-	| "o4-mini-2025-04-16"
-	| "o3"
-	| "o3-2025-04-16"
-	| "o3-mini"
-	| "o3-mini-2025-01-31"
-	| "o1"
-	| "o1-2024-12-17"
-	| "o1-preview"
-	| "o1-preview-2024-09-12"
-	| "o1-mini"
-	| "o1-mini-2024-09-12"
-	| "gpt-4o"
-	| "gpt-4o-2024-11-20"
-	| "gpt-4o-2024-08-06"
-	| "gpt-4o-2024-05-13"
-	| "gpt-4o-audio-preview"
-	| "gpt-4o-audio-preview-2024-10-01"
-	| "gpt-4o-audio-preview-2024-12-17"
-	| "gpt-4o-audio-preview-2025-06-03"
-	| "gpt-4o-mini-audio-preview"
-	| "gpt-4o-mini-audio-preview-2024-12-17"
-	| "gpt-4o-search-preview"
-	| "gpt-4o-mini-search-preview"
-	| "gpt-4o-search-preview-2025-03-11"
-	| "gpt-4o-mini-search-preview-2025-03-11"
-	| "chatgpt-4o-latest"
-	| "codex-mini-latest"
-	| "gpt-4o-mini"
-	| "gpt-4o-mini-2024-07-18"
-	| "gpt-4-turbo"
-	| "gpt-4-turbo-2024-04-09"
-	| "gpt-4-0125-preview"
-	| "gpt-4-turbo-preview"
-	| "gpt-4-1106-preview"
-	| "gpt-4-vision-preview"
-	| "gpt-4"
-	| "gpt-4-0314"
-	| "gpt-4-0613"
-	| "gpt-4-32k"
-	| "gpt-4-32k-0314"
-	| "gpt-4-32k-0613"
-	| "gpt-3.5-turbo"
-	| "gpt-3.5-turbo-16k"
-	| "gpt-3.5-turbo-0301"
-	| "gpt-3.5-turbo-0613"
-	| "gpt-3.5-turbo-1106"
-	| "gpt-3.5-turbo-0125"
-	| "gpt-3.5-turbo-16k-0613";
 /**
  * A filter used to compare a specified attribute key to a given value using a
  * defined comparison operation.
@@ -6001,29 +5931,6 @@ export declare namespace CustomToolInputFormat {
 	}
 }
 /**
- * The parameters the functions accepts, described as a JSON Schema object. See the
- * [guide](https://platform.openai.com/docs/guides/function-calling) for examples,
- * and the
- * [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
- * documentation about the format.
- *
- * Omitting `parameters` defines a function with an empty parameter list.
- */
-export type FunctionParameters = {
-	[key: string]: unknown;
-};
-/**
- * Set of 16 key-value pairs that can be attached to an object. This can be useful
- * for storing additional information about the object in a structured format, and
- * querying for objects via API or the dashboard.
- *
- * Keys are strings with a maximum length of 64 characters. Values are strings with
- * a maximum length of 512 characters.
- */
-export type Metadata = {
-	[key: string]: string;
-};
-/**
  * **gpt-5 and o-series models only**
  *
  * Configuration options for
@@ -6071,43 +5978,6 @@ export interface Reasoning {
 	 * models after `gpt-5`.
 	 */
 	summary?: "auto" | "concise" | "detailed" | null;
-}
-/**
- * Constrains effort on reasoning for
- * [reasoning models](https://platform.openai.com/docs/guides/reasoning). Currently
- * supported values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
- * `max`. Reducing reasoning effort can result in faster responses and fewer tokens
- * used on reasoning in a response.
- *
- * - `gpt-5.1` defaults to `none`, which does not perform reasoning. The supported
- *   reasoning values for `gpt-5.1` are `none`, `low`, `medium`, and `high`. Tool
- *   calls are supported for all reasoning values in gpt-5.1.
- * - All models before `gpt-5.1` default to `medium` reasoning effort, and do not
- *   support `none`.
- * - The `gpt-5-pro` model defaults to (and only supports) `high` reasoning effort.
- * - `xhigh` is supported for all models after `gpt-5.1-codex-max`.
- * - `max` is supported for `gpt-5.6` and later models.
- */
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
-/**
- * JSON object response format. An older method of generating JSON responses. Using
- * `json_schema` is recommended for models that support it. Note that the model
- * will not generate JSON without a system or user message instructing it to do so.
- */
-export interface ResponseFormatJSONObject {
-	/**
-	 * The type of response format being defined. Always `json_object`.
-	 */
-	type: "json_object";
-}
-/**
- * Default response format. Used to generate text responses.
- */
-export interface ResponseFormatText {
-	/**
-	 * The type of response format being defined. Always `text`.
-	 */
-	type: "text";
 }
 export type ResponsesModel =
 	| (string & {})
