@@ -278,7 +278,12 @@ jobs:
             echo "ran=0"
           } > "$RECEIPT"
 
-          if [[ ! -s "$SHARD_FILE" ]]; then
+          if ! bun scripts/ovh-test-shards.mjs --verify "$SHARD_FILE" --expected "${{ matrix.files }}"; then
+            echo "::error::Shard ${{ matrix.index }} test list does not match the plan (expected ${{ matrix.files }} tests)"
+            exit 1
+          fi
+
+          if [[ "${{ matrix.files }}" == "0" ]]; then
             echo 'no-related-tests: 0 selected, 0 passed, 0 failed'
             shard_end=$(date +%s)
             shard_elapsed=$((shard_end - shard_start))

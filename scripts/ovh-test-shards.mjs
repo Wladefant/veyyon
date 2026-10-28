@@ -61,6 +61,21 @@ export function parseSelectedLines(text) {
 	return lines;
 }
 
+/** Fail closed when a shard's test list is missing or disagrees with the planned count. */
+export async function verifyShardFile(file, expected) {
+	if (!Number.isInteger(expected) || expected < 0) throw new RangeError(`expected test count must be a non-negative integer, got ${expected}`);
+	let text;
+	try {
+		text = await readFile(file, "utf8");
+	} catch (error) {
+		if (error && error.code === "ENOENT") throw new Error(`shard file is missing: ${file} (plan expected ${expected} tests)`);
+		throw error;
+	}
+	const lines = parseSelectedLines(text);
+	if (lines.length !== expected) throw new Error(`shard file lists ${lines.length} tests but the plan selected ${expected}: ${file}`);
+	return lines.length;
+}
+
 async function atomicWrite(file, content) {
 	const temp = `${file}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`;
 	try {
@@ -73,11 +88,17 @@ async function atomicWrite(file, content) {
 }
 
 export async function runCli(args = process.argv.slice(2), env = process.env) {
-	let input, output;
+	let input, output, verify, expected;
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--input" && input === undefined) input = args[++i];
 		else if (args[i] === "--output" && output === undefined) output = args[++i];
+		else if (args[i] === "--verify" && verify === undefined) verify = args[++i];
+		else if (args[i] === "--expected" && expected === undefined) expected = args[++i];
 		else throw new Error(`unexpected or duplicate argument: ${args[i]}`);
+	}
+	if (verify !== undefined || expected !== undefined) {
+		if (input !== undefined || output !== undefined || !verify || !/^[0-9]+$/.test(expected ?? "")) throw new Error("usage: ovh-test-shards.mjs --verify <shard-file> --expected <count>");
+		return verifyShardFile(verify, Number(expected));
 	}
 	if (!input || !output) throw new Error("usage: ovh-test-shards.mjs --input <selected-lines-file> --output <dir>");
 	const manifestPath = fileURLToPath(new URL("./ovh-test-durations.json", import.meta.url));

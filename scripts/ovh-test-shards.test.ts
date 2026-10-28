@@ -1,5 +1,8 @@
-import { describe, expect, it } from "bun:test";
-import { planShards, parseSelectedLines } from "./ovh-test-shards.mjs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { parseSelectedLines, planShards, runCli } from "./ovh-test-shards.mjs";
 
 describe("OVH test shard planner", () => {
 	it("uses deterministic LPT placement with least-loaded index tie breaks", () => {
@@ -49,5 +52,44 @@ describe("OVH test shard planner", () => {
 		expect(parseSelectedLines("a\nb\n")).toEqual(["a", "b"]);
 		expect(parseSelectedLines("a\r\nb\r\n")).toEqual(["a", "b"]);
 		expect(() => parseSelectedLines("a\n\nb")).toThrow(/empty/);
+	});
+});
+
+// WHY: a shard whose test list is missing or short once passed as "no related tests" and hid unrun tests.
+// Closes the class "plan says N tests, file disagrees"; it does not exercise the workflow shell itself.
+describe("OVH shard file verification (--verify)", () => {
+	let dir: string;
+	beforeEach(async () => {
+		dir = await mkdtemp(path.join(tmpdir(), "ovh-verify-"));
+	});
+	afterEach(async () => {
+		await rm(dir, { recursive: true, force: true });
+	});
+
+	it("accepts a file whose line count equals the plan, including an empty plan", async () => {
+		const file = path.join(dir, "shard-0.txt");
+		await writeFile(file, "a.test.ts\nb.test.ts\n");
+		expect(await runCli(["--verify", file, "--expected", "2"])).toBe(2);
+		await writeFile(file, "");
+		expect(await runCli(["--verify", file, "--expected", "0"])).toBe(0);
+	});
+
+	it("rejects a missing file when tests were planned", async () => {
+		await expect(runCli(["--verify", path.join(dir, "shard-1.txt"), "--expected", "3"])).rejects.toThrow(/missing/);
+	});
+
+	it("rejects an empty or short file when tests were planned, and a non-empty file when none were", async () => {
+		const file = path.join(dir, "shard-0.txt");
+		await writeFile(file, "");
+		await expect(runCli(["--verify", file, "--expected", "1"])).rejects.toThrow(/lists 0 tests but the plan selected 1/);
+		await writeFile(file, "a.test.ts\n");
+		await expect(runCli(["--verify", file, "--expected", "2"])).rejects.toThrow(/lists 1 tests but the plan selected 2/);
+		await expect(runCli(["--verify", file, "--expected", "0"])).rejects.toThrow(/lists 1 tests but the plan selected 0/);
+	});
+
+	it("rejects a malformed expected count", async () => {
+		const file = path.join(dir, "shard-0.txt");
+		await writeFile(file, "a.test.ts\n");
+		for (const bad of ["", "-1", "1.5", "x"]) await expect(runCli(["--verify", file, "--expected", bad])).rejects.toThrow(/usage/);
 	});
 });
