@@ -325,8 +325,8 @@ class GatewayExchange<O> {
 	}
 
 	/** The answer to a request its wire's parser rejected with `error`. */
-	malformed(_error: unknown): Response {
-		return this.signal.aborted ? this.closed() : this.reject(400, "invalid_request_error", "Invalid request");
+	malformed(error: unknown): Response {
+		return this.signal.aborted ? this.closed() : this.reject(400, "invalid_request_error", errorMessage(error));
 	}
 
 	/** The request body parsed as JSON, or the answer that ends the request. */
@@ -337,7 +337,7 @@ class GatewayExchange<O> {
 			body = await req.json();
 		} catch (error) {
 			if (this.signal.aborted) return this.closed();
-			return this.reject(400, "invalid_request_error", "Invalid JSON body");
+			return this.reject(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
 		}
 		return this.signal.aborted ? this.closed() : { body };
 	}

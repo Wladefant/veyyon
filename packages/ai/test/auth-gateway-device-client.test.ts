@@ -17,19 +17,25 @@ describe("credential-free device client", () => {
 			return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
 		};
 		const stream = streamPiNative(model, { messages: [{ role: "user", content: "hello", timestamp: 0 }] }, { apiKey: "device-token", fetch: transport });
-		for await (const _event of stream) { /* Drain the real client's error event. */ }
-		expect((await stream.result()).stopReason).toBe("error");
+		const iteration = (async () => {
+			for await (const _event of stream) { /* Drain the real client's error event. */ }
+		})();
+		const iterationRejected = expect(iteration).rejects.toThrow(/401|unauthorized/);
+		const resultRejected = expect(stream.result()).rejects.toThrow(/401|unauthorized/);
+		await Promise.all([iterationRejected, resultRejected]);
 		expect(calls).toBe(1);
 	});
-	it("reports broker unavailability without a provider fallback", async () => {
+	it("rejects on broker unavailability without a provider fallback", async () => {
 		const model = { ...createMockModel({ provider: "openrouter", id: "device-test" }).model, baseUrl: "https://broker.example" };
 		let calls = 0;
 		const transport: FetchImpl = async () => { calls++; throw new Error("broker unavailable"); };
 		const stream = streamPiNative(model, { messages: [] }, { apiKey: "device-token", fetch: transport });
-		for await (const _event of stream) { /* Drain the real client's error event. */ }
-		const result = await stream.result();
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("broker unavailable");
+		const iteration = (async () => {
+			for await (const _event of stream) { /* Drain the real client's error event. */ }
+		})();
+		const iterationRejected = expect(iteration).rejects.toThrow("broker unavailable");
+		const resultRejected = expect(stream.result()).rejects.toThrow("broker unavailable");
+		await Promise.all([iterationRejected, resultRejected]);
 		expect(calls).toBe(1);
 	});
 });

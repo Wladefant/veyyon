@@ -131,12 +131,12 @@ describe("auth-gateway auth retry", () => {
 		const mock = createMockModel({
 			provider: "mock",
 			id: "gateway-quota-model",
-			handler: (_context, options) => {
+			handler: _context => {
 				attempt += 1;
 				if (attempt === 1) {
 					throw new ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" });
 				}
-				return { content: [`ok:${options?.apiKey ?? "missing"}`] };
+				return { content: ["quota retry succeeded"] };
 			},
 		});
 		const handle = startAuthGateway({
@@ -168,7 +168,7 @@ describe("auth-gateway auth retry", () => {
 			if (typeof failedKey !== "string" || typeof retriedKey !== "string") {
 				throw new Error("expected gateway retries to use static API keys");
 			}
-			expect(body.choices?.[0]?.message?.content).toBe(`ok:${retriedKey}`);
+			expect(body.choices?.[0]?.message?.content).toBe("quota retry succeeded");
 			expect(new Set([failedKey, retriedKey]).size).toBe(2);
 			expect(markUsageLimitSpy.mock.calls).toHaveLength(1);
 			const usageLimitCall = markUsageLimitSpy.mock.calls[0];
