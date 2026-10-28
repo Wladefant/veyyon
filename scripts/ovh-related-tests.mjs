@@ -265,41 +265,108 @@ for (const file of sourceFiles) {
   }
 }
 
-// Build a tracked-path index and conservative edges from literal references in any tracked file.
+// Build conservative edges from literal references in tracked files.
 const trackedPathForms = new Map();
 function addPathForm(form, target) {
   if (form.length < 3 || /(^|\/)index(?:\.[^/]+)?$/.test(form) || /(^|\/)(?:test|spec|index)$/.test(form)) return;
   if (!trackedPathForms.has(form)) trackedPathForms.set(form, new Set());
   trackedPathForms.get(form).add(target);
 }
-for (const target of allTracked) {
-  const noExt = target.replace(/\.(?:[cm]?[jt]sx?|json|ya?ml|md|txt|snap|toml|lock)$/, '');
-  addPathForm(target, target);
-  addPathForm(noExt, target);
-}
-for (const target of changedSet) {
+for (const target of new Set([...allTracked, ...changedSet])) {
   const noExt = target.replace(/\.(?:[cm]?[jt]sx?|json|ya?ml|md|txt|snap|toml|lock)$/, '');
   addPathForm(target, target);
   addPathForm(noExt, target);
 }
 const refReverse = new Map();
 const quotedPath = /(['"])([^'"\r\n]{1,512})\1/g;
+function pathAliases(ast) {
+  const joins = new Set(), resolves = new Set(), dirnames = new Set(), fileURLToPaths = new Set();
+  for (const statement of ast.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const source = statement.moduleSpecifier.text, clause = statement.importClause, bindings = clause?.namedBindings;
+    if ((source === 'node:path' || source === 'path') && clause?.name) {
+      joins.add(`${clause.name.text}.join`); resolves.add(`${clause.name.text}.resolve`); dirnames.add(`${clause.name.text}.dirname`);
+    }
+    if ((source === 'node:path' || source === 'path') && bindings && ts.isNamespaceImport(bindings)) {
+      joins.add(`${bindings.name.text}.join`); resolves.add(`${bindings.name.text}.resolve`); dirnames.add(`${bindings.name.text}.dirname`);
+    }
+    if ((source === 'node:path' || source === 'path') && bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
+      const imported = item.propertyName?.text ?? item.name.text, local = item.name.text;
+      if (imported === 'join') joins.add(local);
+      if (imported === 'resolve') resolves.add(local);
+      if (imported === 'dirname') dirnames.add(local);
+    }
+    if ((source === 'node:url' || source === 'url') && clause?.name) fileURLToPaths.add(`${clause.name.text}.fileURLToPath`);
+    if ((source === 'node:url' || source === 'url') && bindings && ts.isNamespaceImport(bindings)) fileURLToPaths.add(`${bindings.name.text}.fileURLToPath`);
+    if ((source === 'node:url' || source === 'url') && bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
+      if ((item.propertyName?.text ?? item.name.text) === 'fileURLToPath') fileURLToPaths.add(item.name.text);
+    }
+  }
+  return { joins, resolves, dirnames, fileURLToPaths };
+}
 for (const consumer of allTracked) {
   if (!fs.existsSync(consumer) || fs.statSync(consumer).size > 2_000_000) continue;
   const text = fs.readFileSync(consumer, 'utf8');
   if (text.includes('\0')) continue;
   const literalsFound = [];
   const moduleRanges = [];
+  const pathRanges = [];
+  const staticPaths = [];
   if (jsTsRx.test(consumer)) {
     const { ast } = astFor(consumer);
-    for (const statement of ast.statements) {
-      if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) && statement.moduleSpecifier) moduleRanges.push([statement.moduleSpecifier.getStart(ast), statement.moduleSpecifier.getEnd()]);
+    const aliases = pathAliases(ast);
+    const bindings = new Map();
+    for (const statement of ast.statements) if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const) !== 0) {
+      for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name) && declaration.initializer) bindings.set(declaration.name.text, declaration.initializer);
     }
+    const metaUrl = Symbol('import.meta.url');
+    const evalNode = (node, seen = new Set(), depth = 0) => {
+      if (!node || depth > 20) return null;
+      if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) return evalNode(node.expression, seen, depth + 1);
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+      if (ts.isIdentifier(node)) {
+        if (seen.has(node.text) || !bindings.has(node.text)) return null;
+        const next = new Set(seen); next.add(node.text);
+        return evalNode(bindings.get(node.text), next, depth + 1);
+      }
+      if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression)) {
+        if (node.name.text === 'url') return metaUrl;
+        if (node.name.text === 'dirname') return path.dirname(path.resolve(root, consumer));
+        if (node.name.text === 'filename') return path.resolve(root, consumer);
+      }
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression.getText(ast);
+        const args = node.arguments.map(arg => evalNode(arg, seen, depth + 1));
+        if (aliases.fileURLToPaths.has(callee) && args[0] === metaUrl) return path.resolve(root, consumer);
+        if (aliases.dirnames.has(callee) && typeof args[0] === 'string') return path.dirname(args[0]);
+        if (aliases.joins.has(callee) || aliases.resolves.has(callee)) {
+          if (args.some(value => value === null || typeof value !== 'string')) return null;
+          return aliases.resolves.has(callee) ? path.resolve(root, ...args) : path.join(...args);
+        }
+        if (callee === 'process.cwd' && args.length === 0) return root;
+      }
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.Plus) {
+        const left = evalNode(node.left, seen, depth + 1), right = evalNode(node.right, seen, depth + 1);
+        return typeof left === 'string' && typeof right === 'string' ? left + right : null;
+      }
+      return null;
+    };
     const visit = node => {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+        moduleRanges.push([node.moduleSpecifier.getStart(ast), node.moduleSpecifier.getEnd()]);
+      }
       if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literalsFound.push({ value: node.text, start: node.getStart(ast) });
-      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
-        const arg = node.arguments[0];
-        if (arg && ts.isStringLiteral(arg)) moduleRanges.push([arg.getStart(ast), arg.getEnd()]);
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression.getText(ast);
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require')) {
+          const arg = node.arguments[0];
+          if (arg && ts.isStringLiteral(arg)) moduleRanges.push([arg.getStart(ast), arg.getEnd()]);
+        }
+        if (aliases.joins.has(callee) || aliases.resolves.has(callee)) {
+          for (const arg of node.arguments) pathRanges.push([arg.getStart(ast), arg.getEnd()]);
+          const value = evalNode(node);
+          if (value !== null) staticPaths.push(value);
+        }
       }
       ts.forEachChild(node, visit);
     };
@@ -307,14 +374,17 @@ for (const consumer of allTracked) {
   } else {
     for (const match of text.matchAll(quotedPath)) literalsFound.push({ value: match[2], start: match.index });
   }
+  const addReference = candidate => {
+    const normalized = normalize(candidate);
+    for (const target of trackedPathForms.get(normalized) ?? []) if (target !== consumer) edge(refReverse, target, consumer);
+  };
+  for (const staticPath of staticPaths) addReference(path.relative(root, path.resolve(root, staticPath)));
   for (const { value: rawValue, start } of literalsFound) {
-    if (moduleRanges.some(([from, to]) => start >= from && start < to)) continue;
+    if (moduleRanges.some(([from, to]) => start >= from && start < to) || pathRanges.some(([from, to]) => start >= from && start < to)) continue;
     const value = rawValue.replaceAll('\\/', '/');
-    const candidates = new Set([value, value.replace(/^\.\//, '')]);
-    if (value.startsWith('.')) candidates.add(normalize(path.relative(root, path.resolve(root, path.dirname(consumer), value))));
-    for (const candidate of candidates) for (const target of trackedPathForms.get(normalize(candidate)) ?? []) {
-      if (target !== consumer) edge(refReverse, target, consumer);
-    }
+    if (value.startsWith('.')) addReference(path.relative(root, path.resolve(root, path.dirname(consumer), value)));
+    else if (value.includes('/')) addReference(value.replace(/^\//, ''));
+    else addReference(path.relative(root, path.resolve(root, path.dirname(consumer), value)));
   }
 }
 

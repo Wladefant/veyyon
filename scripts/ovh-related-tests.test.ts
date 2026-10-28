@@ -107,7 +107,7 @@ describe("OVH related-test selector", () => {
 				"tsconfig.json": JSON.stringify({
 					compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext" },
 				}),
-				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0" }),
+				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0", changelog: "CHANGELOG.md" }),
 				"packages/pkg-a/src/mod-a.ts": 'export const a = "alpha";\n',
 				"packages/pkg-a/src/mod-b.ts": 'console.log("barrel side effect");\nexport const b = "beta";\n',
 				"packages/pkg-a/src/types.ts": "export type SharedType = { value: string };\n",
@@ -116,7 +116,7 @@ describe("OVH related-test selector", () => {
 				"packages/pkg-a/test/consumer-a.test.ts": 'import { a } from "../src/index.js";\nexport const testA = a;\n',
 				"packages/pkg-a/test/direct-a.test.ts": 'import { a } from "../src/mod-a.js";\nexport const directA = a;\n',
 				"packages/pkg-a/test/same-pkg-type-consumer.test.ts":
-					'import type { SharedType } from "../src/types.js";\nexport const localVal: SharedType = { value: "pkg-a" };\n',
+					'import type { SharedType } from "../src/types";\nexport const localVal: SharedType = { value: "pkg-a" };\n',
 				"packages/pkg-a/test/unrelated.test.ts": "export const standalone = 123;\n",
 				"packages/pkg-b/package.json": JSON.stringify({ name: "@fixture/pkg-b", version: "1.0.0" }),
 				"packages/pkg-b/test/foreign-type-consumer.test.ts":
@@ -125,6 +125,18 @@ describe("OVH related-test selector", () => {
 					'import type { SharedType } from "../../pkg-a/src/index.js";\nexport const foreignVal: SharedType = { value: "pkg-b" };\n',
 				"packages/pkg-b/test/foreign-barrel-binding-consumer.test.ts":
 					'import { SharedType } from "../../pkg-a/src/index.js";\nexport const foreignVal: SharedType = { value: "pkg-b" };\n',
+				"CHANGELOG.md": "# root\n",
+				"packages/pkg-a/CHANGELOG.md": "# package\n",
+				"packages/pkg-a/tsconfig.json": JSON.stringify({ include: ["CHANGELOG.md"] }),
+				"scripts/root-changelog-reader.test.ts":
+					'import { dirname as getDir } from "node:path";\nimport { join as pathJoin } from "node:path";\nimport { fileURLToPath as toPath } from "node:url";\nconst HERE = getDir(toPath(import.meta.url));\nconst REPO_ROOT = pathJoin(HERE, "..");\nconst ROOT_PATH = pathJoin(REPO_ROOT, "CHANGELOG.md");\nexport const rootChangelog = ROOT_PATH;\n',
+				"packages/pkg-a/test/package-changelog-reader.test.ts":
+					'import { dirname, join } from "node:path";\nimport { fileURLToPath } from "node:url";\nconst HERE = dirname(fileURLToPath(import.meta.url));\nconst ROOT = join(HERE, "../../..");\nconst PACKAGE_CHANGELOG = join(ROOT, "packages", "pkg-a", "CHANGELOG.md");\nexport const packageChangelog = PACKAGE_CHANGELOG;\n',
+				"packages/pkg-a/test/package-metadata-reader.test.ts":
+					'import metadata from "../package.json";\nexport const changelogMetadata = metadata.changelog;\n',
+				"packages/pkg-a/test/unresolved-prefix.test.ts":
+					'import { join } from "node:path";\nconst first = second;\nconst second = first;\nconst runtimeDir = first;\nexport const possibleChangelog = join(runtimeDir, "CHANGELOG.md");\n',
+				"packages/pkg-b/test/changelog-unrelated.test.ts": "export const unrelatedChangelog = true;\n",
 			});
 			fixtureDir = fixture.fixtureDir;
 			cleanupFixture = fixture.cleanup;
@@ -172,6 +184,19 @@ describe("OVH related-test selector", () => {
 			expect(selected).toContain("packages/pkg-b/test/foreign-type-consumer.test.ts");
 			expect(selected).toContain("packages/pkg-b/test/foreign-barrel-type-consumer.test.ts");
 			expect(selected).toContain("packages/pkg-b/test/foreign-barrel-binding-consumer.test.ts");
+		});
+		it("resolves whole static path calls without treating manifest metadata as root references", () => {
+			const rootSelected = parseSelectedTests(runSelector(["CHANGELOG.md"], { cwd: fixtureDir }));
+			expect(rootSelected).toEqual(["scripts/root-changelog-reader.test.ts"]);
+			expect(rootSelected).not.toContain("packages/pkg-a/test/package-changelog-reader.test.ts");
+			expect(rootSelected).not.toContain("packages/pkg-a/test/package-metadata-reader.test.ts");
+			expect(rootSelected).not.toContain("packages/pkg-a/test/unresolved-prefix.test.ts");
+
+			const packageSelected = parseSelectedTests(runSelector(["packages/pkg-a/CHANGELOG.md"], { cwd: fixtureDir }));
+			expect(packageSelected).toContain("packages/pkg-a/test/package-changelog-reader.test.ts");
+			expect(packageSelected).toContain("packages/pkg-a/test/package-metadata-reader.test.ts");
+			expect(packageSelected).not.toContain("scripts/root-changelog-reader.test.ts");
+			expect(packageSelected).not.toContain("packages/pkg-b/test/changelog-unrelated.test.ts");
 		});
 	});
 });
