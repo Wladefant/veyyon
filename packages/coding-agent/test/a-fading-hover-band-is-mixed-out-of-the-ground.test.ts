@@ -35,30 +35,11 @@ import {
 } from "@veyyon/coding-agent/theme/theme";
 import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
+import { bandRgb, hexRgb, rgbDistance } from "./helpers/band-colors";
 
 const originalColorterm = Bun.env.COLORTERM;
 const originalAnsiPolicy = getAnsiPolicy();
 let originalTheme: typeof theme | undefined;
-
-/** `48;2;r;g;b` from a rendered band, or null when the row carries no truecolor background. */
-function bandRgb(row: string): [number, number, number] | null {
-	const match = /\x1b\[[0-9;]*?48;2;(\d+);(\d+);(\d+)/.exec(row);
-	if (match === null) return null;
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function hexRgb(hex: string): [number, number, number] {
-	return [
-		Number.parseInt(hex.slice(1, 3), 16),
-		Number.parseInt(hex.slice(3, 5), 16),
-		Number.parseInt(hex.slice(5, 7), 16),
-	];
-}
-
-/** How far a band is from a color, summed over the channels. */
-function distance(a: [number, number, number], b: [number, number, number]): number {
-	return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-}
 
 /**
  * Load a theme in a chosen color mode. The mode is read once, at construction, so it is set on the
@@ -137,12 +118,12 @@ describe("a fading hover band is mixed out of the ground", () => {
 		// Monotone travel: every step is closer to the band and further from the page than the last.
 		// Asserting direction rather than exact channels is what keeps this from breaking on a
 		// theme's palette while still failing on a mix that runs backwards or off the line.
-		expect(distance(quarter.rgb, quarter.full)).toBeGreaterThan(distance(half.rgb, half.full));
-		expect(distance(half.rgb, half.full)).toBeGreaterThan(distance(most.rgb, most.full));
-		expect(distance(quarter.rgb, quarter.ground)).toBeLessThan(distance(half.rgb, half.ground));
-		expect(distance(half.rgb, half.ground)).toBeLessThan(distance(most.rgb, most.ground));
+		expect(rgbDistance(quarter.rgb, quarter.full)).toBeGreaterThan(rgbDistance(half.rgb, half.full));
+		expect(rgbDistance(half.rgb, half.full)).toBeGreaterThan(rgbDistance(most.rgb, most.full));
+		expect(rgbDistance(quarter.rgb, quarter.ground)).toBeLessThan(rgbDistance(half.rgb, half.ground));
+		expect(rgbDistance(half.rgb, half.ground)).toBeLessThan(rgbDistance(most.rgb, most.ground));
 		// And the weakest band is nearer the page than the band it is arriving as.
-		expect(distance(quarter.rgb, quarter.ground)).toBeLessThan(distance(quarter.rgb, quarter.full));
+		expect(rgbDistance(quarter.rgb, quarter.ground)).toBeLessThan(rgbDistance(quarter.rgb, quarter.full));
 	});
 
 	it("resolves out of the light theme's own ground, not a dark one", async () => {
@@ -151,7 +132,7 @@ describe("a fading hover band is mixed out of the ground", () => {
 		// A light theme's page is bright, so a barely-there band on it is bright too. A band mixed
 		// out of black would be darker than either endpoint, which is the visible symptom of taking
 		// the ground from the wrong place.
-		expect(distance(faint.rgb, faint.ground)).toBeLessThan(distance(faint.rgb, [0, 0, 0]));
+		expect(rgbDistance(faint.rgb, faint.ground)).toBeLessThan(rgbDistance(faint.rgb, [0, 0, 0]));
 	});
 
 	it("switches rather than mixes in a color mode that cannot show the mix", async () => {

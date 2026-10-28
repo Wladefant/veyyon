@@ -47,6 +47,7 @@ import type { AccountInventory } from "@veyyon/coding-agent/session/account-inve
 import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL, type TUI } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { bandRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
@@ -70,13 +71,6 @@ let originalColorterm: string | undefined;
  */
 const { advance, settle } = useHandTickedMotion();
 
-/** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
-function bandRgb(row: string): [number, number, number] | null {
-	const match = /\x1b\[[0-9;]*?48;2;(\d+);(\d+);(\d+)/.exec(row);
-	if (match === null) return null;
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
 /**
  * The fill a settled band carries. The band colour is a property of the theme, not of the row it
  * covers, so a one-character sample at full strength is the endpoint every surface here lands on.
@@ -85,11 +79,6 @@ function fullBandRgb(): [number, number, number] {
 	const rgb = bandRgb(hoverBandAt("x", 8, 1));
 	if (rgb === null) throw new Error("full strength painted no truecolor fill");
 	return rgb;
-}
-
-/** How far one colour is from another, summed over the channels. */
-function distance(a: [number, number, number], b: [number, number, number]): number {
-	return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
 }
 
 interface Card {
@@ -258,7 +247,7 @@ describe("the model hub fades every band it owns", () => {
 		advance(15);
 		const midway = bandRgb(rowText(hub, target.row));
 		expect(midway, "a band mid-fade").not.toBeNull();
-		expect(distance(midway as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
+		expect(rgbDistance(midway as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
 
 		settle();
 		expect(bandRgb(rowText(hub, target.row))).toEqual(fullBandRgb());
@@ -281,8 +270,8 @@ describe("the model hub fades every band it owns", () => {
 		expect(outgoing, "the row the pointer left still bands").not.toBeNull();
 		expect(incoming, "the row the pointer arrived at bands").not.toBeNull();
 		// Both are mid-travel on the same frame, which is why strength is per ROW.
-		expect(distance(outgoing as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
-		expect(distance(incoming as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
+		expect(rgbDistance(outgoing as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
+		expect(rgbDistance(incoming as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
 
 		settle();
 		expect(rowText(hub, leaving.row)).toBe(bareLeaving);
@@ -366,7 +355,7 @@ describe("the session model picker fades the list it embeds", () => {
 		advance(15);
 		const midway = bandRgb(rowText(picker, target.row));
 		expect(midway, "a band mid-fade").not.toBeNull();
-		expect(distance(midway as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
+		expect(rgbDistance(midway as [number, number, number], fullBandRgb())).toBeGreaterThan(0);
 
 		settle();
 		expect(bandRgb(rowText(picker, target.row))).toEqual(fullBandRgb());

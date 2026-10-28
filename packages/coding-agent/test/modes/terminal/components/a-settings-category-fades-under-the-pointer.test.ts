@@ -38,6 +38,7 @@ import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/c
 import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { bandRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
@@ -58,16 +59,6 @@ let originalColorterm: string | undefined;
  */
 const { advance, settle } = useHandTickedMotion();
 
-/** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
-function bandRgb(row: string): [number, number, number] | null {
-	const match = /\x1b\[[0-9;]*?48;2;(\d+);(\d+);(\d+)/.exec(row);
-	if (match === null) return null;
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function distance(a: [number, number, number], b: [number, number, number]): number {
-	return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-}
 function createCard(requestRender: () => void = () => {}): SettingsSelectorComponent {
 	return new SettingsSelectorComponent(
 		{
@@ -171,7 +162,7 @@ describe("a settings category fades under the pointer", () => {
 		expect(rowText(card, cell.row)).toBe(switched);
 		const full = bandRgb(switched);
 		expect(full, "the switched band paints a truecolor background").not.toBeNull();
-		expect(distance(midway as [number, number, number], full as [number, number, number])).toBeGreaterThan(0);
+		expect(rgbDistance(midway as [number, number, number], full as [number, number, number])).toBeGreaterThan(0);
 		card.dispose();
 	});
 
