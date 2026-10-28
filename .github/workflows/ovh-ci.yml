@@ -19,6 +19,10 @@ on:
       cargo_packages:
         description: JSON array of Cargo package names to test on the runner (empty skips)
         type: string
+      typecheck:
+        description: Run full TypeScript check across all packages
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
@@ -29,7 +33,7 @@ permissions:
 
 jobs:
   prepare:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (!inputs.typecheck) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64, veyyon]
     timeout-minutes: 15
     outputs:
@@ -373,3 +377,78 @@ jobs:
             ${{ runner.temp }}/ovh-receipt.txt
           if-no-files-found: warn
           retention-days: 7
+  typecheck:
+    if: inputs.typecheck
+    runs-on: [self-hosted, Linux, X64, veyyon]
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+      - name: Record checkout identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha }}
+        run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Install dependencies and generate code
+        id: install
+        uses: ./.github/actions/bun-install
+      - name: Run TypeScript check
+        id: check
+        shell: bash
+        env:
+          RAW_LOG: ${{ runner.temp }}/ovh-typecheck-raw.log
+          KEYS_FILE: ${{ runner.temp }}/ovh-typecheck-keys.txt
+        run: |
+          set -uo pipefail
+          status=0
+          bun run check:ts 2>&1 | tee "$RAW_LOG" || status=${PIPESTATUS[0]}
+          target_sha="$(git rev-parse HEAD)"
+          export RAW_LOG KEYS_FILE target_sha
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const lines = fs.readFileSync(process.env.RAW_LOG, 'utf8').split('\n');
+          const keys = [];
+          for (const line of lines) {
+            const match = line.match(/^\s*(\S+)\((\d+),\d+\): error (TS\d+):/);
+            if (!match) continue;
+            const file = match[1].replace(/\\/g, '/').replace(/^\.\//, '');
+            keys.push(`${file}:${match[2]}:${match[3]}`);
+          }
+
+          keys.sort();
+
+          fs.writeFileSync(process.env.KEYS_FILE, keys.length ? `${keys.join('\n')}\n` : '');
+          console.log(`OVH_TYPECHECK target=${process.env.target_sha} diagnostics=${keys.length}`);
+          for (const key of keys) console.log(key);
+          NODE
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+      - name: Upload typecheck artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-typecheck-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ovh-typecheck-raw.log
+            ${{ runner.temp }}/ovh-typecheck-keys.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce TypeScript check exit status
+        if: always()
+        shell: bash
+        run: |
+          exit_code="${{ steps.check.outputs.exit_code }}"
+          if [[ -z "$exit_code" || "$exit_code" -ne 0 ]]; then
+            echo "::error::TypeScript check failed with exit code ${exit_code:-unknown}"
+            exit "${exit_code:-1}"
+          fi
