@@ -468,6 +468,36 @@ describe("renderRootChangelog", () => {
 		// The drift guard relies on this — it regenerates and byte-compares.
 		expect(gen.renderRootChangelog(SAMPLE)).toBe(gen.renderRootChangelog(SAMPLE));
 	});
+
+	it("deduplicates identical bullets across different releases and package sources", () => {
+		const pkgA = [
+			"# Changelog",
+			"",
+			"## [1.6.0] - 2026-08-02",
+			"",
+			"### Fixed",
+			"",
+			"- Shared cross-release bullet.",
+			"",
+		].join("\n");
+		const pkgB = [
+			"# Changelog",
+			"",
+			"## [1.5.6] - 2026-08-01",
+			"",
+			"### Fixed",
+			"",
+			"- Shared cross-release bullet.",
+			"",
+		].join("\n");
+
+		const root = gen.renderRootChangelog([
+			{ name: "coding-agent", md: pkgA },
+			{ name: "tool-render", md: pkgB },
+		]);
+		const bullets = root.split("\n").filter((line: string) => line === "- Shared cross-release bullet.");
+		expect(bullets).toHaveLength(1);
+	});
 });
 
 describe("fetchGitHubReleases", () => {

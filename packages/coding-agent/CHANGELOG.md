@@ -6,6 +6,10 @@
 
 - Collected verified tool-failure cases into the eval corpus; no user-facing change ([#704](https://github.com/Wladefant/veyyon/pull/704)).
 
+### Fixed
+
+- Deduplicate cross-release bullet points during root changelog generation.
+
 ## [1.6.1] - 2026-10-28
 
 ### Changed
