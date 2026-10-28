@@ -195,6 +195,8 @@ export function renderSearchToolBm25Description(discoverableTools: DiscoverableT
  *
  * When tools.discoveryMode === "all", this covers both MCP tools and built-in discoverable tools.
  * When tools.discoveryMode === "mcp-only" or mcp.discoveryMode === true, only MCP tools are searched.
+ * Activated tools are capped by tools.maxDiscoveredTools (default 40, LRU evicted) and pruned after
+ * compaction when unused in retained messages.
  */
 export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema.value, SearchToolBm25Details> {
 	readonly name = "search_tool_bm25";
@@ -271,6 +273,8 @@ export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema
 		// An activation is billed on every later request of the session, so it
 		// follows the score band and not the rank order: a weak tail match is
 		// reported instead, and a second query by name activates it for 20 tokens.
+		// Activated tools are capped by tools.maxDiscoveredTools (default 40, LRU evicted)
+		// and pruned after compaction when unused in retained messages.
 		const bestScore = ranked[0]?.score ?? 0;
 		const activating = ranked.filter(result => result.score >= bestScore * ACTIVATION_SCORE_FLOOR);
 		const activated =
