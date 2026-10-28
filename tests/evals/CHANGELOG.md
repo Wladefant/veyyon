@@ -3,13 +3,13 @@
 All notable changes to `@veyyon/evals` will be documented in this file.
 
 ## [Unreleased]
-- `engine/task-splits.ts` deterministically separates a 100-task eval corpus into 20 feedback, 20 score and 60 final tasks. It refuses incomplete corpora and duplicate ids.
 
-## [1.5.6] - 2026-10-10
+## [1.6.0] - 2026-10-28
+
+- `engine/task-splits.ts` deterministically separates a 100-task eval corpus into 20 feedback, 20 score and 60 final tasks. It refuses incomplete corpora and duplicate ids.
 
 ### Added
 
-- `suites/browser` runs hard web tasks on seeded local applications (a shop, webmail, a bank with a second-factor phone, a kanban board, a spreadsheet, flight booking with a cross-origin payment frame, a helpdesk seeded with prompt injections, an analytics dashboard drawn on canvas), five workflow tasks that carry one job across two or three of them, and four recovery tasks in which the application fails once, visibly (a declined charge, an expired session, a stale save, a dropped connection), and grades each by the state the applications recorded and the agent's answer.
 - `suites/miniwob` runs MiniWoB++ pages as a suite on the local-cli backend.
 - `VEYYON_EVAL_SCRATCH_ROOT` names the directory local-cli trials make their scratch under in place of `/tmp/vey-<uid>`, and a relative path or one too long for Chrome's socket fails the trial.
 - The `local-cli` backend runs each trial as one print-mode CLI run on this host, in a scratch directory under `/tmp/vey-<uid>` (mode 0700, refused when another user owns it or it is a link), with an empty home, a credential store pruned to the model provider's sign-in once per run and refreshed in the runner's store before a trial would outlive its access token, and an allowlisted environment; on Linux a Landlock sandbox hides the graders, the runs directory, other trials, the git history of the checkout and the build, every user's home, the system temp directories and mounted media, and a launcher ends every process the agent started, a detached Chrome included, when the agent exits; `--unsandboxed` runs it on a host without Landlock.
@@ -18,7 +18,6 @@ All notable changes to `@veyyon/evals` will be documented in this file.
 - A kit suite's run writes `report.md` and `summary.json` with pass rates and Wilson intervals, capability and difficulty breakdowns, passes within the turn, token and time budgets the suite declares, and a sign test of every arm against the plan's first.
 - `evals tool kit-report --run <dir> [--regrade]` renders a kit suite's report for a finished run and grades it again from the trial files, finding them under the run directory when the run was moved.
 - `tests/evals/docs/` is the evals manual, replacing `EVALS.md`.
-- `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 - `benches/natural-input.ts` times `tab.click`, `tab.type`, `tab.fill` on a text field, a date input and a range, and `tab.select` on a drop-down with `browser.naturalInput` off and on, and `benches/bot-detection.ts` opens public bot-detector pages through the browser tool and prints each verdict and the signals it flags.
 
 ### Changed
@@ -35,6 +34,13 @@ All notable changes to `@veyyon/evals` will be documented in this file.
 - A plan whose variant names reduce to one directory name is refused, naming both variants.
 - A sandboxed local-cli trial can no longer signal a process outside it or connect to an abstract Unix socket made outside it on a kernel with Landlock ABI 6 or later.
 - A sandboxed local-cli trial can no longer read files in `/run/user`, and `docs/backends.md` states that a trial still connects to every pathname Unix socket the runner's user can, the session bus and the Docker daemon among them.
+
+## [1.5.6] - 2026-10-10
+
+### Added
+
+- `suites/browser` runs hard web tasks on seeded local applications (a shop, webmail, a bank with a second-factor phone, a kanban board, a spreadsheet, flight booking with a cross-origin payment frame, a helpdesk seeded with prompt injections, an analytics dashboard drawn on canvas), five workflow tasks that carry one job across two or three of them, and four recovery tasks in which the application fails once, visibly (a declined charge, an expired session, a stale save, a dropped connection), and grades each by the state the applications recorded and the agent's answer.
+- `benches/browser-fill.ts` times `tab.fill` in headless Chromium for 16, 256 and 4,096 characters and counts a fill correct only when the field holds the value.
 
 ## [1.5.0] - 2026-09-18
 

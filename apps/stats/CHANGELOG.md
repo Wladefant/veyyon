@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
@@ -11,19 +13,15 @@
 ### Fixed
 
 - Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
+- A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
+
 ### Removed
 
 - Removed the three backfill-completion setters of the database module, which nothing called; no user-visible change.
 
-## [1.5.6] - 2026-10-13
-
 ### Changed
 
 - Split the session-file parser into one function per entry kind, the request-detail route and the model ranking the preference and cost charts share into their own functions; no user-visible change.
-
-### Fixed
-
-- A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
 
 ## [1.5.4] - 2026-09-24
 

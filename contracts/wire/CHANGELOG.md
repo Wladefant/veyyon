@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
@@ -13,7 +15,6 @@
 ### Fixed
 
 - Included generated assistant images in the wire content contract.
-## [1.5.6] - 2026-10-13
 
 ### Changed
 
@@ -36,7 +37,6 @@
 - `TextContent`, `ImageContent`, `ThinkingContent`, `RedactedThinkingContent`, `ToolCallContent`, `FallbackContent`, `WireStopReason` and `WireUsage` are `Pick` projections of the shapes `@veyyon/model` owns, imported type-only, with the same fields as before; the package declares `@veyyon/model` and no runtime dependency.
 - `AgentProgressPayload` and `AgentLifecyclePayload` are the payloads on the `task:subagent:progress` and `task:subagent:lifecycle` bus channels; `SubagentProgressPayload` and `SubagentLifecyclePayload` remain exported as the same types, and the channel spellings are unchanged.
 - `generateRoomKey` and `generateWriteToken` return the filled random buffer directly; the key and token lengths are unchanged.
-
 - `VideoContent` joins the user, developer, tool-result and custom message content unions so collab guests receive video attachments.
 
 ## [16.3.0] - 2026-07-02

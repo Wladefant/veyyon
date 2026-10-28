@@ -4,21 +4,29 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Added
 
 - `SessionManager.sync()` fsyncs file-backed session writes before callers acknowledge durable receipts, and `YieldQueue` retains notices when prompt injection fails ([#592](https://github.com/Wladefant/veyyon/issues/592)).
-### Fixed
-
-- Terminal ownership checks now refuse a terminal record other local users can read or write, failing closed instead of parsing it.
+- `SessionManagerStateSnapshot`, the type `SessionManager.captureState()` returns and `restoreState()` takes, is exported from `@veyyon/kernel/session/session-manager`.
 
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- `prepareEntryForPersistence` copies an array or object only from its first changed child on, cutting the persistence pass over a 400-entry session with nothing to externalize from 0.33 ms to 0.10 ms (median of 200 alternating rounds, three runs).
+
+### Fixed
+
+- Terminal ownership checks now refuse a terminal record other local users can read or write, failing closed instead of parsing it.
+- A persisted session entry keeps the `lineCount` its producer wrote beside a `content` string instead of recounting it from that string when another field of the same object is dropped or externalized, which recorded the shown head's line count for a mentioned file as the file's.
 
 ## [1.5.6] - 2026-10-10
+
 ### Breaking Changes
 
 - `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
+- `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
 
 ### Removed
 
@@ -41,68 +49,11 @@
 - A session moves the server-side window of every compaction a newer compaction summarized out of memory, live and on load, and keeps the compaction's other fields in memory, so a 146 MB session with 126 windows resumes to an editable prompt in 596 ms instead of 714 ms with a peak resident set of 394 MB instead of 431 MB, and a 393 MB session with 305 windows loads in 424 ms instead of 645 ms.
 - `readColdMessage(message)` returns a cold message stand-in's full message read back from the session file without keeping it in memory, and returns any other message as it is.
 - `session-cold-payloads` imports the logger from `@veyyon/utils/logger` instead of the `@veyyon/utils` barrel, so the read tool's module graph again loads no module through the barrel; no user-visible change.
-
-### Fixed
-
-- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
-- A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
-- A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
-- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
-- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
-- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
-- `compactedHistoryEnd` and `contextCompaction` return the boundary the session context is built from, the newest compaction the branch's default model can read, so history a context sends after a resume onto another model is no longer moved out of memory and read back from disk on every build.
-
-## [1.5.6] - 2026-10-13
-
-### Breaking Changes
-
-- `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
-
-### Added
-
-- `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
-- Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Added the `tools.artifactMaxBytes` setting (default 16 MiB, `0` unbounded, negative rejected) capping saved tool-output artifacts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027).
-
-### Changed
-
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 - Eval display migration uses the registered result codec. Read-only history and resume loads do not write artifacts; writable flush stores complete recovery values before publishing the migrated session version ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Restore blob-backed display values before migration, publish the new session version only after all saves succeed, and reserve artifact IDs across independent writers and synchronous allocations. The registered eval-result codec owns display migration; read-only loads retain full values without writing, and writable flush saves recovery artifacts ([#451](https://github.com/Wladefant/veyyon/pull/451)).
-
-### Fixed
-- Config reload snapshots changed routing objects before activation so live listeners receive their model changes ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
-- Flush persists stale OpenAI Responses replay cleanup while deferring legacy structural migrations until writable activity ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
-- Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed terminal breadcrumbs being rewritten when unchanged, skipping redundant disk writes when re-recording identical session pointers (oh-my-pi aa4136eb4a9e8cbe99e9f17435e7fd2b207ba655, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-- Validate `Type.Unsafe` against the draft-2020-12 upgraded schema so raw JSON Schema draft-07 documents validate consistently with wire validation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Config source stamps use WebCrypto SHA-256 without loading `node:crypto` on the launch-card path; digest bytes are unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
-
-- Fixed blob reference resolution passing unvalidated `blob:sha256:` and `blobtext:sha256:` suffixes into `path.join`, allowing a crafted ref (e.g. `blob:sha256:../../../etc/passwd`) in a persisted or shared session to escape the blob directory and read arbitrary files into image history; `parseBlobRef` and `parseTextBlobRef` now reject any suffix that is not a canonical 64-char lowercase hex hash ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Bounded synchronous SQLite busy_timeout to 1s in headless hosts for session storage databases, so lock contention fails fast rather than freezing protocol loops for 5s ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Fixed a first-use race in `ArtifactManager` where two concurrent `save` or `allocatePath` callers on a fresh instance both scanned the directory and allocated duplicate artifact IDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- A terminal ownership claim whose PID is alive but whose endpoint answers nothing no longer blocks every launch in the project; the check now confirms the owner is serving, since Windows recycles PIDs and a claim file outliving its CLI used to match an unrelated process ([#196](https://github.com/Wladefant/veyyon/issues/196)).
-- Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
-- Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-- Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
-### Added
-
-- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
-- `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
-- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
-- `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
-- `SessionLoadOptions.coolCompactedHistory` makes a streamed load move compacted history to disk as it reads and return the store and the session's usage totals as `cold`, and `SessionEntryIndex.rebuild` takes those totals instead of counting every entry.
-- `readColdEntry` returns an entry whose payloads are held in the session file as its line reads back, and leaves the entry's payloads in the file.
-- A `ToolResultCodec` can define `settle`, which a persisting `SessionManager` calls on a tool result it records, before writing it, to replace in place each `details` field `slim` drops with the form `restore` builds.
-- `SessionManagerStateSnapshot`, the type `SessionManager.captureState()` returns and `restoreState()` takes, is exported from `@veyyon/kernel/session/session-manager`.
-
-### Changed
-
 - `getRecentSessions` and `findMostRecentSession` scan session files newest first by mtime and stop once they hold the requested rows, instead of listing the whole directory through `.session-list-index.json` and rewriting it, cutting the welcome shortlist over 1,495 sessions from 37.8 ms to 17.1 ms in a fresh process and from 19.9 ms and 6.3 MiB of heap to 4.0 ms and 0.6 MiB warm (medians of 11 and 8 alternating runs).
 - 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
@@ -144,10 +95,32 @@
 - A session load's string-pooling walk writes a string back only when an earlier equal string replaces it and skips a cold entry's moved fields by one cursor over its key order, which cut the walk over a 108,163-entry synthetic session with two thirds of it cooled from 89 ms to 80 ms (median of 7 rounds, 2 runs each) and its median open from 500 ms to 494 ms (6 interleaved runs).
 - The pass that moves unreachable entries out of memory after a resume, a publish or a compaction matches entries to a never-branched session's active branch by file position instead of building a set of the live entries, which cut that pass over a 312 MB, 108,163-entry synthetic session from 2.86 ms to 2.51 ms (median of 5 interleaved runs of 31 passes each).
 - `AgentStorage` builds its credential store on the first credential or cache call instead of when it opens, and leaves a current schema version row unwritten, which cut the memory of a launch's held `agent.db` connection from 384 KiB to 209 KiB and its open plus model-usage read from 827 µs to 606 µs (median of 7 alternating runs of 60 opens).
-- `prepareEntryForPersistence` copies an array or object only from its first changed child on, cutting the persistence pass over a 400-entry session with nothing to externalize from 0.33 ms to 0.10 ms (median of 200 alternating rounds, three runs).
 
 ### Fixed
 
+- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
+- A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
+- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
+- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
+- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
+- `compactedHistoryEnd` and `contextCompaction` return the boundary the session context is built from, the newest compaction the branch's default model can read, so history a context sends after a resume onto another model is no longer moved out of memory and read back from disk on every build.
+- Config reload snapshots changed routing objects before activation so live listeners receive their model changes ([Refs](https://github.com/Wladefant/veyyon/issues/519)).
+- Flush persists stale OpenAI Responses replay cleanup while deferring legacy structural migrations until writable activity ([PR 451](https://github.com/Wladefant/veyyon/pull/451)).
+- Fence fresh terminal breadcrumbs to an explicit session directory and require positive directory inode evidence before re-rooting moved projects (oh-my-pi 13fc0b6c33c536481221a1b23d16ef993f01d7b0, oh-my-pi cd46dd0ca51641560e53d3cd14e164cd4f241e9d, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Session discovery recovers hashed-layout transcripts without changing active directory names or deleting conflicting stale copies ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed terminal breadcrumbs being rewritten when unchanged, skipping redundant disk writes when re-recording identical session pointers (oh-my-pi aa4136eb4a9e8cbe99e9f17435e7fd2b207ba655, [Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+- Validate `Type.Unsafe` against the draft-2020-12 upgraded schema so raw JSON Schema draft-07 documents validate consistently with wire validation ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Config source stamps use WebCrypto SHA-256 without loading `node:crypto` on the launch-card path; digest bytes are unchanged ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed `SettingsStore.forkWithRuntimeOverrides` dropping `#configPath` on forked in-memory instances, so subagents and runtime forks can compute `configSourceStamp()` and detect on-disk config changes.
+- Fixed blob reference resolution passing unvalidated `blob:sha256:` and `blobtext:sha256:` suffixes into `path.join`, allowing a crafted ref (e.g. `blob:sha256:../../../etc/passwd`) in a persisted or shared session to escape the blob directory and read arbitrary files into image history; `parseBlobRef` and `parseTextBlobRef` now reject any suffix that is not a canonical 64-char lowercase hex hash ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Bounded synchronous SQLite busy_timeout to 1s in headless hosts for session storage databases, so lock contention fails fast rather than freezing protocol loops for 5s ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a first-use race in `ArtifactManager` where two concurrent `save` or `allocatePath` callers on a fresh instance both scanned the directory and allocated duplicate artifact IDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- A terminal ownership claim whose PID is alive but whose endpoint answers nothing no longer blocks every launch in the project; the check now confirms the owner is serving, since Windows recycles PIDs and a claim file outliving its CLI used to match an unrelated process ([#196](https://github.com/Wladefant/veyyon/issues/196)).
+- Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+- Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
 - The session loader no longer instantiates the `@veyyon/utils` barrel through its cold-entry store, which cut the modules it loads from 141 to 88 and the modules the `read` tool loads from 360 to 333.
 - A title change made while a session file rewrite is queued or in progress is written to the file once instead of twice, and a change that lands after the rewrite read its body is published by a second pass instead of being lost with its title.
 - An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
@@ -160,7 +133,19 @@
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
 - `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
-- A persisted session entry keeps the `lineCount` its producer wrote beside a `content` string instead of recounting it from that string when another field of the same object is dropped or externalized, which recorded the shown head's line count for a mentioned file as the file's.
+
+### Added
+
+- `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+- Exported SessionManagerStateSnapshot in SessionManager for atomic session migration and state restoration ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Added the `tools.artifactMaxBytes` setting (default 16 MiB, `0` unbounded, negative rejected) capping saved tool-output artifacts ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi ac896ded0bd499cbc1c480b500c2a43b3abc2027).
+- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+- `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
+- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
+- `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
+- `SessionLoadOptions.coolCompactedHistory` makes a streamed load move compacted history to disk as it reads and return the store and the session's usage totals as `cold`, and `SessionEntryIndex.rebuild` takes those totals instead of counting every entry.
+- `readColdEntry` returns an entry whose payloads are held in the session file as its line reads back, and leaves the entry's payloads in the file.
+- A `ToolResultCodec` can define `settle`, which a persisting `SessionManager` calls on a tool result it records, before writing it, to replace in place each `details` field `slim` drops with the form `restore` builds.
 
 ## [1.5.5] - 2026-09-25
 
