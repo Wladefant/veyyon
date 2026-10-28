@@ -229,6 +229,7 @@ mod an_alternation_reaches_its_deepest_alternative {
 	/// follows. Reading `\` inside a class as an escape keeps the class open
 	/// across `{a]`, splits the alternative at the inner group's `,`, and
 	/// bounds the walk short of the depth-six match.
+	#[cfg(unix)]
 	#[test]
 	fn a_backslash_inside_a_class_does_not_hide_a_group() {
 		assert_engine_reaches("{b/b/[\\]{a],b/b/b/a}a}", "b/b/\\b/b/b/aa", 6);
@@ -348,13 +349,24 @@ mod an_alternation_reaches_its_deepest_alternative {
 		}
 	}
 
+	/// Tokens the engine reads as the sweep does. Windows reads `\` as a
+	/// separator, not an escape, so a token carrying one is drawn on Unix only.
+	fn drawable_tokens() -> Vec<usize> {
+		(0..TOKENS.len())
+			.filter(|&token| !cfg!(windows) || !TOKENS[token].0.contains('\\'))
+			.collect()
+	}
+
 	#[test]
 	fn every_alternative_of_a_drawn_pattern_is_reachable() {
 		let mut rng = SplitMix(0x5eed0fa17e57);
+		let drawable = drawable_tokens();
 		let mut bounded_groups = 0;
 		for _ in 0..60_000 {
 			let length = 1 + rng.below(12);
-			let tokens: Vec<usize> = (0..length).map(|_| rng.below(TOKENS.len())).collect();
+			let tokens: Vec<usize> = (0..length)
+				.map(|_| drawable[rng.below(drawable.len())])
+				.collect();
 			let pattern: String = tokens.iter().map(|&token| TOKENS[token].0).collect();
 			let bound = walk_depth_bound(&pattern);
 			if bound == usize::MAX {
