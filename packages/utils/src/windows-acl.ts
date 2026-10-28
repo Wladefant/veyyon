@@ -110,7 +110,6 @@ ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
 
-
 /** Apply a protected DACL granting full control only to the current user and LocalSystem. */
 export async function applyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {
 	await runOwnerOnlyAcl(APPLY_SCRIPT, filePath, options);

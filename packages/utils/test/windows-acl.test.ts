@@ -302,7 +302,9 @@ describe("owner-only Windows ACL helpers", () => {
 				windowsHide: true,
 			});
 			expect(removed.status).toBe(0);
-			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow(
+				"ACL does not contain exactly two access rules",
+			);
 		});
 
 		/** Adding Everyone proves the verifier rejects an unapproved principal, not only missing SYSTEM. */
@@ -315,7 +317,9 @@ describe("owner-only Windows ACL helpers", () => {
 				windowsHide: true,
 			});
 			expect(granted.status).toBe(0);
-			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow("ACL does not contain exactly two access rules");
+			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow(
+				"ACL does not contain exactly two access rules",
+			);
 		});
 	});
 });
