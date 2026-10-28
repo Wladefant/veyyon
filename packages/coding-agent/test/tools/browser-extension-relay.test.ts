@@ -211,7 +211,11 @@ describe("owned connect bootstrap", () => {
 			`${url}&unrelated=1`,
 			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, token: "wrong-token" }),
 			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, protocolVersion: 3 }),
-			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }),
+			buildConnectUrl({
+				...bootstrap,
+				relayUrl: relay.extensionUrl,
+				extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			}),
 			buildConnectUrl({ ...bootstrap, relayUrl: relay.extensionUrl, clientName: "another-client" }),
 			buildConnectUrl({ ...bootstrap, relayUrl: `${relay.extensionUrl}/wrong-endpoint` }),
 		];
