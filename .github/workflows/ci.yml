@@ -364,9 +364,9 @@ jobs:
       if: ${{ !cancelled() && needs.native_linux_x64.result != 'failure' }}
       timeout-minutes: 20
       steps:
+         # One commit deep: no workspace package suite reads history, and full
+         # history cost this checkout about 35 s of the job's critical path.
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-           with:
-              fetch-depth: 0
          - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/ts-test-env
