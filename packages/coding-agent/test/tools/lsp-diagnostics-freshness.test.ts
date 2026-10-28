@@ -9,7 +9,8 @@ import { fileToUri } from "@veyyon/coding-agent/lsp/utils";
 import { createLspWritethrough } from "@veyyon/coding-agent/lsp/writethrough";
 import type { DeferredDiagnosticsEntry, ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
-import { type ptree, TempDir } from "@veyyon/utils";
+import * as utils from "@veyyon/utils";
+import { atomicWriteFileSync, type ptree, TempDir } from "@veyyon/utils";
 import { driveFakeTime, installFakeTime } from "../../../utils/test/helpers/fake-time";
 
 const TEST_SERVER: ServerConfig = {
@@ -54,6 +55,22 @@ function createClient(cwd: string, config: ServerConfig): LspClient {
 function publishDiagnostics(client: LspClient, uri: string, diagnostics: Diagnostic[], version: number | null): void {
 	client.diagnostics.set(uri, { diagnostics, version });
 	client.diagnosticsVersion += 1;
+}
+
+/**
+ * Fake time for a write driven by `driveFakeTime`, with the writethrough's disk commit run through the
+ * blocking atomic writer.
+ *
+ * `driveFakeTime` advances fake time while the event loop waits, and the writethrough arms its 5000ms
+ * operation budget before it commits to disk. An asynchronous commit that took a few hundred real
+ * milliseconds spent that budget: the sync and the diagnostics wait were skipped and the write returned
+ * undefined. A blocking commit holds the event loop, so it spends no fake time.
+ */
+function installFakeClock(): void {
+	installFakeTime();
+	vi.spyOn(utils, "atomicWriteFilePreservingMode").mockImplementation(async (filePath, data) =>
+		atomicWriteFileSync(filePath, data, { fsync: false, mode: 0o644 }),
+	);
 }
 
 describe("LSP diagnostics freshness", () => {
@@ -168,7 +185,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -211,7 +228,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -253,7 +270,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -311,7 +328,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -347,7 +364,7 @@ describe("LSP diagnostics freshness", () => {
 		const filePath = path.join(tempDir.path(), "write-tool.ts");
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -511,7 +528,7 @@ describe("LSP diagnostics from a server that answers pulls", () => {
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.serverCapabilities = { diagnosticProvider: { interFileDependencies: true, workspaceDiagnostics: false } };
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
 		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
