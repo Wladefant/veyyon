@@ -2,12 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	__resetDirsFromEnvForTests,
-	getSharedAuthStoreDirIfEnabled,
-	readGlobalProfileSharingSafe,
-	resolveGlobalProfileSharing,
-} from "@veyyon/utils/dirs";
+import { __resetDirsFromEnvForTests, getSharedAuthStoreDirIfEnabled } from "@veyyon/utils/dirs";
+import { readGlobalProfileSharingSafe, resolveGlobalProfileSharing } from "@veyyon/utils/global-config";
 
 /**
  * The credential-store location is decided by `profileSharing` in the global config.

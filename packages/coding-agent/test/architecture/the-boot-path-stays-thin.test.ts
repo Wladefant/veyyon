@@ -14,7 +14,7 @@
  * offers when you type a symbol name, pulls the settings store, the theme, the session and its
  * whole graph onto the boot path, and the only symptom is that startup got slower.
  *
- * WHAT THE NUMBERS ARE. `cli.ts` reaches 39 modules. `main.ts`, one dynamic import away, reaches
+ * WHAT THE NUMBERS ARE. `cli.ts` reaches 41 modules. `main.ts`, one dynamic import away, reaches
  * 1468, and `sdk.ts` reaches 1421. So the lazy boundary is not decorative: it holds back more than a
  * thousand modules the entry never parses, and the assertions below say that in both directions, as
  * a ceiling on the entry and as a named list of what must stay off it.
@@ -82,8 +82,17 @@ import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
  * day file through it instead of through a `Date`, whose first local-time read builds the engine's
  * ICU time zone cache: 2.2 ms and 1.9 MiB of anonymous memory on the path to the first frame. Its one
  * import is `bun:ffi`, a runtime builtin the walk does not count, so the edge cannot grow.
+ *
+ * 41 from 2026-10-28: `@veyyon/utils/config-root` and `@veyyon/utils/global-config`, split out of
+ * `@veyyon/utils/dirs` with no code added. `dirs.ts` is on this path to resolve the profile and
+ * imports both, so the path parses the same code as before in three modules instead of one, and
+ * every module the two import was already here, so the edge cannot grow. The writer of the global
+ * `config.yml`, `@veyyon/utils/global-config-write`, left `dirs.ts` and is not on this path. That
+ * cut the reach of `dirs.ts` alone from 22 modules to 17 and its import from 5.52 ms to 4.41 ms
+ * (medians of six order-balanced rounds of 40 imports each), but every module it dropped is still
+ * reached here through another edge, so this path gains no time from it.
  */
-const BOOT_CEILING = 39;
+const BOOT_CEILING = 41;
 
 /** The same measurement as a floor, so a broken walk fails instead of passing quietly. */
 const BOOT_FLOOR = 25;

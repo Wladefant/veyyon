@@ -19,12 +19,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	__resetDirsFromEnvForTests,
-	getAgentDir,
-	getGlobalConfigRootDir,
-	migrateLegacyDefaultProfileLayout,
-} from "@veyyon/utils/dirs";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
+import { __resetDirsFromEnvForTests, getAgentDir, migrateLegacyDefaultProfileLayout } from "@veyyon/utils/dirs";
 import { Snowflake } from "@veyyon/utils/snowflake";
 import { getGlobalAgentsPath } from "../../src/discovery/agents-guidance";
 import { resolveVaultLocations, vaultPathFor } from "../../src/secrets/vault";

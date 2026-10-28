@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import { TERMINAL } from "@veyyon/tui/terminal-capabilities";
-import { DEFAULT_PROFILE_DIR_NAME, getActiveProfileOrDefault, getProjectDir } from "@veyyon/utils/dirs";
+import { DEFAULT_PROFILE_DIR_NAME } from "@veyyon/utils/config-root";
+import { getActiveProfileOrDefault, getProjectDir } from "@veyyon/utils/dirs";
 import { formatDuration, formatNumber, normalizePremiumRequests } from "@veyyon/utils/format";
 import { clamp01 } from "@veyyon/utils/math";
 import { sanitizeStatusText } from "@veyyon/utils/sanitize-status-text";

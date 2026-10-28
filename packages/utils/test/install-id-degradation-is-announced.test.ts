@@ -29,7 +29,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { __resetInstallIdCacheForTests, getGlobalConfigRootDir, getInstallId } from "@veyyon/utils/dirs";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
+import { __resetInstallIdCacheForTests, getInstallId } from "@veyyon/utils/dirs";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

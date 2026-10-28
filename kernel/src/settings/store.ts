@@ -18,15 +18,14 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
-import {
-	findShadowedGlobalConfigFiles,
-	getAgentDir,
-	getGlobalConfigFilePath,
-	getProjectDir,
-	MAIN_CONFIG_FILENAMES,
-} from "@veyyon/utils/dirs";
+import { getAgentDir, getProjectDir } from "@veyyon/utils/dirs";
 import { withFileLock } from "@veyyon/utils/file-lock";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import {
+	findShadowedGlobalConfigFiles,
+	getGlobalConfigFilePath,
+	MAIN_CONFIG_FILENAMES,
+} from "@veyyon/utils/global-config";
 import * as logger from "@veyyon/utils/logger";
 import { expandTilde } from "@veyyon/utils/path";
 import { type QuarantinedFile, quarantineUnparseableFile } from "@veyyon/utils/quarantine-file";
@@ -1464,8 +1463,8 @@ function mutateTree(tree: RawSettings, segments: readonly string[], value: unkno
  * Report a config file that exists but is ignored because a higher-precedence
  * one exists too.
  *
- * `dirs` finds these but cannot report them: it sits below the logger, which
- * imports it. This is the layer that has somewhere to say it, so it says it
+ * `@veyyon/utils/global-config` finds these but cannot report them: it sits below
+ * the logger, which reaches it through `dirs`. This is the layer that has somewhere to say it, so it says it
  * here rather than letting a whole settings file be silently dead.
  */
 function reportShadowedConfigFiles(): void {

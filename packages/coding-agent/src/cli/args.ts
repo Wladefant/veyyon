@@ -6,7 +6,8 @@
 // DEFAULT profile's `.env` before `--profile` has even been parsed (pinned by profile-cli.test.ts).
 import { renderHelpParagraph, renderHelpTable } from "@veyyon/utils/cli";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
-import { APP_NAME, CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
+import { CONFIG_DIR_NAME } from "@veyyon/utils/config-root";
+import { APP_NAME } from "@veyyon/utils/dirs";
 import { pluralize } from "@veyyon/utils/format";
 import { nearestNames } from "@veyyon/utils/levenshtein";
 import { isUuid } from "@veyyon/utils/regex";

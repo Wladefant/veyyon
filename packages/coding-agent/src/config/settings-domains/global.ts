@@ -28,21 +28,23 @@
 
 import type { GlobalSettingBinding } from "@veyyon/kernel/settings/store";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+import { DEFAULT_PROFILE_DIR_NAME } from "@veyyon/utils/config-root";
 import {
-	DEFAULT_PROFILE_DIR_NAME,
 	GLOBAL_RESOURCE_LIMITS,
 	readGlobalAuthBrokerSafe,
 	readGlobalDefaultProfileSafe,
 	readGlobalOnboardingVersionSafe,
 	readGlobalProfileSharingSafe,
 	readGlobalResourceLimitSafe,
+} from "@veyyon/utils/global-config";
+import {
 	writeGlobalAuthBrokerToken,
 	writeGlobalAuthBrokerUrl,
 	writeGlobalDefaultProfile,
 	writeGlobalOnboardingVersion,
 	writeGlobalProfileSharing,
 	writeGlobalResourceLimit,
-} from "@veyyon/utils/dirs";
+} from "@veyyon/utils/global-config-write";
 
 /**
  * What the settings UI shows for a stored auth-broker token. The plaintext is

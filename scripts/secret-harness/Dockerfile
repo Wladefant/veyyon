@@ -18,8 +18,8 @@
 # machine that means the run shows that developer's real credential names, so the
 # output is neither reproducible nor safe to paste. A fresh container gives an
 # empty vault and a HOME nothing has ever written a credential into, with no
-# `HOME=` override and no `VEYYON_CONFIG_DIR` (which the code rejects as an
-# absolute path anyway — see `packages/utils/src/dirs.ts getConfigDirName`).
+# `HOME=` override and no `VEYYON_CONFIG_DIR` (see `getConfigRootOverride` in
+# `packages/utils/src/config-root.ts`).
 
 ARG VEYYON_BASE=veyyon:dev
 FROM ${VEYYON_BASE}

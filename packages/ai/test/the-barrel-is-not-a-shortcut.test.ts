@@ -308,11 +308,19 @@ describe("the modules that were repointed stay cut", () => {
 	 * `ai/prompts/registry.ts`, already on this reach, registers them; they import nothing, so no consumer
 	 * gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-10-28: `agent/src/proxy.ts` 149 -> 152, `parser.ts` 126 -> 129, `db.ts` 128 -> 131
+	 * and `sync-worker.ts` 127 -> 130, each by the three modules split out of `@veyyon/utils/dirs` with no
+	 * code added: `utils/config-root.ts`, `utils/global-config.ts` and `utils/global-config-write.ts`. The
+	 * `@veyyon/utils` entry point, already on every one of these reaches, exports all three, and each
+	 * imports only what its source did, so no consumer gained an edge to a subsystem it did not already
+	 * reach.
+	 */
 	it.each([
-		["agent/src/proxy.ts", 149],
-		["apps/stats/src/parser.ts", 126],
-		["apps/stats/src/db.ts", 128],
-		["apps/stats/src/sync-worker.ts", 127],
+		["agent/src/proxy.ts", 152],
+		["apps/stats/src/parser.ts", 129],
+		["apps/stats/src/db.ts", 131],
+		["apps/stats/src/sync-worker.ts", 130],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry

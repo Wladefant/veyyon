@@ -18,7 +18,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAuthBrokerTokenFilePath, resolveAuthBrokerConfig } from "@veyyon/ai/auth-broker";
-import { getGlobalConfigRootDir } from "@veyyon/utils/dirs";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { withEnv } from "./helpers";

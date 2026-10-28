@@ -7,16 +7,11 @@
 
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import {
-	getAgentDbPath,
-	getAgentDir,
-	getAuthBrokerSnapshotCachePath,
-	getConfigRootDir,
-	getGlobalConfigRootDir,
-	MAIN_CONFIG_FILENAMES,
-} from "@veyyon/utils/dirs";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
+import { getAgentDbPath, getAgentDir, getAuthBrokerSnapshotCachePath, getConfigRootDir } from "@veyyon/utils/dirs";
 import { $pickenv } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { MAIN_CONFIG_FILENAMES } from "@veyyon/utils/global-config";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { YAML } from "bun";

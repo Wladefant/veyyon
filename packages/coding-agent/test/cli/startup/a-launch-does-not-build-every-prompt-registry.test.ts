@@ -541,11 +541,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * runtime imports (`@veyyon/agent-core`, `@veyyon/utils/content-text` and `session/messages.ts`) are
  * already here. Measured 2026-10-27 at 1525.
  *
+ * 1525 to 1528: `utils/src/config-root.ts`, `utils/src/global-config.ts` and
+ * `utils/src/global-config-write.ts`, split out of `utils/src/dirs.ts` with no code added: the config
+ * root, the reader of the global `config.yml`, and its writer. The `@veyyon/utils` barrel, already
+ * here, exports all three and `dirs.ts` imports the first two; every module they import is already
+ * here. Measured 2026-10-28 at 1528.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1525;
+const LAUNCH_REACH_CEILING = 1528;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -576,8 +582,11 @@ const LAUNCH_REACH_CEILING = 1525;
  *
  * 488 to 489: re-measured at 487 before, plus `ai/src/prompts/tool-choice/any.md` and
  * `ai/src/prompts/tool-choice/named.md`, which `ai/src/prompts/registry.ts`, already here, registers.
+ *
+ * 489 to 492: the three modules split out of `utils/src/dirs.ts`, for the reason the launch ceiling
+ * above records.
  */
-const ASSEMBLER_REACH_CEILING = 489;
+const ASSEMBLER_REACH_CEILING = 492;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

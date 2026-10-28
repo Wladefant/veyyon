@@ -30,7 +30,8 @@ import {
 	writeInstalledPluginsRegistry,
 } from "@veyyon/coding-agent/extensibility/plugins/marketplace";
 import { removeSyncWithRetries } from "@veyyon/utils";
-import { CONFIG_DIR_NAME, getPluginsDir } from "@veyyon/utils/dirs";
+import { CONFIG_DIR_NAME } from "@veyyon/utils/config-root";
+import { getPluginsDir } from "@veyyon/utils/dirs";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

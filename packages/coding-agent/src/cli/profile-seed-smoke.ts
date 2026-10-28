@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_PROFILE_DIR_NAME, PROFILES_DIR_NAME } from "@veyyon/utils/dirs";
+import { DEFAULT_PROFILE_DIR_NAME, PROFILES_DIR_NAME } from "@veyyon/utils/config-root";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { YAML } from "bun";
 import { resolveWorkerSpawnCmd, SMOKE_TEST_TIMEOUT_MS, workerEnvFromParent } from "../subprocess/worker-client";

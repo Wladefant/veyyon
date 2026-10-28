@@ -1,10 +1,11 @@
 /**
- * Centralized path helpers for veyyon config directories.
+ * Path helpers for the directories under the veyyon config root: profiles, the agent directory, and
+ * the data, state and cache bases.
  *
- * Uses VEYYON_CONFIG_DIR (default ".veyyon") for the config root and
- * VEYYON_CODING_AGENT_DIR to override the agent directory. That override applies
- * in default-profile mode only: a named profile derives its own
- * `~/.veyyon/profiles/<name>/agent` and ignores the variable.
+ * The config root itself (`VEYYON_CONFIG_DIR`, default `~/.veyyon`) is resolved in `./config-root`,
+ * and the global `config.yml` at its root is read in `./global-config`. VEYYON_CODING_AGENT_DIR
+ * overrides the agent directory. That override applies in default-profile mode only: a named
+ * profile derives its own `~/.veyyon/profiles/<name>/agent` and ignores the variable.
  *
  * On Linux and macOS, when XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME are
  * set AND the corresponding `$XDG_*_HOME/veyyon` directory already exists, paths
@@ -24,16 +25,28 @@ import { APP_DIRECTORY_SLUG } from "./app-identity";
 // in `$HOME/.env` has to be heard before the first `DirResolver` is built. `./dotenv-home` imports nothing
 // that can reach this file, which is why the `.env` layers needing a resolved directory stay in `./env`.
 import "./dotenv-home";
-import { atomicWriteFileSync } from "./atomic-write";
-import { AGENT_DIR_ENV_KEYS, CONFIG_DIR_ENV_KEYS, PROFILE_ENV_KEYS, SANDBOX_MARKER_ENV_KEY } from "./dir-env-keys";
-import { withFileLockSync } from "./file-lock";
+import {
+	CONFIG_DIR_NAME,
+	DEFAULT_PROFILE_DIR_NAME,
+	getConfigDirName,
+	getGlobalConfigRootDir,
+	getSharedAuthDir,
+	normalizeProfileName,
+	PROFILES_DIR_NAME,
+	SUBAGENTS_DIR_NAME,
+} from "./config-root";
+import { AGENT_DIR_ENV_KEYS, PROFILE_ENV_KEYS, pickProcessEnv } from "./dir-env-keys";
 import { isMissingPath } from "./fs-error";
+import {
+	MAIN_CONFIG_FILENAMES,
+	readGlobalDefaultProfileSafe,
+	readGlobalProfileSharingSafe,
+	resolveGlobalDefaultProfile,
+} from "./global-config";
 import { logFileName } from "./log-file";
 import { isUuid } from "./regex";
 import { bareVersion } from "./semver";
-import { sleepSync } from "./sleep";
-import { errorMessage, isRecord } from "./type-guards";
-import { parseYaml, syncYamlTextToSettings } from "./yaml-sync";
+import { errorMessage } from "./type-guards";
 
 /**
  * The lowercase slug used in filesystem paths.
@@ -80,32 +93,6 @@ export function changelogUrlForVersion(version: string): string {
 	return `${CHANGELOG_URL}#v${bare.replace(/\./g, "-")}`;
 }
 
-/** Config directory name (e.g. ".veyyon") */
-export const CONFIG_DIR_NAME: string = ".veyyon";
-
-/** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
-export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
-
-/**
- * Basename of the cross-profile directory holding user-authored agent
- * definitions ({@link getGlobalSubagentsDir}).
- *
- * `subagents`, not `agents`: the config root already holds `profiles/`, whose
- * every entry carries an `agent/` dir, so an `agent/agents/` path named two
- * unrelated things one segment apart. `<extension>/agents/` keeps its own name
- * — that is the published plugin-authoring convention, not this directory.
- */
-export const SUBAGENTS_DIR_NAME = "subagents";
-
-/**
- * Bounded retry for a PRESENT-but-momentarily-unreadable global config (EMFILE /
- * EBUSY / transient IO), so a rebuild's fd pressure cannot flip the credential
- * posture. Small and fixed: this runs on the startup path, and the failure it
- * covers clears in milliseconds or not at all.
- */
-const GLOBAL_CONFIG_READ_RETRY_ATTEMPTS = 3;
-const GLOBAL_CONFIG_READ_RETRY_DELAY_MS = 5;
-
 /** Basename of the per-install UUID file at the config root (see {@link getInstallId}). */
 const INSTALL_ID_FILE = "install-id";
 
@@ -115,45 +102,6 @@ export const VERSION: string = version;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
-const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-
-/**
- * Names Windows treats as reserved device aliases. Matches the basename
- * itself as well as any `BASENAME.<anything>` form, because Windows reserves
- * `CON.foo`/`PRN.txt`/etc. too — using them as a profile name would let
- * `setProfile` accept the input only for directory creation to fail later
- * with a confusing `ENOENT`/`EINVAL`. Case-insensitive: NTFS treats `CON`
- * and `con` identically.
- */
-const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
-
-/**
- * Normalize and validate a profile name. Returns `undefined` for the implicit
- * default (empty string, whitespace, or the explicit "default" sentinel) and
- * throws for syntactically invalid or platform-reserved names.
- *
- * Exported so consumers of `@veyyon/utils/dirs` (CLI bootstrap, tests,
- * downstream tools) can validate user input without re-deriving the rules.
- */
-export function normalizeProfileName(profile: string | undefined): string | undefined {
-	const normalized = profile?.trim();
-	if (!normalized || normalized === "default") return undefined;
-	if (
-		normalized === "." ||
-		normalized === ".." ||
-		normalized.endsWith(".") ||
-		!PROFILE_NAME_RE.test(normalized) ||
-		WINDOWS_RESERVED_BASENAME_RE.test(normalized)
-	) {
-		throw new Error(
-			`Invalid profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
-				`cannot be "." or "..", cannot end with ".", and cannot be a Windows reserved device name ` +
-				`(CON, PRN, AUX, NUL, COM0-9, LPT0-9, or any of those with an extension).`,
-		);
-	}
-	return normalized;
-}
-
 /**
  * Resolve the active profile from the `VEYYON_PROFILE` env var. An
  * explicitly-empty value selects the default profile. Delegates
@@ -162,14 +110,6 @@ export function normalizeProfileName(profile: string | undefined): string | unde
  */
 export function resolveProfileEnv(value: string | undefined): string | undefined {
 	return normalizeProfileName(value);
-}
-
-function pickProcessEnv(...keys: readonly string[]): string | undefined {
-	for (const key of keys) {
-		const value = process.env[key];
-		if (value !== undefined) return value;
-	}
-	return undefined;
 }
 
 // The list has one owner, `./dir-env-keys`, because `./dotenv-home` needs it too and cannot import this
@@ -207,10 +147,6 @@ export function resolveProfileFromEnv(): string | undefined {
 	return undefined;
 }
 
-function getProfileFromEnv(): string | undefined {
-	return resolveProfileFromEnv();
-}
-
 /**
  * Module-load profile resolution. Unlike {@link resolveStartupProfile}, an
  * invalid VEYYON_PROFILE value or broken global config
@@ -221,7 +157,7 @@ function getProfileFromEnv(): string | undefined {
  */
 function readProfileFromEnvSafe(): string | undefined {
 	try {
-		return getProfileFromEnv();
+		return resolveProfileFromEnv();
 	} catch {
 		return undefined;
 	}
@@ -263,66 +199,6 @@ function isUsableXdgBase(envVar: string, value: string): boolean {
 }
 
 /**
- * The user's home directory, refused rather than guessed when it is unusable.
- *
- * Every path veyyon owns hangs off this one value, so a bad answer here is not a bad path, it is
- * every path. Two answers are bad without announcing themselves:
- *
- *  - Empty (`HOME=` with no usable passwd entry, common in a stripped container or an `env -i`
- *    invocation). `path.join("", ".veyyon")` is `.veyyon`, a relative path, so config, sessions and
- *    credentials are created in whatever directory the process started in, and a second run from a
- *    different directory sees a different, empty veyyon.
- *  - The filesystem root (`HOME=/`). Every write lands in `/.veyyon`, outside the user's control
- *    and usually not writable; where it is writable, it litters the root of the filesystem.
- *
- * Both are configuration faults with a one-line fix, so this throws and states the fix rather than
- * proceeding somewhere arbitrary. Exported so the refusal can be tested directly: `os.homedir()` is
- * resolved once per process, so a test cannot reach the empty case by assigning `HOME`.
- */
-export function resolveHomeDirOrThrow(): string {
-	const home = os.homedir();
-	if (!home || !path.isAbsolute(home)) {
-		throw new Error(
-			`Cannot determine your home directory: HOME is unset or empty (os.homedir() returned ${JSON.stringify(home)}). ` +
-				`Every veyyon path is resolved from it, and without it settings and credentials would be written to a ` +
-				`relative path that changes with the working directory. Set HOME to an absolute path, or set ` +
-				`VEYYON_CONFIG_DIR to place the config root explicitly.`,
-		);
-	}
-	if (path.parse(home).root === home) {
-		throw new Error(
-			`HOME is set to the filesystem root (${home}), so veyyon would create ${path.join(home, CONFIG_DIR_NAME)} ` +
-				`at the top of the filesystem. Set HOME to a real home directory, or set VEYYON_CONFIG_DIR to an ` +
-				`absolute path that places the config root explicitly.`,
-		);
-	}
-	return home;
-}
-
-/**
- * The config root, before the profile segment.
- *
- * `CONFIG_DIR_NAME` rather than `getConfigDirName()` on the default branch, deliberately:
- * the name is only ever a name in the default case, and asking the override for its
- * basename here would let a `/srv/veyyon-work` override answer `~/veyyon-work`, which is
- * the doubled-path defect the override exists to remove.
- */
-function getBaseConfigRoot(): string {
-	return getConfigRootOverride() ?? path.join(resolveHomeDirOrThrow(), CONFIG_DIR_NAME);
-}
-
-/** The default profile's directory name under `profiles/`. */
-export const DEFAULT_PROFILE_DIR_NAME = "default";
-
-/**
- * The single directory under the config root that holds all profiles
- * (`<configRoot>/profiles/<name>`). One owner for the segment name so a rename
- * or layout change touches exactly one place; every profile-path builder below
- * joins this rather than repeating the literal.
- */
-export const PROFILES_DIR_NAME = "profiles";
-
-/**
  * Every profile — including the default — lives under `profiles/<name>`.
  * The bare config root holds only global, cross-profile state (the global
  * `config.yml`, `install-id`, and `profiles/` itself); see
@@ -330,771 +206,7 @@ export const PROFILES_DIR_NAME = "profiles";
  * legacy bare-root layout.
  */
 function getProfileConfigRoot(profile: string | undefined): string {
-	return path.join(getBaseConfigRoot(), PROFILES_DIR_NAME, profile ?? DEFAULT_PROFILE_DIR_NAME);
-}
-
-/**
- * Read `defaultProfile` from the GLOBAL config file (`~/.veyyon/config.yml` /
- * `config.yaml` at the config root — distinct from any profile's own settings
- * file under `profiles/<name>/agent/`). Returns `undefined` when no global
- * config exists or the key is unset; throws on unreadable YAML or an invalid
- * profile name so the CLI can surface a clean error naming the file.
- */
-export function resolveGlobalDefaultProfile(): string | undefined {
-	const { record, filePath } = readGlobalConfigRecord();
-	const value = record.defaultProfile;
-	if (value === undefined || value === null) return undefined;
-	if (typeof value !== "string") {
-		throw new Error(`Global config ${filePath}: defaultProfile must be a string profile name.`);
-	}
-	try {
-		return normalizeProfileName(value);
-	} catch (error) {
-		throw new Error(`Global config ${filePath}: ${errorMessage(error)}`);
-	}
-}
-
-/**
- * Set or clear `defaultProfile` in the GLOBAL config file, preserving every
- * other key. Pass a profile name to set (validated; "default" clears, since
- * the default profile needs no override) or `undefined` to clear. Returns the
- * file written.
- */
-export function writeGlobalDefaultProfile(profile: string | undefined): string {
-	const normalized = normalizeProfileName(profile);
-	// `normalizeProfileName` collapses the default profile to `undefined`, which
-	// clears the key — the default needs no override.
-	return mutateGlobalConfigKey("defaultProfile", () => normalized);
-}
-
-/**
- * How one candidate config file turned out.
- *
- * These three states must stay distinct because two of them used to collapse
- * into one. `readGlobalConfigRecord` returned `{}` both for "no file exists" and
- * for "a file exists but holds no YAML mapping", so a ZERO-BYTE `config.yml` was
- * indistinguishable from a fresh install: the onboarding gate read "no
- * onboardingVersion", concluded nobody had ever run setup, and walked a
- * long-onboarded user back through the wizard. That empty file is not exotic
- * either. {@link mutateGlobalConfigKey} writes one DELIBERATELY when it cannot
- * unlink a config it has just emptied, so this is a state the code reaches by
- * itself and not something the user broke.
- */
-type MainConfigCandidate =
-	/** Nothing at this path. The ONLY state that means "no config here". */
-	| { kind: "absent" }
-	/** Present, valid YAML, and a mapping: the one usable shape. */
-	| { kind: "map"; record: Record<string, unknown>; text: string }
-	/** Present and valid YAML but not a mapping: zero bytes, a scalar, a sequence. */
-	| { kind: "not-a-map" };
-
-/** How to name a config file in an error the user has to act on. */
-interface ConfigFileKind {
-	/** Opens the message: "Global config /home/u/.veyyon/config.yml could not be read...". */
-	subject: string;
-	/** What the user can safely do about a broken file, appended after the cause. */
-	repairHint: string;
-}
-
-const GLOBAL_CONFIG_FILE_KIND: ConfigFileKind = {
-	subject: "Global config",
-	repairHint: "Fix or remove the file (it holds only cross-profile keys like defaultProfile).",
-};
-
-/** The retired per-profile config, read only by {@link readLegacyProfileSetupVersion}. */
-const PROFILE_CONFIG_FILE_KIND: ConfigFileKind = {
-	subject: "Profile config",
-	repairHint: "Fix or remove the file.",
-};
-
-/**
- * Read one candidate's bytes, or `undefined` when the path is not there.
- *
- * ONE owner for the absent-versus-unreadable split and its bounded retry,
- * because the reader and the writer each had their own answer and the writer's
- * was destructive. `mutateGlobalConfigKey` did `catch { continue; }`, so a single
- * non-absence error (EMFILE under fd pressure while several rebuilt processes
- * start at once, EACCES, EIO, an NFS blip) made a populated config look empty and
- * the read-modify-write then emitted a file holding ONLY the key being mutated:
- * `defaultProfile`, `profileSharing`, `onboardingVersion` and the auth-broker
- * token all gone, with no error anywhere. A present-but-unreadable file has to
- * ABORT the mutation; it must never shrink it.
- *
- * ENOENT is the obvious absence and ENOTDIR is the same fact reached differently,
- * so absence is {@link isMissingPath} rather than a local ENOENT check that could
- * drift from the rest of the tree. Every other code means the file IS there:
- * treating those as "no config" is what would silently default `profileSharing`
- * and relocate the credential store to the empty shared dir, logging a
- * `profileSharing:false` user out this run and back in the next.
- */
-function readConfigFileText(filePath: string, fileKind: ConfigFileKind): string | undefined {
-	for (let attempt = 0; ; attempt++) {
-		try {
-			return fs.readFileSync(filePath, "utf8");
-		} catch (error) {
-			if (isMissingPath(error)) return undefined;
-			// Present but momentarily unreadable, which is transient by nature: retry
-			// briefly so only a persistent failure surfaces, and never as a silent
-			// posture flip.
-			if (attempt < GLOBAL_CONFIG_READ_RETRY_ATTEMPTS) {
-				sleepSync(GLOBAL_CONFIG_READ_RETRY_DELAY_MS);
-				continue;
-			}
-			throw new Error(
-				`${fileKind.subject} ${filePath} could not be read: ${errorMessage(error)}. ` +
-					`Nothing was changed; restore the file's readability and retry.`,
-			);
-		}
-	}
-}
-
-/** Classify one candidate path. Throws only for a file that is present and whose YAML does not parse. */
-function classifyConfigCandidate(filePath: string, fileKind: ConfigFileKind): MainConfigCandidate {
-	const text = readConfigFileText(filePath, fileKind);
-	if (text === undefined) return { kind: "absent" };
-	let parsed: unknown;
-	try {
-		parsed = parseYaml(text);
-	} catch (error) {
-		throw new Error(
-			`${fileKind.subject} ${filePath} is not valid YAML: ${errorMessage(error)}. ${fileKind.repairHint}`,
-		);
-	}
-	if (isRecord(parsed)) return { kind: "map", record: parsed as Record<string, unknown>, text };
-	return { kind: "not-a-map" };
-}
-
-/** The candidate chosen out of {@link MAIN_CONFIG_FILENAMES} for one directory, and what it holds. */
-interface MainConfigSelection {
-	/** The file every reader and the writer use for this root. */
-	filePath: string;
-	candidate: MainConfigCandidate;
-}
-
-/**
- * Apply {@link MAIN_CONFIG_FILENAMES} precedence to one directory.
- *
- * The first name still wins OUTRIGHT when it is usable and the files are never
- * merged, because merging two files that disagree makes the effective config
- * depend on a rule nobody can see. What changed is what "usable" means. A
- * candidate that exists but holds no YAML mapping carries no keys at all, so
- * letting it win bought nothing and cost everything: an empty `config.yml` buried
- * a fully populated `config.yaml` permanently, with no error, no effect, and no
- * way for the user to see why the file they edited was dead. So a usable map now
- * beats a present-but-unusable earlier name, and the loser is still reported by
- * {@link findShadowedGlobalConfigFiles} so the shadowing never goes silent.
- *
- * When NOTHING parses to a map, the first PRESENT candidate is selected and
- * carries `not-a-map`. That is what keeps "present but unusable" tellable from
- * "absent" one level up, and it is also the file the writer has to rewrite.
- */
-function selectMainConfigFile(root: string, fileKind: ConfigFileKind): MainConfigSelection {
-	let firstPresent: MainConfigSelection | undefined;
-	for (const filename of MAIN_CONFIG_FILENAMES) {
-		const filePath = path.join(root, filename);
-		const candidate = classifyConfigCandidate(filePath, fileKind);
-		if (candidate.kind === "map") return { filePath, candidate };
-		if (candidate.kind === "not-a-map") firstPresent ??= { filePath, candidate };
-	}
-	return firstPresent ?? { filePath: path.join(root, MAIN_CONFIG_FILENAMES[0]), candidate: { kind: "absent" } };
-}
-
-/** The GLOBAL config as a parsed record, the file it came from, and whether that file is present but unusable. */
-interface GlobalConfigRead {
-	/** The parsed mapping, or `{}` when no file exists or the one that does holds no mapping. */
-	record: Record<string, unknown>;
-	/**
-	 * The file the record came from, or the canonical path when none exists. Lets
-	 * each caller name the offending file in its own value-validation errors.
-	 */
-	filePath: string;
-	/**
-	 * A file exists at `filePath` but holds no YAML mapping, so `record` is empty
-	 * because of THAT rather than because the machine is new. Readers whose default
-	 * is safe either way (`defaultProfile`, `profileSharing`) deliberately ignore
-	 * this and keep their default; the onboarding reader must not, because there
-	 * "absent" means run the setup wizard.
-	 */
-	presentButUnusable: boolean;
-}
-
-/**
- * Read the whole GLOBAL config file. One reader for every global key so callers
- * do not each re-implement the filename precedence. Throws on unreadable or
- * unparseable YAML, naming the file.
- */
-function readGlobalConfigRecord(): GlobalConfigRead {
-	const { filePath, candidate } = selectMainConfigFile(getBaseConfigRoot(), GLOBAL_CONFIG_FILE_KIND);
-	return {
-		record: candidate.kind === "map" ? candidate.record : {},
-		filePath,
-		presentButUnusable: candidate.kind === "not-a-map",
-	};
-}
-
-/**
- * The GLOBAL config file that reads and writes actually use: the first name in
- * {@link MAIN_CONFIG_FILENAMES} that parses to a YAML mapping, else the first one
- * that merely exists, else the canonical `config.yml` that a first write creates.
- *
- * Never throws. Its whole job is to let a user-facing message name the file, and
- * a notification that a save FAILED must not itself fail because the file it
- * wants to name is the unreadable one.
- */
-export function getGlobalConfigFilePath(): string {
-	const root = getBaseConfigRoot();
-	try {
-		return selectMainConfigFile(root, GLOBAL_CONFIG_FILE_KIND).filePath;
-	} catch {
-		// A candidate that cannot even be classified (unreadable, unparseable) is
-		// exactly the file the caller wants to talk about, and it is reached before any
-		// later name, so the canonical path is the right thing to name.
-		return path.join(root, MAIN_CONFIG_FILENAMES[0]);
-	}
-}
-
-/** A config file that exists but is ignored because a higher-precedence one does too. */
-export interface ShadowedConfigFile {
-	/** The file that is being ignored. */
-	ignored: string;
-	/** The file being used instead. */
-	using: string;
-}
-
-/**
- * Config files in `root` that exist but are ignored because another name in
- * {@link MAIN_CONFIG_FILENAMES} is the one being read.
- *
- * The precedence itself is deliberate and must not change: one file wins outright
- * and the others are NOT merged, because merging two files that disagree would
- * make the effective config depend on a rule nobody can see. But leaving the
- * loser silent is its own trap. Someone who edits `config.yaml` while `config.yml`
- * exists gets no error, no effect and no clue: their file is simply dead, and
- * every symptom points at the setting they changed rather than at the file they
- * changed it in.
- *
- * The winner reported here is the one {@link selectMainConfigFile} picks, not
- * blindly the first present name. Comparing against the first name would name the
- * wrong file in exactly the case that hurts most: an empty `config.yml` beside a
- * populated `config.yaml` would send the user to edit the empty file, which is no
- * longer the file being read.
- *
- * This returns the finding instead of logging it because `dirs` sits below the
- * logger (logger imports this module for its own paths). The settings layer, which
- * has both a logger and a user-visible surface, reports it. Precedence still has
- * exactly one owner: the constant and this function live here.
- */
-export function findShadowedGlobalConfigFiles(root: string = getBaseConfigRoot()): ShadowedConfigFile[] {
-	// existsSync, not the classifier, decides PRESENCE: a directory named
-	// `config.yml` is not readable as a file yet really does sit where a config
-	// would, and the user still needs to be told it is not being read.
-	const present = MAIN_CONFIG_FILENAMES.filter(filename => fs.existsSync(path.join(root, filename)));
-	const usable = present.find(filename => {
-		try {
-			return classifyConfigCandidate(path.join(root, filename), GLOBAL_CONFIG_FILE_KIND).kind === "map";
-		} catch {
-			// Unreadable or unparseable is exactly "not usable", and this function only
-			// ever feeds a warning: throwing here would turn a diagnostic about a dead
-			// file into a crash.
-			return false;
-		}
-	});
-	const winner = usable ?? present[0];
-	if (winner === undefined) return [];
-	return present
-		.filter(filename => filename !== winner)
-		.map(filename => ({
-			ignored: path.join(root, filename),
-			using: path.join(root, winner),
-		}));
-}
-
-/**
- * Serialized read-modify-write of a single GLOBAL config key, preserving every
- * other key. `mutate` receives the current record and returns the value to
- * store, or `undefined` to delete the key. Returns the file written. One writer
- * for every global key so the lock target, atomicity, and empty-file cleanup
- * live in exactly one place (see {@link writeGlobalDefaultProfile}, which is a
- * thin wrapper over this).
- */
-function mutateGlobalConfigKey(key: string, mutate: (current: Record<string, unknown>) => unknown): string {
-	const root = getBaseConfigRoot();
-	fs.mkdirSync(root, { recursive: true });
-	// The canonical config path is the stable lock target regardless of which
-	// filename actually exists on disk, so every writer serializes on one lock.
-	const canonicalPath = path.join(root, MAIN_CONFIG_FILENAMES[0]);
-	return withFileLockSync(canonicalPath, () => {
-		// The same selection the readers use, so a write can never land in a file
-		// the next read ignores. It throws for a present-but-unreadable candidate,
-		// which is the point: aborting leaves the user's other global keys intact,
-		// where swallowing the error rewrote the file with only `key` in it.
-		const { filePath, candidate } = selectMainConfigFile(root, {
-			subject: GLOBAL_CONFIG_FILE_KIND.subject,
-			repairHint: `Fix or remove the file before changing ${key}.`,
-		});
-		const existing = candidate.kind === "map" ? candidate.record : {};
-		// The file's own bytes, so the write can EDIT it rather than re-serialize it: this
-		// is a file people hand-edit, and a re-serialization discards their comments,
-		// blank lines and key order (see syncYamlTextToSettings). A candidate that is not
-		// a mapping has no keys, comments or order to keep, and splicing a key into a
-		// scalar document would not even be valid YAML, so it is rewritten from empty.
-		const existingText = candidate.kind === "map" ? candidate.text : "";
-		const next = mutate(existing);
-		if (next === undefined) delete existing[key];
-		else existing[key] = next;
-		if (Object.keys(existing).length === 0) {
-			// Nothing left — remove the file rather than leaving an empty stub.
-			//
-			// If the unlink fails the removal still has to persist. Swallowing it left
-			// the file holding its previous contents, so the key the caller just
-			// deleted came back on the next read: a profile switch or a change to the
-			// credential-sharing posture reported success and silently reverted. An
-			// empty file is a worse-looking but honest end state, and the next write
-			// cleans it up. A failure to write that is left to throw, because at that
-			// point nothing can be persisted and saying so is the only correct move.
-			try {
-				fs.unlinkSync(filePath);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-					// process.emitWarning rather than the logger: logger imports this
-					// module for getLogsDir, so importing it back would close a cycle in
-					// the module that resolves every path the logger needs.
-					process.emitWarning(
-						`Could not remove the now-empty global config ${filePath} (${errorMessage(error)}); ` +
-							`writing it empty instead so the removal of "${key}" persists.`,
-						{ code: "VEYYON_CONFIG_UNLINK_FAILED" },
-					);
-					atomicWriteFileSync(filePath, "");
-				}
-			}
-			return filePath;
-		}
-		// Atomic: an interrupted write here would corrupt cross-profile keys
-		// (the pointer to the active profile, credential-sharing posture).
-		atomicWriteFileSync(filePath, syncYamlTextToSettings(existingText, existing));
-		return filePath;
-	});
-}
-
-/**
- * The auth-broker keys in the GLOBAL config. Stored NESTED
- * (`auth: { broker: { url, token } }`); the reader also accepts the legacy
- * flat literal keys (`"auth.broker.url"`), matching the discovery precedence
- * in `packages/ai/src/auth-broker/discover.ts` (nested wins). The writers
- * always persist the nested form and remove any legacy flat duplicate so the
- * value has exactly one home after the first write.
- */
-const AUTH_BROKER_SEGMENTS = ["auth", "broker"] as const;
-
-/** The global auth-broker configuration, read without ever exposing the token. */
-export interface GlobalAuthBroker {
-	url: string | undefined;
-	/** Whether a token is stored. The plaintext is deliberately not returned:
-	 * settings surfaces render presence, never the secret. */
-	tokenSet: boolean;
-}
-
-function readAuthBrokerValue(record: Record<string, unknown>, leaf: "url" | "token"): string | undefined {
-	// Nested form wins over the legacy flat literal-dot key.
-	const auth = record[AUTH_BROKER_SEGMENTS[0]];
-	if (isRecord(auth)) {
-		const broker = auth[AUTH_BROKER_SEGMENTS[1]];
-		if (isRecord(broker) && typeof broker[leaf] === "string" && (broker[leaf] as string).length > 0) {
-			return broker[leaf] as string;
-		}
-	}
-	const flat = record[`${AUTH_BROKER_SEGMENTS.join(".")}.${leaf}`];
-	return typeof flat === "string" && flat.length > 0 ? flat : undefined;
-}
-
-/**
- * Read the auth-broker url and token PRESENCE from the GLOBAL config. Safe:
- * a broken global config must never crash a bare import or the settings UI;
- * discovery re-validates loudly on the auth path itself.
- */
-export function readGlobalAuthBrokerSafe(): GlobalAuthBroker {
-	try {
-		const { record } = readGlobalConfigRecord();
-		return {
-			url: readAuthBrokerValue(record, "url"),
-			tokenSet: readAuthBrokerValue(record, "token") !== undefined,
-		};
-	} catch {
-		return { url: undefined, tokenSet: false };
-	}
-}
-
-/** Set or clear (`undefined`/empty) one auth-broker leaf, preserving every
- * other key. Writes the nested form, deletes any legacy flat duplicate, and
- * prunes empty `broker`/`auth` records so a fully cleared config leaves no
- * stub behind. */
-function writeGlobalAuthBrokerLeaf(leaf: "url" | "token", value: string | undefined): string {
-	const [authKey, brokerKey] = AUTH_BROKER_SEGMENTS;
-	return mutateGlobalConfigKey(authKey, existing => {
-		// The legacy flat literal key would shadow-read forever; one home only.
-		delete existing[`${authKey}.${brokerKey}.${leaf}`];
-		const auth = isRecord(existing[authKey]) ? (existing[authKey] as Record<string, unknown>) : {};
-		const broker = isRecord(auth[brokerKey]) ? (auth[brokerKey] as Record<string, unknown>) : {};
-		const trimmed = value?.trim();
-		if (trimmed) broker[leaf] = trimmed;
-		else delete broker[leaf];
-		if (Object.keys(broker).length > 0) auth[brokerKey] = broker;
-		else delete auth[brokerKey];
-		return Object.keys(auth).length > 0 ? auth : undefined;
-	});
-}
-
-/** Set or clear the global auth-broker URL. Returns the file written. */
-export function writeGlobalAuthBrokerUrl(url: string | undefined): string {
-	return writeGlobalAuthBrokerLeaf("url", url);
-}
-
-/** Set or clear the global auth-broker bearer token. Never logged, never read
- * back into any UI surface (see {@link readGlobalAuthBrokerSafe}). Returns the
- * file written. */
-export function writeGlobalAuthBrokerToken(token: string | undefined): string {
-	return writeGlobalAuthBrokerLeaf("token", token);
-}
-
-/**
- * The global-config key controlling whether provider credentials are shared
- * across profiles. Absent or `true` means shared (the default posture); `false`
- * isolates each profile to its own credential store. One owner for the literal
- * so the reader, writer, and any settings-domain binding agree.
- */
-export const PROFILE_SHARING_CONFIG_KEY = "profileSharing";
-
-/**
- * Whether provider credentials are shared across profiles (the "shared by
- * default" posture). Reads `profileSharing` from the GLOBAL config: absent →
- * shared (`true`); an explicit boolean is honored. A non-boolean value throws
- * naming the file, matching {@link resolveGlobalDefaultProfile}'s strictness so
- * a typo cannot silently flip the credential posture.
- */
-export function resolveGlobalProfileSharing(): boolean {
-	const { record, filePath } = readGlobalConfigRecord();
-	const value = record[PROFILE_SHARING_CONFIG_KEY];
-	if (value === undefined || value === null) return true;
-	if (typeof value !== "boolean") {
-		throw new Error(
-			`Global config ${filePath}: ${PROFILE_SHARING_CONFIG_KEY} must be a boolean ` +
-				`(true = share credentials across profiles, false = isolate). Got ${typeof value}.`,
-		);
-	}
-	return value;
-}
-
-/** Module-load-safe variant of {@link resolveGlobalProfileSharing}: a broken/invalid global config must never crash a bare import; the CLI re-validates loudly. Defaults to shared. */
-export function readGlobalProfileSharingSafe(): boolean {
-	try {
-		return resolveGlobalProfileSharing();
-	} catch {
-		return true;
-	}
-}
-
-/**
- * Set the credential-sharing posture in the GLOBAL config, preserving every
- * other key. `true` shares credentials across profiles (deletes the key, since
- * shared is the default); `false` writes the explicit isolate flag. Returns the
- * file written.
- */
-export function writeGlobalProfileSharing(shared: boolean): string {
-	return mutateGlobalConfigKey(PROFILE_SHARING_CONFIG_KEY, () => (shared ? undefined : false));
-}
-
-/**
- * The GLOBAL config key holding machine-wide resource limits.
- *
- * These are machine-wide rather than per-profile because they bound VEYYON,
- * not one session and not one profile. Two profiles running at once share one
- * CPU and one disk, so a cap held per profile is not the cap it names: each
- * copy reads its own file, and the machine gets the sum. Grouped under one
- * mapping so a hand-edited config keeps them together instead of scattering
- * four numbers across the top level.
- *
- * The key is also the settings-path prefix (`machine.cpuLimitCores` is stored
- * at `machine.cpuLimitCores`), so the panel, the generated reference and the
- * file a person opens all spell the value the same way.
- */
-export const GLOBAL_MACHINE_CONFIG_KEY = "machine";
-
-/**
- * Every machine-wide limit, by leaf name under {@link GLOBAL_MACHINE_CONFIG_KEY}.
- * The leaf names match the per-session setting they bound, so the two tiers of
- * one resource are recognisably the same knob at two scopes.
- *
- * Enumerated here rather than at each call site: the settings domain, the
- * bindings map and the budget placement all derive from this list, so adding a
- * resource is one edit and cannot reach three of the four places.
- */
-export const GLOBAL_RESOURCE_LIMITS = ["cpuLimitCores", "memoryLimitGb", "writeBudgetGb", "maxProcesses"] as const;
-
-export type GlobalResourceLimit = (typeof GLOBAL_RESOURCE_LIMITS)[number];
-
-/**
- * One machine-wide limit from the GLOBAL config. `0` means no limit, which is
- * also what an absent key means, so an unconfigured machine and an explicitly
- * lifted one behave identically.
- *
- * Throws on a value that is present but not a non-negative finite number,
- * naming the file and the key: a limit is a safety control, and a typo that
- * silently read as "no limit" is the failure this must not have.
- */
-export function resolveGlobalResourceLimit(limit: GlobalResourceLimit): number {
-	const { record, filePath } = readGlobalConfigRecord();
-	const resources = record[GLOBAL_MACHINE_CONFIG_KEY];
-	if (!isRecord(resources)) return 0;
-	const value = resources[limit];
-	if (value === undefined) return 0;
-	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-		throw new Error(
-			`Global config ${filePath}: ${GLOBAL_MACHINE_CONFIG_KEY}.${limit} must be a non-negative number ` +
-				`(0 = no limit). Got ${JSON.stringify(value)}.`,
-		);
-	}
-	return value;
-}
-
-/**
- * Module-load-safe variant of {@link resolveGlobalResourceLimit}. A broken
- * global config must never crash a bare import or the settings panel.
- *
- * It reports NO limit rather than some limit, because the alternative is worse:
- * a config the reader cannot parse would otherwise cap a machine at a number
- * nobody chose, with no way to see where it came from. The budget placement
- * surfaces the parse failure through {@link resolveGlobalResourceLimit} on the
- * path that actually applies limits, so the error is reported rather than lost.
- */
-export function readGlobalResourceLimitSafe(limit: GlobalResourceLimit): number {
-	try {
-		return resolveGlobalResourceLimit(limit);
-	} catch {
-		return 0;
-	}
-}
-
-/**
- * Set or lift one machine-wide limit, preserving every other key. `0` deletes
- * the leaf and an emptied `resources` mapping, so a fully lifted config leaves
- * no stub behind. Returns the file written.
- */
-export function writeGlobalResourceLimit(limit: GlobalResourceLimit, value: number): string {
-	return mutateGlobalConfigKey(GLOBAL_MACHINE_CONFIG_KEY, existing => {
-		const resources = isRecord(existing[GLOBAL_MACHINE_CONFIG_KEY])
-			? { ...(existing[GLOBAL_MACHINE_CONFIG_KEY] as Record<string, unknown>) }
-			: {};
-		if (Number.isFinite(value) && value > 0) resources[limit] = Math.floor(value);
-		else delete resources[limit];
-		return Object.keys(resources).length > 0 ? resources : undefined;
-	});
-}
-
-/**
- * The onboarding-generation key in the GLOBAL config.
- *
- * Onboarding is something a HUMAN does once per machine, so its marker belongs
- * beside `defaultProfile` rather than inside one profile's settings file. Held
- * per profile it made `--profile <name>` look like a brand-new install: the new
- * profile's `agent/config.yml` has no onboarding key, the gate read the schema
- * default, and a user who had onboarded years ago was walked through the setup
- * wizard again. One owner for the literal so the reader, the writer, and the
- * settings-domain binding agree.
- */
-export const ONBOARDING_VERSION_CONFIG_KEY = "onboardingVersion";
-
-/** The machine-wide onboarding generation, and whether it could be read at all. */
-export interface GlobalOnboardingVersion {
-	/** The stored generation, or `undefined` when the key is absent. */
-	version: number | undefined;
-	/**
-	 * True when the global config is present but could not be read or parsed, so
-	 * `version` is absent because of that failure rather than because the machine
-	 * is new. A caller deciding whether to onboard MUST NOT read this case as a
-	 * first install: that is how a corrupt config re-ran the setup wizard.
-	 */
-	unreadable: boolean;
-}
-
-/**
- * The onboarding generation this machine has completed, from the GLOBAL config.
- * `undefined` means the key is absent (never onboarded). Throws on unreadable
- * YAML, on a config file that exists but holds no mapping, or on a non-numeric
- * value, naming the file, matching {@link resolveGlobalDefaultProfile}'s
- * strictness so a typo cannot silently decide whether a user is onboarded.
- */
-export function resolveGlobalOnboardingVersion(): number | undefined {
-	const { record, filePath, presentButUnusable } = readGlobalConfigRecord();
-	if (presentButUnusable) {
-		// The one reader that must NOT fold this into its default. A config file that
-		// exists but holds no mapping (zero bytes is the common one) carries no
-		// onboarding record, and reading that as "never onboarded" is precisely how a
-		// machine set up years ago got marched through the setup wizard again. The
-		// sibling readers keep their default here because sharing credentials or using
-		// the default profile is safe either way; re-onboarding is not.
-		throw new Error(
-			`Global config ${filePath} exists but holds no settings mapping (it is empty, or not a YAML map), ` +
-				`so whether this machine has already completed setup cannot be read. ` +
-				`Restore or delete the file; setup was NOT treated as unfinished.`,
-		);
-	}
-	const value = record[ONBOARDING_VERSION_CONFIG_KEY];
-	if (value === undefined || value === null) return undefined;
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		throw new Error(
-			`Global config ${filePath}: ${ONBOARDING_VERSION_CONFIG_KEY} must be a finite number ` +
-				`(the setup generation already completed on this machine). Got ${typeof value}.`,
-		);
-	}
-	return value;
-}
-
-/**
- * Never-throwing variant of {@link resolveGlobalOnboardingVersion} that reports
- * WHY the value is missing.
- *
- * The distinction is the whole point: the sibling `*Safe` readers can fold a
- * failure into their default because sharing credentials or using the default
- * profile is a safe posture either way. Onboarding is not symmetric. "Absent"
- * means run the wizard and "unreadable" means do not, so a reader that returned
- * one number for both would re-onboard every launch a config file was corrupt.
- */
-export function readGlobalOnboardingVersionSafe(): GlobalOnboardingVersion {
-	try {
-		return { version: resolveGlobalOnboardingVersion(), unreadable: false };
-	} catch {
-		return { version: undefined, unreadable: true };
-	}
-}
-
-/**
- * Record the onboarding generation in the GLOBAL config, preserving every other
- * key; `undefined` clears it. Returns the file written. Synchronous and atomic
- * under the shared lock, so the fact that a user completed onboarding is on disk
- * before the call returns rather than waiting on a debounced save that a closed
- * terminal would discard.
- */
-export function writeGlobalOnboardingVersion(version: number | undefined): string {
-	return mutateGlobalConfigKey(ONBOARDING_VERSION_CONFIG_KEY, () => version);
-}
-
-/**
- * The RETIRED per-profile onboarding key. Never written any more; read only so a
- * machine onboarded before the key moved to the global config is still recognised.
- */
-const LEGACY_PROFILE_SETUP_VERSION_KEY = "setupVersion";
-
-/** The highest retired per-profile `setupVersion` on this machine, and whether any profile hid one. */
-export interface LegacyProfileSetupVersion {
-	/** The maximum recorded generation across every profile, or `undefined` when none records one. */
-	version: number | undefined;
-	/**
-	 * A profile config exists but could not be read, parsed, or understood, so
-	 * `version` may be too low or missing entirely. A caller deciding whether to
-	 * onboard MUST treat this as "cannot tell", never as "never onboarded".
-	 */
-	unreadable: boolean;
-}
-
-/**
- * The highest retired `setupVersion` recorded by ANY profile under `profiles/`.
- *
- * Onboarding is something a human does once per MACHINE, so evidence that it
- * happened has to be read machine-wide. The promotion that fills in the global
- * `onboardingVersion` used to fall back to the retired key through the settings
- * layer, which resolves the ACTIVE profile only. On the reporting user's disk the
- * record lived in `profiles/work/agent/config.yml` while `profiles/oss-work` had
- * no config file at all, so launching `--profile oss-work` first looked in one
- * profile, found nothing, and declared a fresh install on a machine that had been
- * onboarded for years: the full four-step wizard, from the top.
- *
- * Absence contributes nothing, because a profile that never stored the key is the
- * normal case. Anything else that stops a profile from answering sets `unreadable`
- * instead of vanishing: a file that will not read or parse, a file that holds no
- * mapping, and a `setupVersion` that is present but not a finite number. All three
- * mean the profile has something to say about onboarding that could not be
- * understood, and silently skipping them is the same "declare a fresh install"
- * bug one level down.
- */
-export function readLegacyProfileSetupVersion(): LegacyProfileSetupVersion {
-	const profilesRoot = path.join(getBaseConfigRoot(), PROFILES_DIR_NAME);
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(profilesRoot, { withFileTypes: true });
-	} catch (error) {
-		// No `profiles/` at all is a genuinely fresh install and contributes nothing.
-		// Any other failure HID profiles that may well record a version, so it must
-		// not read as "never onboarded".
-		return { version: undefined, unreadable: !isMissingPath(error) };
-	}
-	let version: number | undefined;
-	let unreadable = false;
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const value = readProfileSetupVersion(path.join(profilesRoot, entry.name, "agent"));
-		if (value === "unreadable") unreadable = true;
-		else if (value !== undefined) version = version === undefined ? value : Math.max(version, value);
-	}
-	return { version, unreadable };
-}
-
-/** One profile's `setupVersion`: `undefined` when it records none, `"unreadable"` when its config or the value cannot be understood. */
-function readProfileSetupVersion(agentDir: string): number | "unreadable" | undefined {
-	let candidate: MainConfigCandidate;
-	try {
-		// Same filename precedence and same read-with-retry as the global config,
-		// so a profile's `config.yml`/`config.yaml` cannot be resolved two ways.
-		candidate = selectMainConfigFile(agentDir, PROFILE_CONFIG_FILE_KIND).candidate;
-	} catch {
-		return "unreadable";
-	}
-	if (candidate.kind === "absent") return undefined;
-	if (candidate.kind === "not-a-map") return "unreadable";
-	const value = candidate.record[LEGACY_PROFILE_SETUP_VERSION_KEY];
-	if (value === undefined || value === null) return undefined;
-	return typeof value === "number" && Number.isFinite(value) ? value : "unreadable";
-}
-
-/**
- * Directory whose `agent.db` holds the machine-wide SHARED credential store read
- * by every profile when {@link resolveGlobalProfileSharing} is on. Lives beside
- * the global `config.yml` at the base config root, under a dedicated name so it
- * never collides with the legacy `~/.veyyon/agent` layout (which triggers the
- * legacy-migration path) or with `profiles/`. Not XDG-redirected: the shared
- * store is intentionally one fixed machine-wide location.
- */
-export function getSharedAuthDir(): string {
-	return path.join(getBaseConfigRoot(), "shared-auth");
-}
-
-/**
- * Directory holding user-authored agent definitions (`<name>.md`, YAML
- * frontmatter + prompt body), read by every profile.
- *
- * DISCOVERY IS GLOBAL, ENABLING IS PER-PROFILE. A definition is authored
- * content, so it lives once at the base config root beside the global
- * `config.yml`; whether a profile may spawn it is that profile's
- * `agent.agents.<name>.enabled`. Keeping the file inside a profile's agent
- * dir meant re-authoring the same agent for every profile, and it read as
- * profile state rather than as something the operator wrote.
- *
- * Not XDG-redirected, for the reason {@link getSharedAuthDir} is not: one fixed
- * machine-wide location is the whole point.
- */
-export function getGlobalSubagentsDir(): string {
-	return path.join(getBaseConfigRoot(), SUBAGENTS_DIR_NAME);
-}
-
-/** Module-load-safe variant of {@link resolveGlobalDefaultProfile}: a broken global config must not crash a bare import; the CLI re-validates loudly. */
-export function readGlobalDefaultProfileSafe(): string | undefined {
-	try {
-		return resolveGlobalDefaultProfile();
-	} catch {
-		// Undefined means "no global default", so the caller uses the built-in default profile. Quiet on
-		// purpose and only here: this runs at module load, where there is no logger to report to yet, and
-		// the CLI re-reads the same config through the validating path that DOES report it.
-		return undefined;
-	}
+	return path.join(getGlobalConfigRootDir(), PROFILES_DIR_NAME, profile ?? DEFAULT_PROFILE_DIR_NAME);
 }
 
 /**
@@ -1129,7 +241,7 @@ function isProfileDerivedAgentDir(agentDirEnv: string | undefined): boolean {
 	if (agentDirEnv === undefined || path.basename(agentDirEnv) !== "agent") return false;
 	let profilesRoot: string;
 	try {
-		profilesRoot = path.join(getBaseConfigRoot(), PROFILES_DIR_NAME);
+		profilesRoot = path.join(getGlobalConfigRootDir(), PROFILES_DIR_NAME);
 	} catch {
 		return false;
 	}
@@ -1153,59 +265,6 @@ function standardizeMacOSPath(p: string): string {
 	} catch {}
 	return p;
 }
-
-export function resolveEquivalentPath(inputPath: string): string {
-	const resolvedPath = path.resolve(inputPath);
-	try {
-		return fs.realpathSync(resolvedPath);
-	} catch {
-		return resolvedPath;
-	}
-}
-
-export function normalizePathForComparison(inputPath: string): string {
-	const resolvedPath = resolveEquivalentPath(inputPath);
-	return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
-}
-
-export function pathIsWithin(root: string, candidate: string): boolean {
-	const normalizedRoot = normalizePathForComparison(root);
-	const normalizedCandidate = normalizePathForComparison(candidate);
-	const relative = path.relative(normalizedRoot, normalizedCandidate);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-/**
- * The path from `root` down to `candidate`, or null when `candidate` is not under it.
- *
- * THE RELATIVE PATH IS TAKEN FROM THE CANDIDATE'S OWN SPELLING. Containment is decided on
- * `normalizePathForComparison`, which lowercases on Windows because that filesystem is
- * case-insensitive; the string handed back must not be, and it was. A project in
- * `C:\Users\dev\Projects\MyApp\Src` reported `myapp\src`, and that string is what the status
- * line paints and what a rule path is named by, so a Windows session read its own directories
- * in a case it had never used.
- */
-export function relativePathWithinRoot(root: string, candidate: string): string | null {
-	const resolvedRoot = resolveEquivalentPath(root);
-	const resolvedCandidate = resolveEquivalentPath(candidate);
-	const normalizedRoot = process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
-	const normalizedCandidate = process.platform === "win32" ? resolvedCandidate.toLowerCase() : resolvedCandidate;
-	const relative = path.relative(normalizedRoot, normalizedCandidate);
-	if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-	// HOW DEEP, from the folded comparison; WHICH NAMES, from the candidate. Asking
-	// `path.relative` for the answer over the resolved spellings is not enough: it folds case
-	// on win32 and not on posix, so a root configured in one case and a directory on disk in
-	// another walked up and back down (`../../Users/dev/Projects/MyApp`) wherever the platform
-	// compares exactly. Containment is already settled above, so the tail is that many
-	// segments off the end of the candidate.
-	const depth = relative.split(PATH_SEPARATORS).filter(segment => segment !== "").length;
-	if (depth === 0) return null;
-	const segments = resolvedCandidate.split(PATH_SEPARATORS).filter(segment => segment !== "");
-	return segments.slice(Math.max(0, segments.length - depth)).join(path.sep) || null;
-}
-
-/** Either platform's separator, since a resolved path may be spelled with either. */
-const PATH_SEPARATORS = /[\\/]+/u;
 
 let projectDir = standardizeMacOSPath(process.cwd());
 
@@ -1257,107 +316,6 @@ export async function directoryExists(dir: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-/**
- * A `VEYYON_CONFIG_DIR` value written as an absolute path, on either platform.
- *
- * `path.isAbsolute` only knows the platform it runs on, and a value written for the
- * other one means the same thing: `C:\veyyon` on Linux is not "absolute" to `path`, so
- * resolving it against the home would produce a directory whose NAME contains a
- * backslash. Both forms are recognised so the value is read as the path its author
- * meant wherever it was written.
- */
-function looksAbsolute(value: string): boolean {
-	return path.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\");
-}
-
-/** True when `candidate` is `root` or sits underneath it. */
-function isUnderPath(candidate: string, root: string): boolean {
-	const rel = path.relative(root, candidate);
-	return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
-
-/**
- * The config root named by `VEYYON_CONFIG_DIR`, or `undefined` when it is unset.
- *
- * The value is a path, not a name: absolute is taken as written, relative is resolved against the
- * home. It is then checked against the one thing it must never be, somewhere inside the operator's
- * home. A joined name instead makes `~/.veyyon-<anything>` reachable from one environment variable,
- * and a suite setting one in the belief that it has isolated itself writes into the real home,
- * because assigning `process.env.HOME` does not move `os.homedir()` under Bun, which resolves it
- * once at process start.
- *
- * The default root `~/.veyyon` is unaffected: that is what an unset variable gives, and this
- * function is not consulted for it.
- *
- * Inside the test sandbox the home is a tmpfs the guest owns, with the operator's real home absent
- * from the filesystem view, so {@link SANDBOX_MARKER_ENV_KEY} lifts the refusal. It is trusted in
- * this one direction only; the strong half of the pair is the reachability proof in
- * `packages/utils/test/helpers/sandbox-gate.ts`, which refuses to let the process start when a real
- * home is in reach.
- *
- * `packages/utils/test/sandbox-gate-contracts.test.ts` fails when this regresses to a joined name.
- */
-export function getConfigRootOverride(): string | undefined {
-	const override = pickProcessEnv(...CONFIG_DIR_ENV_KEYS);
-	if (override === undefined || override === "") return undefined;
-	const key = CONFIG_DIR_ENV_KEYS[0];
-	if (override.trim() === "") {
-		throw new Error(
-			`${key} is set to whitespace (${JSON.stringify(override)}). It names the directory veyyon keeps its ` +
-				`configuration in, so this would create a directory whose name you cannot see. Set it to an absolute ` +
-				`path such as "/srv/veyyon", or unset it to use the default (${path.join("~", CONFIG_DIR_NAME)}).`,
-		);
-	}
-	// A value written for the OTHER platform is still refused, and this is the one refusal
-	// that survived the inversion above. `C:\veyyon` is not absolute to POSIX `path`, so it
-	// would be resolved as a relative name and create a directory whose name contains a
-	// backslash -- a thing no listing shows sensibly and no user asked for. There is no
-	// reading of it that is worth guessing at.
-	if (!path.isAbsolute(override) && looksAbsolute(override)) {
-		throw new Error(
-			`${key} is set to "${override}", which is written as an absolute path for another platform and cannot ` +
-				`be one here, so it would be resolved as a relative name and create a directory whose name contains ` +
-				`a path separator. Set it to an absolute path in this platform's form, such as "/srv/veyyon".`,
-		);
-	}
-	const home = resolveHomeDirOrThrow();
-	// One `resolve`, because it already does both jobs: an absolute `override` replaces
-	// `home` outright, and a relative one is resolved against it.
-	const resolved = path.resolve(home, override);
-	if (isUnderPath(resolved, home) && !process.env[SANDBOX_MARKER_ENV_KEY]) {
-		throw new Error(
-			`${key} resolves to "${resolved}", which is inside your home directory ("${home}").\n` +
-				`It is a PATH to the config root, not a name hung off your home, and a value that lands back in your ` +
-				`home is how 136 stray ${CONFIG_DIR_NAME}* directories were created in one: a bare name such as ` +
-				`"${CONFIG_DIR_NAME}-mysuite" reads like isolation and is a directory in the real home.\n` +
-				`Set it to an absolute path OUTSIDE your home (for example "/srv/veyyon", or a temp directory), or ` +
-				`unset it to use the default (${path.join(home, CONFIG_DIR_NAME)}).`,
-		);
-	}
-	return resolved;
-}
-
-/**
- * The config root expressed RELATIVE TO THE HOME, for the callers that hold a home and
- * join a name onto it -- {@link getConfigAgentDirName} below, and through it
- * `USER_CONFIG_BASES` in `packages/coding-agent/src/config.ts`.
- *
- * `path.relative`, not `path.basename`, and the difference is a wrong answer rather than
- * an ugly one. Every caller does `path.join(home, thisValue)`, so the value has to be the
- * one that reconstructs the root: a basename turns an override of `../shared` into
- * `~/shared` and `/srv/veyyon-work` into `~/veyyon-work`, which is the doubled-path defect
- * the override exists to remove, reintroduced one layer up. The `..`-relative form is not
- * pretty, but `path.join(home, "../../srv/veyyon")` is `/srv/veyyon`, which is the root the
- * user asked for.
- *
- * Derived from the resolved root rather than the raw environment value, so it cannot answer
- * anything {@link getConfigRootOverride} refuses: one validator, consulted by both.
- */
-export function getConfigDirName(): string {
-	const override = getConfigRootOverride();
-	return override === undefined ? CONFIG_DIR_NAME : path.relative(resolveHomeDirOrThrow(), override);
 }
 
 /** Get the config agent directory name relative to home (e.g. ".veyyon/profiles/default/agent"). */
@@ -1522,9 +480,9 @@ function resolveActiveAgentDirOverride(): string | undefined {
 // empty tree, so surface it loudly here. Import must stay non-throwing; the
 // CLI migrates (or fails closed) right after startup profile resolution.
 try {
-	if (activeProfile === undefined && fs.existsSync(path.join(getBaseConfigRoot(), "agent"))) {
+	if (activeProfile === undefined && fs.existsSync(path.join(getGlobalConfigRootDir(), "agent"))) {
 		process.emitWarning(
-			`Legacy veyyon layout detected at ${path.join(getBaseConfigRoot(), "agent")} — the default profile now lives at ` +
+			`Legacy veyyon layout detected at ${path.join(getGlobalConfigRootDir(), "agent")} — the default profile now lives at ` +
 				`${getProfileConfigRoot(undefined)}. Run the veyyon CLI once to migrate (it moves the legacy tree, or names ` +
 				`the conflict if both layouts exist).`,
 			{ code: "VEYYON_LEGACY_LAYOUT" },
@@ -1578,15 +536,6 @@ export function refreshDirsFromEnv(): void {
 /** Get the active profile's config root (~/.veyyon/profiles/<name>). */
 export function getConfigRootDir(): string {
 	return dirs.configRoot;
-}
-
-/**
- * Get the GLOBAL config home (~/.veyyon) — the cross-profile root holding the
- * global `config.yml`, `install-id`, and `profiles/`. Distinct from
- * {@link getConfigRootDir}, which is the active profile's own root.
- */
-export function getGlobalConfigRootDir(): string {
-	return getBaseConfigRoot();
 }
 
 /**
@@ -1805,7 +754,7 @@ export function getProfileRootDir(profile: string | undefined): string {
  */
 export function assertRemovableProfileDir(target: string): string {
 	const resolved = path.resolve(target);
-	const profilesRoot = path.resolve(path.join(getBaseConfigRoot(), PROFILES_DIR_NAME));
+	const profilesRoot = path.resolve(path.join(getGlobalConfigRootDir(), PROFILES_DIR_NAME));
 	const parent = path.dirname(resolved);
 	const base = path.basename(resolved);
 	if (parent !== profilesRoot || base === "" || base === "." || base === "..") {
@@ -1836,7 +785,7 @@ export function listProfiles(): ProfileInfo[] {
 		},
 	];
 
-	const profilesDir = path.join(getBaseConfigRoot(), PROFILES_DIR_NAME);
+	const profilesDir = path.join(getGlobalConfigRootDir(), PROFILES_DIR_NAME);
 	let entries: fs.Dirent[] = [];
 	try {
 		entries = fs.readdirSync(profilesDir, { withFileTypes: true });
@@ -1965,7 +914,7 @@ const LEGACY_MIGRATION_MARKER = ".migration-in-progress";
  * right after startup profile resolution, before `.env` loading).
  */
 export function migrateLegacyDefaultProfileLayout(): LegacyLayoutMigrationResult {
-	const root = getBaseConfigRoot();
+	const root = getGlobalConfigRootDir();
 	const legacyAgentDir = path.join(root, "agent");
 	const targetDir = path.join(root, PROFILES_DIR_NAME, DEFAULT_PROFILE_DIR_NAME);
 	const markerPath = path.join(targetDir, LEGACY_MIGRATION_MARKER);
@@ -2490,7 +1439,7 @@ let cachedInstallId: string | null = null;
  */
 export function getInstallId(): string {
 	if (cachedInstallId) return cachedInstallId;
-	const filePath = path.join(getBaseConfigRoot(), INSTALL_ID_FILE);
+	const filePath = path.join(getGlobalConfigRootDir(), INSTALL_ID_FILE);
 
 	let observedInvalid = false;
 	try {

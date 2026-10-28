@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { getConfigDirName, refreshDirsFromEnv } from "@veyyon/utils/dirs";
+import { getConfigDirName } from "@veyyon/utils/config-root";
+import { refreshDirsFromEnv } from "@veyyon/utils/dirs";
 
 // Clean break: only VEYYON_CONFIG_DIR is honored. The pre-rebrand OMP_/PI_
 // aliases are dropped — setting them must have no effect on the config dir name.

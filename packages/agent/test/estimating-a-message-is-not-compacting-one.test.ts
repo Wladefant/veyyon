@@ -188,9 +188,15 @@ const PRUNING_CEILING = 197;
  * `ai/prompts/tool-choice/named.md`, the request text that asks for a tool call a wire cannot force,
  * which `ai/prompts/registry.ts`, already on the engine's reach, registers. They import nothing, so the
  * growth is those two files and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 316, remote summarizer 103. The new modules are `utils/config-root.ts`,
+ * `utils/global-config.ts` and `utils/global-config-write.ts`, split out of `utils/dirs.ts` with no code
+ * added. The engine reaches all three through the `@veyyon/utils` barrel and the remote summarizer the
+ * first two through `@veyyon/utils/dirs`; every module they import was already on both reaches, so the
+ * growth is those files and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 313;
-const REMOTE_SUMMARIZER_CEILING = 101;
+const COMPACTION_ENGINE_CEILING = 316;
+const REMOTE_SUMMARIZER_CEILING = 103;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {

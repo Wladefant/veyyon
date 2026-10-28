@@ -20,7 +20,7 @@ import { createAcpSessionFactory } from "@veyyon/coding-agent/main";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
 import { TempDir } from "@veyyon/utils";
-import { CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
+import { CONFIG_DIR_NAME } from "@veyyon/utils/config-root";
 
 describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 	it("forces enableMCP=false even when baseOptions opts in", async () => {

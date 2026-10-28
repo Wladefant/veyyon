@@ -53,7 +53,7 @@ import {
 	machineWrittenBytes,
 	resetMachineWriteTally,
 } from "@veyyon/kernel/session/machine-budget";
-import { GLOBAL_RESOURCE_LIMITS } from "@veyyon/utils/dirs";
+import { GLOBAL_RESOURCE_LIMITS } from "@veyyon/utils/global-config";
 import * as YAML from "yaml";
 import { makeCgroupRoot, makeDelegatedParent, makeFakeHost, removeCgroupRoots } from "./helpers/fake-cgroup";
 

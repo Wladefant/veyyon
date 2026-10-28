@@ -3,12 +3,12 @@ import { mkdtempSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getConfigDirName } from "@veyyon/utils/config-root";
 import {
 	__resetDirsFromEnvForTests,
 	APP_NAME,
 	getActiveProfile,
 	getAuthBrokerSnapshotCachePath,
-	getConfigDirName,
 	getDocumentConversionCacheDir,
 	getGithubCacheDbPath,
 	getProfileRootDir,

@@ -116,9 +116,10 @@ export const SANDBOX_ENTRYPOINT = "bash scripts/test-sandbox/run.sh";
 /**
  * The config-root directory name, spelled here rather than imported.
  *
- * `CONFIG_DIR_NAME` lives in `packages/utils/src/dirs.ts`, and `dirs.ts` is precisely
- * the module that must not be evaluated before this gate has decided: it resolves and
- * caches every veyyon path at module load, from the home this gate has not yet cleared.
+ * `CONFIG_DIR_NAME` lives in `packages/utils/src/config-root.ts`, which applies `$HOME/.env`
+ * as it loads, and `dirs.ts` imports it and resolves and caches every veyyon path at module
+ * load. Neither may be evaluated before this gate has decided, from a home it has not yet
+ * cleared.
  * A four-character literal is the cheaper of the two couplings, and
  * `sandbox-gate-contracts.test.ts` asserts the two spellings agree.
  */

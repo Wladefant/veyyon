@@ -16,6 +16,7 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - `privateTempDirName(uid)` in `@veyyon/utils/app-identity` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
 - A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
+- The config root, the global `config.yml` reader and its writer moved out of `@veyyon/utils/dirs` into `@veyyon/utils/config-root`, `@veyyon/utils/global-config` and `@veyyon/utils/global-config-write`, the path-comparison helpers into `@veyyon/utils/path` and `pickProcessEnv` into `@veyyon/utils/dir-env-keys`; the `@veyyon/utils` entry point exports every moved name, and a deep import of one from `@veyyon/utils/dirs` imports it from its new module instead.
 
 ### Fixed
 

@@ -6,16 +6,15 @@ import {
 	getGlobalConfigRootDir,
 	getGlobalSubagentsDir,
 	getSharedAuthDir,
-	migrateLegacyDefaultProfileLayout,
-	profileEnvIsSet,
+	SUBAGENTS_DIR_NAME,
+} from "@veyyon/utils/config-root";
+import { migrateLegacyDefaultProfileLayout, profileEnvIsSet, resolveStartupProfile } from "@veyyon/utils/dirs";
+import {
 	readGlobalProfileSharingSafe,
 	resolveGlobalDefaultProfile,
 	resolveGlobalProfileSharing,
-	resolveStartupProfile,
-	SUBAGENTS_DIR_NAME,
-	writeGlobalDefaultProfile,
-	writeGlobalProfileSharing,
-} from "@veyyon/utils/dirs";
+} from "@veyyon/utils/global-config";
+import { writeGlobalDefaultProfile, writeGlobalProfileSharing } from "@veyyon/utils/global-config-write";
 import { Snowflake } from "@veyyon/utils/snowflake";
 
 const PROFILE_ENV_KEYS = ["VEYYON_PROFILE"] as const;
