@@ -2350,7 +2350,11 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	#recordUndoState(): void {
 		if (this.#suspendUndo) return;
-		this.#undoStack.push(structuredClone(this.#state));
+		// Lines are immutable strings, so a fresh array of the same strings is a full snapshot: an
+		// edit replaces or splices `#state.lines`, never a string inside it. A deep clone copied every
+		// line's characters on each undo step, which made a keystroke cost the size of the draft.
+		const { lines, cursorLine, cursorCol } = this.#state;
+		this.#undoStack.push({ lines: lines.slice(), cursorLine, cursorCol });
 		if (this.#undoStack.length > MAX_UNDO_STACK) {
 			this.#undoStack.shift();
 		}
