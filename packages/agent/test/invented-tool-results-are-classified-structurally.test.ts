@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { collectPackageSources, PACKAGES_DIR } from "../../utils/test/support/package-sources";
-import { loopSource, preparationSource, unionMembers } from "./support/invented-tool-result-sources";
+import { prepareToolCall } from "../src/tool-call-preparation";
+import { loopSource, unionMembers } from "./support/invented-tool-result-sources";
 
 /**
  * Structural lock on one mistake class: classifying a tool result by matching its
@@ -191,47 +192,44 @@ describe("invented tool results are classified structurally", () => {
 		expect(inlineSeen.sort()).toEqual(Object.keys(INLINE_RESULT_SITES).sort());
 	});
 
-	/**
-	 * The text of every rejection `prepareToolCall` returns, declared by the
-	 * expression that supplies it. Each is the cause's own message: the missing
-	 * tool's name and the tools that exist, the repairer's reason and hints, the
-	 * schema's verdict, the transform's error. A Cursor exec-channel call answers a
-	 * rejection with the same text, so this covers it as well.
-	 */
-	const REJECTION_TEXTS: Readonly<Record<string, string>> = {
-		"new AIError.ToolNotFoundError(": "names the tool the model called and the tools it could have called",
-		"unrepairableArgumentsText(outcome)": "argument repair gave up; the text is the repairer's own reason",
-		"errorMessage(validationError)": "schema validation refused the payload",
-		"errorMessage(transformError)": "the argument transform threw",
-	};
 
-	it("every call prepareToolCall rejects carries text derived from its cause", async () => {
-		const source = await preparationSource();
-		// One constructor builds every rejection, so the sweep below sees all of them. The
-		// pattern is an object literal opening on the field; the interface declares it as `readonly`.
-		expect(source.match(/\{\s*ok: false\b/g)).toHaveLength(1);
-		const offenders: string[] = [];
-		const seen: string[] = [];
-		for (let at = source.indexOf("rejected("); at !== -1; at = source.indexOf("rejected(", at + 1)) {
-			if (/[\w$]/.test(source[at - 1] ?? "")) continue;
-			const head = (callArguments(source, at + "rejected".length)[0] ?? "").trim();
-			const declared = Object.keys(REJECTION_TEXTS).filter(marker => head.startsWith(marker));
-			if (declared.length === 1) seen.push(declared[0]);
-			else offenders.push(`rejection with no recorded cause: ${head.split("\n")[0]}`);
-		}
-		expect(offenders).toEqual([]);
-		expect(seen.sort()).toEqual(Object.keys(REJECTION_TEXTS).sort());
+	it("preparation rejections carry the cause-specific error text", () => {
+		const missing = prepareToolCall(
+			undefined,
+			{ id: "call-1", name: "missing_tool", arguments: {} } as never,
+			{},
+			[{ name: "read_file" }, { name: "write_file" }] as never,
+		);
+		expect(missing.ok).toBe(false);
+		if (missing.ok) throw new Error("missing tool was prepared for execution");
+		expect(missing.error).toContain("missing_tool");
+		expect(missing.error).toContain("read_file");
+		expect(missing.error).toContain("write_file");
+
+		const tool = { name: "read_file", parameters: {} } as never;
+		const call = { id: "call-2", name: "read_file", arguments: {} } as never;
+		const unrepairable = prepareToolCall(tool, call, {
+			repairToolCallArguments: () => ({ status: "unrepairable", reason: "repair reason", hints: ["repair hint"] }),
+		} as never);
+		expect(unrepairable.ok).toBe(false);
+		if (unrepairable.ok) throw new Error("unrepairable arguments were prepared for execution");
+		expect(unrepairable.error).toContain("repair reason");
+		expect(unrepairable.error).toContain("repair hint");
+
+		const invalid = prepareToolCall(tool, call, {});
+		expect(invalid.ok).toBe(false);
+		if (invalid.ok) throw new Error("invalid arguments were prepared for execution");
+		expect(invalid.error.length).toBeGreaterThan(0);
+
+		const transformed = prepareToolCall(tool, call, {
+			transformToolCallArguments: () => {
+				throw new Error("transform cause");
+			},
+		} as never);
+		expect(transformed.ok).toBe(false);
+		if (transformed.ok) throw new Error("transform failure was prepared for execution");
+		expect(transformed.error).toContain("transform cause");
 	});
-
-	/**
-	 * The source unions, read out of the source at run time. Adding a skip reason or
-	 * an assistant-stop source without deciding what it means here is the exact
-	 * shape of the original defect, so it fails until a decision is recorded.
-	 *
-	 * The recorded decision is the mapping each constructor performs. Both tables
-	 * are checked against the declared unions in both directions, so neither an
-	 * unmapped member nor a mapping to a member that no longer exists survives.
-	 */
 	it("every declared skip source is mapped to a details source", async () => {
 		const source = await loopSource();
 		const declared = await unionMembers(source, "SkippedToolResultDetails", "source");
