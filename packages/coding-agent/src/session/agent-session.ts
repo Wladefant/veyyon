@@ -32,6 +32,7 @@ import {
 	type StreamFn,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	type ThinkingLevel,
+	ToolAdmissionFatalError,
 	type ToolChoiceDirective,
 } from "@veyyon/agent-core";
 import {
@@ -4968,10 +4969,16 @@ export class AgentSession {
 					if (this.sessionManager.getSessionId() !== cloudSessionId) {
 						await this.#cloudOwnership!.close();
 						if (ownershipMarker)
-							throw new Error("Transferred session identity changed; tool admission is blocked");
+							throw new ToolAdmissionFatalError("Transferred session identity changed; tool admission is blocked");
 						return previous?.(context, signal);
 					}
-					await this.#cloudOwnership!.admit();
+					try {
+						await this.#cloudOwnership!.admit();
+					} catch (error) {
+						// Without write authority every later call fails the same way; end the run instead of letting the
+						// model re-sample against a fence it cannot lift.
+						throw new ToolAdmissionFatalError(errorMessage(error), { cause: error });
+					}
 					return previous?.(context, signal);
 				};
 				this.#listenerReleases.push(() => {
