@@ -472,6 +472,53 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	});
 
+	// WHY: an invalid or mismatched push occurrence used to throw in the stream processor, which cancelled the stream and
+	// reopened it at the same cursor, so the server resent the frame and the subscription never advanced (#718).
+	// Gap: a malformed cursor on a frame still fails the frame, as the test above pins.
+	it("drops a mismatched push occurrence, advances its cursor and keeps the stream open for the next frame", async () => {
+		const firstStreamOpened = Promise.withResolvers<void>();
+		const server = fakeMcpServer({
+			delivery: "push",
+			onStream(_controller, _streamId, ordinal) {
+				if (ordinal === 1) firstStreamOpened.resolve();
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const received: string[] = [];
+		const cursors: Array<string | null> = [];
+		const goodDelivered = Promise.withResolvers<void>();
+		manager.setOnEvent((_name, occurrence) => {
+			received.push(occurrence.eventId);
+			goodDelivered.resolve();
+			return "queued";
+		});
+		manager.setOnEventCursor((_name, _key, cursor) => { cursors.push(cursor); });
+		vi.useFakeTimers();
+		try {
+			await connect(manager, "mismatch-push-server", managerConfig(server, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+			}));
+			await firstStreamOpened.promise;
+			const stream = server.requests.find(request => request.method === "events/stream");
+			const controller = server.streamControllers[0]!;
+			emitStreamNotification(controller, stream!.id!, "notifications/events/event", {
+				...event("mismatched", "cursor-bad"),
+				name: "other/unsubscribed-event",
+			});
+			emitStreamNotification(controller, stream!.id!, "notifications/events/event", event("valid-1", "cursor-ok"));
+			await goodDelivered.promise;
+			await advanceTimers(5_000);
+			expect(received).toEqual(["valid-1"]);
+			expect(cursors).toEqual(["cursor-bad", "cursor-ok"]);
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(1);
+		} finally {
+			await manager.stopEvents();
+			server.stop();
+			vi.useRealTimers();
+		}
+	});
+
 
 	it("answers webhook challenges before subscribing, refreshes, and unsubscribes on stop", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });

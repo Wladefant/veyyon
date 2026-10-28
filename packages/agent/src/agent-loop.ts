@@ -185,6 +185,16 @@ export function createToolScopedAbortReason(
 export const TERMINAL_TOOL_RESULT_ABORT_REASON = Symbol.for("pi-agent-core.terminal-tool-result");
 
 /**
+ * Thrown by `beforeToolCall` when a call can never be admitted for the rest of the run, such as a lost lease on a
+ * session another node now owns. Any other throw there is a per-call failure the model reads and may recover from;
+ * this one ends the run once the batch's results are recorded, without sampling another turn, because every further
+ * call would hit the same fence and the model would loop on it.
+ */
+export class ToolAdmissionFatalError extends Error {
+	override readonly name = "ToolAdmissionFatalError";
+}
+
+/**
  * Cadence (ms) for polling queued steering while an `interruptible` tool is in
  * flight, so a steer cuts the wait short instead of sitting idle until the
  * tool's own window elapses. A cheap synchronous queue check; latency-bounded
@@ -790,6 +800,8 @@ interface LoopState {
 	hostToolChoice: ToolChoice | undefined;
 	softRequiredTool: string | undefined;
 	directiveResolvedForTurn: boolean;
+	/** A tool call hit a {@link ToolAdmissionFatalError}: the run ends after this turn's results, with no further sample. */
+	endsRun: boolean;
 }
 
 /** Abort at `deadline`: the signal the run observes, and the timer to clear when the run ends. */
@@ -867,6 +879,7 @@ async function driveLoop(run: LoopRun): Promise<void> {
 		hostToolChoice: undefined,
 		softRequiredTool: undefined,
 		directiveResolvedForTurn: false,
+		endsRun: false,
 	};
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
@@ -934,6 +947,10 @@ async function runTurn(run: LoopRun, state: LoopState): Promise<boolean> {
 	await emitTurnEnd(run.stream, run.context, message, toolResults, run.config, run.signal, {
 		willContinue: state.hasMoreToolCalls && !isDeadlineExceeded(run.config.deadline),
 	});
+	if (state.endsRun) {
+		endAgentStream(run.stream, run.newMessages, run.telemetry, run.stepCounter.count);
+		return true;
+	}
 	if (endIfDeadlinePassed(run)) return true;
 	state.pendingMessages = await nextTurnMessages(run, state.hasMoreToolCalls);
 	return false;
@@ -1178,7 +1195,12 @@ async function dispatchTurnToolCalls(
 	}
 	if (toolCalls.length === 0) return false;
 	if (runnableStop && !deadlinePassed) {
-		for (const result of await executeToolCalls(run, message)) appendToolResult(run, toolResults, result);
+		const batch = await executeToolCalls(run, message);
+		for (const result of batch.results) appendToolResult(run, toolResults, result);
+		if (batch.endsRun) {
+			state.endsRun = true;
+			return false;
+		}
 		return true;
 	}
 	// Turn ended on a non-runnable reason (`length` truncation) or deadline was exceeded
@@ -2326,6 +2348,11 @@ class ToolBatch {
 	readonly #emitted: ToolResultMessage[] = [];
 	/** What interrupted the batch; `undefined` until steering or a peer IRC interrupt does. */
 	#interruptSource: SteeringInterruptSource | "irc" | undefined;
+	/** A call's `beforeToolCall` threw {@link ToolAdmissionFatalError}. */
+	#endsRun = false;
+	get endsRun(): boolean {
+		return this.#endsRun;
+	}
 
 	constructor(run: LoopRun, assistantMessage: AssistantMessage) {
 		this.#context = run.context;
@@ -2634,6 +2661,7 @@ class ToolBatch {
 			outcome.isError = coerced.malformed || coerced.result.isError === true;
 		} catch (e) {
 			outcome.caughtError = e;
+			if (e instanceof ToolAdmissionFatalError) this.#endsRun = true;
 			outcome.result = { content: [{ type: "text", text: errorMessage(e) }], details: {} };
 			outcome.isError = true;
 		}
@@ -2821,7 +2849,10 @@ class ToolBatch {
 /**
  * Execute tool calls from an assistant message, returning their results in the order they were emitted.
  */
-async function executeToolCalls(run: LoopRun, assistantMessage: AssistantMessage): Promise<ToolResultMessage[]> {
+async function executeToolCalls(
+	run: LoopRun,
+	assistantMessage: AssistantMessage,
+): Promise<{ results: ToolResultMessage[]; endsRun: boolean }> {
 	const batch = new ToolBatch(run, assistantMessage);
 	const tasks = batch.schedule();
 	// While an interruptible tool is in flight (e.g. a `job`/`irc` wait blocking on external work), queued steering or
@@ -2837,7 +2868,7 @@ async function executeToolCalls(run: LoopRun, assistantMessage: AssistantMessage
 	}
 	// Hand the event loop a turn after the batch so I/O the tools queued, such as large results, is serviced first.
 	await yieldIfDue();
-	return batch.answerUnresolved();
+	return { results: batch.answerUnresolved(), endsRun: batch.endsRun };
 }
 
 /**

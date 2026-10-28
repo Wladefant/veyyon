@@ -7,10 +7,13 @@
 - Added owner-local terminal-control credential rotation without restarting the terminal or active turn.
 
 ### Fixed
+- MCP push event streams now skip a frame with an invalid or mismatched occurrence and advance past its cursor instead of cancelling and replaying the same frame forever ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Restored launch request replay, idle socket cleanup, recovery quarantine, and file-search test injection after upstream conflict resolution.
+- Tool admission on a synchronized cloud session ends the run when write authority is lost, instead of letting the model re-sample against the fence; every admission throw, including a transient `assertWritable` failure, now ends the run (fail closed) ([Refs #715](https://github.com/Wladefant/veyyon/issues/715)).
 - Plan mode stays on, with its plan tools and plan model, when restoring the pre-plan model or tools fails during exit.
 - Migrated tests off the removed model-roles settings API to `defaultModel` and `agent.helpers`, deleted the role-table tests whose contract no longer exists, and moved fetch-timeout to `withScopedTimeoutSignal` ([Refs #707](https://github.com/Wladefant/veyyon/issues/707)).
 - `/reload-config` reloads advisor models from `agent.helpers` without rebinding Main or existing workers.
+- `/reload-config` also applies the compaction settings; every other setting outside spawn routing still requires a restart ([Refs #685](https://github.com/Wladefant/veyyon/issues/685)).
 - Shell and Python/JS eval withhold recognizable credential records before live output and backing artifacts, and redact known secret values ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Python eval refuses Windows signal-zero process probes and checks KV lock owners through non-signaling process handles ([issue](https://github.com/Wladefant/veyyon/issues/73)).
 - Task and qa-verifier spawns preserve configured model priority instead of reordering Luna and Flash by spawn identity ([Refs #692](https://github.com/Wladefant/veyyon/issues/692)).
@@ -41,7 +44,8 @@
 - Session cwd changes leave the shared process directory unchanged and load plugin configuration from each session's destination project ([issue](https://github.com/Wladefant/veyyon/issues/529)).
 - Quota refusals block the failed request's credential, not a healthy account selected by a later resolver call ([PR](https://github.com/Wladefant/veyyon/pull/619)).
 - Automatic lane handoff reserves the summary model's full output limit, including reasoning, before selection. The request sends the same limit ([issue](https://github.com/Wladefant/veyyon/issues/552)).
-- Extension browser sessions reuse their exact connect tab and remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
+- Extension browser sessions close the connect tab they opened, by tab id, once the first browser tab is attached. A reused operator Chrome and its other tabs stay untouched ([PR](https://github.com/Wladefant/veyyon/pull/644)).
+- Extension browser sessions remove pages created by failed opens. Closing a tab removes it before the extension can disconnect ([issue](https://github.com/Wladefant/veyyon/issues/548)).
 - A browser returned by `acquireBrowser` carries a lease its caller releases, so one session's release can no longer close a browser another session has just reused.
 - Session factory callback typing and mixed native actor rosters now pass the workspace type check ([Refs](https://github.com/Wladefant/veyyon/issues/569)).
 - MCP event notices remain queued after prompt rejection and are fsynced with their durable prompt receipt before delivery is acknowledged ([Refs Wladefant/veyyon#592](https://github.com/Wladefant/veyyon/issues/592)).
@@ -53,6 +57,8 @@
 
 
 - Restored model selectors and assigned browser and bash helpers to their owning modules.
+- A lazily created session with no file yet no longer fails the first prompt with ENOENT when its checkpoint ownership marker is checked ([Refs #716](https://github.com/Wladefant/veyyon/issues/716)).
+- Terminal-control delivery journals each operator answer by question id before injecting it, drops a replay of a consumed question (also after a restart) with a `DUPLICATE-ANSWER` log line, and re-injects an answer journaled but not yet injected after a crash ([Refs #668](https://github.com/Wladefant/veyyon/issues/668)).
 ### Changed
 
 - `/reload-config` and `/reload` re-read rule layers and skills without restarting the session. The summary lists added, changed, and removed paths. Unreadable files keep the last good snapshot, and unchanged rules keep the existing advisor ([issue](https://github.com/Wladefant/veyyon/issues/577)).
