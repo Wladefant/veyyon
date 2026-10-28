@@ -4,7 +4,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entries";
 import { TempDir } from "@veyyon/utils";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup

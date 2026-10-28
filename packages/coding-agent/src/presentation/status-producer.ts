@@ -12,7 +12,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { AssistantMessage, UsageLimit, UsageReport } from "@veyyon/ai";
 import type { OAuthAccountIdentity } from "@veyyon/ai/auth-storage";
-import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entries";
 import { asRecord } from "@veyyon/utils/type-guards";
 import type {
 	SessionFacts,

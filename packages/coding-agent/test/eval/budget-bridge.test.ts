@@ -3,7 +3,7 @@ import { runEvalBudget } from "@veyyon/coding-agent/eval/budget-bridge";
 import type { Goal, GoalModeState } from "@veyyon/coding-agent/goals/state";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
-import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entry-index";
+import { emptyUsageStatistics } from "@veyyon/kernel/session/session-entries";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
