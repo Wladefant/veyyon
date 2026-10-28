@@ -42,7 +42,6 @@ import type { ToolViewRenderer } from "@veyyon/view";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
 import type { ModelRegistry } from "../../config/model-registry";
-import type { EditToolDetails } from "../../edit";
 import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -51,15 +50,7 @@ import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { MemoryRuntimeContext } from "../../memory/backend";
 import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
 import type { Theme } from "../../theme/theme";
-import type {
-	BashToolDetails,
-	BashToolInput,
-	ReadToolDetails,
-	ReadToolInput,
-	SearchToolDetails,
-	SearchToolInput,
-	WriteToolInput,
-} from "../../tools";
+import type { BashToolInput, ReadToolInput, SearchToolInput, WriteToolInput } from "../../tools";
 import type { ApprovalMode } from "../../tools/core/approval";
 import type { EventBus } from "../../utils/event-bus";
 import type {
@@ -92,6 +83,7 @@ import type {
 	SessionTreeEvent,
 	TodoReminderEvent,
 	ToolCallEventResult,
+	ToolResultEvent,
 	ToolResultEventResult,
 	TtsrTriggeredEvent,
 	TurnEndEvent,
@@ -832,52 +824,15 @@ export type ToolCallEvent =
 	| SearchToolCallEvent
 	| CustomToolCallEvent;
 
-interface ToolResultEventBase {
-	type: "tool_result";
-	toolCallId: string;
-	input: Record<string, unknown>;
-	content: (TextContent | ImageContent)[];
-	isError: boolean;
-}
-
-export interface BashToolResultEvent extends ToolResultEventBase {
-	toolName: "bash";
-	details: BashToolDetails | undefined;
-}
-
-export interface ReadToolResultEvent extends ToolResultEventBase {
-	toolName: "read";
-	details: ReadToolDetails | undefined;
-}
-
-export interface EditToolResultEvent extends ToolResultEventBase {
-	toolName: "edit";
-	details: EditToolDetails | undefined;
-}
-
-export interface WriteToolResultEvent extends ToolResultEventBase {
-	toolName: "write";
-	details: undefined;
-}
-
-export interface SearchToolResultEvent extends ToolResultEventBase {
-	toolName: "search";
-	details: SearchToolDetails | undefined;
-}
-
-export interface CustomToolResultEvent extends ToolResultEventBase {
-	toolName: string;
-	details: unknown;
-}
-
-/** Fired after a tool executes. Can modify result. */
-export type ToolResultEvent =
-	| BashToolResultEvent
-	| ReadToolResultEvent
-	| EditToolResultEvent
-	| WriteToolResultEvent
-	| SearchToolResultEvent
-	| CustomToolResultEvent;
+export type {
+	BashToolResultEvent,
+	CustomToolResultEvent,
+	EditToolResultEvent,
+	ReadToolResultEvent,
+	SearchToolResultEvent,
+	ToolResultEvent,
+	WriteToolResultEvent,
+} from "../shared-events";
 
 /**
  * Type guard for narrowing ToolCallEvent by tool name.
