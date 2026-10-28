@@ -5,23 +5,17 @@
  * Runs in its own process: the measurement reads the whole heap, and in a test runner process the
  * files run before it leave garbage that dies or stays alive across the window.
  */
-import { heapStats } from "bun:jsc";
 import type { Message } from "@veyyon/ai";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem } from "@veyyon/utils";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export interface PersistenceIndexHeap {
 	/** Messages on the branch the index covers. */
 	messages: number;
 	/** Heap and external bytes the built index retains over the session it indexes. */
 	retained: number;
-}
-
-function retained(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
 }
 
 /** A logged message per index, cycling through the roles a key covers, each with a provider-length id. */
@@ -77,9 +71,9 @@ function measure(count: number): PersistenceIndexHeap {
 	const warm = session(count);
 	if (warm.persistence.alreadyPersisted(probe)) throw new Error("the probe is not on the warm-up branch");
 	const measured = session(count);
-	const before = retained();
+	const before = liveHeapBytes();
 	if (measured.persistence.alreadyPersisted(probe)) throw new Error("the probe is not on the measured branch");
-	const grown = retained() - before;
+	const grown = liveHeapBytes() - before;
 	// Both sessions stay reachable until both readings are taken.
 	if (warm.store.getBranch().length !== count || measured.store.getBranch().length !== count) {
 		throw new Error("a session lost an entry");

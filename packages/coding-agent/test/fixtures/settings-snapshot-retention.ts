@@ -6,8 +6,8 @@
  *
  * Every arm runs once before it is measured, so no arm pays for code the others compiled first.
  */
-import { heapStats } from "bun:jsc";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export const STORES = 200;
 
@@ -22,12 +22,6 @@ export interface SnapshotRetention {
 
 type Arm = (store: Settings) => void;
 
-function live(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
-}
-
 let paths: string[] = [];
 const arms: Record<"idle" | "snapshot" | "everyPath", Arm> = {
 	idle: () => {},
@@ -41,13 +35,13 @@ const arms: Record<"idle" | "snapshot" | "everyPath", Arm> = {
 
 function perStore(arm: Arm): number {
 	const stores: Settings[] = [];
-	const before = live();
+	const before = liveHeapBytes();
 	for (let i = 0; i < STORES; i++) {
 		const store = Settings.isolated();
 		arm(store);
 		stores.push(store);
 	}
-	const after = live();
+	const after = liveHeapBytes();
 	if (stores.length !== STORES) throw new Error("a store was dropped before it was measured");
 	return (after - before) / STORES;
 }

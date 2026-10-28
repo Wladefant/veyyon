@@ -6,10 +6,10 @@
  * Five loads run before the measurement, so the measured loads pay for nothing a first load
  * compiles or caches for the process.
  */
-import { heapStats } from "bun:jsc";
 import { buildBuiltinRules } from "@veyyon/coding-agent/discovery/builtin-defaults";
 import { bucketRules } from "@veyyon/coding-agent/discovery/capability/rule-buckets";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export const SESSIONS = 200;
 
@@ -18,12 +18,6 @@ export interface BundledRuleRetention {
 	registered: number;
 	/** Bytes each load left live. */
 	perSession: number;
-}
-
-function live(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
 }
 
 const loads: unknown[] = [];
@@ -35,10 +29,10 @@ function load(): number {
 }
 
 for (let i = 0; i < 5; i++) load();
-const before = live();
+const before = liveHeapBytes();
 let registered = 0;
 for (let i = 0; i < SESSIONS; i++) registered = load();
-const after = live();
+const after = liveHeapBytes();
 
 const result: BundledRuleRetention = { registered, perSession: (after - before) / SESSIONS };
 process.stdout.write(JSON.stringify(result));

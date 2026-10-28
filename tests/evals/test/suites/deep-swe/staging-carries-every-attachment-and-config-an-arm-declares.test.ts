@@ -20,15 +20,10 @@ import {
 	ARM_ATTACHMENT_MANIFEST_FILE,
 	type ArmAttachmentManifest,
 } from "../../../engine/harness/arm-attachments";
-import { internalScratchDir } from "../../../engine/package-paths";
 import { knownPromptIds } from "../../../engine/plan/prompt-overrides";
 import { stageAllArms } from "../../../suites/deep-swe/runner/arm-staging";
+import { createScratchDir } from "../../scratch-dir";
 
-function createScratchDir(prefix: string): string {
-	const base = internalScratchDir();
-	fs.mkdirSync(base, { recursive: true });
-	return fs.mkdtempSync(path.join(base, prefix));
-}
 describe("DeepSWE Unified Staging — carries all arm attachments and configs matching legacy contract", () => {
 	it("stages arm YAML configs and generates valid attachments.json manifest", () => {
 		const scratch = createScratchDir("deepswe-staging-test-");

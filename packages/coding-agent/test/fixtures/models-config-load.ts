@@ -7,8 +7,8 @@
  * of the process, so a load that builds the models-config validator registers hundreds of nodes and
  * a load served from the accepted-value snapshot registers none.
  */
-import { heapStats } from "bun:jsc";
 import { ModelsConfigFile } from "@veyyon/coding-agent/config/models-config";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export interface ModelsConfigLoad {
 	status: string;
@@ -26,17 +26,11 @@ function registeredNodeCount(): number {
 	return registry?.nodesByRegisteredId ? Object.keys(registry.nodesByRegisteredId).length : 0;
 }
 
-function live(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
-}
-
 const file = ModelsConfigFile.relocate(process.argv[2]);
 const nodesBefore = registeredNodeCount();
-const before = live();
+const before = liveHeapBytes();
 const result = file.tryLoad();
-const retained = live() - before;
+const retained = liveHeapBytes() - before;
 
 const load: ModelsConfigLoad = {
 	status: result.status,

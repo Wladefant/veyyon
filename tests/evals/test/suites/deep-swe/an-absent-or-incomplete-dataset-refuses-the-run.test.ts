@@ -19,14 +19,8 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { internalScratchDir } from "../../../engine/package-paths";
 import { deepSweSuite } from "../../../suites/deep-swe/main";
-
-function createScratchDir(prefix: string): string {
-	const base = internalScratchDir();
-	fs.mkdirSync(base, { recursive: true });
-	return fs.mkdtempSync(path.join(base, prefix));
-}
+import { createScratchDir } from "../../scratch-dir";
 
 function createFixtureCorpus(
 	rootDir: string,

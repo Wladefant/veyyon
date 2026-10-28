@@ -29,7 +29,6 @@ import * as path from "node:path";
 import { AuthStorage, type CredentialHealthResult } from "@veyyon/ai";
 import type { HarnessAdapter } from "../../../engine/contracts";
 import { harnesses } from "../../../engine/members/loaded";
-import { internalScratchDir } from "../../../engine/package-paths";
 import { stageAllArms } from "../../../suites/deep-swe/runner/arm-staging";
 import {
 	ArmAttachmentError,
@@ -72,12 +71,7 @@ import {
 	requirePierAgentImportPath,
 } from "../../../suites/deep-swe/runner/executor";
 import { requireFile } from "../../../suites/deep-swe/runner/preflight";
-
-function createScratchDir(prefix: string): string {
-	const base = internalScratchDir();
-	fs.mkdirSync(base, { recursive: true });
-	return fs.mkdtempSync(path.join(base, prefix));
-}
+import { createScratchDir } from "../../scratch-dir";
 
 describe("staging and execution failures throw errors and survive process", () => {
 	let tempDir: string;
