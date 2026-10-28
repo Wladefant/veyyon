@@ -7,6 +7,7 @@
 - Added Anthropic prompt-cache telemetry records (`Usage.cacheRequests`) capturing requested TTL, prefix hash, model, and request ID across provider attempts ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 ### Fixed
+- Google Antigravity usage retains daily windows from the model listing when the quota summary names both counters but omits those windows ([issue](https://github.com/Wladefant/veyyon/issues/611)).
 - Extracted request IDs from `AnthropicApiError` instances and response headers in Anthropic stream attempt error handling ([Refs #711](https://github.com/Wladefant/veyyon/pull/711)).
 
 - Auth gateway refuses missing, malformed, wrong and revoked device bearers before provider dispatch. Device tokens can refresh per request ([Refs #602](https://github.com/Wladefant/veyyon/issues/602)).
