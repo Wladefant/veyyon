@@ -10,13 +10,14 @@
  * instead, and building that shape in one place keeps the next change to it from
  * having to be made in four files.
  */
+import { RELEASE_REPOSITORY } from "@veyyon/utils";
 
 /** The endpoint the updater resolves the newest version from. */
-export const LATEST_RELEASE_URL = "https://github.com/santhreal/veyyon/releases/latest";
+export const LATEST_RELEASE_URL = `https://github.com/${RELEASE_REPOSITORY}/releases/latest`;
 
 /** Where a redirect for `tag` points. Exported so tests can assert on it. */
 export function releaseTagUrl(tag: string): string {
-	return `https://github.com/santhreal/veyyon/releases/tag/${tag}`;
+	return `https://github.com/${RELEASE_REPOSITORY}/releases/tag/${tag}`;
 }
 
 /**
