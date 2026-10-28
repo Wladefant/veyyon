@@ -120,6 +120,46 @@ describe("agent runtime model resolution", () => {
 		expect(result.resolvedModel).toBe("fallback/working-model");
 	});
 
+	it.each([{ tail: [] }, { tail: ["missing/unavailable-model"] }])("keeps the child boundary when no later candidate resolves (%j)", async ({ tail }) => {
+		const primary = model("primary", "only-model");
+		let childFallbackKey: string | undefined;
+		let childFallbackChains: Record<string, string[]> | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			if (!options) throw new Error("Expected createAgentSession options");
+			childFallbackKey = options.modelPatternFallbackKey;
+			childFallbackChains = options.settings?.get("retry.fallbackChains") as Record<string, string[]> | undefined;
+			return {
+				session: createYieldingSession(),
+				extensionsResult: {},
+				setToolUIContext: () => {},
+				setToolNotifier: () => {},
+			} as never;
+		});
+		const settings = Settings.isolated({
+			"retry.modelFallback": true,
+			"retry.fallbackChains": { "primary/*": ["global/inherited-model"] },
+		});
+		await runSubprocess({
+			cwd: "/tmp",
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+			task: "work",
+			index: 0,
+			id: "closed-child-chain",
+			modelOverride: ["primary/only-model", ...tail],
+			settings,
+			modelRegistry: {
+				refresh: async () => {},
+				getAvailable: () => [primary],
+				getApiKey: async () => "test-key",
+			} as never,
+			enableLsp: false,
+			artifactsDir: isolatedArtifactsDir(),
+		});
+		expect(childFallbackKey).toBe("primary/only-model");
+		expect(childFallbackChains?.["primary/only-model"]).toEqual([]);
+		expect(settings.get("retry.fallbackChains")).toEqual({ "primary/*": ["global/inherited-model"] });
+	});
+
 	it("preserves upstream routing selectors in the child retry fallback chain", async () => {
 		const routedModel = model("openrouter", "z-ai/glm-4.7");
 		let childFallbackChains: Record<string, string[]> | undefined;
