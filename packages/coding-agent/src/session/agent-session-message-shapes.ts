@@ -5,10 +5,15 @@
  */
 
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, TextContent } from "@veyyon/ai";
 import { getStringProperty, isRecord } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import type { TitleConversationTurn } from "../tiny/message-preproc";
+
+/** A custom message's text: a string as is, a block list as its text blocks joined by a newline. */
+export function customMessageContentText(content: string | (TextContent | ImageContent)[]): string {
+	return contentText(content);
+}
 
 export function stringProperty(value: object, key: string): string | undefined {
 	const field = Object.getOwnPropertyDescriptor(value, key)?.value;

@@ -18,6 +18,7 @@ import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import {
+	customMessageContentText,
 	findLastAssistantMessage,
 	lastCopyCandidateAssistantMessage,
 	sanitizeAssistantForReparentedHistory,
@@ -32,6 +33,18 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 }
 
 describe("a message shape reader tolerates the content it is handed", () => {
+	it("reads a custom message's text from a string and from a block list, dropping images", () => {
+		expect(customMessageContentText("plain")).toBe("plain");
+		expect(
+			customMessageContentText([
+				{ type: "text", text: "first" },
+				{ type: "image", data: "AAAA", mimeType: "image/png" },
+				{ type: "text", text: "second" },
+			]),
+		).toBe("first\nsecond");
+		expect(customMessageContentText([])).toBe("");
+	});
+
 	it("reads only own string properties, so a prototype field is not a value", () => {
 		expect(stringProperty({ path: "/repo/src/app.ts" }, "path")).toBe("/repo/src/app.ts");
 		expect(stringProperty({ path: 7 }, "path")).toBeUndefined();
