@@ -74,7 +74,7 @@ describe("atomicWriteFile", () => {
 			await enteredRename.promise;
 			const exitCleanup = process.listeners("exit").find(listener => listener.name === "removePendingTemps");
 			expect(exitCleanup).toBeDefined();
-			exitCleanup?.();
+			exitCleanup?.(0);
 			expect(tempSiblings(target)).toEqual([]);
 		} finally {
 			resumeRename.resolve();
