@@ -144,8 +144,8 @@ export type {
 	MCPManager,
 	MCPServerConfig,
 	MCPServerConnection,
-	MCPServerEventsConfig,
 	MCPServerEventSubscriptionConfig,
+	MCPServerEventsConfig,
 	MCPToolsLoadResult,
 } from "./mcp";
 export type { Tool } from "./tools";

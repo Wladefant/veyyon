@@ -527,7 +527,9 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			expect(prompt).not.toContain("# Tool: mcp__github_create_issue");
 			expect(prompt).not.toContain("# Tool: mcp__slack_post_message");
 			expect(session.getSelectedMCPToolNames()).toEqual(["mcp__linear_create_issue"]);
-			expect(session.sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__linear_create_issue"]);
+			expect(session.sessionManager.buildSessionContext().selectedMCPToolNames).toEqual([
+				"mcp__linear_create_issue",
+			]);
 		} finally {
 			await session.dispose();
 		}
