@@ -25,6 +25,7 @@
 
 ### Changed
 
+- Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
 - A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
 - The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
 - A launch whose extension, command, rule, prompt, tool and hook directories are missing or empty no longer loads the native addon to scan them, so a print-mode turn reaches its first request in 55.9 ms instead of 60.9 ms and exits in 75.0 ms instead of 79.6 ms.
@@ -126,6 +127,7 @@
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 - Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
+- Tool normalization renders a tool's examples against the wire schema it already built instead of converting that schema again; the examples text is unchanged.
 - The tool wire-schema store is a `BuildStore` from `@veyyon/utils/build-store`, created with `createToolWireSchemaStore(build, filePath)`, and a `cache/tool-wire-schemas.json` in the earlier layout is ignored and rewritten; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
