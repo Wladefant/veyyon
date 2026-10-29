@@ -398,23 +398,26 @@ describe("the walk really happened", () => {
 	 * to Anthropic. That reasoning was wrong. The usage client calls one OAuth endpoint with plain `fetch`
 	 * and never touches the streaming engine; it reached `stream.ts` only because it imported a version
 	 * string from the Anthropic provider, and when that string moved to a leaf the control went false while
-	 * nothing was broken. A control has to be a module whose edge is INHERENT, so it is now the Anthropic
-	 * provider itself, which cannot stream a completion without the engine.
+	 * nothing was broken. The Anthropic provider that replaced it had the same flaw: it reached the engine
+	 * only through `mapAnthropicToolChoice`, which the engine declared, and went false when that function
+	 * moved to `providers/anthropic-tool-choice.ts`. A control has to be a module whose edge is INHERENT,
+	 * so it is now the auth gateway server, which answers every request it proxies by calling
+	 * `streamSimple` and `completeSimple`.
 	 */
 	it("still finds stream.ts from a module that legitimately uses it", () => {
-		const reached = reachedNames("providers/anthropic.ts");
+		const reached = reachedNames("auth-gateway/server.ts");
 
 		expect(reached.some(file => file.endsWith("packages/ai/src/stream.ts"))).toBe(true);
 		// The size half of this control used to be `> AUTH_STORAGE_CEILING`, a frozen 227
 		// that described a DIFFERENT module's budget. It went false on 2026-07-27 for the
 		// best possible reason: every barrel import in `packages/ai/src` was repointed at
-		// the module that declares the name, and this provider fell from 253 to 191 without
-		// losing a single edge it needs. A control that fails when the tree gets better is
-		// not measuring what it meant to, so it compares against the module it is a control
-		// FOR: the provider streams and the store does not, so the provider reaches strictly
+		// the module that declares the name, and the Anthropic provider, then the control, fell
+		// from 253 to 191 without losing a single edge it needs. A control that fails when the
+		// tree gets better is not measuring what it meant to, so it compares against the module
+		// it is a control FOR: the gateway streams and the store does not, so the gateway reaches strictly
 		// more, and both numbers are read from the same walk rather than from a constant
 		// that has to be renegotiated every time something is cut.
-		expect(reach("providers/anthropic.ts")).toBeGreaterThan(reach("auth-storage.ts"));
+		expect(reach("auth-gateway/server.ts")).toBeGreaterThan(reach("auth-storage.ts"));
 	});
 
 	/**

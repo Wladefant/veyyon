@@ -53,6 +53,8 @@ const PROVIDERS = path.join(AI_SRC, "providers");
 const LAUNCH_PROVIDER_MODULES = [
 	// The session clears the Anthropic fast-mode fallback when the model changes.
 	"providers/anthropic-session-state.ts",
+	// `stream.ts` maps a request's tool choice onto the Anthropic wire; the module imports only types.
+	"providers/anthropic-tool-choice.ts",
 	// The remote summarizer maps an Azure model id to its deployment name.
 	"providers/azure-deployment-names.ts",
 	// The provider request derives the Claude Code device id header.

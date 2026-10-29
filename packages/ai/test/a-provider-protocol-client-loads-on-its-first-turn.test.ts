@@ -43,6 +43,9 @@ describe("the streaming engine's static import graph", () => {
 			.filter(name => name.endsWith(".ts") && reached.has(path.join(PROVIDERS, name)))
 			.sort();
 		expect(eager).toEqual([
+			// The engine maps a turn's tool choice onto the Anthropic wire before the provider loads; the
+			// module holds that one function and imports only types.
+			"anthropic-tool-choice.ts",
 			// Shared by every provider's error mapping.
 			"error-message.ts",
 			// `isGitLabDuoModel`, `isKimiModel` and `isSyntheticModel` route a turn synchronously, and
