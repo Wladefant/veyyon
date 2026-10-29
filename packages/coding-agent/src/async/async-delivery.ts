@@ -1,4 +1,5 @@
 import { errorMessage, logger } from "@veyyon/utils";
+import { type ProducerSecretOwner } from "../secrets/producer-owner";
 import { truncateMiddle } from "../session/streaming-output";
 import { formatArtifactErrorNotice, type OutputMeta, stripOutputNotice } from "../tools/core/output-meta";
 
@@ -18,11 +19,13 @@ export async function formatAsyncResultForFollowUp(
 	result: string,
 	meta?: OutputMeta,
 	allocator?: ArtifactAllocator,
+	producerSecretOwner?: ProducerSecretOwner,
 ): Promise<string> {
+	const safeResult = producerSecretOwner?.redact(result) ?? result;
 	// Strip the already-rendered source notice before taking the smaller preview,
 	// then retain its capture warning once even when the result is short or the original footer is elided.
 	if (meta?.artifactError) {
-		const body = stripOutputNotice(result, meta).trimEnd();
+		const body = stripOutputNotice(safeResult, meta).trimEnd();
 		const notice = `[${formatArtifactErrorNotice(meta.artifactError)}]`;
 		if (body.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
 			return body ? `${body}\n\n${notice}` : notice;
@@ -31,8 +34,8 @@ export async function formatAsyncResultForFollowUp(
 		return `${preview}\n${notice}`;
 	}
 
-	if (result.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
-		return result;
+	if (safeResult.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
+		return safeResult;
 	}
 
 	// The producing tool's output sink already mirrored the raw stream to an
@@ -41,7 +44,7 @@ export async function formatAsyncResultForFollowUp(
 	// wall time, timeout), so the preview keeps `result`'s tail as well.
 	const rawArtifactId = meta?.truncation?.artifactId ?? meta?.limits?.columnTruncated?.artifactId;
 	if (rawArtifactId) {
-		const headTail = truncateMiddle(result, {
+		const headTail = truncateMiddle(safeResult, {
 			maxBytes: ASYNC_PREVIEW_MAX_CHARS,
 			maxHeadBytes: ASYNC_PREVIEW_MAX_CHARS - ASYNC_PREVIEW_TAIL_CHARS,
 		}).content;
@@ -53,12 +56,12 @@ export async function formatAsyncResultForFollowUp(
 		return `${headTail}\n${label}: artifact://${rawArtifactId}`;
 	}
 
-	const preview = `${result.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
+	const preview = `${safeResult.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
 	if (allocator) {
 		try {
 			const { path: artifactPath, id: artifactId } = await allocator.allocateArtifactPath("async");
 			if (artifactPath && artifactId) {
-				await Bun.write(artifactPath, result);
+				await Bun.write(artifactPath, safeResult);
 				return `${preview}\nFull output: artifact://${artifactId}`;
 			}
 		} catch (error) {

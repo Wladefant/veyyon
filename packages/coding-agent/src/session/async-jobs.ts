@@ -79,7 +79,12 @@ export function createOwnedAsyncJobManager(input: OwnedAsyncJobsInput): AsyncJob
 			const initialTarget = input.target(ownerId);
 			if ((!initialTarget || initialTarget.isDisposed) && !manager.isOwnerDisposed(ownerId))
 				throw new Error(`Async job owner unavailable: ${ownerId ?? "session"}`);
-			const followUp = await formatAsyncResultForFollowUp(result, jobOutputMeta(job), input.sessionManager);
+			const followUp = await formatAsyncResultForFollowUp(
+				result,
+				jobOutputMeta(job),
+				input.sessionManager,
+				job?.producerSecretOwner,
+			);
 			if (manager.isDeliverySuppressed(jobId)) return;
 			const target = input.target(ownerId);
 			if (target && !target.isDisposed) {

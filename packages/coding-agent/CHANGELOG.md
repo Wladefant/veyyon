@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Multiline registered secrets stay redacted or withheld across producer output chunks.
+
 ## [1.6.6] - 2026-10-28
 
 ### Changed
