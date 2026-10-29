@@ -927,12 +927,14 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 						continue;
 					}
 					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
+					const minVersion = client.diagnosticsVersion;
+					// Opened before the project-load wait: tsserver loads no project, and reports no
+					// progress, until one of its files is open.
+					await refreshFile(client, resolved, signal);
 					if (isProjectAwareLspServer(serverConfig)) {
 						await waitForProjectLoaded(client, signal);
 						throwIfAborted(signal);
 					}
-					const minVersion = client.diagnosticsVersion;
-					await refreshFile(client, resolved, signal);
 					const expectedDocumentVersion = client.openFiles.get(uri)?.version;
 					const diagnostics = await waitForDiagnostics(client, uri, {
 						timeoutMs: diagnosticsWaitTimeoutMs,

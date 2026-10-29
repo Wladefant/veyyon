@@ -32,10 +32,25 @@ const fileOperationLocks = new Map<string, Promise<void>>();
 /** Callbacks run on every diagnostics publish a client records, for any document. */
 const diagnosticsPublishListeners = new WeakMap<LspClient, Set<() => void>>();
 
-/** Record a diagnostics publish for `uri` and run every listener {@link onDiagnosticsPublish} registered. */
+/**
+ * Clients whose server has sent work-done progress (`window/workDoneProgress/create` or `$/progress`).
+ * A server outside this set reports no project load, so nothing would ever end its wait in
+ * {@link waitForProjectLoaded} but {@link PROJECT_LOAD_TIMEOUT_MS}.
+ */
+const clientsReportingProgress = new WeakSet<LspClient>();
+
+/** `performance.now()` at each client's first `didOpen`: a server loads its project for an open file. */
+const firstOpenAt = new WeakMap<LspClient, number>();
+
+/**
+ * Record a diagnostics publish for `uri` and run every listener {@link onDiagnosticsPublish} registered.
+ * A publish after the first open from a server that has reported no progress means it has checked the
+ * file without a project load to wait for, so its project counts as loaded.
+ */
 export function recordPublishedDiagnostics(client: LspClient, uri: string, published: PublishedDiagnostics): void {
 	client.diagnostics.set(uri, published);
 	client.diagnosticsVersion += 1;
+	if (firstOpenAt.has(client) && !clientsReportingProgress.has(client)) client.resolveProjectLoaded();
 	const listeners = diagnosticsPublishListeners.get(client);
 	if (!listeners) return;
 	for (const listener of listeners) listener();
@@ -386,6 +401,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 								});
 							} else if (message.method === "$/progress" && message.params) {
 								const params = message.params as { token: string | number; value?: { kind?: string } };
+								clientsReportingProgress.add(client);
 								if (params.value?.kind === "begin") {
 									client.activeProgressTokens.add(params.token);
 								} else if (params.value?.kind === "end") {
@@ -520,6 +536,7 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 	}
 	if (message.method === "window/workDoneProgress/create") {
 		// Accept progress token registration from the server.
+		clientsReportingProgress.add(client);
 		await sendResponse(client, message.id, null, message.method);
 		return;
 	}
@@ -649,6 +666,14 @@ async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSig
 }
 
 const PROJECT_LOAD_TIMEOUT_MS = 15_000;
+
+/**
+ * How long after its first `didOpen` a server that has reported no progress is still waited on. A server
+ * that reports its project load begins within this window (tsserver about 60ms after the open,
+ * rust-analyzer before it); one that never reports would otherwise hold its first project-aware call for
+ * the whole {@link PROJECT_LOAD_TIMEOUT_MS}.
+ */
+const SILENT_SERVER_GRACE_MS = 2_000;
 
 /** Max time to wait for graceful LSP shutdown and process exit. */
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -841,6 +866,7 @@ async function openDocument(
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const languageId = detectLanguageId(filePath);
+	if (!firstOpenAt.has(client)) firstOpenAt.set(client, performance.now());
 	throwIfAborted(signal);
 	await sendNotification(
 		client,
@@ -901,27 +927,32 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
 }
 
 /**
- * Wait for the server's initial project loading to complete.
- * Races the server's $/progress tracking against the abort signal.
- * Returns immediately if loading already completed or timed out.
+ * Wait for the server's initial project loading to complete: until its work-done progress ends, or, for
+ * a server that has reported none, until it publishes diagnostics or {@link SILENT_SERVER_GRACE_MS}
+ * passes after its first `didOpen`. A server loads a project for an open file, so a caller opens the
+ * file first. Returns immediately if loading already completed or timed out, and on abort.
  */
 export async function waitForProjectLoaded(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (signal?.aborted) return;
-	if (!signal) {
-		await client.projectLoaded;
-	} else {
-		// `{ once: true }` detaches the listener only once abort FIRES. This race is
-		// normally won by an already-settled `projectLoaded`, so without an explicit
-		// removal every LSP feature call leaves one more listener on a signal that
-		// lives as long as the turn, and all of them run when it finally aborts.
-		const { promise: abortPromise, resolve: abortResolve } = Promise.withResolvers<void>();
-		const onAbort = () => abortResolve();
-		signal.addEventListener("abort", onAbort, { once: true });
-		try {
-			await Promise.race([client.projectLoaded, abortPromise]);
-		} finally {
-			signal.removeEventListener("abort", onAbort);
+	// `{ once: true }` detaches the listener only once abort FIRES. This race is
+	// normally won by an already-settled `projectLoaded`, so without an explicit
+	// removal every LSP feature call leaves one more listener on a signal that
+	// lives as long as the turn, and all of them run when it finally aborts.
+	const { promise: aborted, resolve: abort } = Promise.withResolvers<void>();
+	const listener = () => abort();
+	signal?.addEventListener("abort", listener, { once: true });
+	try {
+		const ended = Promise.race([client.projectLoaded, aborted]);
+		const openedAt = firstOpenAt.get(client);
+		if (openedAt !== undefined && !clientsReportingProgress.has(client)) {
+			const graceLeft = openedAt + SILENT_SERVER_GRACE_MS - performance.now();
+			const settled = ended.then(() => false);
+			const lapsed = graceLeft <= 0 || (await settleWithin(settled, graceLeft, true));
+			if (lapsed && !clientsReportingProgress.has(client)) client.resolveProjectLoaded();
 		}
+		await ended;
+	} finally {
+		signal?.removeEventListener("abort", listener);
 	}
 	// The race above resolves on abort, so the signal has to be read again before the second
 	// wait. Without this, aborting mid-wait returns cleanly on every server and throws
@@ -1049,7 +1080,10 @@ export async function notifyWorkspaceWatchedFiles(
 				.filter(change => isPathInsideWorkspace(change.filePath, workspace))
 				.map(change => {
 					const uri = fileToUri(change.filePath);
-					client.diagnostics.delete(uri);
+					// An open document's diagnostics follow the text synced to the server, which a change on
+					// disk does not touch. A write syncs before it commits, so its server's publish for the
+					// new text can land before this notice and must survive it.
+					if (!client.openFiles.has(uri)) client.diagnostics.delete(uri);
 					return { uri, type: change.type };
 				});
 			if (clientChanges.length === 0) return;
