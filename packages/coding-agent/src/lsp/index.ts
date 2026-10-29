@@ -914,6 +914,9 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 			const uri = fileToUri(resolved);
 			const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
 			const allDiagnostics: Diagnostic[] = [];
+			// A server that failed is named with its error, so a file no checker could read is not reported clean.
+			const answered: string[] = [];
+			const serverNotes: string[] = [];
 
 			// Query all applicable servers for this file
 			for (const [serverName, serverConfig] of servers) {
@@ -924,6 +927,7 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 						const linterClient = getLinterClient(serverName, serverConfig, this.session.cwd);
 						const diagnostics = await linterClient.lint(resolved);
 						for (let di = 0; di < diagnostics.length; di++) allDiagnostics.push(diagnostics[di]!);
+						answered.push(serverName);
 						continue;
 					}
 					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
@@ -943,41 +947,50 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 						expectedDocumentVersion,
 					});
 					for (let di = 0; di < diagnostics.length; di++) allDiagnostics.push(diagnostics[di]!);
+					answered.push(serverName);
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
 						throw err;
 					}
-					// Server failed, continue with others
+					serverNotes.push(`  ${serverName}: ${errorMessage(err)}`);
 				}
 			}
 
 			const uniqueDiagnostics = uniqueSortedDiagnostics(allDiagnostics);
+			const notes = serverNotes.length > 0 ? ["  Server notes:", ...serverNotes] : [];
+			const from = notes.length > 0 ? ` from ${answered.join(", ")}` : "";
 
 			if (!detailed && targets.length === 1) {
-				if (uniqueDiagnostics.length === 0) {
-					return {
-						content: [{ type: "text", text: "OK" }],
-						details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
-					};
+				let text: string;
+				if (uniqueDiagnostics.length > 0) {
+					const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
+					text = `${formatDiagnosticsSummary(uniqueDiagnostics)}:\n${formatGroupedDiagnosticMessages(formatted)}`;
+				} else if (answered.length === 0) {
+					text = "No server checked the file";
+				} else {
+					text = notes.length === 0 ? "OK" : `No issues${from}`;
 				}
-
-				const summary = formatDiagnosticsSummary(uniqueDiagnostics);
-				const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
-				const output = `${summary}:\n${formatGroupedDiagnosticMessages(formatted)}`;
 				return {
-					content: [{ type: "text", text: output }],
-					details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
+					content: [{ type: "text", text: [text, ...notes].join("\n") }],
+					details: {
+						action,
+						serverName: Array.from(allServerNames).join(", "),
+						success: answered.length > 0,
+					},
 				};
 			}
 
-			if (uniqueDiagnostics.length === 0) {
-				results.push(`${theme.status.success} ${relPath}: no issues`);
-			} else {
+			if (uniqueDiagnostics.length > 0) {
 				const summary = formatDiagnosticsSummary(uniqueDiagnostics);
 				results.push(`${theme.status.error} ${relPath}: ${summary}`);
 				const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
 				results.push(formatGroupedDiagnosticMessages(formatted));
+			} else if (answered.length === 0) {
+				results.push(`${theme.status.error} ${relPath}: no server checked the file`);
+			} else {
+				results.push(`${theme.status.success} ${relPath}: no issues${from}`);
 			}
+			results.push(...notes);
 		}
 
 		return {

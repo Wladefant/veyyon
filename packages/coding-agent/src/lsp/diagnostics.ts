@@ -3,8 +3,9 @@
  * dropping a TypeScript server's orphan-project noise, and formatting the result.
  */
 
+import { errorMessage } from "@veyyon/utils";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
-import { throwIfAborted } from "../tools/core/tool-errors";
+import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 import { getOrCreateClient, LspResponseError, onDiagnosticsPublish, sendRequest, waitForProjectLoaded } from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
@@ -320,7 +321,10 @@ export async function getDiagnosticsForFile(
 		}),
 	);
 
-	for (const result of results) {
+	// A server that failed is named with its error, so a file no checker could read is not reported clean.
+	const failures: string[] = [];
+	for (let i = 0; i < results.length; i++) {
+		const result = results[i]!;
 		if (result.status === "fulfilled") {
 			serverNames.push(result.value.serverName);
 			allDiagnostics.push(
@@ -331,18 +335,25 @@ export async function getDiagnosticsForFile(
 					result.value.diagnostics,
 				),
 			);
+		} else if (!signal?.aborted && !(result.reason instanceof ToolAbortError)) {
+			failures.push(`${servers[i]![0]} did not check the file: ${errorMessage(result.reason)}`);
 		}
 	}
 
-	if (serverNames.length === 0) {
+	if (serverNames.length === 0 && failures.length === 0) {
 		return undefined;
 	}
 
 	if (allDiagnostics.length === 0) {
 		return {
-			server: serverNames.join(", "),
-			messages: [],
-			summary: "OK",
+			server: serverNames.length > 0 ? serverNames.join(", ") : undefined,
+			messages: failures,
+			summary:
+				failures.length === 0
+					? "OK"
+					: serverNames.length === 0
+						? "not checked"
+						: `no issues from ${serverNames.join(", ")}`,
 			errored: false,
 		};
 	}
@@ -355,7 +366,7 @@ export async function getDiagnosticsForFile(
 
 	return {
 		server: serverNames.join(", "),
-		messages: limited,
+		messages: limited.concat(failures),
 		summary,
 		errored: hasErrors,
 	};
