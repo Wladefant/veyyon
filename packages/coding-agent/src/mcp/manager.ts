@@ -45,7 +45,7 @@ import { mcpManagerInstance, setMcpManagerInstance } from "./manager-instance";
 import {
 	lookupMcpOAuthCredential,
 	type MCPOAuthCredentialLookup,
-	selectMcpOAuthRefreshMaterial,
+	resolveMcpOAuthRefreshTarget,
 } from "./oauth-credentials";
 import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
@@ -1409,7 +1409,6 @@ export class MCPManager {
 		}
 		let resolved: MCPServerConfig = { ...config };
 
-		const auth = config.auth;
 		const lookup: MCPOAuthCredentialLookup | undefined =
 			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
 		if (lookup && this.#authStorage) {
@@ -1429,51 +1428,41 @@ export class MCPManager {
 						forceRefresh: opts?.forceRefresh,
 						refreshSkewMs: REFRESH_BUFFER_MS,
 						canRefresh: current => {
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							return Boolean(current.refresh && material?.tokenUrl);
+							return Boolean(current.refresh && resolveMcpOAuthRefreshTarget(current, config).tokenUrl);
 						},
 						refresh: (current, signal) => {
 							if (current.refresh === REMOTE_REFRESH_SENTINEL) {
 								throw new MCPBrokerRedactedRefreshError(describeMCPServerTarget(config));
 							}
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							const tokenUrl = material?.tokenUrl;
-							if (!current.refresh || !tokenUrl) {
+							const target = resolveMcpOAuthRefreshTarget(current, config);
+							if (!current.refresh || !target.tokenUrl) {
 								throw new Error(
 									`The stored OAuth credential for ${describeMCPServerTarget(config)} has no refresh token or no token endpoint, so it cannot be refreshed and will stay expired. Fix: run \`/mcp reauth <name>\` to authorize again; \`/mcp list\` gives the server's name.`,
 								);
 							}
-							const clientId = material?.clientId;
-							const clientSecret = material?.clientSecret;
-							const authorizationUrl =
-								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-							const resourceIsFallback =
-								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
-							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
-							return refreshMCPOAuthToken(tokenUrl, current.refresh, clientId, clientSecret, resource, {
-								authorizationUrl,
-								stripSameOriginResource: resourceIsFallback,
-								signal,
-							});
+							return refreshMCPOAuthToken(
+								target.tokenUrl,
+								current.refresh,
+								target.clientId,
+								target.clientSecret,
+								target.resource,
+								{
+									authorizationUrl: target.authorizationUrl,
+									stripSameOriginResource: target.resourceIsFallback,
+									signal,
+								},
+							);
 						},
 						mergeRefreshedCredential: (current, refreshed) => {
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							const tokenUrl = material?.tokenUrl;
-							const clientId = material?.clientId;
-							const clientSecret = material?.clientSecret;
-							const authorizationUrl =
-								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-							const resourceIsFallback =
-								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
-							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							const target = resolveMcpOAuthRefreshTarget(current, config);
 							return {
 								...current,
 								...refreshed,
-								tokenUrl,
-								clientId,
-								clientSecret,
-								resource: resourceIsFallback ? undefined : resource,
-								authorizationUrl,
+								tokenUrl: target.tokenUrl,
+								clientId: target.clientId,
+								clientSecret: target.clientSecret,
+								resource: target.resourceIsFallback ? undefined : target.resource,
+								authorizationUrl: target.authorizationUrl,
 							};
 						},
 						isDefinitiveFailure: error => isDefinitiveOAuthFailure(errorMessage(error)),
