@@ -10,6 +10,11 @@ const PASSWORD_CANARIES = {
 	shadow: ["SHADOW_", "PASSWORD_SENTINEL"].join(""),
 	frame: ["FRAME_", "PASSWORD_SENTINEL"].join(""),
 } as const;
+const XHTML_PASSWORD_CANARIES = [
+	["XHTML_", "PASSWORD_SENTINEL"].join(""),
+	["PREFIXED_", "PASSWORD_SENTINEL"].join(""),
+] as const;
+const XHTML_DISPLAY_TEXT = ["VISIBLE_", "XHTML_TEXT_SENTINEL"].join("");
 
 function makeSession(): ToolSession {
 	const sessionId = `browser-tab-evaluate-${process.pid}-${crypto.randomUUID()}`;
@@ -220,5 +225,97 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 		expect(output).not.toContain(PASSWORD_CANARIES.disabled);
 		expect(output).not.toContain(PASSWORD_CANARIES.shadow);
 		expect(output).not.toContain(PASSWORD_CANARIES.frame);
+	}, 60_000);
+	it("masks unprefixed and prefixed XHTML password values", async () => {
+		const tool = new BrowserTool(makeSession());
+		const name = `xhtml-password-${process.pid}-${crypto.randomUUID()}`;
+		const xhtml = `<?xml version="1.0" encoding="UTF-8"?>
+			<html xmlns="http://www.w3.org/1999/xhtml" xmlns:h="http://www.w3.org/1999/xhtml">
+				<head><title>Synthetic XHTML credential form</title></head>
+				<body>
+					<label for="xhtml-secret">XHTML password</label>
+					<input id="xhtml-secret" type="password" />
+					<label for="prefixed-secret">Prefixed XHTML password</label>
+					<h:input id="prefixed-secret" type="password" />
+					<label for="xhtml-text">XHTML display</label>
+					<h:input id="xhtml-text" type="text" />
+				</body>
+			</html>`;
+		const url = `data:application/xhtml+xml;charset=utf-8,${encodeURIComponent(xhtml)}`;
+		const runArgs = {
+			action: "run" as const,
+			name,
+			code: `
+				const plainSecret = ['XHTML_', 'PASSWORD_SENTINEL'].join('');
+				const prefixedSecret = ['PREFIXED_', 'PASSWORD_SENTINEL'].join('');
+				const ordinaryExpected = ['VISIBLE_', 'XHTML_TEXT_SENTINEL'].join('');
+				await tab.fill('#xhtml-secret', plainSecret);
+				await tab.fill('#prefixed-secret', prefixedSecret);
+				await tab.fill('#xhtml-text', ordinaryExpected);
+				const seeded = await tab.evaluate(() => ({
+					contentType: document.contentType,
+					plainSecret: document.querySelector('#xhtml-secret')?.value,
+					prefixedSecret: document.querySelector('#prefixed-secret')?.value,
+					ordinaryValue: document.querySelector('#xhtml-text')?.value,
+				}));
+				if (
+					seeded.contentType !== 'application/xhtml+xml' ||
+					seeded.plainSecret !== plainSecret ||
+					seeded.prefixedSecret !== prefixedSecret ||
+					seeded.ordinaryValue !== ordinaryExpected
+				) {
+					throw new Error('XHTML fixture values did not match before observation');
+				}
+				const observation = await tab.observe({ includeAll: true });
+				const expectedLabels = ['Prefixed XHTML password', 'XHTML display', 'XHTML password'];
+				const expectedPasswords = ['Prefixed XHTML password', 'XHTML password'];
+				const labels = observation.elements
+					.filter(entry => entry.role === 'StaticText' && expectedLabels.includes(entry.name ?? ''))
+					.map(entry => entry.name ?? '')
+					.sort();
+				const passwordControls = observation.elements.filter(
+					entry => entry.role === 'textbox' && expectedPasswords.includes(entry.name ?? ''),
+				);
+				const passwordControlNames = passwordControls.map(entry => entry.name ?? '').sort();
+				const ordinaryControl = observation.elements.find(
+					entry => entry.role === 'textbox' && entry.name === 'XHTML display',
+				);
+				if (labels.join('|') !== expectedLabels.slice().sort().join('|')) {
+					throw new Error('XHTML observation omitted a fixture label');
+				}
+				if (passwordControlNames.join('|') !== expectedPasswords.slice().sort().join('|')) {
+					throw new Error('XHTML observation omitted a password textbox');
+				}
+				if (passwordControls.some(entry => entry.value !== undefined)) {
+					throw new Error('XHTML observation exposed a password value');
+				}
+				if (!ordinaryControl || ordinaryControl.value !== ordinaryExpected) {
+					throw new Error('XHTML observation did not preserve the seeded ordinary text');
+				}
+				return {
+					labels,
+					passwordControlNames,
+					passwordValuesUndefined: true,
+					ordinaryTextLabel: ordinaryControl.name,
+					ordinaryTextValue: ordinaryControl.value,
+				};
+			`,
+		};
+		try {
+			await tool.execute("open", { action: "open", name, url });
+			const result = await tool.execute("run", runArgs);
+			const rendered = browserToolView.renderResult(result, { expanded: true }, runArgs);
+			const output = JSON.stringify({ result, rendered });
+			expect(typeof result.details?.result).toBe("string");
+			expect(output).toContain("XHTML password");
+			expect(output).toContain("Prefixed XHTML password");
+			expect(output).toContain("XHTML display");
+			expect(output).toContain(XHTML_DISPLAY_TEXT);
+			expect(output).toContain("passwordValuesUndefined");
+			expect(output).not.toContain(XHTML_PASSWORD_CANARIES[0]);
+			expect(output).not.toContain(XHTML_PASSWORD_CANARIES[1]);
+		} finally {
+			await tool.execute("close", { action: "close", name, kill: true });
+		}
 	}, 60_000);
 });
