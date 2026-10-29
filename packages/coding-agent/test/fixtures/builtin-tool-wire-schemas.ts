@@ -109,8 +109,8 @@ async function sweep(): Promise<WireSchemaSweepReport> {
 	const storeFile = getToolWireSchemaCachePath();
 	let storedIds: string[] = [];
 	try {
-		const stored = JSON.parse(await fs.readFile(storeFile, "utf8")) as { schemas?: Record<string, unknown> };
-		storedIds = Object.keys(stored.schemas ?? {}).sort();
+		const stored = JSON.parse(await fs.readFile(storeFile, "utf8")) as { entries?: Record<string, unknown> };
+		storedIds = Object.keys(stored.entries ?? {}).sort();
 	} catch {}
 	return {
 		suppliers: [...suppliers].sort(),

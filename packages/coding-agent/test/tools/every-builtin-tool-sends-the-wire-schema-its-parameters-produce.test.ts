@@ -64,9 +64,9 @@ function sweep(build: string): WireSchemaSweepReport {
 /** Mark every stored wire form, so a launch that sends one sends it changed. */
 function markStoredForms(storeFile: string): void {
 	const stored = JSON.parse(fs.readFileSync(storeFile, "utf8")) as {
-		schemas: Record<string, Record<string, unknown>>;
+		entries: Record<string, Record<string, unknown>>;
 	};
-	for (const wire of Object.values(stored.schemas)) wire["x-marked"] = true;
+	for (const wire of Object.values(stored.entries)) wire["x-marked"] = true;
 	fs.writeFileSync(storeFile, JSON.stringify(stored));
 }
 

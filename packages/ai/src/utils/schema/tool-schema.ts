@@ -12,86 +12,23 @@
  * `id` names one schema for the life of a build. A schema built from runtime inputs carries every input
  * in its id. Two declarations of one id with different builders throw at the second one.
  */
-import * as fs from "node:fs";
-import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
+import { BuildStore } from "@veyyon/utils/build-store";
 import { getToolWireSchemaCachePath } from "@veyyon/utils/dirs";
-import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { TSchema } from "../../types";
 import { parametersWireSchema } from "./wire";
 
-/** Bumped whenever the file's shape, or what a stored wire form means, changes. */
-const STORE_VERSION = 1;
-
 type WireSchema = Record<string, unknown>;
 
+/** The wire forms one build computed, persisted in one JSON file; see {@link BuildStore}. */
+export type ToolWireSchemaStore = BuildStore<WireSchema>;
+
 /**
- * The wire forms one build computed, persisted in one JSON file. Entries stored by another build, or
- * under another {@link STORE_VERSION}, are not read: the file is replaced by the next write.
+ * The wire-schema store of `build`, kept in `filePath`. Its version is bumped whenever what a stored wire
+ * form means changes.
  */
-export class ToolWireSchemaStore {
-	readonly #build: string | undefined;
-	readonly #filePath: () => string;
-	#entries: Map<string, WireSchema> | undefined;
-	#unsaved = false;
-
-	/** `build` undefined or empty stores nothing; `filePath` is resolved on the first read. */
-	constructor(build: string | undefined, filePath: () => string) {
-		this.#build = build || undefined;
-		this.#filePath = filePath;
-	}
-
-	/** The wire form stored under `id` by an earlier launch of this build. */
-	get(id: string): WireSchema | undefined {
-		if (this.#build === undefined) return undefined;
-		return this.#load().get(id);
-	}
-
-	/** Store `wire` under `id`. The file is written once the current task ends, with every entry put in it. */
-	put(id: string, wire: WireSchema): void {
-		if (this.#build === undefined) return;
-		this.#load().set(id, wire);
-		if (this.#unsaved) return;
-		this.#unsaved = true;
-		queueMicrotask(() => this.save());
-	}
-
-	/** Write the entries put since the last save, merged with those another process of this build wrote. */
-	save(): void {
-		if (!this.#unsaved || this.#build === undefined) return;
-		this.#unsaved = false;
-		const file = this.#filePath();
-		const merged = this.#read(file);
-		for (const [id, wire] of this.#load()) merged.set(id, wire);
-		const body = JSON.stringify({ version: STORE_VERSION, build: this.#build, schemas: Object.fromEntries(merged) });
-		try {
-			// A cache: a torn file fails to parse and is recomputed, so the write skips the fsync.
-			atomicWriteFileSync(file, body, { fsync: false });
-		} catch (error) {
-			logger.debug("tool wire-schema cache not written", { file, error: String(error) });
-		}
-	}
-
-	#load(): Map<string, WireSchema> {
-		this.#entries ??= this.#read(this.#filePath());
-		return this.#entries;
-	}
-
-	#read(file: string): Map<string, WireSchema> {
-		const entries = new Map<string, WireSchema>();
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-		} catch {
-			return entries;
-		}
-		if (!isRecord(parsed) || parsed.version !== STORE_VERSION || parsed.build !== this.#build) return entries;
-		if (!isRecord(parsed.schemas)) return entries;
-		for (const [id, wire] of Object.entries(parsed.schemas)) {
-			if (isRecord(wire)) entries.set(id, wire);
-		}
-		return entries;
-	}
+export function createToolWireSchemaStore(build: string | undefined, filePath: () => string): ToolWireSchemaStore {
+	return new BuildStore({ build, filePath, version: 2, isValue: isRecord });
 }
 
 /** A tool parameter schema with its wire form; see the module documentation. */
@@ -151,7 +88,7 @@ export function createToolSchema<T extends TSchema>(
  * The store of the running build. The binary build defines `process.env.VEYYON_BUILD_ID` as an id
  * unique to that build; a run from source leaves it unset and stores nothing.
  */
-const buildStore = new ToolWireSchemaStore(process.env.VEYYON_BUILD_ID, getToolWireSchemaCachePath);
+const buildStore = createToolWireSchemaStore(process.env.VEYYON_BUILD_ID, getToolWireSchemaCachePath);
 
 /** The builder source each declared id was declared with, to reject a second schema under one id. */
 const declaredBuilders = new Map<string, string>();

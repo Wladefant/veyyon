@@ -12,6 +12,7 @@
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `getToolWireSchemaCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/tool-wire-schemas.json`.
+- `getModelReferenceCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/model-references.json`, and `BuildStore` in `@veyyon/utils/build-store` persists values one compiled build computed in one JSON file that only that build reads.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 - `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
 - `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.

@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `resolveBundledModelReference` in a compiled build stores each answer, a bundled model or none, in the profile's `cache/model-references.json` under the build's id, and a later launch of that build reads the answer instead of indexing the catalog's model ids.
 - `bundledCatalogDigest` returns `process.env.VEYYON_CATALOG_DIGEST` when it is set, which the compiled binary defines at build time, instead of reading and hashing `models.json`.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.

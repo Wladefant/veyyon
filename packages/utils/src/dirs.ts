@@ -1161,6 +1161,17 @@ export function getToolWireSchemaCachePath(): string {
 	return dirs.rootSubdir(path.join("cache", "tool-wire-schemas.json"), "cache");
 }
 
+/**
+ * Get the model-reference cache path (profile `cache/model-references.json`).
+ *
+ * Holds the bundled model each custom model id resolved to, keyed by the id of the compiled build that
+ * resolved it, so a later launch of the same build finds a custom model's reference without indexing the
+ * catalog.
+ */
+export function getModelReferenceCachePath(): string {
+	return dirs.rootSubdir(path.join("cache", "model-references.json"), "cache");
+}
+
 /** A profile `cache/<file>` path, or the value of `envVar` when it is set so a test or operator can relocate it. */
 function cacheFilePath(envVar: string, file: string): string {
 	return pickProcessEnv(envVar) || dirs.rootSubdir(path.join("cache", file), "cache");

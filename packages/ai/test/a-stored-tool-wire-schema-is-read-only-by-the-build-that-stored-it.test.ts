@@ -21,7 +21,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Tool } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { createToolSchema, ToolWireSchemaStore, toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import {
+	createToolSchema,
+	createToolWireSchemaStore,
+	type ToolWireSchemaStore,
+	toolSchema,
+} from "@veyyon/ai/utils/schema/tool-schema";
 import { parametersWireSchema, toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 
 let dir = "";
@@ -49,10 +54,10 @@ function counted() {
 const EXPECTED = parametersWireSchema(counted().build());
 
 function storeOf(build: string | undefined): ToolWireSchemaStore {
-	return new ToolWireSchemaStore(build, () => file);
+	return createToolWireSchemaStore(build, () => file);
 }
 
-function readFile(): { version: unknown; build: unknown; schemas: Record<string, unknown> } {
+function readFile(): { version: unknown; build: unknown; entries: Record<string, unknown> } {
 	return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
@@ -78,15 +83,15 @@ describe("a stored tool wire schema", () => {
 		expect(builds.count).toBe(1);
 		expect(fs.existsSync(file)).toBe(false);
 		await Promise.resolve();
-		expect(readFile().schemas).toEqual({ read: EXPECTED });
+		expect(readFile().entries).toEqual({ read: EXPECTED });
 	});
 
 	const STALE_FILES: Record<string, (stale: Record<string, unknown>) => string> = {
-		"another build": stale => JSON.stringify({ version: readFile().version, build: "build-b", schemas: stale }),
-		"another store version": stale => JSON.stringify({ version: 0, build: "build-a", schemas: stale }),
+		"another build": stale => JSON.stringify({ version: readFile().version, build: "build-b", entries: stale }),
+		"another store version": stale => JSON.stringify({ version: 0, build: "build-a", entries: stale }),
 		"a file that is not JSON": () => "{ not json",
-		"a file whose schemas are not an object": () =>
-			JSON.stringify({ version: readFile().version, build: "build-a", schemas: [] }),
+		"a file whose entries are not an object": () =>
+			JSON.stringify({ version: readFile().version, build: "build-a", entries: [] }),
 	};
 
 	for (const [name, contents] of Object.entries(STALE_FILES)) {
@@ -101,7 +106,7 @@ describe("a stored tool wire schema", () => {
 			store.save();
 			const written = readFile();
 			expect(written.build).toBe("build-a");
-			expect(written.schemas).toEqual({ read: EXPECTED });
+			expect(written.entries).toEqual({ read: EXPECTED });
 		});
 	}
 
@@ -124,7 +129,7 @@ describe("a stored tool wire schema", () => {
 		void createToolSchema(first, "read", counted().build).wire;
 		first.save();
 		second.save();
-		expect(Object.keys(readFile().schemas).sort()).toEqual(["other", "read"]);
+		expect(Object.keys(readFile().entries).sort()).toEqual(["other", "read"]);
 	});
 
 	it("is declared once per id: the same builder again is accepted, another builder throws", () => {
