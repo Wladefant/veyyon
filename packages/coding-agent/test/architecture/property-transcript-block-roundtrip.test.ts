@@ -26,7 +26,6 @@ import type { AgentMessage } from "@veyyon/session";
 import type { TranscriptBlock } from "@veyyon/wire/presentation";
 import {
 	blockIdFor,
-	defaultToolText,
 	isDisplayed,
 	toTranscriptBlock,
 	toTranscriptBlocks,
@@ -308,37 +307,6 @@ describe("custom and hook projections keep every text chunk boundary", () => {
 	});
 });
 
-describe("defaultToolText formats tool arguments safely", () => {
-	test("returns string arguments verbatim", () => {
-		expect(defaultToolText("raw string args")).toBe("raw string args");
-	});
-
-	test("returns empty string for undefined", () => {
-		expect(defaultToolText(undefined)).toBe("");
-	});
-
-	test("formats objects and arrays as 2-space indented JSON", () => {
-		expect(defaultToolText({ key: "val" })).toBe('{\n  "key": "val"\n}');
-		expect(defaultToolText([1, 2])).toBe("[\n  1,\n  2\n]");
-	});
-
-	test("formats primitives to JSON string", () => {
-		expect(defaultToolText(null)).toBe("null");
-		expect(defaultToolText(42)).toBe("42");
-		expect(defaultToolText(true)).toBe("true");
-	});
-
-	test("returns [unserializable] for circular references without throwing", () => {
-		const circular: Record<string, unknown> = {};
-		circular.self = circular;
-		expect(defaultToolText(circular)).toBe("[unserializable]");
-	});
-
-	test("returns [unserializable] for BigInt without throwing", () => {
-		expect(defaultToolText({ num: BigInt(42) })).toBe("[unserializable]");
-	});
-});
-
 describe("toTranscriptBlock projects content and tool text faithfully", () => {
 	test("compaction preserves full context and reports pre-compaction tokens without inventing savings", () => {
 		const block = toTranscriptBlock(
@@ -410,7 +378,7 @@ describe("toTranscriptBlock projects content and tool text faithfully", () => {
 		expect(failedBlock.error).toBe("err 1\nerr 2");
 	});
 
-	test("assistant message formats tool-call input with defaultToolText fallback", () => {
+	test("assistant message states tool-call arguments as indented JSON when no renderer is given", () => {
 		const message = {
 			role: "assistant",
 			content: [

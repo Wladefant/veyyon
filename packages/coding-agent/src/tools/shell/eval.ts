@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, formatCount, lazy, logger, prompt, truncate } from "@veyyon/utils";
+import { errorMessage, formatCount, lazy, logger, prompt, stringifyJsonSafe, truncate } from "@veyyon/utils";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
 import { IdleTimeout } from "../../eval/idle-timeout";
@@ -162,12 +162,7 @@ export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) =
 const MAX_DISPLAY_TEXT_CHARS = 8000;
 
 export function formatDisplayJsonForText(value: unknown): string {
-	let text: string;
-	try {
-		text = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		text = String(value);
-	}
+	const text = stringifyJsonSafe(value, 2);
 	if (text.length <= MAX_DISPLAY_TEXT_CHARS) return text;
 	const chars = [...text];
 	if (chars.length <= MAX_DISPLAY_TEXT_CHARS) return text;

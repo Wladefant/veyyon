@@ -31,6 +31,7 @@ import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
 import { projectCustomDisplay, readCustomLevel } from "./custom-display";
 import { toBranchSummaryView, toCompactionSummaryView } from "./summary-builder";
 import { buildToolExecutionBlock } from "./tool-execution";
+import { serializeToolInput } from "./tool-input";
 
 /** Everything the builder needs that a message does not carry. */
 export interface TranscriptBuildOptions {
@@ -87,19 +88,6 @@ export function toUserMessageView(message: Extract<AgentMessage, { role: "develo
 		text: userMessageText(message),
 		synthetic: message.role === "developer" || (message.synthetic ?? false),
 	};
-}
-
-/** How a tool call's arguments are rendered when the caller supplies nothing better. */
-export function defaultToolText(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (value === undefined) return "";
-	try {
-		return JSON.stringify(value, null, 2) ?? "";
-	} catch {
-		// A tool argument holding a cycle or a BigInt is a display problem, not a
-		// session failure: say so in the block instead of throwing into the render.
-		return "[unserializable]";
-	}
 }
 
 /**
@@ -329,7 +317,7 @@ function mentionAttachments(files: unknown): Attachment[] {
 export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuildOptions): TranscriptBlock {
 	const id = blockIdFor(message, options.index);
 	const timestamp = timestampOf(message);
-	const renderToolText = options.renderToolText ?? defaultToolText;
+	const renderToolText = options.renderToolText ?? serializeToolInput;
 	const pending = options.pendingToolCallIds ?? new Set<string>();
 	const role = messageRole(message);
 

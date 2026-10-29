@@ -17,7 +17,8 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import type { PresentationContext, TranscriptBlock } from "@veyyon/wire/presentation";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import { SessionProjectionEngine } from "./session-projection-engine";
-import { defaultToolText, isDisplayed, type TranscriptBuildOptions } from "./transcript-builder";
+import { serializeToolInput } from "./tool-input";
+import { isDisplayed, type TranscriptBuildOptions } from "./transcript-builder";
 
 export type ToolTextRenderer = NonNullable<TranscriptBuildOptions["renderToolText"]>;
 
@@ -38,7 +39,7 @@ export class PresentationEventBridge {
 	constructor(source: PresentationEventSource, presentation: PresentationContext, renderToolText?: ToolTextRenderer) {
 		this.#source = source;
 		this.#presentation = presentation;
-		this.#renderToolText = renderToolText ?? defaultToolText;
+		this.#renderToolText = renderToolText ?? serializeToolInput;
 		this.#engine = new SessionProjectionEngine({
 			renderToolText: this.#renderToolText,
 			getMessages: () => this.#source.messages,

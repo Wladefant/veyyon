@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { Writable } from "node:stream";
 import * as util from "node:util";
 
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { createHelpers, type HelperBundle } from "./helpers";
@@ -289,10 +290,10 @@ export class JsRuntime {
 			try {
 				hooks.onDisplay({ type: "json", data: structuredClone(value) });
 			} catch (err) {
-				logger.debug("js displayValue: value is not structured-cloneable, falling back to text", {
+				logger.debug("js displayValue: value is not structured-cloneable, rendering it as text", {
 					error: errorMessage(err),
 				});
-				hooks.onText(`${Object.prototype.toString.call(value)}\n`);
+				hooks.onText(`${stringifyJsonSafe(value, 2)}\n`);
 			}
 			return;
 		}
