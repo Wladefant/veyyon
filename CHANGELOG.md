@@ -131,6 +131,7 @@
 - No user-visible change: the Models and Tools charts take their legend and tooltip from `buildSharedPlugins`, and the Behavior and Costs charts build their line and bar configs with `timeChartData` and `timeChartOptions` instead of two copies.
 - No user-visible change: the dashboard imports `JsonBlock` and `StatusPill` from `@veyyon/tool-render` instead of two one-line re-export modules in `client/ui`.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
+- The request, model, model-performance, cost and tool-call time series read through one bucketed query; no user-facing change.
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
 - No user-visible change: the terminal capabilities read `HostNotification` from `@veyyon/host/notification` instead of a `@veyyon/utils` re-export.
