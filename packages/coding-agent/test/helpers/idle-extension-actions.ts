@@ -24,7 +24,7 @@ export function idleExtensionActions(overrides: Partial<ExtensionActions> = {}):
 }
 
 /**
- * The `ExtensionContextActions` of an idle session with no model and no queue.
+ * The `ExtensionContextActions` of an idle session with no model, no queue and no secrets to redact.
  * `overrides` replaces the members a test reads back.
  */
 export function idleContextActions(overrides: Partial<ExtensionContextActions> = {}): ExtensionContextActions {
@@ -37,6 +37,7 @@ export function idleContextActions(overrides: Partial<ExtensionContextActions> =
 		getContextUsage: () => undefined,
 		compact: async () => {},
 		getSystemPrompt: () => [],
+		obfuscateProviderText: text => text,
 		...overrides,
 	};
 }

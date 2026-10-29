@@ -1439,12 +1439,11 @@ export interface ExtensionContextActions {
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string[];
 	/** Live redaction-only transform for provider-bound extension and hook strings. */
-	obfuscateProviderText?: (text: string) => string;
+	obfuscateProviderText: (text: string) => string;
 }
 
-/** Actions for ExtensionCommandContext (ctx.* in command handlers). */
+/** Actions for ExtensionCommandContext (ctx.* in command handlers), beyond the context actions. */
 export interface ExtensionCommandContextActions {
-	getContextUsage: () => ContextUsage | undefined;
 	waitForIdle: () => Promise<void>;
 	newSession: (options?: {
 		parentSession?: string;
@@ -1452,7 +1451,6 @@ export interface ExtensionCommandContextActions {
 	}) => Promise<{ cancelled: boolean }>;
 	branch: (entryId: string) => Promise<{ cancelled: boolean }>;
 	navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{ cancelled: boolean }>;
-	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
 	reload: () => Promise<void>;
 }

@@ -545,10 +545,6 @@ export interface InteractiveModeContext {
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;
-	emitCustomToolSessionEvent(
-		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
-		previousSessionFile?: string,
-	): Promise<void>;
 	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
@@ -595,5 +591,4 @@ export interface InteractiveModeContext {
 		options?: { overlay?: boolean | OverlayOptions },
 	): Promise<T>;
 	showExtensionError(extensionPath: string, error: string): void;
-	showToolError(toolName: string, error: string): void;
 }

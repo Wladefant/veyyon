@@ -539,11 +539,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * here, exports all three and `dirs.ts` imports the first two; every module they import is already
  * here. Measured 2026-10-28 at 1528.
  *
+ * 1528 to 1529: `coding-agent/src/extensibility/extensions/session-actions.ts`, the extension action
+ * set print, RPC, ACP and a spawned agent build against their session, which `task/executor.ts`,
+ * already here, had assembled inline. Its runtime imports (`@veyyon/kernel/session/detached-abort`,
+ * `session/messages.ts`, `extensions/compact-handler.ts` and `extensions/get-commands-handler.ts`)
+ * are already here. Measured 2026-10-28 at 1529.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1528;
+const LAUNCH_REACH_CEILING = 1529;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

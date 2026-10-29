@@ -3028,13 +3028,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#extensionUiController.initHooksAndCustomTools();
 	}
 
-	emitCustomToolSessionEvent(
-		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
-		previousSessionFile?: string,
-	): Promise<void> {
-		return this.#extensionUiController.emitCustomToolSessionEvent(reason, previousSessionFile);
-	}
-
 	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void {
 		this.#extensionUiController.setHookWidget(key, content, options);
 	}
@@ -3106,10 +3099,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showExtensionError(extensionPath: string, error: string): void {
 		this.#extensionUiController.showExtensionError(extensionPath, error);
-	}
-
-	showToolError(toolName: string, error: string): void {
-		this.#extensionUiController.showToolError(toolName, error);
 	}
 
 	#subscribeToAgent(): void {

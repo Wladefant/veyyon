@@ -1,16 +1,13 @@
 /**
  * Shared extension runtime wiring for print and RPC modes.
  *
- * Both modes initialize the extension runner with the same action handlers
- * that delegate to the {@link AgentSession}. Only error reporting, shutdown
- * behavior, and UI context differ between callers — those stay as
- * caller-supplied hooks.
+ * Both modes initialize the extension runner with the session-backed action set
+ * every non-interactive host shares. Only error reporting, shutdown behavior,
+ * and UI context differ between callers — those stay as caller-supplied hooks.
  */
-import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
-import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import { sessionCommandActions, sessionExtensionActions } from "../extensibility/extensions/session-actions";
 import type { ExtensionError, ExtensionUIContext } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
-import { USER_INTERRUPT_LABEL } from "../session/messages";
 
 /** Action name for an extension-originated send failure. */
 export type ExtensionSendAction = "extension_send" | "extension_send_user";
@@ -48,94 +45,35 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 		markAgentInvokingMessage,
 		trackAgentInvokingMessage,
 	} = options;
-	const shutdown = onShutdown ?? (() => {});
-
-	runner.initialize(
-		// ExtensionActions
-		{
-			sendMessage: (message, sendOptions) => {
-				const sendTask = session.sendCustomMessage(message, sendOptions);
-				if (sendOptions?.triggerTurn) {
-					if (trackAgentInvokingMessage) {
-						trackAgentInvokingMessage(sendTask);
-					} else {
-						markAgentInvokingMessage?.();
-					}
-				}
-				sendTask.catch(e => {
-					reportSendError("extension_send", e instanceof Error ? e : new Error(String(e)));
-				});
-			},
-			sendUserMessage: (content, sendOptions) => {
-				const sendTask = session.sendUserMessage(content, sendOptions);
+	const { actions, contextActions } = sessionExtensionActions(session, {
+		sendMessage: (message, sendOptions) => {
+			const sendTask = session.sendCustomMessage(message, sendOptions);
+			if (sendOptions?.triggerTurn) {
 				if (trackAgentInvokingMessage) {
 					trackAgentInvokingMessage(sendTask);
 				} else {
 					markAgentInvokingMessage?.();
 				}
-				sendTask.catch(e => {
-					reportSendError("extension_send_user", e instanceof Error ? e : new Error(String(e)));
-				});
-			},
-			appendEntry: (customType, data) => {
-				session.sessionManager.appendCustomEntry(customType, data);
-			},
-			setLabel: (targetId, label) => {
-				session.sessionManager.appendLabelChange(targetId, label);
-			},
-			getActiveTools: () => session.getActiveToolNames(),
-			getAllTools: () => session.getAllToolNames(),
-			setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
-			getCommands: () => getSessionSlashCommands(session),
-			setModel: (model, options) => runExtensionSetModel(session, model, options),
-			getThinkingLevel: () => session.thinkingLevel,
-			setThinkingLevel: (level, persist) => session.setThinkingLevel(level, persist),
-			getSessionName: () => session.sessionManager.getSessionName(),
-			setSessionName: async name => {
-				await session.sessionManager.setSessionName(name, "user");
-			},
+			}
+			sendTask.catch(e => {
+				reportSendError("extension_send", e instanceof Error ? e : new Error(String(e)));
+			});
 		},
-		// ExtensionContextActions
-		{
-			getModel: () => session.model,
-			isIdle: () => !session.isStreaming,
-			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
-			hasPendingMessages: () => session.queuedMessageCount > 0,
-			shutdown,
-			getContextUsage: () => session.getContextUsage(),
-			getSystemPrompt: () => session.systemPrompt,
-			compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
+		sendUserMessage: (content, sendOptions) => {
+			const sendTask = session.sendUserMessage(content, sendOptions);
+			if (trackAgentInvokingMessage) {
+				trackAgentInvokingMessage(sendTask);
+			} else {
+				markAgentInvokingMessage?.();
+			}
+			sendTask.catch(e => {
+				reportSendError("extension_send_user", e instanceof Error ? e : new Error(String(e)));
+			});
 		},
-		// ExtensionCommandContextActions — commands invokable via prompt("/command")
-		{
-			getContextUsage: () => session.getContextUsage(),
-			waitForIdle: () => session.agent.waitForIdle(),
-			newSession: async newOptions => {
-				const success = await session.newSession({ parentSession: newOptions?.parentSession });
-				if (success && newOptions?.setup) {
-					await newOptions.setup(session.sessionManager);
-				}
-				return { cancelled: !success };
-			},
-			branch: async entryId => {
-				const result = await session.branch(entryId);
-				return { cancelled: result.cancelled };
-			},
-			navigateTree: async (targetId, navOptions) => {
-				const result = await session.navigateTree(targetId, { summarize: navOptions?.summarize });
-				return { cancelled: result.cancelled };
-			},
-			switchSession: async sessionPath => {
-				const success = await session.switchSession(sessionPath);
-				return { cancelled: !success };
-			},
-			reload: async () => {
-				await session.reload();
-			},
-			compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
-		},
-		uiContext,
-	);
+		shutdown: onShutdown ?? (() => {}),
+		abortSite: "runtime-init.extension.abort",
+	});
+	runner.initialize(actions, contextActions, sessionCommandActions(session), uiContext);
 
 	runner.onError(reportRuntimeError);
 	await runner.emit({ type: "session_start" });

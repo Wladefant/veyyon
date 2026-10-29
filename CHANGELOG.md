@@ -144,6 +144,7 @@
 ### Removed
 
 - `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
+- The terminal's `emitCustomToolSessionEvent` and `showToolError` are removed; nothing called them; no user-facing change.
 
 ### Fixed
 
@@ -219,6 +220,10 @@
 - Stopping the interactive mode stops every spinner, rail, shimmer and loader in the transcript, nested groups included, so no transcript timer outlives the mode.
 - A shell retained for a plain-`&` background job holds one reap interval, and retaining the same shell again arms no second one.
 - No user-visible change: `resetSessionCpuLimitsForTests` disposes every limiter it drops, so a limiter's watcher interval ends with the test that created it.
+- Extension tools, hooks and commands in print, RPC and ACP modes redact provider-bound text through `ctx.obfuscateProviderText` as the terminal does; they used to pass it through unredacted.
+- An extension in a spawned agent reads the agent's context usage through `ctx.getContextUsage()` and compacts it through `ctx.compact()`; they used to return `undefined` and do nothing.
+- A failed abort requested by an extension in print, RPC or a spawned agent is logged instead of exiting the process.
+- No user-visible change: print, RPC, ACP and a spawned agent build their extension actions through one `sessionExtensionActions` in `extensibility/extensions/session-actions.ts` instead of three copies.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.

@@ -41,8 +41,7 @@ import { type SettingPath, Settings } from "../config/settings";
 import type { Rule } from "../discovery/capability/rule";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
-import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import { sessionExtensionActions } from "../extensibility/extensions/session-actions";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -57,7 +56,7 @@ import type { AgentSession } from "../session/agent-session";
 import { discoverAuthStorage } from "../session/auth-broker-config";
 import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu-limit";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
-import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
@@ -2203,45 +2202,15 @@ async function initializeChildExtensions(
 	// Name the child on its own runner before initialize, so an approval card raised from it carries
 	// a byline. See `ExtensionRunner.agentId`.
 	extensionRunner.setAgentId(id);
-	extensionRunner.initialize(
-		{
-			sendMessage: (message, options) =>
-				trackExtensionSend("sendMessage", session.sendCustomMessage(message, options)),
-			sendUserMessage: (content, options) =>
-				trackExtensionSend("sendUserMessage", session.sendUserMessage(content, options)),
-			appendEntry: (customType, data) => {
-				session.sessionManager.appendCustomEntry(customType, data);
-			},
-			setLabel: (targetId, label) => {
-				session.sessionManager.appendLabelChange(targetId, label);
-			},
-			getActiveTools: () => session.getActiveToolNames(),
-			getAllTools: () => session.getAllToolNames(),
-			setActiveTools: (toolNames: string[]) =>
-				session.setActiveToolsByName(toolNames.filter(name => !PARENT_OWNED_TOOL_NAMES.has(name))),
-			getCommands: () => getSessionSlashCommands(session),
-			setModel: (model, options) => runExtensionSetModel(session, model, options),
-			getThinkingLevel: () => session.thinkingLevel,
-			setThinkingLevel: (level, persist) => session.setThinkingLevel(level, persist),
-			getSessionName: () => session.sessionManager.getSessionName(),
-			setSessionName: async name => {
-				await session.sessionManager.setSessionName(name, "user");
-			},
-		},
-		{
-			getModel: () => session.model,
-			isIdle: () => !session.isStreaming,
-			obfuscateProviderText: text => session.obfuscateProviderText(text),
-			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
-			hasPendingMessages: () => session.queuedMessageCount > 0,
-			shutdown: () => {},
-			getContextUsage: () => session.getContextUsage(),
-			getSystemPrompt: () => session.systemPrompt,
-			compact: instructionsOrOptions => runExtensionCompact(session, instructionsOrOptions),
-		},
-		undefined,
-		resolveRootUIContext(id),
-	);
+	const { actions, contextActions } = sessionExtensionActions(session, {
+		sendMessage: (message, options) => trackExtensionSend("sendMessage", session.sendCustomMessage(message, options)),
+		sendUserMessage: (content, options) =>
+			trackExtensionSend("sendUserMessage", session.sendUserMessage(content, options)),
+		shutdown: () => {},
+		abortSite: "executor.extension.abort",
+		activatable: name => !PARENT_OWNED_TOOL_NAMES.has(name),
+	});
+	extensionRunner.initialize(actions, contextActions, undefined, resolveRootUIContext(id));
 	extensionRunner.onError(err => {
 		logger.error("Extension error", { path: err.extensionPath, error: err.error });
 	});

@@ -42,7 +42,6 @@ import {
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { BlobStore, resolveImageDataSync } from "@veyyon/kernel/session/blob-store";
-import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -57,8 +56,7 @@ import {
 	type ExtensionUIDialogOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
-import { runExtensionCompact, runExtensionSetModel } from "../../extensibility/extensions/compact-handler";
-import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
+import { sessionCommandActions, sessionExtensionActions } from "../../extensibility/extensions/session-actions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 // The owning module, not the `internal-urls` barrel: the barrel re-exports every protocol
@@ -1943,73 +1941,23 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
+		const session = record.session;
+		const { actions, contextActions } = sessionExtensionActions(session, {
+			sendMessage: (message, options) => {
+				session.sendCustomMessage(message, options).catch((error: unknown) => {
+					logger.warn("ACP extension sendMessage failed", { error });
+				});
+			},
+			sendUserMessage: (content, options) => {
+				trackExtensionUserMessage(record, session.sendUserMessage(content, options));
+			},
+			shutdown: () => {},
+			abortSite: "acp-agent.session.abort",
+		});
 		extensionRunner.initialize(
-			{
-				sendMessage: (message, options) => {
-					record.session.sendCustomMessage(message, options).catch((error: unknown) => {
-						logger.warn("ACP extension sendMessage failed", { error });
-					});
-				},
-				sendUserMessage: (content, options) => {
-					trackExtensionUserMessage(record, record.session.sendUserMessage(content, options));
-				},
-				appendEntry: (customType, data) => {
-					record.session.sessionManager.appendCustomEntry(customType, data);
-				},
-				setLabel: (targetId, label) => {
-					record.session.sessionManager.appendLabelChange(targetId, label);
-				},
-				getActiveTools: () => record.session.getActiveToolNames(),
-				getAllTools: () => record.session.getAllToolNames(),
-				setActiveTools: toolNames => record.session.setActiveToolsByName(toolNames),
-				getCommands: () => getSessionSlashCommands(record.session),
-				setModel: (model, options) => runExtensionSetModel(record.session, model, options),
-				getThinkingLevel: () => record.session.thinkingLevel,
-				setThinkingLevel: (level, persist) => record.session.setThinkingLevel(level, persist),
-				getSessionName: () => record.session.sessionManager.getSessionName(),
-				setSessionName: async name => {
-					await record.session.sessionManager.setSessionName(name, "user");
-				},
-			},
-			{
-				getModel: () => record.session.model,
-				isIdle: () => !record.session.isStreaming,
-				abort: () => {
-					abortDetached(record.session, "acp-agent.session.abort", USER_INTERRUPT_LABEL);
-				},
-				hasPendingMessages: () => record.session.queuedMessageCount > 0,
-				shutdown: () => {},
-				getContextUsage: () => record.session.getContextUsage(),
-				getSystemPrompt: () => record.session.systemPrompt,
-				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
-			},
-			{
-				getContextUsage: () => record.session.getContextUsage(),
-				waitForIdle: () => record.session.agent.waitForIdle(),
-				newSession: async options => {
-					const success = await record.session.newSession({ parentSession: options?.parentSession });
-					if (success && options?.setup) {
-						await options.setup(record.session.sessionManager);
-					}
-					return { cancelled: !success };
-				},
-				branch: async entryId => {
-					const result = await record.session.branch(entryId);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await record.session.navigateTree(targetId, { summarize: options?.summarize });
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async sessionPath => {
-					const success = await record.session.switchSession(sessionPath);
-					return { cancelled: !success };
-				},
-				reload: async () => {
-					await record.session.reload();
-				},
-				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
-			},
+			actions,
+			contextActions,
+			sessionCommandActions(session),
 			// Per-session getter: `record.session.sessionId` reads through to
 			// `sessionManager.getSessionId()` (it's a getter, not a field), so an
 			// extension command that calls `ctx.newSession` / `ctx.switchSession`

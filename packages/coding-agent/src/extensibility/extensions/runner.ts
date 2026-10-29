@@ -308,9 +308,11 @@ export class ExtensionRunner {
 		this.#hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.#shutdownHandler = contextActions.shutdown;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
-		this.#obfuscateProviderTextFn = contextActions.obfuscateProviderText ?? (text => text);
+		this.#obfuscateProviderTextFn = contextActions.obfuscateProviderText;
+		this.#getContextUsageFn = contextActions.getContextUsage;
+		this.#compactFn = contextActions.compact;
 
-		// Command context actions (optional, only for interactive mode)
+		// Command context actions (optional: a spawned agent passes none)
 		if (commandContextActions) {
 			this.#waitForIdleFn = commandContextActions.waitForIdle;
 			this.#newSessionHandler = commandContextActions.newSession;
@@ -318,8 +320,6 @@ export class ExtensionRunner {
 			this.#navigateTreeHandler = commandContextActions.navigateTree;
 			this.#switchSessionHandler = commandContextActions.switchSession;
 			this.#reloadHandler = commandContextActions.reload;
-			this.#getContextUsageFn = commandContextActions.getContextUsage;
-			this.#compactFn = commandContextActions.compact;
 		}
 
 		this.#uiContext = uiContext ?? noOpUIContext;
