@@ -550,15 +550,14 @@ async function requestGitLabJson(
 		});
 	} catch (error) {
 		config.onFailure?.({ stage: "request", url: reportedUrl, detail: errorMessage(error) });
-		// An abort is not "this candidate produced nothing usable", it is the end of
-		// the phase, and swallowing it made the handshake walk the remaining
-		// candidates against an already-dead signal and then conclude with
-		// "set GITLAB_DUO_NAMESPACE_ID" — a configuration remedy for a stalled
-		// network. Rethrow so the caller reports the deadline it set. A catalog
-		// refresh still degrades: `fetchGitLabDuoWorkflowModels` catches and
-		// answers `null`.
-		if (config.signal?.aborted) throw error;
-		return null;
+		// A request that THREW ends the phase, whatever threw it. An abort is the caller's deadline, and
+		// a refused dial, a name that did not resolve or a certificate that did not verify is the host
+		// itself: every step of the handshake asks the same host, so no other candidate does better.
+		// Swallowing either walked the remaining candidates against a host that answered none of them
+		// and concluded with "set GITLAB_DUO_NAMESPACE_ID" -- a configuration remedy for a network that
+		// reached nothing. Rethrow so the caller reports what failed. A catalog refresh still degrades:
+		// `fetchGitLabDuoWorkflowModels` catches and answers `null`.
+		throw error;
 	}
 	if (!response.ok) {
 		// A 401 says the token is wrong and a 404 says this candidate is not a namespace the token can see.

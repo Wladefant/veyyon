@@ -122,10 +122,18 @@ export class AnthropicApiError extends ProviderHttpError {
 	}
 }
 
-/** Network-level failure (DNS, TLS, socket reset) after retries were exhausted. */
+/**
+ * A request that received no response: the dial, the TLS handshake or the socket failed first.
+ *
+ * The message is the cause's own sentence, because that sentence is the only part that tells a port
+ * nothing listens on from a name that does not resolve from a certificate that does not verify. The
+ * registry reads transience from the cause, as it does for a fetch any other provider threw; a fixed
+ * "Connection error." read as transient whatever failed, so a host that does not exist was redialed
+ * by the provider ladder and then by the turn, and the operator was shown none of the reason.
+ */
 export class AnthropicConnectionError extends Error {
 	constructor(cause: unknown) {
-		super("Connection error.", { cause });
+		super(cause instanceof Error && cause.message.length > 0 ? cause.message : "Connection error.", { cause });
 		this.name = "AnthropicConnectionError";
 	}
 }

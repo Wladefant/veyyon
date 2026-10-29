@@ -6,10 +6,12 @@
  * reconnected an MCP session and were a permanent failure to a provider call.
  *
  * Class closed: the socket vocabulary has one owner (`DEAD_SOCKET_ERRNOS` /
- * `DEAD_SOCKET_PHRASE_SOURCES` in the network domain), every errno it lists reads the same in the
- * provider ladder and in the MCP reconnect decision, and each surviving layer keeps only the rules
+ * `DEAD_SOCKET_PHRASE_SOURCES` in the network domain), every errno it lists is retried by the
+ * provider path and reconnects an MCP session, and each surviving layer keeps only the rules
  * that are its own — the MCP session shape (404/502/503, the transports' own wording) here, the
- * wider transient set (a live peer answering 500, a request held past its deadline) there. A second
+ * wider transient set (a live peer answering 500, a request held past its deadline) there. Within the
+ * provider path a dial that reached no peer (`UNREACHABLE_PEER_ERRNOS`) is redialed by the turn and
+ * not by the transport stage, and every other dead socket by the transport stage. A second
  * local vocabulary turns this suite red, because the sentences that belong to the wider set only are
  * asserted NOT to reconnect an MCP session.
  *
@@ -18,10 +20,13 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+	classify,
 	DEAD_SOCKET_ERRNOS,
 	DEAD_SOCKET_PHRASE_SOURCES,
 	isTransientErrorText,
 	namesDeadSocket,
+	retriable,
+	UNREACHABLE_PEER_ERRNOS,
 } from "@veyyon/ai/error/flags";
 import { isProviderRetryableError } from "@veyyon/ai/error/retryable";
 import type { MCPReconnect } from "@veyyon/coding-agent/mcp/tool-bridge";
@@ -61,13 +66,17 @@ function phraseSample(source: string): string {
 describe("the socket vocabulary is one list", () => {
 	it("reads every errno the owner lists the same way in both layers", () => {
 		expect(DEAD_SOCKET_ERRNOS.length).toBeGreaterThan(0);
+		const unreachable: readonly string[] = UNREACHABLE_PEER_ERRNOS;
 
 		for (const errno of DEAD_SOCKET_ERRNOS) {
 			const sentence = `connect ${errno} 10.0.0.1:443`;
 			expect(namesDeadSocket(sentence)).toBe(true);
 			expect(isTransientErrorText(sentence)).toBe(true);
 			expect(mcpFailureWarrantsReconnect(new Error(sentence))).toBe(true);
-			expect(isProviderRetryableError(new Error(sentence))).toBe(true);
+			expect(`${errno} turn=${retriable(classify(new Error(sentence)))}`).toBe(`${errno} turn=true`);
+			expect(`${errno} transport=${isProviderRetryableError(new Error(sentence))}`).toBe(
+				`${errno} transport=${!unreachable.includes(errno)}`,
+			);
 		}
 	});
 

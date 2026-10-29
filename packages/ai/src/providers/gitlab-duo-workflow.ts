@@ -2910,7 +2910,7 @@ export async function resolveGitLabDuoWorkflowNamespaceSelection(
 	} catch (error) {
 		throw new AIError.ProviderResponseError(
 			`GitLab Duo Workflow runtime namespace resolution failed: ${gitLabDuoWorkflowErrorText(error)}`,
-			{ provider: "gitlab-duo-agent", kind: "runtime" },
+			{ provider: "gitlab-duo-agent", kind: "runtime", cause: error },
 		);
 	}
 }

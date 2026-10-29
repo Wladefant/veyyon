@@ -35,7 +35,7 @@ import {
 	gatewayUsageLimitRule,
 	quotaDomain,
 } from "./domains/account";
-import { refusalDomain, timeoutDomain, transportDomain } from "./domains/network";
+import { refusalDomain, timeoutDomain, transportDomain, unreachableDomain } from "./domains/network";
 import {
 	fastModeDomain,
 	gatewayInvalidRequestWordingRule,
@@ -81,6 +81,7 @@ export const ERROR_DOMAINS: readonly ErrorDomain[] = [
 	streamDomain,
 	thinkingLoopDomain,
 	refusalDomain,
+	unreachableDomain,
 	transportDomain,
 	timeoutDomain,
 	providerHttpDomain,

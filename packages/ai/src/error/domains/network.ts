@@ -4,22 +4,18 @@
  * `transport` is a fault the next attempt can differ on — a socket that closed, an HTTP/2 stream the
  * peer reset, an errno, a gateway page, a provider that said "overloaded". `refusal` is the same
  * subject with the opposite answer: the peer NAMED a code whose meaning is that a replay reproduces
- * it. `timeout` is neither, because a context that timed out once times out again on the same model,
- * so the turn moves to another one rather than re-sending.
+ * it. `unreachable` is a dial that reached no peer, which the turn retries and the transport stage
+ * does not. `timeout` is none of these, because a context that timed out once times out again on the
+ * same model, so the turn moves to another one rather than re-sending.
  *
- * The three live together because they partition the same prose between them and read each other's
+ * The four live together because they partition the same prose between them and read each other's
  * conditions to do it: the transport rule of last resort must not fire on a timeout, and the timeout
  * rules must know whether an HTTP/2 code was named. Splitting them made those two files import each
  * other, which is the same thing with an extra edge.
  */
 import { http2RetryVerdict, isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
 import { isStreamFrameLimitError } from "@veyyon/utils/stream-frame-limit";
-import {
-	AnthropicConnectionError,
-	AnthropicConnectionTimeoutError,
-	CodexProviderStreamError,
-	CodexWebSocketTransportError,
-} from "../classes";
+import { AnthropicConnectionTimeoutError, CodexProviderStreamError, CodexWebSocketTransportError } from "../classes";
 import { Flag } from "../flag";
 import type { ErrorDomain } from "./types";
 
@@ -243,13 +239,6 @@ export const transportDomain: ErrorDomain = {
 	},
 	classes: [
 		{
-			name: "anthropic-connection-error",
-			why: "An Anthropic connection fault states its own transience in its type. The timeout subclass is excluded because it is its own family and carries a second flag.",
-			matches: link =>
-				link instanceof AnthropicConnectionError && !(link instanceof AnthropicConnectionTimeoutError),
-			flags: () => Flag.Transient,
-		},
-		{
 			name: "codex-websocket-transport",
 			why: "A Codex websocket transport error is a dead socket, whatever sentence the wrapper around it composed.",
 			matches: link => link instanceof CodexWebSocketTransportError,
@@ -330,6 +319,73 @@ export const refusalDomain: ErrorDomain = {
 			name: "named-http2-refused-code",
 			why: "A named HTTP/2 error code in the non-retryable set is the peer's own statement that a replay reproduces it; `NGHTTP2_CANCEL` is our own abort, and retrying a cancel is a bug rather than a recovery.",
 			structural: signal => signal.http2 === false,
+		},
+	],
+};
+
+/**
+ * The errnos of a dial that reached no peer: nothing listens on the port, no route reaches the host
+ * or its network, or the resolver could not answer for now. `ENOTFOUND` is absent because a name
+ * that does not exist fails the same way on every attempt, so it is not transient at any stage.
+ * `ETIMEDOUT` is absent because it also ends a read on a socket that was established.
+ */
+export const UNREACHABLE_PEER_ERRNOS = ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"] as const;
+
+const UNREACHABLE_PEER_CODES: ReadonlySet<string> = new Set(UNREACHABLE_PEER_ERRNOS);
+
+const UNREACHABLE_PEER_PATTERN = new RegExp(`(?<![\\w-])(?:${UNREACHABLE_PEER_ERRNOS.join("|")})(?![\\w-])`, "i");
+
+/** A sentence about an upstream is a proxy's report of its own dial: the proxy answered. */
+const UPSTREAM_PATTERN = /\bupstream\b/i;
+
+/**
+ * Whether a message states a dial from this machine that reached no peer.
+ *
+ * Errnos only. `fetch` in Bun and Node puts the errno in every dial failure it reports, while the
+ * prose "connection refused" is how a proxy describes ITS upstream (`upstream connect error:
+ * connection refused`), and that peer is alive and may route the next attempt elsewhere.
+ */
+function namesUnreachablePeer(text: string): boolean {
+	return UNREACHABLE_PEER_PATTERN.test(text) && !UPSTREAM_PATTERN.test(text);
+}
+
+/**
+ * The unreachable family: the request never left this machine, because no connection was made.
+ *
+ * Ordered ahead of `transport`, which also reads these errnos and sets `Flag.Transient` beside this
+ * one, so this family answers what each stage does. The turn retries it, with the countdown the
+ * operator sees and can cancel. The transport stage does not: a peer that refused the dial refuses
+ * the redial a second later, and the transport ladder ran its six attempts inside every attempt of
+ * the turn ladder, so a local server that was not running held a turn on "Working..." for minutes
+ * before the first countdown appeared.
+ *
+ * Both rules require that no status arrived, and the wording rule declines a sentence about an
+ * upstream: a proxy that reports its upstream refused the connection is a live peer whose next
+ * attempt may reach a different upstream.
+ */
+export const unreachableDomain: ErrorDomain = {
+	id: "unreachable",
+	why: "No connection was made: the dial was refused, no route reached the host, or the resolver could not answer.",
+	recovers: [Flag.PeerUnreachable],
+	recovery: {
+		transport: { action: "surface" },
+		credential: { action: "surface" },
+		turn: { action: "retry" },
+	},
+	rules: [
+		{
+			flags: Flag.PeerUnreachable | Flag.Transient,
+			name: "unreachable-peer-code",
+			why: "A runtime states a failed dial in the errno it puts in `code` (Bun's `fetch` and Node's `net` both do), which is a fact rather than a sentence, so a wrapper that rewords the message cannot hide it.",
+			structural: signal =>
+				signal.status === undefined && signal.code !== undefined && UNREACHABLE_PEER_CODES.has(signal.code),
+		},
+		{
+			flags: Flag.PeerUnreachable | Flag.Transient,
+			name: "unreachable-peer-wording",
+			why: "A failed dial that a wrapper rewrapped keeps its sentence and loses its `code` (`Network error: connect ECONNREFUSED`), so the errno is read from the text; a status or an HTTP/2 code means a peer answered, and then this is not the failure.",
+			structural: signal => signal.status === undefined && signal.http2 === undefined,
+			text: namesUnreachablePeer,
 		},
 	],
 };

@@ -48,6 +48,17 @@ export const Flag = {
 	 * ahead of `transport` so it answers first.
 	 */
 	TransportRefused: 0x4000_0000,
+	/**
+	 * No connection was established: the peer refused the dial (nothing listens on the port), the
+	 * host or network has no route, or the resolver could not answer for now. Set beside
+	 * {@link Flag.Transient}, because the next dial can succeed once the server starts or the network
+	 * returns, but it is never redialed by the transport stage: that ladder is invisible, and a dead
+	 * endpoint retried there multiplied every wait the turn ladder shows and can cancel.
+	 *
+	 * The bit is below {@link Flag.Class} on purpose. Every bit above it is taken, and a classified id
+	 * never carries a status, while an unclassified id is a status below 600 that never sets 0x800.
+	 */
+	PeerUnreachable: 0x0000_0800,
 	// A dead OAuth grant has no flag. It used to have one — `OAuthExpiry`, in this table and in
 	// KIND_MASK — that nothing ever set, so `is(id, Flag.OAuthExpiry)` answered false for every dead
 	// grant there has ever been. The answer belongs to `isDefinitiveOAuthFailure` in
