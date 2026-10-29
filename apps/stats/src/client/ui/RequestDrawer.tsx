@@ -1,11 +1,10 @@
+import { JsonBlock, StatusPill } from "@veyyon/tool-render";
 import { Clock, Coins, Gauge, Hash, Star, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getRequestDetails } from "../api";
 import { formatCost, formatDurationMs, formatInteger } from "../data/formatters";
 import type { RequestDetails } from "../types";
-import { JsonBlock } from "./JsonBlock";
 import { Skeleton } from "./Skeleton";
-import { StatusPill } from "./StatusPill";
 
 export interface RequestDrawerProps {
 	id: number | null;

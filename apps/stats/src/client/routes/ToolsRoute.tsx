@@ -1,3 +1,4 @@
+import { StatusPill } from "@veyyon/tool-render";
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import { getToolDashboardStats } from "../api";
@@ -7,7 +8,7 @@ import { formatCompact, formatCost, formatInteger, formatPercent, formatRelative
 import { useResource } from "../data/useResource";
 import { buildToolRows, type ToolRowView } from "../data/view-models";
 import type { TimeRange, ToolModelStats, ToolTimeSeriesPoint, ToolUsageStats } from "../types";
-import { AsyncBoundary, DataTable, Panel, StatusPill } from "../ui";
+import { AsyncBoundary, DataTable, Panel } from "../ui";
 import { useSystemTheme } from "../useSystemTheme";
 
 export interface ToolsRouteProps {
