@@ -1285,7 +1285,7 @@ async function runOneSuite(
 			throw new CliUsageError("Final skill phase has no complete current binding.");
 		}
 		const expectedBinding = skills.createCandidateSourceBinding(
-			{ skillBinding: plan.skillBinding },
+			plan.skillBinding,
 			skillTaskDescriptors,
 			fullSkillArm.sourceHash,
 			{
