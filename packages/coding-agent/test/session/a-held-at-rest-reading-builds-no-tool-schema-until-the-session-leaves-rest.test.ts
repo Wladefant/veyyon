@@ -12,9 +12,11 @@
  * since a recorded value drawn back is not a measurement.
  *
  * THE CLASS: every read the real status row and the real interactive host make while the session is
- * at rest builds no tool schema, observed as reads of each active tool's `parameters` through the
- * same objects the estimate walks. The suite renders the real `StatusLineComponent` and commits real
- * frames of a real `InteractiveMode` over a real session, so a new read either grows is covered by
+ * at rest builds no tool schema, observed as reads of each active tool's `parameters` and
+ * `wireParameters` through the same objects the estimate walks. A run from source has no wire-schema
+ * cache, so a `wireParameters` read builds the schema it describes. The suite renders the real
+ * `StatusLineComponent` and commits real frames of a real `InteractiveMode` over a real session, so
+ * a new read either grows is covered by
  * the render rather than by a list of paths. The release arms are the positive control: the same
  * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
  * guard and not a blind probe. Around it: creation files nothing, a session's first turn files the
@@ -117,30 +119,35 @@ async function create(extra: Partial<CreateAgentSessionOptions>): Promise<AgentS
 }
 
 /**
- * Count every read of `parameters` on the session's active tools, the objects the tool-schema
- * estimate iterates, and pass each read's tool name to `onRead`. Each tool keeps its own getter or
- * value; the counter wraps it on the instance.
+ * Count every read of `parameters` or `wireParameters` on the session's active tools, the objects
+ * the tool-schema estimate iterates, and pass each read's tool name to `onRead`. Each tool keeps its
+ * own getter or value; the counter wraps it on the instance.
  */
 function countSchemaReads(session: AgentSession, onRead?: (tool: string) => void): { count: number } {
 	const reads = { count: 0 };
 	for (const tool of session.agent.state.tools) {
-		let owner: object | null = tool;
-		let descriptor: PropertyDescriptor | undefined;
-		while (owner !== null && descriptor === undefined) {
-			descriptor = Object.getOwnPropertyDescriptor(owner, "parameters");
-			owner = Object.getPrototypeOf(owner);
+		for (const key of ["parameters", "wireParameters"] as const) {
+			let owner: object | null = tool;
+			let descriptor: PropertyDescriptor | undefined;
+			while (owner !== null && descriptor === undefined) {
+				descriptor = Object.getOwnPropertyDescriptor(owner, key);
+				owner = Object.getPrototypeOf(owner);
+			}
+			if (!descriptor) {
+				if (key === "parameters") throw new Error(`tool ${tool.name} has no parameters`);
+				continue;
+			}
+			const found = descriptor;
+			Object.defineProperty(tool, key, {
+				configurable: true,
+				enumerable: true,
+				get(): unknown {
+					reads.count++;
+					onRead?.(tool.name);
+					return found.get ? found.get.call(tool) : found.value;
+				},
+			});
 		}
-		if (!descriptor) throw new Error(`tool ${tool.name} has no parameters`);
-		const found = descriptor;
-		Object.defineProperty(tool, "parameters", {
-			configurable: true,
-			enumerable: true,
-			get(): unknown {
-				reads.count++;
-				onRead?.(tool.name);
-				return found.get ? found.get.call(tool) : found.value;
-			},
-		});
 	}
 	return reads;
 }

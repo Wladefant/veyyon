@@ -1,13 +1,13 @@
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import type { ptree } from "@veyyon/utils";
-import { lazy } from "@veyyon/utils/abortable";
 import { describeTimeoutParam } from "../tools/core/tool-timeouts";
 
 // =============================================================================
 // Tool Schema
 // =============================================================================
 
-export const lspSchema = lazy(() =>
+export const lspSchema = toolSchema("lsp", () =>
 	type({
 		action:
 			"'diagnostics' | 'definition' | 'references' | 'hover' | 'symbols' | 'rename' | 'rename_file' | 'code_actions' | 'type_definition' | 'implementation' | 'incoming_calls' | 'outgoing_calls' | 'status' | 'reload' | 'capabilities' | 'request'",

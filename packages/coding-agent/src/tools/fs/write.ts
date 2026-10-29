@@ -9,13 +9,13 @@ import type {
 	ToolTier,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { BARE_LITERAL_VALUE_RE, formatHashlineHeader } from "@veyyon/hashline";
 import {
 	atomicWriteFileWith,
 	errorMessage,
 	isEnoent,
 	isRecord,
-	lazy,
 	prompt,
 	statIfPresentOrThrow,
 	untilAborted,
@@ -160,7 +160,7 @@ function parseBulkDirectives(content: string): Map<number, string> | null {
 	return map;
 }
 
-const writeSchema = lazy(() =>
+const writeSchema = toolSchema("write", () =>
 	type({
 		path: type("string").describe("file path"),
 		content: type("string").describe("file content"),
@@ -492,6 +492,9 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 	readonly description: string;
 	get parameters(): typeof writeSchema.value {
 		return writeSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return writeSchema.wire;
 	}
 	readonly strict = true;
 	readonly concurrency = "exclusive";

@@ -10,6 +10,7 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import {
 	DAY_MS,
 	errorMessage,
@@ -18,7 +19,6 @@ import {
 	hashPath,
 	isDateOnly,
 	isEnoent,
-	lazy,
 	nonEmptyTrimmed,
 	prompt,
 	removeTempPath,
@@ -198,7 +198,7 @@ const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 	"run_watch",
 ]);
 
-const githubSchema = lazy(() =>
+const githubSchema = toolSchema("github", () =>
 	type({
 		op: type(
 			"'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
@@ -1097,6 +1097,9 @@ export class GithubTool implements AgentTool<typeof githubSchema.value, GhToolDe
 	readonly description = prompt.render(toolsPrompts["tools/github"].text);
 	get parameters(): typeof githubSchema.value {
 		return githubSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return githubSchema.wire;
 	}
 	readonly strict = true;
 

@@ -1,13 +1,14 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { clampLow, lazy } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { clampLow } from "@veyyon/utils";
 import { MNEMOPI_MEMORY_EDIT_OPERATIONS } from "../../memory/mnemopi/verbs";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { throwIfAborted } from "../core/tool-errors";
 import { requireMnemopiSessionState } from "./memory-session";
 
-const memoryEditSchema = lazy(() =>
+const memoryEditSchema = toolSchema("memory_edit", () =>
 	type({
 		// Derived from the store's own list, so a verb cannot be offered to the model without a branch that
 		// applies it. `type.enumerated` takes the values; the union spelling had to be kept in step by hand.
@@ -28,6 +29,9 @@ export class MemoryEditTool implements AgentTool<typeof memoryEditSchema.value> 
 	readonly description = toolsPrompts["tools/memory-edit"].text;
 	get parameters(): typeof memoryEditSchema.value {
 		return memoryEditSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryEditSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

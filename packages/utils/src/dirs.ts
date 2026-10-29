@@ -1150,6 +1150,17 @@ export function getLaunchFactsCachePath(): string {
 	return dirs.rootSubdir(path.join("cache", "launch-facts.json"), "cache");
 }
 
+/**
+ * Get the tool wire-schema cache path (profile `cache/tool-wire-schemas.json`).
+ *
+ * Holds the JSON Schema of each built-in tool's parameters as a compiled build produced it, keyed by
+ * that build's id, so a later launch of the same build sends its first request without evaluating
+ * arktype.
+ */
+export function getToolWireSchemaCachePath(): string {
+	return dirs.rootSubdir(path.join("cache", "tool-wire-schemas.json"), "cache");
+}
+
 /** A profile `cache/<file>` path, or the value of `envVar` when it is set so a test or operator can relocate it. */
 function cacheFilePath(envVar: string, file: string): string {
 	return pickProcessEnv(envVar) || dirs.rootSubdir(path.join("cache", file), "cache");

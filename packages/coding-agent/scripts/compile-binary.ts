@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -123,6 +124,9 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.VEYYON_COMPILED": JSON.stringify("true"),
 				"process.env.VEYYON_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
+				// Unique to this build: the tool wire-schema cache (`@veyyon/ai/utils/schema/tool-schema`)
+				// serves a stored wire form only to the build that stored it.
+				"process.env.VEYYON_BUILD_ID": JSON.stringify(randomUUID()),
 				...(await buildPayloadDefines()),
 			},
 			// Whitespace and syntax minification are startup latency, not disk

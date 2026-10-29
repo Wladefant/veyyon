@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import {
 	errorMessage,
 	isCancellation,
@@ -98,7 +99,7 @@ const appSchema = lazy(() =>
 	}),
 );
 
-const browserSchema = lazy(() =>
+const browserSchema = toolSchema("browser", () =>
 	type({
 		action: type("'open' | 'close' | 'run' | 'save_state'").describe("operation"),
 		"name?": type("string").describe("tab id (default 'main')"),
@@ -224,6 +225,9 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 	readonly summary = "Control a headless browser to navigate and interact with web pages";
 	get parameters(): typeof browserSchema.value {
 		return browserSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return browserSchema.wire;
 	}
 	readonly strict = true;
 	/**

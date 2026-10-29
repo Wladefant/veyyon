@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { type ToolSchema, toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { errorMessage, formatCount, lazy, logger, prompt, stringifyJsonSafe, truncate } from "@veyyon/utils";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
@@ -113,7 +114,7 @@ export const evalCellCommonFields = lazy(() => ({
  * the full language union for typing; {@link evalSchemaFor} narrows the wire
  * copy per session so disabled backends are never advertised to the model.
  */
-export const evalSchema = lazy(() =>
+export const evalSchema = toolSchema("eval", () =>
 	type({
 		language: type("'py' | 'js' | 'rb' | 'jl'").describe(describeLanguageField(EVAL_LANGUAGE_ORDER)),
 		...evalCellCommonFields.value,
@@ -135,19 +136,24 @@ export type EvalCellInput = EvalToolParams;
  * The list is a subsequence of {@link EVAL_LANGUAGE_ORDER}, which bounds the cache at one entry per
  * subset of the four languages.
  */
-const evalSchemaByLanguages = new Map<string, typeof evalSchema.value>();
+const evalSchemaByLanguages = new Map<string, ToolSchema<typeof evalSchema.value>>();
 
-function evalSchemaFor(langs: readonly EvalLanguageToken[]): typeof evalSchema.value {
-	if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema.value;
+function evalSchemaFor(langs: readonly EvalLanguageToken[]): ToolSchema<typeof evalSchema.value> {
+	if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema;
 	const key = langs.join(",");
-	const cached = evalSchemaByLanguages.get(key);
-	if (cached) return cached;
-	const schema = type({
-		language: type.enumerated(...langs).describe(describeLanguageField(langs)),
-		code: type("string").describe(describeCodeField(langs)),
-		...evalCellCommonFields.value,
-	}) as unknown as typeof evalSchema.value;
-	evalSchemaByLanguages.set(key, schema);
+	let schema = evalSchemaByLanguages.get(key);
+	if (schema === undefined) {
+		schema = toolSchema(
+			`eval:${key}`,
+			() =>
+				type({
+					language: type.enumerated(...langs).describe(describeLanguageField(langs)),
+					code: type("string").describe(describeCodeField(langs)),
+					...evalCellCommonFields.value,
+				}) as unknown as typeof evalSchema.value,
+		);
+		evalSchemaByLanguages.set(key, schema);
+	}
 	return schema;
 }
 
@@ -447,7 +453,10 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		return ALL_EXAMPLES.filter(ex => "call" in ex && langs.has(ex.call.language as EvalLanguageToken));
 	}
 	get parameters(): typeof evalSchema.value {
-		return evalSchemaFor(this.#enabledLanguages());
+		return evalSchemaFor(this.#enabledLanguages()).value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return evalSchemaFor(this.#enabledLanguages()).wire;
 	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;

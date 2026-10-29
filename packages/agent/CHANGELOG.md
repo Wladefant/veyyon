@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 
 ### Fixed

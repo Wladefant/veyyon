@@ -1,13 +1,14 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, logger, pluralize, toError, untilAborted } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { logger, pluralize, toError, untilAborted } from "@veyyon/utils";
 import { formatCurrentTime, formatMemories } from "../../memory/hindsight/content";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { requireMnemopiSessionState } from "./memory-session";
 import { recallToolView } from "./memory-view";
 
-const memoryRecallSchema = lazy(() =>
+const memoryRecallSchema = toolSchema("memory_recall", () =>
 	type({
 		query: type("string").describe("natural language search query"),
 	}),
@@ -22,6 +23,9 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 	readonly description = toolsPrompts["tools/recall"].text;
 	get parameters(): typeof memoryRecallSchema.value {
 		return memoryRecallSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryRecallSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

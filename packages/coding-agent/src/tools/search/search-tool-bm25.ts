@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, lazy, logger, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, logger, prompt } from "@veyyon/utils";
 import { resolveEffectiveToolDiscoveryMode } from "../../discovery/mode";
 import {
 	buildDiscoverableToolSearchIndex,
@@ -29,7 +30,7 @@ const DEFAULT_LIMIT = 8;
  */
 const ACTIVATION_SCORE_FLOOR = 0.5;
 
-const searchToolBm25Schema = lazy(() =>
+const searchToolBm25Schema = toolSchema("search_tool_bm25", () =>
 	type({
 		query: type("string").describe("tool search query"),
 		"limit?": type("number>0").describe("max matches"),
@@ -206,6 +207,9 @@ export class SearchToolBm25Tool implements AgentTool<typeof searchToolBm25Schema
 	}
 	get parameters(): typeof searchToolBm25Schema.value {
 		return searchToolBm25Schema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return searchToolBm25Schema.wire;
 	}
 	readonly strict = true;
 	readonly view = searchToolBm25ToolView;

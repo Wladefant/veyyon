@@ -12,7 +12,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, formatDuration, prompt, toError } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -21,7 +22,7 @@ import { isIrcEnabled } from "./irc-enabled";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
 
-const ircSchema = lazy(() =>
+const ircSchema = toolSchema("irc", () =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
 		"to?": type("string").describe('send: recipient agent id or "all"'),
@@ -71,6 +72,9 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	readonly description: string;
 	get parameters(): typeof ircSchema.value {
 		return ircSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return ircSchema.wire;
 	}
 	readonly strict = true;
 	// Only the ops that block observe an interrupt. `list`, `inbox`, a

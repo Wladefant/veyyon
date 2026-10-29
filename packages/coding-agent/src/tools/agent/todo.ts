@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@veyyon/ai";
 import { type SessionTelemetryDetail, sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { lazy, NON_ALNUM_RUN_RE, prompt } from "@veyyon/utils";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
@@ -251,7 +252,7 @@ const TodoWriteEntry = lazy(() =>
  * belongs at validation, which is the layer the repair loop and the model-facing
  * error path are built around.
  */
-const todoSchema = lazy(() =>
+const todoSchema = toolSchema("todo", () =>
 	type({
 		"op?": TodoOp.value,
 		"list?": InitListEntry.value.array().describe("phased task list (init)"),
@@ -1267,6 +1268,9 @@ export class TodoTool implements AgentTool<typeof todoSchema.value, TodoToolDeta
 	readonly description: string;
 	get parameters(): typeof todoSchema.value {
 		return todoSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return todoSchema.wire;
 	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;

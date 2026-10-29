@@ -1,13 +1,14 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, logger, toError, untilAborted } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { logger, toError, untilAborted } from "@veyyon/utils";
 import { ensureBankExists } from "../../memory/hindsight/bank";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { requireMnemopiSessionState } from "./memory-session";
 import { reflectToolView } from "./memory-view";
 
-const memoryReflectSchema = lazy(() =>
+const memoryReflectSchema = toolSchema("memory_reflect", () =>
 	type({
 		query: type("string").describe("question to answer"),
 		"context?": type("string").describe("optional context"),
@@ -23,6 +24,9 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 	readonly description = toolsPrompts["tools/reflect"].text;
 	get parameters(): typeof memoryReflectSchema.value {
 		return memoryReflectSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryReflectSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

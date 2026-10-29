@@ -658,6 +658,9 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 	get parameters(): typeof lspSchema.value {
 		return lspSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return lspSchema.wire;
+	}
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {

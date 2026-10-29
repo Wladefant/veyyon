@@ -7,7 +7,8 @@ import type {
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { isRecord, lazy, prompt, trimTrailingSlashes } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { isRecord, prompt, trimTrailingSlashes } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import type { ToolSession } from "..";
@@ -31,7 +32,7 @@ import { executeTextSearch, type TextSearchDetails, textSearchApproval } from ".
 /** The representations `search` matches, in the order its `type` field describes them. */
 export const SEARCH_TYPES = ["files", "text", "structure"] as const;
 
-export const searchSchema = lazy(() =>
+export const searchSchema = toolSchema("search", () =>
 	type({
 		"+": "reject",
 		type: type
@@ -227,6 +228,9 @@ export class SearchTool implements AgentTool<typeof searchSchema.value, SearchTo
 	readonly summary = "Search workspace files, text, or code structure";
 	get parameters(): typeof searchSchema.value {
 		return searchSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return searchSchema.wire;
 	}
 	readonly strict = true;
 	readonly description: string;

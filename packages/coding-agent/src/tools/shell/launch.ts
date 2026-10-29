@@ -7,7 +7,8 @@ import type {
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { clampLow, lazy, prompt, sanitizeText } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { clampLow, prompt, sanitizeText } from "@veyyon/utils";
 import { formatDuration } from "@veyyon/utils/format";
 import { daemonClientForProject } from "../../launch/client";
 import { DAEMON_COMPLETIONS_LIMIT } from "../../launch/completions";
@@ -31,7 +32,7 @@ import { ToolError } from "../core/tool-errors";
 import { releaseLaunchExitWatch, watchLaunchedProcessExit } from "./launch-exit-watch";
 import { readyPendingSummary } from "./launch-view";
 
-const launchSchema = lazy(() =>
+const launchSchema = toolSchema("launch", () =>
 	type({
 		op: type("'start' | 'list' | 'logs' | 'wait' | 'send' | 'stop' | 'restart' | 'describe'").describe(
 			"launch operation",
@@ -394,6 +395,9 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 	readonly description = prompt.render(toolsPrompts["tools/launch"].text);
 	get parameters(): typeof launchSchema.value {
 		return launchSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return launchSchema.wire;
 	}
 	readonly strict = true;
 	readonly examples: readonly ToolExample<LaunchParams>[] = [

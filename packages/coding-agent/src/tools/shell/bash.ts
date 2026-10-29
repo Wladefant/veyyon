@@ -7,6 +7,7 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import type {
 	ClientBridgeTerminalExitStatus,
 	ClientBridgeTerminalHandle,
@@ -16,7 +17,6 @@ import {
 	clampLow,
 	errorMessage,
 	isEnoent,
-	lazy,
 	logger,
 	prompt,
 	SIGNAL_EXIT_BASE,
@@ -236,7 +236,7 @@ const bashCwdStatement = statementById("tool-policy/bash-cwd");
 if (!bashCwdStatement) throw new Error("Missing required tool-policy/bash-cwd prompt statement");
 const BASH_CWD_DESCRIPTION = bashCwdStatement.text.trim();
 
-const bashSchemaBase = lazy(() =>
+const bashSchemaBase = toolSchema("bash", () =>
 	type({
 		command: type("string").describe("command to execute"),
 		"env?": type({ "[string]": "string" }).describe("extra env vars"),
@@ -249,7 +249,7 @@ const bashSchemaBase = lazy(() =>
 	}),
 );
 
-const bashSchemaWithAsync = lazy(() =>
+const bashSchemaWithAsync = toolSchema("bash:async", () =>
 	type({
 		command: "string",
 		"env?": { "[string]": "string" },
@@ -565,7 +565,10 @@ export class BashTool
 		});
 	}
 	get parameters(): BashToolSchema {
-		return this.#asyncEnabled ? bashSchemaWithAsync.value : bashSchemaBase.value;
+		return (this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase).value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return (this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase).wire;
 	}
 	// Non-pty calls run alongside each other (the executor isolates overlapping
 	// runs on the same shell session); pty takes over the terminal UI and must

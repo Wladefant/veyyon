@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `toolSchema(id, build)` in `@veyyon/ai/utils/schema/tool-schema` holds a tool parameter schema with its wire form, which a compiled build stores per build in the profile's `cache/tool-wire-schemas.json`, and `Tool.wireParameters` supplies that wire form to a request without building `parameters`.
+
 ### Changed
 
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.

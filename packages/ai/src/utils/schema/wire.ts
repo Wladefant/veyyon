@@ -742,14 +742,32 @@ export function arkToWireSchema(schema: Type): Record<string, unknown> {
 
 /**
  * Resolve a tool's parameters to a JSON Schema object suitable for sending
+ * over the wire: its supplied {@link Tool.wireParameters} while `parameters`
+ * is read through an accessor, otherwise {@link parametersWireSchema} of
+ * `parameters`.
+ *
+ * An object holding `parameters` as its own data property was given that
+ * value directly, typically by spreading a tool and replacing it, so a
+ * `wireParameters` the spread copied along describes the schema it replaced.
+ */
+export function toolWireSchema(tool: Tool): Record<string, unknown> {
+	const own = Object.getOwnPropertyDescriptor(tool, "parameters");
+	if (own === undefined || !("value" in own)) {
+		const supplied = tool.wireParameters;
+		if (supplied !== undefined) return supplied;
+	}
+	return parametersWireSchema(tool.parameters);
+}
+
+/**
+ * Resolve a parameter schema to a JSON Schema object suitable for sending
  * over the wire. Zod schemas are converted (and cached); legacy TypeBox / raw
  * JSON Schema parameters are upgraded to draft 2020-12 (and cached).
  *
  * Zod schemas also receive Zod-artifact cleanup; both branches normalize
  * schema-valued positions and nullable scalar unions.
  */
-export function toolWireSchema(tool: Tool): Record<string, unknown> {
-	const params: TSchema = tool.parameters;
+export function parametersWireSchema(params: TSchema): Record<string, unknown> {
 	if (isArkSchema(params)) return arkToWireSchema(params);
 	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import {
 	deleteManagedSkill,
 	getManagedSkillsDir,
@@ -12,7 +12,7 @@ import { isNameClaimedByAuthoredSkill } from "../../extensibility/skills";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 
-const manageSkillSchema = lazy(() =>
+const manageSkillSchema = toolSchema("manage_skill", () =>
 	type({
 		action: "'create' | 'update' | 'delete'",
 		name: type("string").describe("kebab-case skill name"),
@@ -45,6 +45,9 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema.value
 	readonly description = toolsPrompts["tools/manage-skill"].text;
 	get parameters(): typeof manageSkillSchema.value {
 		return manageSkillSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return manageSkillSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "essential" as const;

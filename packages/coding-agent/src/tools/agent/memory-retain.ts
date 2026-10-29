@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import {
 	MEMORY_RETAIN_MAX_BYTES,
 	MEMORY_RETAIN_MAX_ITEM_BYTES,
@@ -13,7 +13,7 @@ import { throwIfAborted } from "../core/tool-errors";
 import { requireMnemopiSessionState } from "./memory-session";
 import { retainToolView } from "./memory-view";
 
-const memoryRetainSchema = lazy(() =>
+const memoryRetainSchema = toolSchema("memory_retain", () =>
 	type({
 		items: type({
 			content: type("string").atMostLength(MEMORY_RETAIN_MAX_ITEM_BYTES).describe("information to remember"),
@@ -88,6 +88,9 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 	readonly description = toolsPrompts["tools/retain"].text;
 	get parameters(): typeof memoryRetainSchema.value {
 		return memoryRetainSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryRetainSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

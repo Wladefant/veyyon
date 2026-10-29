@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { atomicWriteFilePreservingMode, clampLow, errorMessage, isEnoent, lazy } from "@veyyon/utils";
 import { resolveToCwd } from "../../tools/core/path-utils";
 import {
@@ -1626,7 +1627,7 @@ export const patchEditEntrySchema = lazy(() =>
 
 export type PatchEditEntry = typeof patchEditEntrySchema.value.infer;
 
-export const patchEditSchema = lazy(() =>
+export const patchEditSchema = toolSchema("edit:patch", () =>
 	type({
 		path: "string",
 		edits: patchEditEntrySchema.value.array(),

@@ -325,6 +325,10 @@ describe("the modules that were repointed stay cut", () => {
 	 * Re-measured 2026-10-28: `shared-llm.ts` 219 -> 220 by `providers/anthropic-tool-choice.ts`, the
 	 * Anthropic `tool_choice` mapping moved out of `stream.ts`, already on this reach, so GitLab Duo and the
 	 * OpenAI/Anthropic shim stop importing the stream dispatcher. It imports only types.
+	 *
+	 * Re-measured 2026-10-29: `shared-llm.ts` 220 -> 221 by `utils/schema/tool-schema.ts`, the tool
+	 * parameter schema that reads its wire form from the build's wire-schema cache, which the commit
+	 * analysis tool declares its schema through. It imports only modules already on this reach.
 	 */
 	it.each([
 		["agent/src/proxy.ts", 152],
@@ -346,7 +350,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 220],
+		["coding-agent/src/commit/shared-llm.ts", 221],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

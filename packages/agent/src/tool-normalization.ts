@@ -154,6 +154,7 @@ function normalizeTool(
 ): Tool {
 	const intentMode = resolveIntentMode(tool.intent);
 	const doInjectIntent = injectIntent && intentMode !== "omit";
+	const spec = specWithoutSchema(tool);
 	// When the full catalog is rendered into the system prompt, ship the tool
 	// specs without their descriptions (top-level + nested schema annotations)
 	// so they are not duplicated on the wire. Strip the STABLE wire schema (the
@@ -163,18 +164,34 @@ function normalizeTool(
 	if (pruneDescriptions) {
 		let parameters = stripSchemaDescriptions(toolWireSchema(tool)) as TSchema;
 		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
-		return { ...tool, parameters, description: "" };
+		return { ...spec, parameters, description: "" } as Tool;
 	}
 	let parameters = toolWireSchema(tool) as TSchema;
 	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 	const description = tool.description ?? "";
 	const examplesBlock = exampleDialect
-		? renderToolExamples({ ...tool, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
+		? renderToolExamples({ ...spec, parameters } as Tool, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 		: "";
 	// Every agent normalizes its own tool list, so an appended examples block would otherwise
 	// leave one copy of each description per live agent.
 	const finalDescription = examplesBlock ? internString(`${description}\n\n${examplesBlock}`) : description;
-	return { ...tool, parameters, description: finalDescription };
+	return { ...spec, parameters, description: finalDescription } as Tool;
+}
+
+/**
+ * The own enumerable properties of `tool` a spread copies, without `parameters` and `wireParameters`.
+ *
+ * A wrapped tool forwards every property through an enumerable accessor, so spreading it reads
+ * `parameters`, which builds the schema the caller is about to replace with its wire form.
+ */
+function specWithoutSchema(tool: AnyAgentTool): Record<PropertyKey, unknown> {
+	const spec: Record<PropertyKey, unknown> = {};
+	for (const key of Reflect.ownKeys(tool)) {
+		if (key === "parameters" || key === "wireParameters") continue;
+		if (!Object.prototype.propertyIsEnumerable.call(tool, key)) continue;
+		spec[key] = (tool as unknown as Record<PropertyKey, unknown>)[key];
+	}
+	return spec;
 }
 
 function resolveIntentMode(intent: AgentTool["intent"]): "require" | "optional" | "omit" {

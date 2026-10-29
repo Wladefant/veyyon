@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { prompt } from "@veyyon/utils";
 import { toolsPrompts } from "../prompts/tools/rows";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/core/tool-errors";
@@ -8,7 +9,7 @@ import { goalToolView } from "./goal-view";
 import { completionBudgetReport, remainingTokens } from "./runtime";
 import type { Goal, GoalToolDetails } from "./state";
 
-const goalSchema = lazy(() =>
+const goalSchema = toolSchema("goal", () =>
 	type({
 		op: type("'create' | 'get' | 'complete' | 'resume' | 'drop'").describe("goal operation"),
 		"objective?": type("string").describe("goal objective"),
@@ -54,6 +55,9 @@ export class GoalTool implements AgentTool<typeof goalSchema.value, GoalToolDeta
 	readonly description = prompt.render(toolsPrompts["tools/goal"].text);
 	get parameters(): typeof goalSchema.value {
 		return goalSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return goalSchema.wire;
 	}
 	readonly strict = true;
 	readonly intent = "omit" as const;

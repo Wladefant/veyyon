@@ -490,6 +490,8 @@ export interface SystemPromptToolMetadata {
 	 * provider-native list mode.
 	 */
 	readonly parameters?: TSchema;
+	/** The JSON Schema of {@link parameters}, when the tool supplies it without building `parameters`. */
+	readonly wireParameters?: Record<string, unknown>;
 	/** Illustrative examples rendered into the verbose inventory. */
 	examples?: readonly ToolExample[];
 }
@@ -513,6 +515,9 @@ export function buildSystemPromptToolMetadata(
 						override?.description ?? (typeof toolRecord.description === "string" ? toolRecord.description : ""),
 					get parameters(): TSchema | undefined {
 						return override?.parameters ?? toolRecord.parameters;
+					},
+					get wireParameters(): Record<string, unknown> | undefined {
+						return override?.parameters === undefined ? toolRecord.wireParameters : override.wireParameters;
 					},
 					examples: override?.examples ?? toolRecord.examples,
 					wireName,
@@ -1062,7 +1067,14 @@ function promptToolSet(options: BuildSystemPromptOptions): PromptToolSet {
 					return {
 						name: wireNames.get(name) ?? name,
 						description: meta?.description ?? "",
-						parameters: meta?.parameters ?? ({ type: "object" } as TSchema),
+						// Accessors, so the renderer reads the wire form the tool supplies instead of building
+						// `parameters` (see `toolWireSchema`).
+						get parameters(): TSchema {
+							return meta?.parameters ?? ({ type: "object" } as TSchema);
+						},
+						get wireParameters(): Record<string, unknown> | undefined {
+							return meta?.wireParameters;
+						},
 						examples: meta?.examples,
 					};
 				}),
