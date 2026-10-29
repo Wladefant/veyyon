@@ -44,10 +44,7 @@ async function register(sessionId: string, env: CpuLimitEnv): Promise<void> {
 }
 
 afterEach(async () => {
-	for (const sessionId of ["sync-registration", "async-bash-session", "async-bash-miss"]) {
-		await sessionCpuLimit(sessionId)?.dispose();
-	}
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 });
 

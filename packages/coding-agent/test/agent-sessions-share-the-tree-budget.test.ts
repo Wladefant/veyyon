@@ -59,15 +59,15 @@ function emptyWorkspaceTree(cwd: string): WorkspaceTree {
 	return { rootPath: cwd, rendered: ".", truncated: false, totalLines: 1, agentsMdFiles: [] };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	globals = beginSettingsTest();
 	setAgentDir(makeTempDir("budget-agentdir").path());
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 });
 
 afterEach(async () => {
 	for (const session of sessions.splice(0)) await session.dispose();
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	restoreSettingsTestState(globals);
 	for (const dir of tempDirs.splice(0)) dir.removeSync();
 });

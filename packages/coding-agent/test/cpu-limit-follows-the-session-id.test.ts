@@ -48,8 +48,8 @@ let tempDir = "";
 let authStorage: AuthStorage | undefined;
 let session: AgentSession | undefined;
 
-beforeEach(() => {
-	resetSessionCpuLimitsForTests();
+beforeEach(async () => {
+	await resetSessionCpuLimitsForTests();
 	tempDir = path.join(os.tmpdir(), `pi-cpu-rekey-${Snowflake.next()}`);
 	fs.mkdirSync(tempDir, { recursive: true });
 });
@@ -59,7 +59,7 @@ afterEach(async () => {
 	session = undefined;
 	authStorage?.close();
 	authStorage = undefined;
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	if (tempDir && fs.existsSync(tempDir)) removeSyncWithRetries(tempDir);
 });
 

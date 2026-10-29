@@ -1410,14 +1410,19 @@ export function resolvedMachineBudgetPlacement(): Promise<MachineBudgetPlacement
 	return undefined;
 }
 
-/** Reset the registry, probe cache and machine placement. Test-only. */
-export function resetSessionCpuLimitsForTests(): void {
+/**
+ * Reset the registry, probe cache and machine placement, and dispose every limiter the registry
+ * held, so its watcher interval and group handle end with the test that created them. Test-only.
+ */
+export async function resetSessionCpuLimitsForTests(): Promise<void> {
+	const live = new Set(limiters.values());
 	limiters.clear();
 	registrationOrder.length = 0;
 	aliasOwners.clear();
 	aliasesByOwner.clear();
 	cachedProbe = undefined;
 	machinePlacements.clear();
+	await Promise.all([...live].map(limiter => limiter.dispose()));
 }
 
 /**

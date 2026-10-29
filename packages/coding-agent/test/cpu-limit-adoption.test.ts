@@ -157,8 +157,8 @@ afterAll(async () => {
 	await fs.rm(stubDir, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-	resetSessionCpuLimitsForTests();
+beforeEach(async () => {
+	await resetSessionCpuLimitsForTests();
 });
 
 afterEach(async () => {
@@ -171,7 +171,7 @@ afterEach(async () => {
 		// belonging to this one. Deregistering first leaves a late adopt with no
 		// target, which is what the production path does for an ended session.
 		await disposeOwnedResources("session", ROOT_SESSION);
-		resetSessionCpuLimitsForTests();
+		await resetSessionCpuLimitsForTests();
 
 		for (const pid of startedPids) {
 			try {

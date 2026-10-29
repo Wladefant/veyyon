@@ -70,8 +70,8 @@ let tempDir = "";
 let authStorage: AuthStorage | undefined;
 let session: AgentSession | undefined;
 
-beforeEach(() => {
-	resetSessionCpuLimitsForTests();
+beforeEach(async () => {
+	await resetSessionCpuLimitsForTests();
 	tempDir = path.join(os.tmpdir(), `veyyon-resources-live-${Snowflake.next()}`);
 	fs.mkdirSync(tempDir, { recursive: true });
 });
@@ -81,7 +81,7 @@ afterEach(async () => {
 	session = undefined;
 	authStorage?.close();
 	authStorage = undefined;
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 	if (tempDir && fs.existsSync(tempDir)) removeSyncWithRetries(tempDir);
 });

@@ -43,7 +43,7 @@ const live: SessionCpuLimit[] = [];
 
 afterEach(async () => {
 	for (const limiter of live.splice(0)) await limiter.dispose();
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 });
 
