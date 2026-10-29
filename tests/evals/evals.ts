@@ -735,17 +735,46 @@ async function runProgram(kind: "bench" | "measurement" | "tool", argv: readonly
  * Starts the evals manager server (REST + SSE API, dashboard, run launcher).
  * One entrypoint, one flag grammar: `evals serve [--port 4700] [--host 0.0.0.0]`.
  */
-async function runSkillCommand(argv: readonly string[]): Promise<number> {
-	const operation = argv[0];
+const SKILL_COMMAND_FLAGS: Record<string, Record<string, true>> = {
+	revise: { "--manifest": true, "--tasks": true, "--run": true, "--split-seed": true, "--model": true, "--output": true },
+	select: {
+		"--manifest": true,
+		"--tasks": true,
+		"--run": true,
+		"--split-seed": true,
+		"--candidate": true,
+		"--output": true,
+	},
+	inspect: { "--manifest": true, "--run": true, "--candidate": true },
+};
+
+export function parseSkillCommandArgs(
+	operation: string,
+	argv: readonly string[],
+): ReadonlyMap<string, string> {
+	const allowed = SKILL_COMMAND_FLAGS[operation];
+	if (!allowed) throw new CliUsageError("Use `evals skill revise`, `evals skill select`, or `evals skill inspect`.");
 	const values = new Map<string, string>();
-	for (let index = 1; index < argv.length; index += 2) {
+	for (let index = 0; index < argv.length; index += 1) {
 		const key = argv[index];
 		const value = argv[index + 1];
-		if (!key?.startsWith("--") || !value || value.startsWith("--") || values.has(key)) {
-			process.stderr.write("Skill commands require unique --name value arguments.\n");
-			return 2;
+		if (!key?.startsWith("--") || !allowed[key] || !value || value.startsWith("--") || values.has(key)) {
+			throw new CliUsageError("Skill commands require unique supported --name value arguments.");
 		}
 		values.set(key, value);
+		index += 1;
+	}
+	return values;
+}
+
+async function runSkillCommand(argv: readonly string[]): Promise<number> {
+	const operation = argv[0];
+	let values: ReadonlyMap<string, string>;
+	try {
+		values = parseSkillCommandArgs(operation ?? "", argv.slice(1));
+	} catch (error) {
+		process.stderr.write(`${errorMessage(error)}\n`);
+		return 2;
 	}
 	const requireValue = (key: string): string => {
 		const value = values.get(key);
