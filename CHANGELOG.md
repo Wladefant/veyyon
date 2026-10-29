@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-10-28
+
 ### Added
 
 - Added `RELEASE_REPOSITORY` as the shared source for the product release repository.
@@ -14,14 +16,9 @@
 
 ### Fixed
 
+- Nested lanes see their delegating ancestors separately from other lanes in IRC and receive their parent identity with the assignment ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 - Fixed Windows `read` with redirected input changing the host process's console modes ([Refs #755](https://github.com/Wladefant/veyyon/issues/755)).
 - Bedrock stream failures retain their service status so transient server and throttling errors remain eligible for retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
-
-## [1.6.6] - 2026-10-28
-
-### Fixed
-
-- Nested lanes see their delegating ancestors separately from other lanes in IRC and receive their parent identity with the assignment ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 
 ## [1.6.5] - 2026-10-28
 
