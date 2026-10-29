@@ -19,19 +19,38 @@ export interface SkillExperimentBinding {
 }
 
 async function hashSources(roots: readonly string[]): Promise<string> {
-	const hash = createHash("sha256");
-	const visit = async (file: string, label: string): Promise<void> => {
+	const files: { file: string; label: string }[] = [];
+	const excludedDirectories: Record<string, true> = { node_modules: true, ".git": true, ".cache": true, dist: true };
+	const collect = async (file: string, label: string): Promise<void> => {
 		const stat = await fs.lstat(file);
 		if (stat.isSymbolicLink()) throw new Error(`Experiment source identity refuses symbolic link: ${label}`);
 		if (stat.isDirectory()) {
-			for (const entry of (await fs.readdir(file)).sort()) await visit(path.join(file, entry), `${label}/${entry}`);
+			const entries = await fs.readdir(file, { withFileTypes: true });
+			for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+				if (entry.isDirectory() && excludedDirectories[entry.name]) continue;
+				if (entry.isSymbolicLink()) throw new Error(`Experiment source identity refuses symbolic link: ${label}/${entry.name}`);
+				const child = path.join(file, entry.name);
+				const childLabel = `${label}/${entry.name}`;
+				if (entry.isDirectory()) await collect(child, childLabel);
+				else if (entry.isFile() && /\.(?:ts|tsx|js|json|md)$/.test(entry.name)) files.push({ file: child, label: childLabel });
+			}
 		} else if (/\.(?:ts|tsx|js|json|md)$/.test(file)) {
-			const bytes = await fs.readFile(file);
+			files.push({ file, label });
+		}
+	};
+	for (let index = 0; index < roots.length; index++) await collect(roots[index], String(index));
+	const hash = createHash("sha256");
+	// Keep reads bounded, but consume bytes in source order so scheduling never changes identity.
+	for (let offset = 0; offset < files.length; offset += 32) {
+		const batch = files.slice(offset, offset + 32);
+		const contents = await Promise.all(batch.map(entry => fs.readFile(entry.file)));
+		for (let index = 0; index < batch.length; index++) {
+			const { label } = batch[index];
+			const bytes = contents[index];
 			hash.update(`${label.length}:${label}:${bytes.length}:`);
 			hash.update(bytes);
 		}
-	};
-	for (let index = 0; index < roots.length; index++) await visit(roots[index], String(index));
+	}
 	return hash.digest("hex");
 }
 
