@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native browser ARIA snapshots and structured observations omit password-control values while preserving accessible labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
+
 ## [1.6.6] - 2026-10-28
 
 ### Changed

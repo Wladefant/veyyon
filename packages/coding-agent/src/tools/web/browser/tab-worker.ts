@@ -753,11 +753,16 @@ async function collectObservationEntries(
 				// Only a role and name the page held once can name this element's replacement.
 				const unique = options.identities.get(`${node.role}\n${name}`) === 1;
 				core.cacheElement(id, handle as ElementHandle, unique ? { role: node.role, name } : null);
+				// AX values can be masked or raw depending on the browser. Classify the
+				// actual control before copying either form into an observation.
+				const isPassword =
+					node.value !== undefined &&
+					(await handle.evaluate(element => element.tagName === "INPUT" && (element as HTMLInputElement).type === "password"));
 				entries.push({
 					id,
 					role: node.role,
 					name: node.name,
-					value: node.value,
+					value: isPassword ? undefined : node.value,
 					description: node.description,
 					keyshortcuts: node.keyshortcuts,
 					states,
