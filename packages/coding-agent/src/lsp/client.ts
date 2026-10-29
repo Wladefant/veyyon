@@ -341,6 +341,9 @@ function queueWriteMessage(
 // Message Reader
 // =============================================================================
 
+/** How long a reader whose stream closed waits for the server's exit to be recorded. */
+const READER_EXIT_GRACE_MS = 1_000;
+
 /**
  * Start background message reader for a client.
  * Routes responses to pending requests and handles notifications.
@@ -443,9 +446,18 @@ async function startMessageReader(client: LspClient): Promise<void> {
 		client.messageBuffer = framer.remainder();
 		reader.releaseLock();
 		client.isReading = false;
-		// Reader exited while the server process is still alive (unrecoverable
-		// read error or bad stream state): nothing will route responses anymore,
-		// so tear the client down — the next call respawns instead of timing out.
+		// A server that closes its stdout is normally exiting, and the exit handler rejects what is pending
+		// with the exit code and stderr that say why. The closed stream can be read before the exit is
+		// recorded, so the exit is given {@link READER_EXIT_GRACE_MS} to land first. A reader that stopped
+		// while the server lives on (an unrecoverable read error or bad stream state) routes nothing more,
+		// so the client is torn down and the next call respawns instead of timing out.
+		if (client.proc.exitCode === null) {
+			await settleWithin(
+				client.proc.exited.catch(() => undefined),
+				READER_EXIT_GRACE_MS,
+				undefined,
+			);
+		}
 		if (client.proc.exitCode === null) {
 			client.status = "error";
 			if (clients.get(client.name) === client) {

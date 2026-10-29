@@ -98,6 +98,7 @@
 - The first `lsp` diagnostics call or `rename_file` against a project-aware language server returns in about a second instead of 15 seconds: the file opens before the project-load wait, and a server that reports no load progress is waited on only until it publishes or 2 seconds after the open.
 - `rename_file` on a fresh TypeScript server proposes the import edits of every file importing the renamed one; it opened no file first, so tsserver loaded no project and proposed none.
 - A write reports the diagnostics its language server published for the written text; a publish that arrived before the write's file-change notice was dropped, so the write waited out its diagnostics budget and reported the file clean.
+- A language server that exits during startup is reported with its exit code and stderr, such as `pyright: LSP server exited (code 1): ModuleNotFoundError: No module named 'pyright'`, instead of `LSP reader stopped; client torn down`.
 
 - A `discovery.type: ollama` endpoint whose `/api/tags` body is not a model list fails with an error naming the URL instead of a `TypeError`, and a `/api/tags` entry that names no model is skipped instead of failing discovery.
 - Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
