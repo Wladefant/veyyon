@@ -121,6 +121,31 @@ function sessionEntries(activeModel?: string): SessionEntry[] {
 	];
 }
 
+function defaultAnthropicEntries(): SessionEntry[] {
+	return sessionEntries("anthropic/claude-sonnet-4");
+}
+
+test("live provider override replays Codex compaction despite an Anthropic default", () => {
+	const entries = defaultAnthropicEntries();
+	const live = buildSessionContext(entries, undefined, undefined, { activeProvider: "openai" });
+	expect(live.messages).toHaveLength(3);
+	expect(summaryMessage(live.messages).providerPayload?.items).toEqual(REMOTE_WINDOW);
+	expect(live.messages[1].role === "user" && live.messages[1].content).toBe("kept turn");
+	expect(live.messages[2].role === "user" && live.messages[2].content).toBe("after compaction");
+
+	const offline = buildSessionContext(entries);
+	expect(offline.messages.some(message => message.role === "compactionSummary")).toBe(false);
+	expect(offline.messages.some(message => message.role === "user" && message.content === "turn one")).toBe(true);
+});
+
+test("foreign live provider never replays Codex encrypted data", () => {
+	const entries = defaultAnthropicEntries();
+	const foreign = buildSessionContext(entries, undefined, undefined, { activeProvider: "anthropic" });
+	expect(foreign.messages.some(message => message.role === "compactionSummary")).toBe(false);
+	expect(JSON.stringify(foreign.messages)).not.toContain("gAAAAABpM0Yj-fake");
+	expect(foreign.messages.some(message => message.role === "user" && message.content === "turn one")).toBe(true);
+});
+
 function getOpenAIModel(): Model {
 	const model = getBundledModel("openai", "gpt-5.1");
 	if (!model) throw new Error("Expected built-in openai/gpt-5.1 to exist");
