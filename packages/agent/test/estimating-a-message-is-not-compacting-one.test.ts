@@ -181,8 +181,13 @@ const PRUNING_CEILING = 197;
  * Anthropic `tool_choice` mapping moved out of `ai/stream.ts`, already on the engine's reach, so the
  * providers that read it stop importing the stream dispatcher. Its only imports are types, so the
  * growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-29: engine 319. The new module is `utils/build-store.ts`, the per-build JSON store
+ * that `catalog/identity/bundled.ts`, already on the engine's reach, reads each custom model id's bundled
+ * reference through. Its imports (`atomic-write.ts`, `logger.ts`, `type-guards.ts`) were already reached,
+ * so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 318;
+const COMPACTION_ENGINE_CEILING = 319;
 const REMOTE_SUMMARIZER_CEILING = 103;
 
 describe("the estimator is a leaf", () => {

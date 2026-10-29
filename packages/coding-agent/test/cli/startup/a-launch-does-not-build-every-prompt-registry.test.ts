@@ -562,11 +562,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * (`@veyyon/utils/atomic-write`, `@veyyon/utils/dirs`, `@veyyon/utils/logger`,
  * `@veyyon/utils/type-guards` and `schema/wire.ts`) are already here. Measured 2026-10-29 at 1532.
  *
+ * 1532 to 1533: `utils/src/build-store.ts`, the per-build JSON store that `tool-schema.ts` and the
+ * catalog's `identity/bundled.ts`, both already here, persist build-derived values through, so a
+ * launch of a compiled build reads each custom model id's bundled reference instead of scanning the
+ * catalog keys. Its imports (`atomic-write.ts`, `logger.ts`, `type-guards.ts`) are already here.
+ * Measured 2026-10-29 at 1533.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1532;
+const LAUNCH_REACH_CEILING = 1533;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -602,8 +608,10 @@ const LAUNCH_REACH_CEILING = 1532;
  * above records.
  *
  * 492 to 493: `ai/src/utils/schema/tool-schema.ts`, for the reason the launch ceiling above records.
+ *
+ * 493 to 494: `utils/src/build-store.ts`, for the reason the launch ceiling above records.
  */
-const ASSEMBLER_REACH_CEILING = 493;
+const ASSEMBLER_REACH_CEILING = 494;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();
