@@ -12,6 +12,10 @@
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 
+### Fixed
+
+- A session entry holding a value that loops back to one of its own ancestors, such as a tool result from a JS eval cell that displayed a cyclic object, reaches the session file with `"[Circular]"` at the loop instead of throwing `RangeError: Maximum call stack size exceeded` and leaving the entry out of the resumed session; the persistence pass over 400 entries takes 79 µs instead of 68 µs for the check.
+
 ## [1.5.10] - 2026-10-25
 
 ### Breaking Changes
