@@ -53,8 +53,7 @@ function createClient(cwd: string, config: ServerConfig): LspClient {
 }
 
 function publishDiagnostics(client: LspClient, uri: string, diagnostics: Diagnostic[], version: number | null): void {
-	client.diagnostics.set(uri, { diagnostics, version });
-	client.diagnosticsVersion += 1;
+	lspClient.recordPublishedDiagnostics(client, uri, { diagnostics, version });
 }
 
 /**
@@ -451,11 +450,10 @@ describe("LSP diagnostics freshness", () => {
 				bunDiagnostic.code = 2867;
 				const syntaxDiagnostic = createDiagnostic("';' expected.");
 				syntaxDiagnostic.code = 1005;
-				mockClient.diagnostics.set(uri, {
+				lspClient.recordPublishedDiagnostics(mockClient, uri, {
 					version: 1,
 					diagnostics: [moduleDiagnostic, bunDiagnostic, syntaxDiagnostic],
 				});
-				mockClient.diagnosticsVersion += 1;
 			});
 
 			const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });

@@ -15,6 +15,7 @@ import type {
 	LspJsonRpcRequest,
 	LspJsonRpcResponse,
 	PublishDiagnosticsParams,
+	PublishedDiagnostics,
 	ServerConfig,
 	WorkspaceEdit,
 } from "./types";
@@ -27,6 +28,28 @@ import { fileToUri } from "./utils";
 const clients = new Map<string, LspClient>();
 const clientLocks = new Map<string, Promise<LspClient>>();
 const fileOperationLocks = new Map<string, Promise<void>>();
+
+/** Callbacks run on every diagnostics publish a client records, for any document. */
+const diagnosticsPublishListeners = new WeakMap<LspClient, Set<() => void>>();
+
+/** Record a diagnostics publish for `uri` and run every listener {@link onDiagnosticsPublish} registered. */
+export function recordPublishedDiagnostics(client: LspClient, uri: string, published: PublishedDiagnostics): void {
+	client.diagnostics.set(uri, published);
+	client.diagnosticsVersion += 1;
+	const listeners = diagnosticsPublishListeners.get(client);
+	if (!listeners) return;
+	for (const listener of listeners) listener();
+}
+
+/** Runs `listener` on every publish recorded for `client` until the returned function is called. */
+export function onDiagnosticsPublish(client: LspClient, listener: () => void): () => void {
+	const listeners = diagnosticsPublishListeners.get(client) ?? new Set<() => void>();
+	diagnosticsPublishListeners.set(client, listeners);
+	listeners.add(listener);
+	return () => {
+		listeners.delete(listener);
+	};
+}
 
 /** Negative cache of recent init failures so a broken server fails fast instead of re-spawning per call. */
 const INIT_FAILURE_BACKOFF_MS = 3 * 60 * 1000;
@@ -357,11 +380,10 @@ async function startMessageReader(client: LspClient): Promise<void> {
 							// Server notification
 							if (message.method === "textDocument/publishDiagnostics" && message.params) {
 								const params = message.params as PublishDiagnosticsParams;
-								client.diagnostics.set(params.uri, {
+								recordPublishedDiagnostics(client, params.uri, {
 									diagnostics: params.diagnostics,
 									version: params.version ?? null,
 								});
-								client.diagnosticsVersion += 1;
 							} else if (message.method === "$/progress" && message.params) {
 								const params = message.params as { token: string | number; value?: { kind?: string } };
 								if (params.value?.kind === "begin") {

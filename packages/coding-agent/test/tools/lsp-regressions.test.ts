@@ -1079,15 +1079,13 @@ describe("lsp regressions", () => {
 			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
 
 			setTimeout(() => {
-				client.diagnostics.set(otherUri, { diagnostics: [otherDiagnostic], version: 1 });
-				client.diagnosticsVersion += 1;
+				lspClient.recordPublishedDiagnostics(client, otherUri, { diagnostics: [otherDiagnostic], version: 1 });
 			}, 20);
 			setTimeout(() => {
-				client.diagnostics.set(targetUri, {
+				lspClient.recordPublishedDiagnostics(client, targetUri, {
 					diagnostics: [],
 					version: client.openFiles.get(targetUri)?.version ?? 2,
 				});
-				client.diagnosticsVersion += 1;
 			}, 80);
 
 			const tool = new LspTool(makeLspSession(tempDir.path()));

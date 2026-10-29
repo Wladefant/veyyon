@@ -5,7 +5,7 @@
 
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { throwIfAborted } from "../tools/core/tool-errors";
-import { getOrCreateClient, LspResponseError, sendRequest, waitForProjectLoaded } from "./client";
+import { getOrCreateClient, LspResponseError, onDiagnosticsPublish, sendRequest, waitForProjectLoaded } from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { isProjectAwareLspServer } from "./servers";
@@ -15,7 +15,8 @@ import { fileToUri, formatDiagnostic, formatDiagnosticsSummary, uniqueSortedDiag
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 export const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 export const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
-const DIAGNOSTICS_POLL_MS = 100;
+/** Delay before re-sending a pull the server cancelled or saw outdated. */
+const PULL_RETRY_DELAY_MS = 100;
 const DIAGNOSTICS_SETTLE_MS = 250;
 /**
  * JSON-RPC error codes a server answers `textDocument/diagnostic` with when the pull should be sent again:
@@ -71,14 +72,20 @@ interface DocumentDiagnosticReport {
 	items?: Diagnostic[];
 }
 
-/** Waits `ms`, or less when `wake` settles first, and leaves no timer armed either way. */
-async function pollDelay(ms: number, wake?: Promise<unknown>): Promise<void> {
+/**
+ * Resolves at `deadline` (epoch ms), when `wake` settles, or when `signal` aborts, whichever is first, and
+ * leaves no timer or abort listener behind. Never rejects: the caller re-checks its state and the signal.
+ */
+async function sleepUntil(deadline: number, signal: AbortSignal | undefined, wake?: Promise<void>): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
-	const timer = setTimeout(resolve, ms);
+	const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+	const onAbort = () => resolve();
+	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
 		await (wake ? Promise.race([promise, wake]) : promise);
 	} finally {
 		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -109,7 +116,7 @@ async function pullDocumentDiagnostics(
 				return undefined;
 			}
 		}
-		await pollDelay(DIAGNOSTICS_POLL_MS);
+		await sleepUntil(Date.now() + PULL_RETRY_DELAY_MS, signal);
 	}
 	return undefined;
 }
@@ -140,38 +147,50 @@ export async function waitForDiagnostics(
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
 	// A server that offers pulls answers with every change applied, so the first full report is accepted
-	// as soon as it lands; a version-matched publish that lands first is accepted the same way.
-	const pull: { items?: Diagnostic[]; pending?: Promise<void> } = {};
+	// as soon as it lands; a version-matched publish that lands first is accepted the same way. Every
+	// state the loop reads changes on a publish or a finished pull, and the settle window and the budget
+	// end at known times, so each pass sleeps until exactly one of those happens.
+	let wake = Promise.withResolvers<void>();
+	const stopListening = onDiagnosticsPublish(client, () => wake.resolve());
+	const pull: { items?: Diagnostic[] } = {};
 	if (client.serverCapabilities?.diagnosticProvider) {
-		pull.pending = pullDocumentDiagnostics(client, uri, start + timeoutMs, signal).then(items => {
+		void pullDocumentDiagnostics(client, uri, start + timeoutMs, signal).then(items => {
 			pull.items = items;
-			pull.pending = undefined;
+			wake.resolve();
 		});
 	}
-	for (;;) {
-		throwIfAborted(signal);
-		if (pull.items) {
-			client.diagnostics.set(uri, { diagnostics: pull.items, version: expectedDocumentVersion ?? null });
-			return pull.items;
-		}
-		if (Date.now() - start >= timeoutMs) break;
-		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
-		const published = client.diagnostics.get(uri);
-		if (published && versionOk) {
-			// Server honored our exact document version → authoritative, accept now.
-			if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
-				return published.diagnostics;
+	try {
+		for (;;) {
+			throwIfAborted(signal);
+			if (pull.items) {
+				client.diagnostics.set(uri, { diagnostics: pull.items, version: expectedDocumentVersion ?? null });
+				return pull.items;
 			}
-			// Unversioned/mismatched publish: wait for the stream to go quiet so an
-			// in-flight publish for the pre-edit content is superseded by the fresh one.
-			if (published !== settledRef) {
-				settledRef = published;
-				settledAt = Date.now();
-			} else if (Date.now() - settledAt >= settleMs) {
-				return published.diagnostics;
+			const now = Date.now();
+			if (now - start >= timeoutMs) break;
+			let wakeAt = start + timeoutMs;
+			const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
+			const published = client.diagnostics.get(uri);
+			if (published && versionOk) {
+				// Server honored our exact document version → authoritative, accept now.
+				if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
+					return published.diagnostics;
+				}
+				// Unversioned/mismatched publish: wait for the stream to go quiet so an
+				// in-flight publish for the pre-edit content is superseded by the fresh one.
+				if (published !== settledRef) {
+					settledRef = published;
+					settledAt = now;
+				} else if (now - settledAt >= settleMs) {
+					return published.diagnostics;
+				}
+				wakeAt = Math.min(wakeAt, settledAt + settleMs);
 			}
+			await sleepUntil(wakeAt, signal, wake.promise);
+			wake = Promise.withResolvers<void>();
 		}
-		await pollDelay(DIAGNOSTICS_POLL_MS, pull.pending);
+	} finally {
+		stopListening();
 	}
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 	if (!versionOk) {
