@@ -30,6 +30,9 @@
 - No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
 - No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
 - No user-visible change: the Brave, Firecrawl, Jina, Synthetic, Tavily, TinyFish and Z.AI web search providers no longer export an unused `findApiKey`.
+- No user-visible change: an MCP OAuth refresh and the credential it stores read the token endpoint, client and resource from one `resolveMcpOAuthRefreshTarget`.
+- No user-visible change: prompt templates, file slash commands and the legacy loader's extra templates derive a missing description from one `firstLineDescription`.
+- No user-visible change: the `oauth` hooks of an extension `ProviderConfig` and of `ProviderConfigInput` are one `ProviderOAuthConfig` type.
 - Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
 - A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
 - The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
@@ -136,6 +139,7 @@
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 - Tool normalization renders a tool's examples against the wire schema it already built instead of converting that schema again; the examples text is unchanged.
 - Building a request's stable prefix renders each tool's description once instead of twice and hashes the prefix fingerprint only when it is read, so the first provider turn of a print-mode session is built in 0.88 ms instead of 1.60 ms.
+- No user-visible change: Claude and OpenAI Codex usage build a percent-used amount through one `usageAmountFromUsedPercent` in `usage/shared`.
 - The tool wire-schema store is a `BuildStore` from `@veyyon/utils/build-store`, created with `createToolWireSchemaStore(build, filePath)`, and a `cache/tool-wire-schemas.json` in the earlier layout is ignored and rewritten; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
@@ -203,6 +207,7 @@
 
 ### Fixed
 
+- The advisor no longer receives a configured secret written in the primary model's thinking; thinking blocks pass through the secret obfuscator like text and tool arguments.
 - A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
 - Both MCP HTTP transports report a reply to a server request that the server answers with an HTTP error status, instead of dropping it.
