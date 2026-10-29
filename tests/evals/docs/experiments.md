@@ -27,6 +27,14 @@ The manifest is version 1. It names one skill, its SHA-256 source hash, full con
 component spans. The engine builds a baseline arm, a full arm, and one ablation per component. Skill
 experiments run only through the in-process Veyyon backend.
 
+Before a skill trial calls its provider, the SDK session reads and edits a disposable canary with
+its real tools and isolated settings. The canary preserves the session's generated-file protection
+value. A failed canary is an invalid setup, not a model-quality failure. Its startup exception
+becomes an infrastructure error. The backend records the successful canary receipt with the trial.
+Keep invalid original records unchanged and store a separate invalidity verdict. Never use their
+feedback, candidate, or score artifacts to learn or select a revision. A source fix requires a new
+binding and fresh feedback and score runs before the one-use final phase.
+
 Use `--skill-phase pilot` with `--tasks <id>` or `--limit 1|2` to run a diagnostic against one or two
 real tasks. Pilot arms are baseline, full, and component ablations. Pilot results are not eligible
 for candidate selection or cutover.

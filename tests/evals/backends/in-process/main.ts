@@ -338,6 +338,7 @@ export class InProcessBackend implements ExecutionBackend {
 					: undefined,
 				observedSkillHashes: state?.observedSkillHashes,
 				observedSkillPrompt: state?.observedSkillPrompt,
+				editableCanary: state?.editableCanary,
 				timedOut,
 				cancelled,
 				timeoutSec,

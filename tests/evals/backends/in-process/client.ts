@@ -28,6 +28,7 @@ import {
 	loadAndValidatePromptOverlay,
 } from "../../engine/plan/overlays";
 import { parseModelId } from "../../engine/trial/model";
+import { type EditableCanaryReceipt, verifyEditableCanary } from "./editable-canary";
 
 export type InProcessEventListener = (event: AgentEvent) => void;
 
@@ -56,6 +57,7 @@ export interface InProcessSessionState {
 	readonly skillArm?: FrozenSkillArm;
 	readonly observedSkillHashes?: readonly { readonly name: string; readonly contentHash: string }[];
 	readonly observedSkillPrompt?: ObservedSkillPrompt;
+	readonly editableCanary?: EditableCanaryReceipt;
 }
 
 export interface InProcessClientOptions {
@@ -120,6 +122,7 @@ export class InProcessClient {
 	#eventListeners: InProcessEventListener[] = [];
 	#unsubscribe: (() => void) | null = null;
 	#skillSnapshotDir: string | null = null;
+	#editableCanary: EditableCanaryReceipt | undefined;
 	#options: InProcessClientOptions;
 
 	constructor(options: InProcessClientOptions) {
@@ -204,6 +207,7 @@ export class InProcessClient {
 
 		this.#sessionResult = result;
 		this.#session = result.session;
+		if (skillArm) this.#editableCanary = await verifyEditableCanary(this.#session, this.#options.cwd);
 		if (this.#options.skillArm) {
 			const requestedModel = parseModelId(this.#options.model);
 			const resolvedModel = this.#session.model;
@@ -305,6 +309,7 @@ export class InProcessClient {
 			settings: session.settings,
 			skillArm: selectedArm,
 			observedSkillPrompt,
+			editableCanary: this.#editableCanary,
 			observedSkillHashes: await Promise.all(skills.map(async skill => ({
 				name: skill.name,
 				contentHash: createHash("sha256").update(await fs.readFile(skill.filePath, "utf8"), "utf8").digest("hex"),

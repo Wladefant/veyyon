@@ -97,10 +97,19 @@ export async function claimFinalSkillUse(
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !details.resume) throw error;
 		const prior = JSON.parse(await fs.readFile(target, "utf8")) as {
+			version?: number;
+			identity?: FinalUseIdentity;
 			candidateHash?: string;
 			executionFingerprint?: string;
 		};
-		if (prior.executionFingerprint !== details.executionFingerprint || prior.candidateHash !== details.candidateHash) throw error;
+		if (
+			prior.version !== 1 ||
+			canonicalizeConfig(prior.identity) !== canonicalizeConfig(identity) ||
+			prior.executionFingerprint !== details.executionFingerprint ||
+			prior.candidateHash !== details.candidateHash
+		) {
+			throw error;
+		}
 		return target;
 	}
 	try {

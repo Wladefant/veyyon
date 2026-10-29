@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
+
 ## [1.6.6] - 2026-10-28
 
 ### Changed

@@ -359,6 +359,16 @@ describe("skill outcome lifecycle", () => {
 		).rejects.toThrow();
 		await expect(claimFinalSkillUse(directory, identity, { ...details, executionFingerprint: "changed", resume: true })).rejects.toThrow();
 		await expect(claimFinalSkillUse(directory, reorderedIdentity, { ...details, resume: true })).resolves.toBe(claimPath);
+		for (const invalidRecord of [
+			{ version: 2, identity, candidateHash: details.candidateHash, executionFingerprint: details.executionFingerprint },
+			{ version: 1, identity: { ...identity, model: "provider/other" }, candidateHash: details.candidateHash, executionFingerprint: details.executionFingerprint },
+		]) {
+			const invalidDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-final-invalid-"));
+			temporaryDirectories.push(invalidDirectory);
+			const invalidPath = await claimFinalSkillUse(invalidDirectory, identity, details);
+			await fs.writeFile(invalidPath, JSON.stringify(invalidRecord), "utf8");
+			await expect(claimFinalSkillUse(invalidDirectory, identity, { ...details, resume: true })).rejects.toThrow();
+		}
 		const release = await acquireFinalSkillRunLock(claimPath!, details.executionFingerprint);
 		await expect(acquireFinalSkillRunLock(claimPath!, details.executionFingerprint)).rejects.toThrow(/already executing/);
 		await release();

@@ -436,7 +436,14 @@ export async function readSkillPhaseRun(input: {
 		if (armKind === "full" && (arm.recipeHash !== full.recipeHash || arm.contentHash !== full.contentHash)) {
 			throw new Error("Run full arm does not match the current manifest.");
 		}
-		if (armKind === "candidate" && (!input.candidate || arm.recipeHash !== input.candidate.candidateHash || arm.contentHash !== input.candidate.candidateHash)) {
+		if (
+			armKind === "candidate" &&
+			(!input.candidate ||
+				arm.id !== `candidate-${input.candidate.candidateHash.slice(0, 12)}` ||
+				arm.skillName !== full.skillName ||
+				arm.recipeHash !== input.candidate.candidateHash ||
+				arm.contentHash !== input.candidate.candidateHash)
+		) {
 			throw new Error("Run candidate arm does not match the frozen candidate artifact.");
 		}
 		if (variantByKind.has(armKind)) throw new Error("Run record repeats a skill arm kind.");
@@ -490,6 +497,14 @@ export async function readSkillPhaseRun(input: {
 				observedArm.recipeHash !== variant.arm.recipeHash
 			) {
 				throw new Error("Run outcome did not load the exact frozen skill arm.");
+			}
+			const observedPrompt = extra.observedSkillPrompt;
+			if (
+				!isRecord(observedPrompt) || observedPrompt.role !== "developer" || observedPrompt.attribution !== "agent" ||
+				observedPrompt.present !== true || observedPrompt.contentHash !== variant.arm.contentHash ||
+				typeof observedPrompt.messageHash !== "string" || !/^[a-f0-9]{64}$/.test(observedPrompt.messageHash)
+			) {
+				throw new Error("Run outcome has no verified agent-authored skill body in model context.");
 			}
 			const observedHashes = extra.observedSkillHashes;
 			if (!Array.isArray(observedHashes) || !observedHashes.every(isRecord)) {
@@ -649,7 +664,7 @@ export async function reviseSkillCandidate(input: {
 		input.binding.splitFingerprint !== splitFingerprint ||
 		!input.binding.requestedModels.includes(input.model)
 	) {
-		throw new Error("Candidate source binding does not match this skill, model, or exact 100-task split.");
+		throw new Error("Candidate source binding does not match this skill, model, or exact declared cohort split.");
 	}
 	const requestedModel = parseModelId(input.model);
 	const feedbackModel = input.binding.resolvedModel;
