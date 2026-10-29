@@ -11,9 +11,9 @@
  */
 
 import { resolveKimiCodeEndpoint } from "@veyyon/catalog/wire/kimi-code";
-import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type { Api, Context, Model } from "../types";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
+import { getKimiCommonHeaders } from "../utils/kimi-headers";
 import {
 	type OpenAIAnthropicApiFormat,
 	type OpenAIAnthropicShimOptions,

@@ -125,12 +125,8 @@ describe("a launch loads no provider client", () => {
 	});
 
 	for (const entry of ["main.ts", "sdk.ts"]) {
-		it(`${entry} statically reaches only the lazy ai modules recorded here`, () => {
-			expect(reachedLazy(entry)).toEqual([
-				// `getKimiCommonHeaders`, which the Kimi stream and the Kimi usage reader send on every request,
-				// is declared beside the device-code login that `registry/kimi-code.ts` loads on first use.
-				"registry/oauth/kimi.ts",
-			]);
+		it(`${entry} statically reaches no module the ai package loads lazily`, () => {
+			expect(reachedLazy(entry)).toEqual([]);
 		});
 
 		it(`${entry} statically reaches only the provider modules recorded here`, () => {

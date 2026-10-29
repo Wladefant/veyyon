@@ -20,6 +20,7 @@
 - `mapAnthropicToolChoice` moved from `stream.ts` to `providers/anthropic-tool-choice.ts` and `OUTPUT_FALLBACK_BUFFER` to `providers/anthropic.ts`, so the Anthropic, GitLab Duo and Kimi Code/Synthetic providers no longer import the stream dispatcher; both names stay exported from `@veyyon/ai`; no user-facing change.
 - `providerFinishErrorMessage` and `PROVIDER_FINISH_ERROR_PATTERN` moved from `error/provider.ts` to `error/classes.ts`, so the turn error domain no longer closes an import cycle through the error classifier; both stay exported from `@veyyon/ai/error`; no user-facing change.
 - xAI OIDC discovery, device-code and token-refresh responses parse their JSON body through one helper; no user-facing change.
+- The Kimi Code request headers moved from the Kimi login module to `@veyyon/ai/utils/kimi-headers`, so a launch and a Kimi chat or usage request no longer load the Kimi login flow.
 
 ### Fixed
 

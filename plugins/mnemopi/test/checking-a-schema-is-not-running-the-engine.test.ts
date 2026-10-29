@@ -170,9 +170,13 @@ describe("asking whether a model is configured is not calling one", () => {
 	 *
 	 * RE-MEASURED 2026-10-28 at 223: `ai/providers/anthropic-tool-choice.ts`, the Anthropic `tool_choice`
 	 * mapping moved out of `ai/stream.ts`, reached through it. It imports only types. Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-29 at 219: the Kimi request headers moved out of the Kimi login,
+	 * `ai/registry/oauth/kimi.ts`, into `ai/utils/kimi-headers.ts`, so the chat client no longer loads the
+	 * login, which left this reach with the four modules only it brought. Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 223 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(223);
+	it("local-llm reaches at most 219 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(219);
 	});
 
 	/**

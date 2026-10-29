@@ -11,7 +11,6 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { renderDemotedThinking } from "../dialect/demotion";
 import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
-import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type {
 	Api,
 	AssistantMessage,
@@ -49,6 +48,7 @@ import {
 	iterateWithIdleTimeout,
 	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
+import { getKimiCommonHeaders } from "../utils/kimi-headers";
 import { OpenAIHttpError, type OpenAIStreamHandle, postOpenAIStream } from "../utils/openai-http";
 import { conversationIdForOpenCode } from "../utils/opencode-headers";
 import { notifyProviderResponse } from "../utils/provider-response";

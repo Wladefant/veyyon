@@ -333,6 +333,10 @@ describe("the modules that were repointed stay cut", () => {
 	 * Re-measured 2026-10-29: `shared-llm.ts` 221 -> 222 by `utils/build-store.ts`, the per-build value
 	 * store the wire-schema cache and the model-reference cache both persist through. It imports only
 	 * modules already on this reach.
+	 *
+	 * Re-measured 2026-10-29: `shared-llm.ts` 222 -> 218. The Kimi request headers moved out of the Kimi
+	 * login, `ai/registry/oauth/kimi.ts`, into `ai/utils/kimi-headers.ts`, so the chat client that sends
+	 * them no longer loads the login, which left this reach with the four modules only it brought.
 	 */
 	it.each([
 		["agent/src/proxy.ts", 152],
@@ -354,7 +358,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 222],
+		["coding-agent/src/commit/shared-llm.ts", 218],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

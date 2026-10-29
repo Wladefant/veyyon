@@ -186,8 +186,13 @@ const PRUNING_CEILING = 197;
  * that `catalog/identity/bundled.ts`, already on the engine's reach, reads each custom model id's bundled
  * reference through. Its imports (`atomic-write.ts`, `logger.ts`, `type-guards.ts`) were already reached,
  * so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-29 again: engine 315. The Kimi request headers moved out of the Kimi login,
+ * `ai/registry/oauth/kimi.ts`, into `ai/utils/kimi-headers.ts`, the one new module, so the chat client and
+ * the usage probe that send them no longer load the login. The login left the reach with the four modules
+ * only it brought: `ai/registry/oauth/{expiry,success-page,token-response}.ts` and `oauth.html`.
  */
-const COMPACTION_ENGINE_CEILING = 319;
+const COMPACTION_ENGINE_CEILING = 315;
 const REMOTE_SUMMARIZER_CEILING = 103;
 
 describe("the estimator is a leaf", () => {

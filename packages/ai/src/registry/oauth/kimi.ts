@@ -2,10 +2,6 @@
  * Kimi Code OAuth flow (device authorization grant)
  */
 
-import * as crypto from "node:crypto";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import {
 	KIMI_CODE_REGIONS,
@@ -14,11 +10,9 @@ import {
 	kimiCodeRegionOfApiEndpoint,
 	kimiCodeRegionOfOAuthHost,
 } from "@veyyon/catalog/wire/kimi-code";
-import { getAgentDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
-import { isEnoent } from "@veyyon/utils/fs-error";
-import packageJson from "../../../package.json" with { type: "json" };
 import * as AIError from "../../error";
+import { getKimiCommonHeaders } from "../../utils/kimi-headers";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
 import { requireTokenResponseObject } from "./token-response";
@@ -26,7 +20,6 @@ import type { OAuthController, OAuthCredentials } from "./types";
 
 // One client id serves both regions; only the hosts differ.
 const CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const DEVICE_ID_FILENAME = "kimi-device-id";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
 
@@ -54,66 +47,6 @@ interface TokenResponse {
 function resolveOAuthHost(region: KimiCodeRegion): string {
 	return $env.KIMI_CODE_OAUTH_HOST || $env.KIMI_OAUTH_HOST || KIMI_CODE_REGIONS[region].oauthHost;
 }
-
-function formatDeviceModel(system: string, release: string, arch: string): string {
-	return [system, release, arch].filter(Boolean).join(" ").trim();
-}
-
-function getDeviceModel(): string {
-	const platform = os.platform();
-	const release = os.release();
-	const arch = os.arch();
-	if (platform === "darwin") return formatDeviceModel("macOS", release, arch);
-	if (platform === "win32") return formatDeviceModel("Windows", release, arch);
-	const label = platform === "linux" ? "Linux" : platform;
-	return formatDeviceModel(label, release, arch);
-}
-
-let getDeviceId = (): string => {
-	const deviceIdPath = path.join(getAgentDir(), DEVICE_ID_FILENAME);
-	try {
-		const existing = fs.readFileSync(deviceIdPath, "utf-8");
-		const trimmed = existing.trim();
-		if (trimmed) {
-			getDeviceId = () => trimmed;
-			return trimmed;
-		}
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-	}
-
-	const deviceId = crypto.randomUUID().replace(/-/g, "");
-	// getAgentDir() only names the config root; it does not guarantee the
-	// directory exists on disk. On a fresh host (a clean CI runner, a
-	// first-ever launch) the parent is absent, so the write below would throw
-	// ENOENT. That error used to propagate up through getKimiCommonHeaders()
-	// into the usage/OAuth request try-blocks and get swallowed as a null
-	// "usage unavailable", masking a filesystem failure as a network one.
-	// Create the parent first so the device-id file is always writable.
-	fs.mkdirSync(path.dirname(deviceIdPath), { recursive: true });
-	fs.writeFileSync(deviceIdPath, `${deviceId}\n`, { mode: 0o600 });
-	getDeviceId = () => deviceId;
-	return deviceId;
-};
-
-function sanitizeHeaderValue(value: string, fallback = ""): string {
-	const sanitized = value.replace(/[^\x20-\x7E]/g, "").trim();
-	return sanitized || fallback;
-}
-
-export let getKimiCommonHeaders = () => {
-	const headers = Object.freeze({
-		"User-Agent": `KimiCLI/${packageJson.version}`,
-		"X-Msh-Platform": "kimi_cli",
-		"X-Msh-Version": packageJson.version,
-		"X-Msh-Device-Name": sanitizeHeaderValue(os.hostname(), "unknown"),
-		"X-Msh-Device-Model": sanitizeHeaderValue(getDeviceModel(), "unknown"),
-		"X-Msh-Os-Version": sanitizeHeaderValue(os.version(), "unknown"),
-		"X-Msh-Device-Id": sanitizeHeaderValue(getDeviceId(), "unknown"),
-	});
-	getKimiCommonHeaders = () => headers;
-	return headers;
-};
 
 async function requestDeviceAuthorization(oauthHost: string): Promise<{
 	userCode: string;
