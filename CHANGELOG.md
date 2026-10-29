@@ -112,6 +112,7 @@
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
 - The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
 - MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
+- The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
@@ -174,6 +175,8 @@
 
 ### Fixed
 
+- A JS eval cell that displays or returns a value holding a cycle shows it with `"[Circular]"` where it loops back, in 41 ms instead of 915 ms, and a value holding a function or symbol shows `"[Function: run]"` or `"Symbol(marker)"` in place; both printed `[object Object]`.
+- A tool block whose arguments hold a cycle states them as `[unserializable]` in 2 µs instead of about 1 s, and arguments carrying code or prose serialize faster, 16.5 µs instead of 28.0 µs for a 50 KB write.
 - The `lsp` diagnostics action and the diagnostics after a write name a language server or linter that failed, with its error, instead of reporting the file clean; a file no server checked is reported as not checked.
 - The first `lsp` diagnostics call or `rename_file` against a project-aware language server returns in about a second instead of 15 seconds: the file opens before the project-load wait, and a server that reports no load progress is waited on only until it publishes or 2 seconds after the open.
 - `rename_file` on a fresh TypeScript server proposes the import edits of every file importing the renamed one; it opened no file first, so tsserver loaded no project and proposed none.
