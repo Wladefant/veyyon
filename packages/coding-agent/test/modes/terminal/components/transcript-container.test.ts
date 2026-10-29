@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { AssistantMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -8,7 +8,7 @@ import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/compone
 import { toAssistantMessageView } from "@veyyon/coding-agent/presentation/transcript-builder";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { type Component, Text } from "@veyyon/tui";
+import { type Component, Container, Loader, Text, type TUI } from "@veyyon/tui";
 
 // Models a transcript block that re-lays-out (tool preview collapsing, assistant
 // message finalizing, late async result) after newer blocks were appended below
@@ -940,5 +940,48 @@ describe("TranscriptContainer seal-on-commit", () => {
 		card.makeDisplaceable();
 		container.render(W);
 		expect(card.sealCount).toBe(1);
+	});
+});
+
+// `InteractiveMode.stop()` stops the transcript through `stopAnimations`. A timer it misses stays
+// armed for the rest of the process; a spinner inside a nested group is the one a walk over the
+// direct children alone misses.
+class TickingBlock implements Component {
+	#timer: NodeJS.Timeout | undefined = setInterval(() => {}, 50);
+	invalidate(): void {}
+	render(_width: number): string[] {
+		return ["ticking"];
+	}
+	stopAnimation(): void {
+		clearInterval(this.#timer);
+		this.#timer = undefined;
+	}
+}
+
+describe("stopAnimations", () => {
+	it("clears every loader and animating block, nested groups included, and keeps their frames", () => {
+		vi.useFakeTimers();
+		try {
+			const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+			const plain = (text: string) => text;
+			const container = new TranscriptContainer();
+			const group = new Container();
+			group.addChild(new Loader(ui, plain, plain, "nested"));
+			container.addChild(new Loader(ui, plain, plain, "top"));
+			container.addChild(group);
+			container.addChild(new TickingBlock());
+			expect(vi.getTimerCount()).toBe(3);
+			const frame = container.render(40);
+			// The first render of a process loads the native addon, which arms a one-shot cleanup
+			// timer of its own; count against the timers armed once the frame is drawn.
+			const armed = vi.getTimerCount();
+
+			container.stopAnimations();
+
+			expect(armed - vi.getTimerCount()).toBe(3);
+			expect(container.render(40)).toEqual(frame);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

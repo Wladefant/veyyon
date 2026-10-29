@@ -1952,7 +1952,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Disconnect everything that can still turn session state into a frame or
 	 * turn a keystroke into session work: the loading/mic/clock animations, the
-	 * anchored motion frame, the todo/observer/goal timers, voice input, extension terminal input
+	 * anchored motion frame, the transcript's spinners, rails and shimmers, the todo/observer/goal
+	 * timers, voice input, extension terminal input
 	 * listeners and hook widgets, the event bus, the agent/bash subscriptions,
 	 * the event controller, the status line, the resize hook, and the session
 	 * event subscription. Everything here is idempotent, and the method itself
@@ -1978,6 +1979,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#clockTimer = undefined;
 		}
 		this.#anchoredBlocks.freeze();
+		this.chatContainer.stopAnimations();
 		this.#goalMode.cancelContinuation();
 		this.#voiceController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();

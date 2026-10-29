@@ -2,6 +2,7 @@ import {
 	type Component,
 	type ComponentScopedRender,
 	Container,
+	Loader,
 	type NativeScrollbackCommittedRows,
 	type NativeScrollbackCompaction,
 	type NativeScrollbackLiveRegion,
@@ -56,6 +57,8 @@ interface FinalizableBlock {
 	isDisplaceableBlock?(): boolean;
 	/** Finalize a displaceable snapshot in place (settle animation, freeze bytes). */
 	seal?(): void;
+	/** Stop every timer the block animates with; the block keeps rendering its current frame. */
+	stopAnimation?(): void;
 }
 
 function isBlockFinalized(child: Component): boolean {
@@ -66,6 +69,15 @@ function isBlockFinalized(child: Component): boolean {
 function getBlockVersion(child: Component): number | undefined {
 	const fn = (child as Component & FinalizableBlock).getTranscriptBlockVersion;
 	return fn ? fn.call(child) : undefined;
+}
+
+/** Stop the animations and loaders of every block under `container`, nested groups included. */
+function stopAnimationsUnder(container: Container): void {
+	for (const child of container.children) {
+		(child as Component & FinalizableBlock).stopAnimation?.();
+		if (child instanceof Loader) child.stop();
+		else if (child instanceof Container) stopAnimationsUnder(child);
+	}
 }
 
 /** Clamped read of a block's declared settled rows (see {@link FinalizableBlock}). */
@@ -366,6 +378,14 @@ export class TranscriptContainer
 		this.#childrenChanged = true;
 		this.#droppedRows = 0;
 		this.#replayPending = false;
+	}
+
+	/**
+	 * Stop every spinner, rail, shimmer and loader a block in this transcript runs, nested groups
+	 * included, so no block requests another frame. Each block keeps rendering its current frame.
+	 */
+	stopAnimations(): void {
+		stopAnimationsUnder(this);
 	}
 
 	setNativeScrollbackCommittedRows(rows: number): void {

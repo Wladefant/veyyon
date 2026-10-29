@@ -155,6 +155,9 @@
 - The list cards (`/resume`, `/tree`, `/copy`, `/theme`, the message picker, history search, the spend-reset, rollback and subcommand pickers, and the thinking, queue-mode and image selectors) size their list to the rows the card shows, so a short terminal shows the rows around the cursor instead of a list the card clips from the bottom.
 - The hook selector behind `ask` questions and extension `ui.select` keeps the highlighted option on screen on a terminal 8 to 10 rows tall instead of clipping it off with the options below it.
 - `/settings` and the model picker on a short terminal show fewer rows instead of cutting the active row or the list off the card, and `/copy` gives its rows to the list instead of drawing a `Preview` heading with nothing under it.
+- Stopping the interactive mode stops every spinner, rail, shimmer and loader in the transcript, nested groups included, so no transcript timer outlives the mode.
+- A shell retained for a plain-`&` background job holds one reap interval, and retaining the same shell again arms no second one.
+- No user-visible change: `resetSessionCpuLimitsForTests` disposes every limiter it drops, so a limiter's watcher interval ends with the test that created it.
 
 ### Removed
 
