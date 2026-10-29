@@ -84,6 +84,13 @@ function protectedRuntimeResources(options: CreateAgentSessionOptions, cwd: stri
 	}));
 }
 
+function configuredMetadataIndexes(value: unknown): string[] {
+	if (!Array.isArray(value) || value.some(entry => typeof entry !== "string" || entry.length === 0)) {
+		throw new Error("Protected credential metadata indexes must be an array of non-empty paths.");
+	}
+	return value;
+}
+
 export interface SessionToolSession {
 	/** The primary agent's tool session. */
 	toolSession: ToolSession;
@@ -148,15 +155,21 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		const model = activeModel();
 		return model ? formatModelString(model) : undefined;
 	};
-
 	const protectedReadPolicies = new Map<string, Promise<ProtectedCredentialReadPolicy>>();
 	const protectedPolicyForCwd = (cwd: string): Promise<ProtectedCredentialReadPolicy> => {
 		const key = path.resolve(cwd);
 		const cached = protectedReadPolicies.get(key);
 		if (cached) return cached;
+		const profileMetadataIndexes = configuredMetadataIndexes(
+			inputs.fields.settings.get("secrets.protectedCredentialMetadataIndexes"),
+		);
+		const sdkMetadataIndexes = configuredMetadataIndexes(options.protectedCredentialMetadataIndexes ?? []);
+		const metadataIndexes = new Set(
+			[...profileMetadataIndexes, ...sdkMetadataIndexes].map(index => path.resolve(key, index)),
+		);
 		const policy = createProtectedCredentialReadPolicy(
 			[...(options.protectedCredentialResources ?? []), ...protectedRuntimeResources(options, key)],
-			options.protectedCredentialMetadataIndexes,
+			[...metadataIndexes],
 		);
 		protectedReadPolicies.set(key, policy);
 		return policy;

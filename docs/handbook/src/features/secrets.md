@@ -17,6 +17,18 @@ secrets:
 
 The setting takes effect in the current session. Veyyon reloads environment variables, `secrets.yml`, and the vault when you toggle protection or run a `/secret` command. Moving to another working directory loads that project's scope and drops the source project's mappings.
 
+### Protecting files named by a credential metadata index
+
+An external credential producer can publish a metadata index that classifies credential files without exposing their contents. Add its index path to the active profile's `config.yml`:
+
+```yaml
+secrets:
+  protectedCredentialMetadataIndexes:
+    - /path/to/credential-index.json
+```
+
+At startup, Veyyon reads the configured index and blocks ordinary agent `read` calls for files it classifies as credentials. Relative index paths resolve from the session working directory. The index itself, documentation, and source files remain readable. Trusted direct filesystem consumers are unchanged. Veyyon snapshots this policy for each working directory when the session starts or first enters that directory; restart the session after changing the index or this setting. This protects only files named by the configured index. It does not scan for other credentials or make the working copy itself unreadable.
+
 ## Your first secret
 
 If the credential is already an environment variable, you have nothing to declare to keep its value out of provider requests. Veyyon treats an environment variable as secret when its value is 8 characters or longer and its name ends with, or has an underscore after, one of `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `PASSPHRASE`, `AUTH`, `CREDENTIAL`, `PRIVATE`, or `OAUTH`.

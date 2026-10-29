@@ -5,6 +5,7 @@
 ### Fixed
 
 - Multiline registered secrets stay redacted or withheld across producer output chunks.
+- Ordinary agent reads block credential files named by the profile's configured metadata indexes.
 
 ## [1.6.6] - 2026-10-28
 
