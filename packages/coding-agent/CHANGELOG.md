@@ -15,6 +15,7 @@
 - No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
 - No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` from `session/session-entries.ts` instead of restating the zero usage record, so the status row evaluates no session-context or compaction module.
 - No user-visible change: the Antigravity, xAI, OpenRouter, Gemini and OpenAI image providers read a refused request's message through one `providerErrorMessage` in `tools/web/image-gen.ts` instead of five copies, and the GitHub run watch and run result reports write their header lines through one `pushRunHeader`.
+- No user-visible change: the assistant message component takes its `ImageContent` type from `@veyyon/ai`, as every other coding-agent module does, instead of `@veyyon/model`, which the package does not declare.
 - The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.

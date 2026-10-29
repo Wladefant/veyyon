@@ -1,4 +1,4 @@
-import type { ImageContent } from "@veyyon/model";
+import type { ImageContent } from "@veyyon/ai";
 import {
 	type Component,
 	Container,
