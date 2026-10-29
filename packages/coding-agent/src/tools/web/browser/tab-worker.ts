@@ -757,7 +757,9 @@ async function collectObservationEntries(
 				// actual control before copying either form into an observation.
 				const isPassword =
 					node.value !== undefined &&
-					(await handle.evaluate(element => element.tagName === "INPUT" && (element as HTMLInputElement).type === "password"));
+					(await handle.evaluate(
+						element => element.tagName === "INPUT" && element.getAttribute("type")?.toLowerCase() === "password",
+					));
 				entries.push({
 					id,
 					role: node.role,
