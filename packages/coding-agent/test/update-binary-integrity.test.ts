@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import fsModule from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { SILENT_UPDATE_REPORTER, updateViaBinaryAt } from "@veyyon/coding-agent/cli/update-cli";
 import { removeWithRetries } from "@veyyon/utils";
 
@@ -79,6 +81,40 @@ describe("a failed binary update leaves the installed binary intact", () => {
 		spyOn(globalThis, "fetch").mockImplementation(impl);
 	}
 
+	/** A 200 whose body delivers a few bytes and then fails the way a dropped connection does. */
+	function resetMidBody(): Response {
+		return new Response(
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode("#!/bin/sh\necho partial"));
+					controller.error(new Error("connection reset by peer"));
+				},
+			}),
+			{ status: 200 },
+		);
+	}
+
+	/** How long {@link holdBackCreatingOpens} holds an open back. */
+	const OPEN_DELAY_MS = 25;
+
+	/**
+	 * Hold every open that creates a file back by `ms`, the way a slow disk does. Opens for
+	 * reading pass straight through. `held` counts the opens that were held back.
+	 *
+	 * The spy sits on the module's default object: Bun's `fs.WriteStream` opens its path through
+	 * that object, and a spy on the namespace binding never reaches it.
+	 */
+	function holdBackCreatingOpens(ms: number): { held: () => number } {
+		const openNow = fsModule.open as (...args: unknown[]) => void;
+		let held = 0;
+		spyOn(fsModule, "open").mockImplementation(((...args: unknown[]) => {
+			if (args[1] !== "w") return openNow(...args);
+			held++;
+			setTimeout(() => openNow(...args), ms);
+		}) as typeof fsModule.open);
+		return { held: () => held };
+	}
+
 	describe("the download never starts", () => {
 		it("a missing release asset (404) fails naming the version and asset, changing nothing", async () => {
 			const target = await installedBinary();
@@ -123,20 +159,32 @@ describe("a failed binary update leaves the installed binary intact", () => {
 			// partial `.new` must not survive, because it is mode 0755 and sits beside the
 			// real binary.
 			const target = await installedBinary();
-			routeFetch({
-				binary: () =>
-					new Response(
-						new ReadableStream({
-							start(controller) {
-								controller.enqueue(new TextEncoder().encode("#!/bin/sh\necho partial"));
-								controller.error(new Error("connection reset by peer"));
-							},
-						}),
-						{ status: 200 },
-					),
-			});
+			routeFetch({ binary: resetMidBody });
 
-			await expect(updateViaBinaryAt(target, VERSION, SILENT_UPDATE_REPORTER)).rejects.toThrow();
+			await expect(updateViaBinaryAt(target, VERSION, SILENT_UPDATE_REPORTER)).rejects.toThrow(
+				/connection reset by peer/,
+			);
+			await expectUntouched(target);
+		});
+
+		it("a stream that fails before the disk has created the partial file leaves nothing behind", async () => {
+			// A write stream opens its path asynchronously, so on a slow disk the body can
+			// fail while the partial file is still being created. A removal that runs then
+			// finds nothing, and the open creates the file afterwards. Holding every
+			// file-creating open back makes that ordering certain instead of a matter of
+			// disk latency, which is how it reached a CI runner.
+			const target = await installedBinary();
+			const opens = holdBackCreatingOpens(OPEN_DELAY_MS);
+			routeFetch({ binary: resetMidBody });
+
+			await expect(updateViaBinaryAt(target, VERSION, SILENT_UPDATE_REPORTER)).rejects.toThrow(
+				/connection reset by peer/,
+			);
+			// A held-back open lands inside this wait, so a file it creates is on disk
+			// before the directory is read.
+			await sleep(OPEN_DELAY_MS * 4);
+			// The delay reached the partial file's open; without it this test proves nothing.
+			expect(opens.held()).toBe(1);
 			await expectUntouched(target);
 		});
 	});

@@ -4,6 +4,7 @@
  * Handles `veyyon update` to check for and install updates.
  * Uses the installer that owns the active veyyon executable when it can be detected.
  */
+import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1329,6 +1330,11 @@ export async function updateViaBinaryAt(
 			}
 			const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
 			try {
+				// A write stream opens its path asynchronously. A body that fails before that
+				// open lands would run the removal below first, and the open would then create
+				// the partial file after the removal: litter beside the real binary. Waiting
+				// for the open orders every removal after it.
+				await once(fileStream, "open");
 				await pipeline(response.body, fileStream);
 			} catch (err) {
 				// A mid-download failure (network drop) leaves a partial attempt file
