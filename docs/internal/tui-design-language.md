@@ -171,7 +171,7 @@ No gratuitous animation on static content. Motion is a semantic signal (the mode
 ## Empty / loading / error
 
 - **Empty:** the composer's ghost hint, which hides once the user types, plus the welcome hero's single rotating tip (`renderWelcomeTip`, prefixed `Tip: ` and centered under the hero). No example-prompt list.
-- **Loading:** spinner + a capitalized verb phrase carrying its cancel key: `Working…` with the bracketed `[esc]` hint from `interruptHint()`, `Running… (esc to cancel)` for a shell block, `Compacting context... (esc to cancel)`.
+- **Loading:** spinner + a capitalized verb phrase carrying its cancel key: `Working…` with the bracketed `[esc]` hint from `interruptHint()`, `Running… (esc to cancel)` for a shell block, `Compacting context... (local compaction) (esc to cancel)`, where the parenthetical names the compaction kind (`compactionActionLabel` in `summary-builder.ts`).
 - **Error:** cause first, remediation second. No stack dumps in the composer.
 
 ## Transcript roles
@@ -290,4 +290,4 @@ sequence in an ordinary widget is a design-system bug. Keep any required raw seq
 component or terminal-protocol owner.
 
 
-*Verified against `71619ee74c372b92dd44b267b217475bccd72692` on 2026-10-03.*
+*Verified against `3092eac38d895e4b9f3daa57e1d70add27b212fa` on 2026-10-28.*
