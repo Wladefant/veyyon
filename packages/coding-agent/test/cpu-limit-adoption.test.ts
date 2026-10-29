@@ -67,8 +67,9 @@
  *
  * These wired sites have no reachable in-process entry point and are covered
  * by NOTHING here:
- *   - utils/jj.ts: `ensureAvailable()` calls `$which("jj")` before spawning,
- *     and that answer is fixed at process start (constraint 2).
+ *   - utils/jj.ts as an entry point: `git.ensureInstalled("jj")` calls `$which("jj")` before
+ *     spawning, and that answer is fixed at process start (constraint 2). Its spawn is
+ *     `runCommand` in utils/git.ts, the site "git runs are adopted" drives.
  *   - tools/browser/registry.ts: needs a real Chromium and a CDP endpoint.
  *   - tools/web/fetch.ts, web/scrapers/youtube.ts, utils/tools-manager.ts,
  *     extensibility/plugins/manager.ts: every entry point performs network I/O
