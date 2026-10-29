@@ -483,18 +483,7 @@ export class MCPManager {
 			this.#serverConfigs.set(name, config);
 
 			// Resolve auth config before connecting, but do so per-server in parallel.
-			const connectionPromise = (async () => {
-				const resolvedConfig = await this.#resolveAuthConfig(config);
-				return connectToServer(name, resolvedConfig, {
-					onNotification: (method, params) => {
-						this.#handleServerNotification(name, method, params);
-					},
-					onRequest: (method, params) => {
-						return this.#handleServerRequest(method, params);
-					},
-					...this.#stdioSpawnHooks(),
-				});
-			})().then(
+			const connectionPromise = this.#openConnection(name, config).then(
 				connection => {
 					// Store original config (without resolved tokens) to keep
 					// cache keys stable and avoid leaking rotating credentials.
@@ -508,35 +497,7 @@ export class MCPManager {
 						this.#connections.set(name, connection);
 					}
 
-					// Wire auth refresh for HTTP-like transports so 401s trigger a fresh credential.
-					// Two kinds qualify, and the second used to be missed entirely: a resolvable
-					// managed OAuth credential (definition-only configs get Bearer injection too and
-					// need the same mid-session refresh), and a `!command` header, which is a server
-					// whose token is minted or read on demand. Without the hook, a rotated token
-					// meant 401s until the process restarted, because nothing ever re-ran the
-					// command.
-					if (
-						isAuthRefreshableMCPTransport(connection.transport) &&
-						(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
-					) {
-						connection.transport.onAuthError = async () => {
-							const refreshed = await this.#resolveAuthConfig(config, {
-								forceRefresh: true,
-								refreshCommands: true,
-							});
-							if (refreshed.type === "http" || refreshed.type === "sse") {
-								return refreshed.headers ?? null;
-							}
-							return null;
-						};
-					}
-
-					// Re-establish connection if the transport closes (server restart,
-					// network interruption).
-					connection.transport.onClose = () => {
-						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-						void this.#reconnectAfterClose(name, connection);
-					};
+					this.#wireTransport(name, config, connection);
 
 					return connection;
 				},
@@ -1129,15 +1090,10 @@ export class MCPManager {
 		return null;
 	}
 
-	/** Establish a new connection to a server, wire handlers, load tools. */
-	async #connectAndWireServer(
-		name: string,
-		config: MCPServerConfig,
-		source: SourceMeta | undefined,
-		reconnectEpoch: number,
-	): Promise<MCPServerConnection> {
+	/** Resolve a server's credentials and open its connection, routing its notifications and requests here. */
+	async #openConnection(name: string, config: MCPServerConfig): Promise<MCPServerConnection> {
 		const resolvedConfig = await this.#resolveAuthConfig(config);
-		const connection = await connectToServer(name, resolvedConfig, {
+		return connectToServer(name, resolvedConfig, {
 			onNotification: (method, params) => {
 				this.#handleServerNotification(name, method, params);
 			},
@@ -1146,24 +1102,18 @@ export class MCPManager {
 			},
 			...this.#stdioSpawnHooks(),
 		});
+	}
 
-		connection.config = config;
-		if (source) connection._source = source;
-
-		// Bail out if the server was disconnected or the manager was reset
-		// while we were connecting (e.g. /mcp reload called disconnectAll).
-		if (!this.#serverConfigs.has(name) || this.#epoch !== reconnectEpoch) {
-			closeTransportDetached(connection.transport, name, "reconnect-superseded");
-			throw new Error(
-				`MCP server "${name}" was removed or disabled while it was reconnecting, so the new connection was dropped rather than left orphaned. Fix: if you did not intend that, run \`/mcp enable ${name}\` and then \`/mcp reconnect ${name}\`; \`/mcp list\` shows the current state.`,
-			);
-		}
-
-		this.#connections.set(name, connection);
-
-		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
-		// Same gate as connectServers: a resolvable managed credential, or a `!command` this
-		// path can re-run.
+	/**
+	 * Wire a live connection's transport, on every path that opens one.
+	 *
+	 * An HTTP-like transport refreshes its credential on a 401 when the server has one to refresh: a
+	 * resolvable managed OAuth credential (definition-only configs get Bearer injection too and need the
+	 * same mid-session refresh), or a `!command` header, which mints or reads its token on demand.
+	 * Without the hook a rotated token meant 401s until the process restarted, because nothing re-ran the
+	 * command. Every transport reconnects when it closes (server restart, network interruption).
+	 */
+	#wireTransport(name: string, config: MCPServerConfig, connection: MCPServerConnection): void {
 		if (
 			isAuthRefreshableMCPTransport(connection.transport) &&
 			(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
@@ -1180,6 +1130,32 @@ export class MCPManager {
 			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
 			void this.#reconnectAfterClose(name, connection);
 		};
+	}
+
+	/** Establish a new connection to a server, wire handlers, load tools. */
+	async #connectAndWireServer(
+		name: string,
+		config: MCPServerConfig,
+		source: SourceMeta | undefined,
+		reconnectEpoch: number,
+	): Promise<MCPServerConnection> {
+		const connection = await this.#openConnection(name, config);
+
+		connection.config = config;
+		if (source) connection._source = source;
+
+		// Bail out if the server was disconnected or the manager was reset
+		// while we were connecting (e.g. /mcp reload called disconnectAll).
+		if (!this.#serverConfigs.has(name) || this.#epoch !== reconnectEpoch) {
+			closeTransportDetached(connection.transport, name, "reconnect-superseded");
+			throw new Error(
+				`MCP server "${name}" was removed or disabled while it was reconnecting, so the new connection was dropped rather than left orphaned. Fix: if you did not intend that, run \`/mcp enable ${name}\` and then \`/mcp reconnect ${name}\`; \`/mcp list\` shows the current state.`,
+			);
+		}
+
+		this.#connections.set(name, connection);
+
+		this.#wireTransport(name, config, connection);
 		try {
 			const serverTools = await listTools(connection);
 			const reconnect = () => this.reconnectServer(name);

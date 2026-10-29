@@ -110,6 +110,29 @@ export function setJsEvalWorkerThreadForTests(enabled: boolean): boolean {
 	return previous;
 }
 
+/**
+ * Send `close` and wait for the worker to acknowledge it, resolving `false` when no acknowledgement
+ * lands within the grace period. `subscribe` arms the listeners that call `ack` and returns their
+ * teardown, which runs once on either outcome.
+ */
+async function awaitCloseAck(subscribe: (ack: () => void) => () => void, sendClose: () => void): Promise<boolean> {
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	let settled = false;
+	let timeout: NodeJS.Timeout | undefined;
+	let teardown = (): void => {};
+	const finish = (value: boolean): void => {
+		if (settled) return;
+		settled = true;
+		clearTimeout(timeout);
+		teardown();
+		resolve(value);
+	};
+	teardown = subscribe(() => finish(true));
+	timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
+	sendClose();
+	return await promise;
+}
+
 export async function executeInVmContext(options: {
 	sessionKey: string;
 	sessionId: string;
@@ -624,26 +647,15 @@ function spawnJsProcess(): WorkerHandle {
 		send: message => base.send(message),
 		onMessage: handler => base.onMessage(handler),
 		onError: handler => base.onError(handler),
-		async close() {
-			const { promise, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				resolve(value);
-			};
-			unsubscribe = base.onMessage(message => {
-				if (message.type !== "closed") return;
-				void base.terminate().finally(() => finish(true));
-			});
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			base.send({ type: "close" });
-			return await promise;
-		},
+		close: () =>
+			awaitCloseAck(
+				ack =>
+					base.onMessage(message => {
+						if (message.type !== "closed") return;
+						void base.terminate().finally(ack);
+					}),
+				() => base.send({ type: "close" }),
+			),
 		terminate: () => base.terminate(),
 	};
 }
@@ -673,37 +685,32 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 				worker.removeEventListener("close", onClose);
 			};
 		},
-		async close() {
-			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let sawClosedAck = false;
-			let sawWorkerExit = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				worker.removeEventListener("close", onClose);
-				resolve(value);
-			};
-			const finishIfClosed = (): void => {
-				if (sawClosedAck && sawWorkerExit) finish(true);
-			};
-			const onClose = (): void => {
-				sawWorkerExit = true;
-				finishIfClosed();
-			};
-			unsubscribe = this.onMessage(msg => {
-				if (msg.type !== "closed") return;
-				sawClosedAck = true;
-				finishIfClosed();
-			});
-			worker.addEventListener("close", onClose);
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			worker.postMessage({ type: "close" } satisfies EvalWorkerInbound);
-			return await closed;
+		close() {
+			return awaitCloseAck(
+				ack => {
+					// Done only once the worker has acknowledged `close` AND its thread has exited.
+					let sawClosedAck = false;
+					let sawWorkerExit = false;
+					const finishIfClosed = (): void => {
+						if (sawClosedAck && sawWorkerExit) ack();
+					};
+					const onClose = (): void => {
+						sawWorkerExit = true;
+						finishIfClosed();
+					};
+					const unsubscribe = this.onMessage(msg => {
+						if (msg.type !== "closed") return;
+						sawClosedAck = true;
+						finishIfClosed();
+					});
+					worker.addEventListener("close", onClose);
+					return () => {
+						unsubscribe();
+						worker.removeEventListener("close", onClose);
+					};
+				},
+				() => worker.postMessage({ type: "close" } satisfies EvalWorkerInbound),
+			);
 		},
 		async terminate() {
 			worker.terminate();
@@ -751,26 +758,20 @@ function spawnInlineWorker(): WorkerHandle {
 			return () => hostListeners.delete(handler);
 		},
 		onError: () => () => {},
-		async close() {
-			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				hostListeners.clear();
-				workerListeners.clear();
-				resolve(value);
-			};
-			unsubscribe = this.onMessage(msg => {
-				if (msg.type === "closed") finish(true);
-			});
-			this.send({ type: "close" });
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			return await closed;
+		close() {
+			return awaitCloseAck(
+				ack => {
+					const unsubscribe = this.onMessage(msg => {
+						if (msg.type === "closed") ack();
+					});
+					return () => {
+						unsubscribe();
+						hostListeners.clear();
+						workerListeners.clear();
+					};
+				},
+				() => this.send({ type: "close" }),
+			);
 		},
 		async terminate() {
 			hostListeners.clear();

@@ -89,6 +89,7 @@
 - An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
 - The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
 - The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
+- MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
 
 ### Fixed
 

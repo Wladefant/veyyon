@@ -40,7 +40,6 @@ import {
 	type Usage,
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import type { AssistantMessage } from "@veyyon/ai";
 import { BlobStore, resolveImageDataSync } from "@veyyon/kernel/session/blob-store";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "@veyyon/kernel/session/session-listing";
@@ -68,6 +67,7 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/a
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
 import type { AgentSession } from "../../session/agent-session";
+import { findLastAssistantMessage } from "../../session/agent-session-message-shapes";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
 import {
 	type BackgroundHandoff,
@@ -1299,14 +1299,7 @@ export class AcpAgent implements Agent {
 		if (!progress || progress.textEmitted) {
 			return;
 		}
-		let lastAssistant: AssistantMessage | undefined;
-		for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-			const message = event.messages[mi]!;
-			if (message.role === "assistant") {
-				lastAssistant = message as AssistantMessage;
-				break;
-			}
-		}
+		const lastAssistant = findLastAssistantMessage(event.messages);
 		if (!lastAssistant) {
 			return;
 		}
@@ -1343,14 +1336,7 @@ export class AcpAgent implements Agent {
 		if (streamedDelivery && (await streamedDelivery)) {
 			return;
 		}
-		let lastAssistant: AssistantMessage | undefined;
-		for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-			const message = event.messages[mi]!;
-			if (message.role === "assistant") {
-				lastAssistant = message as AssistantMessage;
-				break;
-			}
-		}
+		const lastAssistant = findLastAssistantMessage(event.messages);
 		if (lastAssistant?.stopReason !== "error") {
 			return;
 		}
@@ -2274,14 +2260,7 @@ function resolveStopReason(
 	if (cancelRequested) {
 		return "cancelled";
 	}
-	let lastAssistant: AssistantMessage | undefined;
-	for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-		const message = event.messages[mi]!;
-		if (message.role === "assistant") {
-			lastAssistant = message as AssistantMessage;
-			break;
-		}
-	}
+	const lastAssistant = findLastAssistantMessage(event.messages);
 	const reason = lastAssistant?.stopReason;
 	switch (reason) {
 		case "aborted":

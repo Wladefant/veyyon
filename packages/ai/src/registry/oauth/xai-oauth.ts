@@ -49,20 +49,25 @@ interface XAIDeviceAuthorization {
  *         either scheme or host validation.
  */
 export function validateXAIEndpoint(url: string, field: string): string {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
-	}
-	if (parsed.protocol !== "https:") {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
-	}
-	const host = parsed.hostname.toLowerCase();
-	if (!host || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
+	const parsed = URL.parse(url);
+	const host = parsed?.hostname.toLowerCase();
+	if (parsed?.protocol !== "https:" || !host || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
 		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
 	}
 	return url;
+}
+
+/** The parsed body of an xAI response; an unparsable body is a `validation` error naming `operation`. */
+async function responseJson(response: Response, operation: string): Promise<unknown> {
+	try {
+		return await response.json();
+	} catch (error) {
+		throw new AIError.OAuthError(`${operation} returned invalid JSON: ${errorMessage(error)}`, {
+			kind: "validation",
+			provider: "xai",
+			cause: error,
+		});
+	}
 }
 
 /** Fetch xAI's OIDC discovery document and validate the token endpoint. */
@@ -96,16 +101,7 @@ async function xaiOAuthDiscovery(
 				status: response.status,
 			});
 		}
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI OIDC discovery returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI OIDC discovery");
 		if (!isRecord(payload)) {
 			throw new AIError.OAuthError("xAI OIDC discovery response was not a JSON object.", {
 				kind: "validation",
@@ -271,16 +267,7 @@ async function requestXAIDeviceAuthorization(
 			);
 		}
 
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI device-code response returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI device-code response");
 		return parseXAIDeviceAuthorization(payload);
 	} finally {
 		requestTimeout.cancel();
@@ -440,16 +427,7 @@ export async function refreshXAIOAuthToken(
 			});
 		}
 
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI token refresh returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI token refresh");
 		return parseXAITokenResponse(payload, "xAI token refresh response", refreshToken);
 	} finally {
 		requestTimeout.cancel();
