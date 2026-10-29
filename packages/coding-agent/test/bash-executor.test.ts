@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@veyyon/coding-agent/config/settings";
-import { buildMinimizerOptions, executeBash } from "@veyyon/coding-agent/exec/bash-executor";
+import {
+	buildMinimizerOptions,
+	executeBash,
+	reapRetainedShellsForTests,
+} from "@veyyon/coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 import * as shellSnapshot from "@veyyon/coding-agent/utils/shell-snapshot";
 import type { Shell, ShellRunResult } from "@veyyon/natives";
@@ -1079,6 +1084,16 @@ describe("executeBash :async: background retention", () => {
 					alive = false;
 				}
 				expect(alive).toBe(true);
+
+				// Once the job exits, the shell is dropped and its reaper interval ends with it.
+				process.kill(pid, "SIGKILL");
+				const deadline = Date.now() + 4000;
+				let retained = await reapRetainedShellsForTests();
+				while (retained > 0 && Date.now() < deadline) {
+					await sleep(5);
+					retained = await reapRetainedShellsForTests();
+				}
+				expect(retained).toBe(0);
 			} finally {
 				if (pid !== undefined) {
 					try {

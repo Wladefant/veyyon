@@ -109,8 +109,21 @@ const shellSessionsInUse = new Set<string>();
  * background job exits (reaped by the poll loop below). Children stay
  * kill-on-drop, so they still die when the harness tears the Shell down on exit.
  */
-const retainedShells = new Set<Shell>();
+const retainedShells = new Map<Shell, NodeJS.Timeout>();
 const RETAIN_REAP_INTERVAL_MS = 5_000;
+
+/** Drop a retained shell once its last background job has exited. */
+async function releaseIfIdle(shell: Shell): Promise<void> {
+	let remaining = 0;
+	try {
+		remaining = await shell.liveBackgroundJobCount();
+	} catch {
+		// A shell that cannot report its jobs is released, the same as one with none left.
+	}
+	if (remaining > 0) return;
+	clearInterval(retainedShells.get(shell));
+	retainedShells.delete(shell);
+}
 
 async function retainShellWithLiveBackgroundJobs(shell: Shell): Promise<void> {
 	let live: number;
@@ -119,22 +132,16 @@ async function retainShellWithLiveBackgroundJobs(shell: Shell): Promise<void> {
 	} catch {
 		return;
 	}
-	if (live <= 0) return;
-	retainedShells.add(shell);
-	const interval = setInterval(() => {
-		void shell
-			.liveBackgroundJobCount()
-			.then(remaining => {
-				if (remaining > 0) return;
-				clearInterval(interval);
-				retainedShells.delete(shell);
-			})
-			.catch(() => {
-				clearInterval(interval);
-				retainedShells.delete(shell);
-			});
-	}, RETAIN_REAP_INTERVAL_MS);
-	interval.unref?.();
+	if (live <= 0 || retainedShells.has(shell)) return;
+	const reaper = setInterval(() => void releaseIfIdle(shell), RETAIN_REAP_INTERVAL_MS);
+	reaper.unref?.();
+	retainedShells.set(shell, reaper);
+}
+
+/** Run the reaper's check over every retained shell now. Resolves how many stay retained. Test-only. */
+export async function reapRetainedShellsForTests(): Promise<number> {
+	await Promise.all([...retainedShells.keys()].map(releaseIfIdle));
+	return retainedShells.size;
 }
 
 function quarantineShellSession(
