@@ -10,9 +10,9 @@
 
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import type { GuestFrame, HostFrame, RelayControlMessage } from "@veyyon/wire";
+import { packEnvelope, unpackEnvelope } from "@veyyon/wire";
 import { RELAY_FATAL_CLOSE_REASONS, RELAY_MAX_PENDING_SENDS } from "@veyyon/wire/relay";
 import { open, seal } from "./codec";
-import { packEnvelope, unpackEnvelope } from "./link";
 
 export interface CollabSocketOptions {
 	/** wss://host[:port]/r/<roomId> — no query string. */

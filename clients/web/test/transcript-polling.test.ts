@@ -6,9 +6,8 @@
  * from the same cursor forever.
  */
 import { describe, expect, it, vi } from "bun:test";
-import { type HostFrame, TRANSCRIPT_TIMEOUT_MS, type WireSessionEntry } from "@veyyon/wire";
+import { encodeBase64Url, type HostFrame, TRANSCRIPT_TIMEOUT_MS, type WireSessionEntry } from "@veyyon/wire";
 import { GuestClient } from "../src/lib/client";
-import { encodeBase64Url } from "../src/lib/link";
 import { decideTranscriptPoll } from "../src/lib/transcript-poll";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
