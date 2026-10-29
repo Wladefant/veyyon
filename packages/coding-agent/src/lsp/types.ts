@@ -345,8 +345,9 @@ export interface ServerConfig {
 	/** Per-server warmup timeout in milliseconds. Overrides the global WARMUP_TIMEOUT_MS for this server during startup. */
 	warmupTimeoutMs?: number;
 	/**
-	 * Per-server overrides for rust-analyzer workspace-ready polling. When omitted, the module
-	 * defaults are used. Primarily a tuning/test seam to bound the multi-second settle window.
+	 * Per-server overrides for the rust-analyzer workspace wait. `timeoutMs` bounds the whole wait, for
+	 * `quiescent: true` or for the `analyzerStatus` poll; `pollMs`, `settleMs` and `statusRequestTimeoutMs`
+	 * apply to the poll, which runs only for a server that reports no `experimental/serverStatus`.
 	 */
 	workspaceReadyTimings?: {
 		timeoutMs?: number;

@@ -87,6 +87,48 @@ export function onProgress(client: LspClient, listener: ProgressListener): () =>
 	};
 }
 
+/**
+ * Each client's last `experimental/serverStatus` `quiescent` flag. rust-analyzer sends the notification to a
+ * client that advertises `experimental.serverStatusNotification` whenever its pending background work
+ * (workspace fetch, build scripts, proc macros, cache priming) starts or ends; `quiescent: true` means none
+ * is pending, and a request sent before then is held and answered `content modified`. A client absent here
+ * has reported no status.
+ */
+const serverQuiescence = new WeakMap<LspClient, boolean>();
+
+/** Callbacks run on every `experimental/serverStatus` a client receives. */
+const serverStatusListeners = new WeakMap<LspClient, Set<() => void>>();
+
+function recordServerStatus(client: LspClient, quiescent: boolean): void {
+	serverQuiescence.set(client, quiescent);
+	const listeners = serverStatusListeners.get(client);
+	if (!listeners) return;
+	for (const listener of listeners) listener();
+}
+
+/**
+ * Resolves `true` once `client` reports `quiescent: true`, and `false` when `timeoutMs` passes or `signal`
+ * aborts first.
+ */
+async function waitForQuiescence(client: LspClient, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+	if (serverQuiescence.get(client) === true) return true;
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	const listeners = serverStatusListeners.get(client) ?? new Set<() => void>();
+	serverStatusListeners.set(client, listeners);
+	const onStatus = () => {
+		if (serverQuiescence.get(client) === true) resolve(true);
+	};
+	const onAbort = () => resolve(false);
+	listeners.add(onStatus);
+	signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await settleWithin(promise, timeoutMs, false);
+	} finally {
+		listeners.delete(onStatus);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
 /** Negative cache of recent init failures so a broken server fails fast instead of re-spawning per call. */
 const INIT_FAILURE_BACKOFF_MS = 3 * 60 * 1000;
 const initFailures = new Map<string, { at: number; message: string }>();
@@ -240,6 +282,7 @@ const CLIENT_CAPABILITIES = {
 	},
 	experimental: {
 		snippetTextEdit: true,
+		serverStatusNotification: true,
 	},
 };
 
@@ -438,6 +481,8 @@ async function startMessageReader(client: LspClient): Promise<void> {
 								if (listeners && params.value) {
 									for (const listener of listeners) listener(params.token, params.value);
 								}
+							} else if (message.method === "experimental/serverStatus" && message.params) {
+								recordServerStatus(client, (message.params as { quiescent?: unknown }).quiescent === true);
 							}
 						}
 					} else if ("id" in message && message.id !== undefined) {
@@ -642,7 +687,10 @@ async function sendResponse(
 /** Timeout for warmup initialize requests (5 seconds) */
 export const WARMUP_TIMEOUT_MS = 5000;
 
-/** Max time to poll rust-analyzer after progress ends but before Cargo workspaces are ready. */
+/**
+ * Max time to wait for rust-analyzer's workspace after project-load progress ends: for `quiescent: true`
+ * from a server that reports `experimental/serverStatus`, or for the `analyzerStatus` poll below otherwise.
+ */
 const RUST_ANALYZER_WORKSPACE_READY_TIMEOUT_MS = 5_000;
 const RUST_ANALYZER_WORKSPACE_READY_POLL_MS = 100;
 const RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS = 2_000;
@@ -667,6 +715,13 @@ function isRustAnalyzerStatusTimeout(err: unknown): boolean {
 	return err instanceof Error && err.message.startsWith("LSP request rust-analyzer/analyzerStatus timed out after ");
 }
 
+/**
+ * Waits until rust-analyzer can answer from its loaded workspace. A server that reports
+ * `experimental/serverStatus` is ready at `quiescent: true`, which is waited on directly. A server that
+ * reports none (a shared lspmux instance another client started without the capability) is polled with
+ * `rust-analyzer/analyzerStatus` until it lists a workspace and {@link RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS}
+ * has passed. Either wait ends at the timeout without marking the client ready, so the next call waits again.
+ */
 async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (rustAnalyzerReadyClients.has(client)) {
 		return;
@@ -680,6 +735,12 @@ async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSig
 	const deadline = started + timeoutMs;
 	while (true) {
 		throwIfAborted(signal);
+		if (serverQuiescence.has(client)) {
+			// An abort ends the wait unmarked, as it ends `waitForProjectLoaded`; the caller's next request
+			// reads the signal.
+			if (await waitForQuiescence(client, deadline - Date.now(), signal)) rustAnalyzerReadyClients.add(client);
+			return;
+		}
 		let status: unknown;
 		try {
 			status = await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, statusRequestTimeoutMs);
