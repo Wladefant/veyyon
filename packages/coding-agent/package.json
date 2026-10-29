@@ -74,7 +74,6 @@
     "@veyyon/natives": "catalog:",
     "@veyyon/plugin": "catalog:",
     "@veyyon/settings": "catalog:",
-    "@veyyon/tool-render": "catalog:",
     "@veyyon/tui": "catalog:",
     "@veyyon/utils": "catalog:",
     "@veyyon/view": "catalog:",
@@ -86,18 +85,14 @@
     "chalk": "catalog:",
     "diff": "catalog:",
     "fast-xml-parser": "catalog:",
-    "handlebars": "catalog:",
     "header-generator": "catalog:",
     "linkedom": "catalog:",
     "lru-cache": "catalog:",
-    "lucide-react": "catalog:",
     "mammoth": "catalog:",
-    "marked": "catalog:",
     "mupdf": "catalog:",
     "puppeteer-core": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "smol-toml": "catalog:",
     "turndown": "catalog:",
     "turndown-plugin-gfm": "catalog:",
     "yaml": "catalog:",
@@ -111,7 +106,9 @@
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@vtsls/language-server": "0.3.0"
+    "@veyyon/tool-render": "catalog:",
+    "@vtsls/language-server": "0.3.0",
+    "handlebars": "catalog:"
   },
   "engines": {
     "bun": ">=1.4.3"

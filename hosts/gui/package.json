@@ -33,8 +33,7 @@
   },
   "dependencies": {
     "@veyyon/tool-render": "catalog:",
-    "@veyyon/view": "catalog:",
-    "marked": "catalog:"
+    "@veyyon/view": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "catalog:"
