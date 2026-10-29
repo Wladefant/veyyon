@@ -21,7 +21,7 @@ import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
 import { restoreEnv } from "../../utils/test/helpers/restore-global";
-import { createCodexTestContext, createCodexTestToken } from "./helpers";
+import { createCodexTestContext, createCodexTestToken, providerSessionStateForTest } from "./helpers";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
@@ -398,7 +398,7 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			apiKey: "opaque-proxy-key",
 			sessionId: "opaque-ws-session",
-			providerSessionState: new Map<string, ProviderSessionState>(),
+			providerSessionState: providerSessionStateForTest(),
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
@@ -1251,7 +1251,7 @@ describe("openai-codex streaming", () => {
 			{
 				apiKey: token,
 				sessionId: "ws-binary-payload-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 			},
 		).result();
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello binary");
@@ -1282,7 +1282,7 @@ describe("openai-codex streaming", () => {
 			{
 				apiKey: token,
 				sessionId: "ws-observer-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 				onSseEvent: event => {
 					observed.push({ event: event.event, data: event.data, raw: [...event.raw] });
 				},
@@ -1355,7 +1355,7 @@ describe("openai-codex streaming", () => {
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			apiKey: token,
 			sessionId: "ws-orchestration-usage-session",
-			providerSessionState: new Map<string, ProviderSessionState>(),
+			providerSessionState: providerSessionStateForTest(),
 		}).result();
 
 		expect(result.usage.input).toBe(0);
@@ -1400,7 +1400,7 @@ describe("openai-codex streaming", () => {
 					"openai-beta": "responses=stale",
 				},
 				sessionId: "ws-header-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 			},
 		).result();
 
@@ -1436,7 +1436,7 @@ describe("openai-codex streaming", () => {
 			{
 				apiKey: token,
 				sessionId: "ws-lite-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 				responsesLite: true,
 				clientMetadata: { workspace_kind: "repo", "x-codex-turn-metadata": '{"thread_id":"caller"}' },
 			},
@@ -2529,7 +2529,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const streamResult = streamOpenAICodexResponses(model, context, {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -2598,7 +2598,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, context, {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -2726,7 +2726,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const midTurnCompaction: CodexCompactionRequestContext = {
 			operationId: "isolated-success",
 			trigger: "auto",
@@ -2894,7 +2894,7 @@ describe("openai-codex streaming", () => {
 			contextWindow: 128000,
 			maxTokens: 128000,
 		});
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const sessionId = "pre-turn-reset-session";
 		let sseHeaders: Headers | undefined;
 		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
@@ -3040,7 +3040,7 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			serviceTier: "priority",
 			sessionId: "ws-service-tier-session",
-			providerSessionState: new Map<string, ProviderSessionState>(),
+			providerSessionState: providerSessionStateForTest(),
 		}).result();
 		expect(result.stopReason).toBe("stop");
 		expect(fetchMock).not.toHaveBeenCalled();
@@ -3102,7 +3102,7 @@ describe("openai-codex streaming", () => {
 			contextWindow: 128000,
 			maxTokens: 128000,
 		});
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant.", "Use concise answers."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
@@ -3230,7 +3230,7 @@ describe("openai-codex streaming", () => {
 			contextWindow: 128000,
 			maxTokens: 128000,
 		});
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		// Non-ASCII, so a character count and a byte count differ.
 		const replacedInput = [{ role: "user", content: [{ type: "input_text", text: "replaced by hook: ünïcödé ✓" }] }];
 		const response = await streamOpenAICodexResponses(
@@ -3321,7 +3321,7 @@ describe("openai-codex streaming", () => {
 			contextWindow: 128000,
 			maxTokens: 128000,
 		});
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
@@ -3469,7 +3469,7 @@ describe("openai-codex streaming", () => {
 				fetch: fetchImpl,
 				apiKey: createCodexTestToken(),
 				sessionId: "ws-frame-guard-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 			}).result();
 
 			const text = result.content
@@ -3532,7 +3532,7 @@ describe("openai-codex streaming", () => {
 			contextWindow: 128000,
 			maxTokens: 128000,
 		});
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
@@ -3666,7 +3666,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = PreviousResponseMissingWebSocket as unknown as typeof WebSocket;
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
@@ -3774,7 +3774,7 @@ describe("openai-codex streaming", () => {
 
 		global.WebSocket = ProxyStaleAnchorWebSocket as unknown as typeof WebSocket;
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
@@ -3872,7 +3872,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		await streamOpenAICodexResponses(model, context, {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -3929,7 +3929,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		await prewarmOpenAICodexResponses(model, {
 			apiKey: token,
 			sessionId: "ws-idle-timeout-session",
@@ -4003,7 +4003,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = NoProgressWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4075,7 +4075,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = AcceptedThenSilentWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4143,7 +4143,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = WhitespaceArgumentsWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4243,7 +4243,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = RecoveringWhitespaceWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4326,7 +4326,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = WhitespaceCustomInputWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4370,7 +4370,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = EagerCloseWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4420,7 +4420,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = ConnectionLimitWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -4469,7 +4469,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = DeferredOpenWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		// Prewarm starts the handshake; the stream call races it before the socket
 		// opens. Tearing down the CONNECTING socket would reject the prewarm with a
 		// fatal "websocket closed before open" and disable websockets for the session.
@@ -4550,7 +4550,7 @@ describe("openai-codex streaming", () => {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-post-done-whitespace-session",
-			providerSessionState: new Map<string, ProviderSessionState>(),
+			providerSessionState: providerSessionStateForTest(),
 		}).result();
 
 		// A toolcall_end already reached the consumer: replay is refused and the
@@ -4655,7 +4655,7 @@ describe("openai-codex streaming", () => {
 				{ role: "user", content: "Finish", timestamp: Date.now() + 2 },
 			],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 
 		const firstResult = await streamOpenAICodexResponses(model, firstContext, {
 			fetch: fetchMock as FetchImpl,
@@ -4760,7 +4760,7 @@ describe("openai-codex streaming", () => {
 				fetch: fetchMock as FetchImpl,
 				apiKey: token,
 				sessionId: "ws-buffered-close-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 			},
 		).result();
 
@@ -4849,7 +4849,7 @@ describe("openai-codex streaming", () => {
 			systemPrompt: ["Prompt B"],
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 
 		await streamOpenAICodexResponses(websocketModel, firstContext, {
 			fetch: fetchMock as FetchImpl,
@@ -4929,7 +4929,7 @@ describe("openai-codex streaming", () => {
 			maxTokens: 128000,
 		});
 
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		await prewarmOpenAICodexResponses(model, {
 			apiKey: token,
 			sessionId: "ws-reuse-session",
@@ -5049,7 +5049,7 @@ describe("openai-codex streaming", () => {
 
 		const systemPrompt = ["You are a helpful assistant."];
 		const firstUser = { role: "user" as const, content: "Read the file", timestamp: Date.now() };
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const options = {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -5148,7 +5148,7 @@ describe("openai-codex streaming", () => {
 		global.WebSocket = LateFrameWebSocket as unknown as typeof WebSocket;
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const firstContext: Context = {
 			systemPrompt: ["You are a helpful assistant."],
 			messages: [{ role: "user", content: "First", timestamp: Date.now() }],
@@ -5225,7 +5225,7 @@ describe("openai-codex SSE statelessness", () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const options = createSseOptions(fetchMock, "sse-stateless-session", providerSessionState);
 
 		const systemPrompt = ["You are a helpful assistant."];
@@ -5303,7 +5303,7 @@ describe("openai-codex ephemeral fork metadata", () => {
 		const sent: Array<Record<string, unknown>> = [];
 		const fetchMock = createMetadataCapturingFetch(sent);
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 
 		await streamSimple(
 			model,

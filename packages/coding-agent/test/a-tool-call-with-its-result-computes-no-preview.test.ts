@@ -15,7 +15,7 @@
  * What it does not catch: a card sealed without a result and handed new arguments afterwards, which
  * the sealing path stops but does not settle.
  */
-import { afterEach, beforeAll, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, mock, onTestFinished, spyOn } from "bun:test";
 import { setTimeout as nextTask } from "node:timers/promises";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
@@ -107,6 +107,8 @@ function rebuild(mode: (typeof MODES)[number], messages: AgentMessage[], streami
 		isStreaming: () => streaming,
 	});
 	builder.rebuild(messages);
+	// A call rebuilt with no result is a live card whose rail ticks until the transcript is disposed.
+	onTestFinished(() => builder.dispose());
 }
 
 describe("a tool call with its result computes no preview", () => {

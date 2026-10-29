@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "@veyyon/coding-agent/utils/sixel";
@@ -90,6 +90,7 @@ describe("BashExecutionComponent streaming throttle", () => {
 
 	it("caps stored lines during streaming", () => {
 		const component = new BashExecutionComponent("test", ui, false);
+		onTestFinished(() => component.dispose());
 
 		// Flood with 500 lines in one chunk (exceeds STREAMING_LINE_CAP of 100)
 		const lines = Array.from({ length: 500 }, (_, i) => `line${i}`).join("\n");

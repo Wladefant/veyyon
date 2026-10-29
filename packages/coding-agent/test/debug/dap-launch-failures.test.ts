@@ -177,6 +177,7 @@ describe("DAP launch failure handling", () => {
 		spyOn(DapClient, "spawn").mockResolvedValue(fake as unknown as DapClient);
 
 		await manager.launch({ adapter, program: "/bin/echo", cwd: process.cwd() }, undefined, 10);
+		await manager.terminate();
 
 		const launch = fake.requests.find(request => request.command === "launch");
 		expect(launch?.args).toMatchObject({ args: ["--configured"], program: "/bin/echo" });

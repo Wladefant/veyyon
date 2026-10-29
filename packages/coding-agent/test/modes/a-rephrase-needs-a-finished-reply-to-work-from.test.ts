@@ -132,8 +132,11 @@ describe("/rephrase needs a finished reply to work from", () => {
 		await flushMicrotasks();
 		mode.handleRephraseCommand();
 		await flushMicrotasks();
-		if (submitted.length === 0) mode.onInputCallback = undefined;
-		return submitted.at(0);
+		const reply = submitted.at(0);
+		// End the wait rather than dropping its callback: a dropped callback strands
+		// `getUserInput` and the keepalive interval it holds for the rest of the process.
+		mode.onInputCallback?.({ text: "", cancelled: true, started: false });
+		return reply;
 	};
 
 	beforeEach(() => {

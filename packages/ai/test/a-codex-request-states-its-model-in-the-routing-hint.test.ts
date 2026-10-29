@@ -21,10 +21,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
 import { prewarmOpenAICodexResponses, streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState, ServiceTier } from "@veyyon/ai/types";
+import type { Context, FetchImpl, Model, ServiceTier } from "@veyyon/ai/types";
 import { codexRoutingHint } from "@veyyon/catalog/wire/codex";
 import * as piUtils from "@veyyon/utils";
-import { createCodexModel } from "./helpers";
+import { createCodexModel, providerSessionStateForTest } from "./helpers";
 
 const ROUTING_HINT = "x-codex-routing-hint";
 const BASE_URL = "https://codex.example/backend-api";
@@ -247,7 +247,7 @@ describe("a websocket Codex turn states its model and tier on the upgrade", () =
 				apiKey: codexToken(),
 				fetch: host.fetch,
 				sessionId: "routing-hint-ws",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 				serviceTier: tier,
 			}).result();
 
@@ -266,7 +266,7 @@ describe("a websocket Codex turn states its model and tier on the upgrade", () =
 			apiKey: codexToken(),
 			fetch: codexHost().fetch,
 			sessionId: "routing-hint-ws-hook",
-			providerSessionState: new Map<string, ProviderSessionState>(),
+			providerSessionState: providerSessionStateForTest(),
 			onPayload: payload => ({ ...(payload as Record<string, unknown>), model: "gpt-rewritten" }),
 		}).result();
 
@@ -276,7 +276,7 @@ describe("a websocket Codex turn states its model and tier on the upgrade", () =
 
 	it("opens the prewarmed socket with the hint of the turn that reuses it", async () => {
 		const sockets = installCodexWebSocket();
-		const providerSessionState = new Map<string, ProviderSessionState>();
+		const providerSessionState = providerSessionStateForTest();
 		const model = daybreakModel();
 		await prewarmOpenAICodexResponses(model, {
 			apiKey: codexToken(),

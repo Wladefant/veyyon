@@ -15,7 +15,7 @@
  * Not caught: SIXEL images cut by the streaming cap (the cap cut them before this change too), and a memory
  * bound on held chunks between draws, which changes no output.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, onTestFinished } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/eval-execution";
 import {
@@ -35,9 +35,15 @@ beforeEach(async () => {
 
 type ExecutionBlock = BashExecutionComponent | EvalExecutionComponent;
 
+/** A block disposed when the test that opened it ends, so a block left running stops its loader. */
+function opened(block: ExecutionBlock): ExecutionBlock {
+	onTestFinished(() => block.dispose());
+	return block;
+}
+
 const BLOCKS: Array<[string, () => ExecutionBlock]> = [
-	["the bash block", () => new BashExecutionComponent("cmd", ui)],
-	["the eval block", () => new EvalExecutionComponent("print()", ui)],
+	["the bash block", () => opened(new BashExecutionComponent("cmd", ui))],
+	["the eval block", () => opened(new EvalExecutionComponent("print()", ui))],
 ];
 
 function numbered(count: number, trailingNewline: boolean): string {

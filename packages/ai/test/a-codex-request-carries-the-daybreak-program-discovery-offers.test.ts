@@ -45,10 +45,11 @@ import {
 	openAIResponsesServerCompaction,
 	resetServerCompactionRouteCache,
 } from "@veyyon/ai/providers/openai-compaction";
-import type { Context, CyberAccessProgram, FetchImpl, Model, ModelSpec, ProviderSessionState } from "@veyyon/ai/types";
+import type { Context, CyberAccessProgram, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { fetchCodexAccountModels, fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
 import * as piUtils from "@veyyon/utils";
+import { providerSessionStateForTest } from "./helpers";
 
 const DISCOVERY_BASE_URL = "https://codex.example/backend-api";
 const ACCOUNT_ID = "acc_test";
@@ -446,7 +447,7 @@ describe("a Codex request carries the Daybreak program discovery offers", () => 
 				const model = await discoveredModel(slug);
 				const frames = installRecordingWebSocket();
 				const host = codexHost(completedTurn);
-				const providerSessionState = new Map<string, ProviderSessionState>();
+				const providerSessionState = providerSessionStateForTest();
 				const options = {
 					apiKey: codexToken(),
 					sessionId: `access-programs-${slug}`,

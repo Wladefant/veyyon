@@ -10,9 +10,12 @@
  * card: you could watch an agent ask a question and had no way to answer it.
  * Enter now hands the main view to that agent's live session.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, onTestFinished, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
+import {
+	AgentDashboard,
+	type AgentDashboardDeps,
+} from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
@@ -49,6 +52,13 @@ function frameOf(dashboard: AgentDashboard): string {
 	return stripVTControlCharacters(dashboard.render(120).join("\n"));
 }
 
+/** A dashboard disposed when the test that opened it ends, so its age timer ends with the test. */
+function openDashboard(deps?: AgentDashboardDeps): AgentDashboard {
+	const opened = new AgentDashboard(deps);
+	onTestFinished(() => opened.dispose());
+	return opened;
+}
+
 /**
  * Rows the CARD occupies, which is not the length of the frame.
  *
@@ -77,7 +87,7 @@ describe("Live roster", () => {
 	test("shows each agent's type next to its call sign, even while it reports activity", () => {
 		registerSub("0-Sub", "reviewer", "reading diff of agent-dashboard.ts");
 		registerSub("1-Sub", "scout", "grepping for callers");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -99,7 +109,7 @@ describe("Live roster", () => {
 			session: null,
 			status: "running",
 		});
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -122,7 +132,7 @@ describe("Live roster", () => {
 		const ref = registry.get(MAIN_AGENT_ID);
 		if (!ref) throw new Error("registration did not take");
 		ref.lastActivity = Date.now() - 3 * 60_000;
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -133,7 +143,7 @@ describe("Live roster", () => {
 
 	/** With nothing registered the view says so, and says what will fill it. */
 	test("states the empty case instead of rendering a blank pane", () => {
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -156,7 +166,7 @@ describe("Opening an agent", () => {
 		registerSub("1-Sub", "scout");
 		const opened: string[] = [];
 		const focused = Promise.withResolvers<void>();
-		const dashboard = new AgentDashboard({
+		const dashboard = openDashboard({
 			terminalHeight: 40,
 			focusAgent: async id => {
 				opened.push(id);
@@ -177,7 +187,7 @@ describe("Opening an agent", () => {
 		registerSub("1-Sub", "scout");
 		const opened: string[] = [];
 		const focused = Promise.withResolvers<void>();
-		const dashboard = new AgentDashboard({
+		const dashboard = openDashboard({
 			terminalHeight: 40,
 			focusAgent: async id => {
 				opened.push(id);
@@ -202,7 +212,7 @@ describe("Opening an agent", () => {
 	test("closes the card once the hand-over lands", async () => {
 		registerSub("0-Sub", "reviewer");
 		const closed = Promise.withResolvers<void>();
-		const dashboard = new AgentDashboard({ terminalHeight: 40, focusAgent: async () => {} });
+		const dashboard = openDashboard({ terminalHeight: 40, focusAgent: async () => {} });
 		dashboard.onClose = () => closed.resolve();
 
 		dashboard.handleInput("\r");
@@ -221,7 +231,7 @@ describe("Opening an agent", () => {
 		const message = 'Agent "0-Sub" is aborted and cannot be revived';
 		let closeCalls = 0;
 		const rendered = Promise.withResolvers<void>();
-		const dashboard = new AgentDashboard({
+		const dashboard = openDashboard({
 			terminalHeight: 40,
 			focusAgent: () => Promise.reject(new Error(message)),
 		});
@@ -241,7 +251,7 @@ describe("Opening an agent", () => {
 	/** Enter on an empty roster is a no-op, not a crash on `undefined.id`. */
 	test("Enter does nothing when there is no agent to open", () => {
 		const opened: string[] = [];
-		const dashboard = new AgentDashboard({ terminalHeight: 40, focusAgent: async id => void opened.push(id) });
+		const dashboard = openDashboard({ terminalHeight: 40, focusAgent: async id => void opened.push(id) });
 
 		dashboard.handleInput("\r");
 
@@ -258,7 +268,7 @@ describe("Card chrome", () => {
 	 */
 	test("offers Live and Comms, and no configuration tab", () => {
 		registerSub("0-Sub", "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -280,7 +290,7 @@ describe("Card chrome", () => {
 	 * rather than a missing footer.
 	 */
 	test("offers only the keys that work when the roster is empty", () => {
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -296,7 +306,7 @@ describe("Card chrome", () => {
 	/** And every one of them comes back with a row to act on. */
 	test("offers the roster keys again once an agent exists", () => {
 		registerSub("0-Sub", "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const shown = frameOf(dashboard);
 
@@ -316,7 +326,7 @@ describe("Card chrome", () => {
 	test("takes exactly the viewport when the roster does not fit", () => {
 		geo.setRows(30);
 		for (let index = 0; index < 40; index++) registerSub(`${index}-Sub`, "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 30 });
+		const dashboard = openDashboard({ terminalHeight: 30 });
 
 		const lines = dashboard.render(100);
 
@@ -331,7 +341,7 @@ describe("Card chrome", () => {
 	test("re-fits the body when the terminal height shrinks", () => {
 		geo.setRows(30);
 		for (let index = 0; index < 40; index++) registerSub(`${index}-Sub`, "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 30 });
+		const dashboard = openDashboard({ terminalHeight: 30 });
 		expect(dashboard.render(100).length).toBe(30);
 
 		geo.setRows(18);
@@ -355,7 +365,7 @@ describe("Card chrome", () => {
 	test("hugs a small roster rather than framing empty rows", () => {
 		geo.setRows(40);
 		for (let index = 0; index < 4; index++) registerSub(`${index}-Sub`, "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const lines = dashboard.render(100);
 
@@ -378,7 +388,7 @@ describe("Card chrome", () => {
 	test("floats the hugged card in the middle of the terminal", () => {
 		geo.setRows(40);
 		for (let index = 0; index < 4; index++) registerSub(`${index}-Sub`, "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const drawn = dashboard.render(100).map(line => stripVTControlCharacters(line).trimEnd());
 
@@ -403,10 +413,10 @@ describe("Card chrome", () => {
 	test("draws the same card for one agent as for four", () => {
 		geo.setRows(40);
 		registerSub("0-Sub", "reviewer");
-		const one = cardRows(new AgentDashboard({ terminalHeight: 40 }).render(100));
+		const one = cardRows(openDashboard({ terminalHeight: 40 }).render(100));
 		AgentRegistry.resetGlobalForTests();
 		for (let index = 0; index < 4; index++) registerSub(`${index}-Sub`, "reviewer");
-		const four = new AgentDashboard({ terminalHeight: 40 });
+		const four = openDashboard({ terminalHeight: 40 });
 
 		expect(cardRows(four.render(100))).toBe(one);
 		four.dispose();
@@ -419,9 +429,9 @@ describe("Card chrome", () => {
 	test("grows past the floor before it stops growing", () => {
 		geo.setRows(40);
 		for (let index = 0; index < 4; index++) registerSub(`${index}-Sub`, "reviewer");
-		const small = cardRows(new AgentDashboard({ terminalHeight: 40 }).render(100));
+		const small = cardRows(openDashboard({ terminalHeight: 40 }).render(100));
 		for (let index = 4; index < 16; index++) registerSub(`${index}-Sub`, "reviewer");
-		const larger = new AgentDashboard({ terminalHeight: 40 });
+		const larger = openDashboard({ terminalHeight: 40 });
 
 		const grown = cardRows(larger.render(100));
 
@@ -448,7 +458,7 @@ describe("Readable without colour", () => {
 	test("marks the selected roster row with a glyph, not a tint alone", () => {
 		registerSub("0-Sub", "reviewer");
 		registerSub("1-Sub", "scout");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		const rows = frameOf(dashboard).split("\n");
 		const reviewer = rows.find(line => line.includes("reviewer"));
@@ -467,7 +477,7 @@ describe("Readable without colour", () => {
 		const previousPolicy = getAnsiPolicy();
 		setAnsiPolicy("plain");
 		registerSub("0-Sub", "reviewer");
-		const dashboard = new AgentDashboard({ terminalHeight: 40 });
+		const dashboard = openDashboard({ terminalHeight: 40 });
 
 		try {
 			const strip = dashboard.render(120).find(line => line.includes("Live (1)"));

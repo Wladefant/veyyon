@@ -11,7 +11,7 @@
  * remote path has to survive every way a host transcript can misbehave (a
  * header-only first fetch, an oversized entry, rotation under the byte cursor).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -136,7 +136,7 @@ function makeViewer(file: string, remote?: AgentTranscriptRemote, ui?: TUI) {
 		sessionFile: remote ? undefined : file,
 		status: "parked",
 	});
-	return new AgentTranscriptViewer({
+	const viewer = new AgentTranscriptViewer({
 		agentId: "Main/advisor",
 		registry: agents,
 		ui: ui ?? ({ requestRender: () => {}, requestComponentRender: () => {} } as never),
@@ -148,6 +148,8 @@ function makeViewer(file: string, remote?: AgentTranscriptRemote, ui?: TUI) {
 		onClose: () => {},
 		onHubClose: () => {},
 	});
+	onTestFinished(() => viewer.dispose());
+	return viewer;
 }
 
 /** Leading-space count of a stripped line (its content gutter). */

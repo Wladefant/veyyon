@@ -1,6 +1,7 @@
+import { onTestFinished } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Context, Model, UserMessage } from "@veyyon/ai/types";
+import type { Context, Model, ProviderSessionState, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import type { ModelSpec } from "@veyyon/catalog/types";
@@ -72,6 +73,21 @@ export function createCodexModel(
 /** A user turn with plain-text content, stamped 0 so nothing a suite builds from it reads the clock. */
 export function userMessage(text: string): UserMessage {
 	return { role: "user", content: text, timestamp: 0 };
+}
+
+/**
+ * A provider session-state map closed when the current test finishes. A Codex websocket the
+ * suite opens is pooled in this map with its heartbeat interval armed; closing the map ends the
+ * socket and clears the interval with the test that opened it, as `ProviderSessions` does when a
+ * session ends.
+ */
+export function providerSessionStateForTest(): Map<string, ProviderSessionState> {
+	const states = new Map<string, ProviderSessionState>();
+	onTestFinished(() => {
+		for (const state of states.values()) state.close();
+		states.clear();
+	});
+	return states;
 }
 
 /** One user turn saying hello, the smallest context a provider stream accepts. */

@@ -114,6 +114,9 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 		toolRegistry,
 		cleanup: async () => {
 			mode.stop();
+			// A test that armed `getUserInput` and never answered it would otherwise leave the
+			// wait, and the keepalive interval it holds, pending for the rest of the process.
+			mode.onInputCallback?.({ text: "", cancelled: true, started: false });
 			await session.dispose();
 			tempDir.removeSync();
 			resetSettingsForTest();
