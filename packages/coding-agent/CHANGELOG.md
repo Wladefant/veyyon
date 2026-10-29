@@ -13,6 +13,7 @@
 - No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
 - No user-visible change: the `/debug` performance, dump and memory reports write their bundle through one sequence in `debug/index.ts` instead of three copies.
 - No user-visible change: the agents and import setup steps take the checklist sentinel, key hints and space-to-toggle input from `setup-wizard/scenes/wizard-list.ts` instead of two copies.
+- No user-visible change: the prompt history search overlay highlights the tokens `historyQueryTokens` in `@veyyon/kernel/session/history-storage` matched instead of its own copy of the tokenizer.
 - No user-visible change: the session-compaction-stall and session-tree-nav benches build their usage records from `emptyUsage()` instead of restating its zero fields.
 - No user-visible change: the LSP writethrough bench's header describes the event-driven diagnostics wait instead of the 100ms poll it replaced.
 - No user-visible change: each MCP HTTP request builds its headers through one transport helper instead of five inline copies, and the HTTP transport, the legacy SSE transport and `callMCP` read the JSON-RPC POST headers from one constant in `mcp/json-rpc.ts`.

@@ -1,8 +1,8 @@
-import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
+import { type HistoryEntry, type HistoryStorage, historyQueryTokens } from "@veyyon/kernel/session/history-storage";
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { collapseWhitespace, NON_ALNUM_RUN_RE } from "@veyyon/utils";
+import { collapseWhitespace } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { clamp } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
@@ -31,14 +31,6 @@ import { centeredWindow, hoverBandAt, renderScrollableList, selectionBand } from
 
 /** Visible result rows; also the jump distance for PageUp/PageDown. */
 const MAX_VISIBLE = 10;
-
-/** Split a query the same way `HistoryStorage` tokenizes it, so highlights align with matches. */
-function queryTokens(query: string): string[] {
-	return query
-		.toLowerCase()
-		.split(NON_ALNUM_RUN_RE)
-		.filter(tok => tok.length > 0);
-}
 
 /** Wrap every case-insensitive occurrence of any token in `text` with the accent color. */
 function highlightTokens(text: string, tokens: string[]): string {
@@ -376,7 +368,7 @@ export class HistorySearchComponent implements Component {
 			? this.#historyStorage.search(query, this.#resultLimit)
 			: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#selectedIndex = 0;
-		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? queryTokens(query) : []);
+		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? historyQueryTokens(query) : []);
 	}
 
 	render(width: number): readonly string[] {
