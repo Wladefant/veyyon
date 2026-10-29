@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: `/btw` and `/omfg` show, replace, dismiss and fail a request through one `SidePanelSlot` in `modes/terminal/controllers/side-panel-slot.ts` instead of two copies, and a `/btw` answer is held on its request instead of in controller fields cleared on close.
 - No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
 - No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
 - Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.

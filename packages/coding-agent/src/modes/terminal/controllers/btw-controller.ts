@@ -4,6 +4,7 @@ import { sideChannelPrompts } from "../../../prompts/side-channel/rows";
 import { copyToClipboard } from "../../../utils/clipboard";
 import { BtwPanelComponent } from "../components/dialogs/btw-panel";
 import type { InteractiveModeContext } from "../types";
+import { SidePanelSlot } from "./side-panel-slot";
 
 /**
  * The slice of the interactive context this controller uses: 7 members of the
@@ -22,6 +23,8 @@ interface BtwRequest {
 	abortController: AbortController;
 	question: string;
 	leafId: string | null;
+	/** Set when the turn finished with an answer the panel can copy and branch; dropped with the request. */
+	answer?: { copyText: string; assistantMessage: AssistantMessage };
 }
 
 function assistantMessageWithReplyText(assistantMessage: AssistantMessage, replyText: string): AssistantMessage {
@@ -46,44 +49,41 @@ function assistantMessageWithReplyText(assistantMessage: AssistantMessage, reply
 }
 
 export class BtwController {
-	#activeRequest: BtwRequest | undefined;
-	#lastQuestion: string | undefined;
-	#lastReplyText: string | undefined;
-	#lastAssistantMessage: AssistantMessage | undefined;
-	#lastLeafId: string | null | undefined;
+	readonly #slot = new SidePanelSlot<BtwRequest>({
+		container: () => this.ctx.btwContainer,
+		requestRender: () => this.ctx.ui.requestRender(),
+	});
 	#branchInFlight = false;
-	#lastCopyText: string | undefined;
 	#copyInFlight = false;
 
 	constructor(private readonly ctx: BtwControllerContext) {}
 
 	hasActiveRequest(): boolean {
-		return this.#activeRequest !== undefined;
+		return this.#slot.open !== undefined;
 	}
 
 	canBranch(): boolean {
+		const request = this.#slot.open;
 		return (
 			!this.#branchInFlight &&
-			this.#activeRequest?.component.isBranchable() === true &&
-			this.#lastQuestion !== undefined &&
-			this.#lastReplyText !== undefined &&
-			this.#lastAssistantMessage !== undefined &&
-			this.#lastLeafId !== null &&
-			this.#lastLeafId === this.ctx.sessionManager.getLeafId()
+			request?.component.isBranchable() === true &&
+			request.answer !== undefined &&
+			request.leafId !== null &&
+			request.leafId === this.ctx.sessionManager.getLeafId()
 		);
 	}
 
 	canCopy(): boolean {
-		return (
-			!this.#copyInFlight && this.#activeRequest?.component.isCopyable() === true && this.#lastCopyText !== undefined
-		);
+		const request = this.#slot.open;
+		return !this.#copyInFlight && request?.component.isCopyable() === true && request.answer !== undefined;
 	}
 
 	async handleCopy(): Promise<boolean> {
-		if (!this.canCopy() || this.#lastCopyText === undefined) return false;
+		const answer = this.#slot.open?.answer;
+		if (!this.canCopy() || !answer) return false;
 		this.#copyInFlight = true;
 		try {
-			await copyToClipboard(this.#lastCopyText);
+			await copyToClipboard(answer.copyText);
 			this.ctx.showStatus("Copied /btw answer to clipboard");
 			return true;
 		} catch (error) {
@@ -95,10 +95,11 @@ export class BtwController {
 	}
 
 	async handleBranch(): Promise<boolean> {
-		if (!this.canBranch() || !this.#lastQuestion || !this.#lastAssistantMessage) return false;
+		const request = this.#slot.open;
+		if (!this.canBranch() || !request?.answer) return false;
 		this.#branchInFlight = true;
 		try {
-			await this.ctx.handleBtwBranch(this.#lastQuestion, this.#lastAssistantMessage);
+			await this.ctx.handleBtwBranch(request.question, request.answer.assistantMessage);
 			return true;
 		} finally {
 			this.#branchInFlight = false;
@@ -106,13 +107,11 @@ export class BtwController {
 	}
 
 	handleEscape(): boolean {
-		if (!this.#activeRequest) return false;
-		this.#closeActiveRequest({ abort: this.#activeRequest.abortController.signal.aborted === false });
-		return true;
+		return this.#slot.escape();
 	}
 
 	dispose(): void {
-		this.#closeActiveRequest({ abort: true });
+		this.#slot.close({ abort: true });
 	}
 
 	async start(question: string): Promise<void> {
@@ -128,85 +127,38 @@ export class BtwController {
 			return;
 		}
 
-		this.#closeActiveRequest({ abort: true });
-
 		const request: BtwRequest = {
 			component: new BtwPanelComponent({ question: trimmedQuestion, tui: this.ctx.ui }),
 			abortController: new AbortController(),
 			question: trimmedQuestion,
 			leafId: this.ctx.sessionManager.getLeafId(),
 		};
-		this.ctx.btwContainer.clear();
-		this.ctx.btwContainer.addChild(request.component);
-		this.ctx.ui.requestRender();
-		this.#activeRequest = request;
-		void this.#runRequest(request);
+		this.#slot.show(request);
+		void this.#slot.run(request, () => this.#ask(request));
 	}
 
-	async #runRequest(request: BtwRequest): Promise<void> {
-		try {
-			const promptText = prompt.render(sideChannelPrompts["side-channel/btw-user"].text, {
-				question: request.question,
-			});
-			const { replyText, assistantMessage } = await this.ctx.session.runEphemeralTurn({
-				promptText,
-				onTextDelta: delta => {
-					if (this.#isActiveRequest(request)) {
-						request.component.appendText(delta);
-					}
-				},
-				signal: request.abortController.signal,
-			});
+	async #ask(request: BtwRequest): Promise<void> {
+		const promptText = prompt.render(sideChannelPrompts["side-channel/btw-user"].text, {
+			question: request.question,
+		});
+		const { replyText, assistantMessage } = await this.ctx.session.runEphemeralTurn({
+			promptText,
+			onTextDelta: delta => {
+				if (this.#slot.isOpen(request)) {
+					request.component.appendText(delta);
+				}
+			},
+			signal: request.abortController.signal,
+		});
 
-			if (!this.#isActiveRequest(request)) {
-				return;
-			}
-			request.component.setAnswer(replyText);
-			request.component.markComplete();
-			const copyText = request.component.getCopyText();
-			if (copyText !== undefined) {
-				this.#lastQuestion = request.question;
-				this.#lastReplyText = replyText;
-				this.#lastCopyText = copyText;
-				this.#lastAssistantMessage = assistantMessageWithReplyText(assistantMessage, replyText);
-				this.#lastLeafId = request.leafId;
-			} else {
-				this.#clearCompletedState();
-			}
-		} catch (error) {
-			if (!this.#isActiveRequest(request)) {
-				return;
-			}
-			if (request.abortController.signal.aborted) {
-				request.component.markAborted();
-				return;
-			}
-			request.component.markError(errorMessage(error));
+		if (!this.#slot.isOpen(request)) {
+			return;
 		}
-	}
-
-	#closeActiveRequest(options: { abort: boolean }): void {
-		const request = this.#activeRequest;
-		if (!request) return;
-		this.#activeRequest = undefined;
-		this.#clearCompletedState();
-		if (options.abort) {
-			request.abortController.abort();
+		request.component.setAnswer(replyText);
+		request.component.markComplete();
+		const copyText = request.component.getCopyText();
+		if (copyText !== undefined) {
+			request.answer = { copyText, assistantMessage: assistantMessageWithReplyText(assistantMessage, replyText) };
 		}
-		request.component.close();
-		this.ctx.btwContainer.clear();
-		this.ctx.ui.requestRender();
-	}
-
-	#clearCompletedState(): void {
-		this.#lastQuestion = undefined;
-		this.#lastReplyText = undefined;
-		this.#lastAssistantMessage = undefined;
-		this.#lastCopyText = undefined;
-		this.#lastLeafId = undefined;
-	}
-
-	#isActiveRequest(request: BtwRequest): boolean {
-		return this.#activeRequest === request;
 	}
 }
