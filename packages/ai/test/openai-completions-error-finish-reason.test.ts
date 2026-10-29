@@ -10,9 +10,9 @@
 // assertion is now the flag the turn domain actually reads, and the string it
 // checks is the one the owner mints.
 import { describe, expect, it } from "bun:test";
+import { providerFinishErrorMessage } from "@veyyon/ai/error/classes";
 import { Flag } from "@veyyon/ai/error/flag";
 import { classify } from "@veyyon/ai/error/flags";
-import { providerFinishErrorMessage } from "@veyyon/ai/error/provider";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";

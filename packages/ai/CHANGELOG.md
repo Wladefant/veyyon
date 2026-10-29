@@ -12,6 +12,7 @@
 - The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
 - The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
 - `mapAnthropicToolChoice` moved from `stream.ts` to `providers/anthropic-tool-choice.ts` and `OUTPUT_FALLBACK_BUFFER` to `providers/anthropic.ts`, so the Anthropic, GitLab Duo and Kimi Code/Synthetic providers no longer import the stream dispatcher; both names stay exported from `@veyyon/ai`; no user-facing change.
+- `providerFinishErrorMessage` and `PROVIDER_FINISH_ERROR_PATTERN` moved from `error/provider.ts` to `error/classes.ts`, so the turn error domain no longer closes an import cycle through the error classifier; both stay exported from `@veyyon/ai/error`; no user-facing change.
 
 ### Fixed
 
