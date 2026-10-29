@@ -330,11 +330,8 @@ export type LinterClientFactory = (config: ServerConfig, cwd: string) => LinterC
 // =============================================================================
 
 export interface ServerCapabilities {
+	/** The `diagnostics` action runs the server's compiler check (`rust-analyzer/runFlycheck`) and waits for it. */
 	flycheck?: boolean;
-	ssr?: boolean;
-	expandMacro?: boolean;
-	runnables?: boolean;
-	relatedTests?: boolean;
 }
 
 export interface ServerConfig {

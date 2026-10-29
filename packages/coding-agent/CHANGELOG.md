@@ -184,6 +184,7 @@
 
 - `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
 - The terminal's `emitCustomToolSessionEvent` and `showToolError` are removed; nothing called them; no user-facing change.
+- The `ssr`, `expandMacro`, `runnables` and `relatedTests` LSP server capabilities are removed from the built-in rust-analyzer entry and the documentation; no code read them, and a config that still sets them loads unchanged.
 
 ## [1.5.10] - 2026-10-25
 
