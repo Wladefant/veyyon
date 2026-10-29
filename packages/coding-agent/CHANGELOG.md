@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Live provider context compaction now preserves provider-specific context.
+
 ## [1.6.6] - 2026-10-28
 
 ### Changed
