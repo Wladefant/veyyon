@@ -13,7 +13,7 @@ import { truncateToWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import type { Settings } from "../../../../config/settings";
 import { theme } from "../../../../theme/theme-binding";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	planModalChrome,
@@ -246,8 +246,7 @@ export class ModelPickerComponent implements Component {
 
 	render(width: number): string[] {
 		const termRows = this.#tui.terminal?.rows || process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, termRows);
-		const dims = layoutModalCard(width, termRows, sizing);
+		const dims = layoutModalCard(width, termRows, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, termRows);

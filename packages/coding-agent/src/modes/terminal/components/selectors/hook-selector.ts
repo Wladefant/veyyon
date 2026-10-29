@@ -32,7 +32,7 @@ import {
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -953,8 +953,7 @@ export class HookSelectorComponent extends Container {
 		}
 
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = layoutModalCard(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(renderWidth, height);

@@ -14,7 +14,7 @@ import { withIcon } from "../../../../theme/icon-label";
 import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -1076,8 +1076,7 @@ export class SessionSelectorComponent extends Container {
 	 */
 	render(width: number): readonly string[] {
 		const termHeight = this.#getTerminalRows();
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight, !this.#fillHeight);
-		const dims = layoutModalCard(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE, !this.#fillHeight);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, termHeight);

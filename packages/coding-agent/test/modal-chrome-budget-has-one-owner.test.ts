@@ -346,7 +346,9 @@ describe("planModalChrome is the contract callers size against", () => {
 	 * each side of a one-row body and dropped every option under its question.
 	 */
 	test("a body floor sheds the tip gap, the tip, the padding and the reserved footer, in that order", () => {
-		const card = layoutModalCard(200, 24, MODAL_SIZING_LARGE);
+		// 40 rows: the shortest LARGE card that still carries its padding, since a card pinned to its
+		// floor has shed it before any body floor is asked for.
+		const card = layoutModalCard(200, 40, MODAL_SIZING_LARGE);
 		if (!card) throw new Error("no card");
 		const chrome = { shortcuts: SHORTCUTS, tipCandidates: ["a tip"] };
 		const free = planModalChrome(card, chrome);

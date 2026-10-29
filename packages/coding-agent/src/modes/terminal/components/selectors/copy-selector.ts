@@ -17,7 +17,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -271,8 +271,7 @@ export class CopySelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = layoutModalCard(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
 			return emptyModalArea(width, height);
 		}

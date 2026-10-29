@@ -23,7 +23,6 @@ import {
 	HOOK_EDITOR_TEXT_PAD_COLS,
 	layoutModalCard,
 	MODAL_SIZING_MEDIUM,
-	sizingForArea,
 } from "../chrome/modal-geometry";
 import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -161,8 +160,7 @@ export class HookEditorComponent extends Container {
 		if (!this.#card) return super.render(renderWidth);
 
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = layoutModalCard(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(renderWidth, height);

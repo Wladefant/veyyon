@@ -35,7 +35,7 @@ import { getEditorTheme, theme } from "../../../../theme/theme";
 import { replaceTabs, shortenPath, truncateToWidth } from "../../../../tools/core/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../../session-observer-registry";
 import { matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -606,8 +606,7 @@ export class AgentTranscriptViewer implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight);
-		const dims = layoutModalCard(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return new Array(termHeight).fill(" ".repeat(width));

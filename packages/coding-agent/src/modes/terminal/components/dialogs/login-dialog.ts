@@ -6,7 +6,7 @@ import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { theme } from "../../../../theme/theme-binding";
 import { copyToClipboard } from "../../../../utils/clipboard";
 import { openPath } from "../../../../utils/open";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
@@ -188,8 +188,7 @@ export class LoginDialogComponent implements Component {
 		// LARGE, not MEDIUM: the authorize URL is a copy target and a narrow card
 		// wraps it mid-token, so the card takes the wider sizing to keep a typical
 		// URL on one row.
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight);
-		const dims = layoutModalCard(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, termHeight);

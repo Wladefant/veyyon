@@ -17,7 +17,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
@@ -381,8 +381,7 @@ export class HistorySearchComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = layoutModalCard(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, height);

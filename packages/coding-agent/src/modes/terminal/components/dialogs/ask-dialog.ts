@@ -557,8 +557,7 @@ export class AskDialogComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
-		const sizing = MODAL_SIZING_LARGE;
-		const dims = layoutModalCard(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			this.#listPointerMap = null;

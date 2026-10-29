@@ -21,6 +21,7 @@
 
 ### Changed
 
+- A modal card keeps its padding from 29 rows for large cards and 27 rows for medium and settings cards, instead of 39, 33 and 31, so cards on terminals 27 to 38 rows tall show up to four more list rows.
 - No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
 - No user-visible change: the `/debug` performance, dump and memory reports write their bundle through one sequence in `debug/index.ts` instead of three copies.
 - No user-visible change: the agents and import setup steps take the checklist sentinel, key hints and space-to-toggle input from `setup-wizard/scenes/wizard-list.ts` instead of two copies.
@@ -224,6 +225,7 @@
 - An extension in a spawned agent reads the agent's context usage through `ctx.getContextUsage()` and compacts it through `ctx.compact()`; they used to return `undefined` and do nothing.
 - A failed abort requested by an extension in print, RPC or a spawned agent is logged instead of exiting the process.
 - No user-visible change: print, RPC, ACP and a spawned agent build their extension actions through one `sessionExtensionActions` in `extensibility/extensions/session-actions.ts` instead of three copies.
+- The ask dialog and the plan review shed their padding on short terminals like every other card, showing up to four more body rows at 24 rows.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.

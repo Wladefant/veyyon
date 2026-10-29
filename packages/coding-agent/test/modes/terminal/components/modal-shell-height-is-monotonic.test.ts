@@ -24,11 +24,12 @@
  * the whole time: a live copy of the exact defect, invisible to the guard, keeping
  * its padding across every height from 24 to 32 where the shared rule says the card
  * is pinned to its floor. A scan for a spelling cannot close a class of spellings.
- * The decision is now unreachable: `sizingForArea` takes the AREA HEIGHT, computes
- * the rule itself, and its only boolean can compact a card EARLIER, never later. The
- * cases below assert that property over every exported sizing AND over a synthetic
- * grid of margins and paddings, so a sizing that does not exist yet, exported or
- * private, is already covered.
+ * The decision is now unreachable: `layoutModalCard`, the layout every card paints,
+ * applies `sizingForArea`, which takes the AREA HEIGHT and computes the rule itself,
+ * and its only boolean can compact a card EARLIER, never later. The cases below
+ * assert that property over every exported sizing AND over a synthetic grid of
+ * margins and paddings, so a sizing that does not exist yet, exported or private, is
+ * already covered.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
@@ -53,17 +54,23 @@ beforeAll(async () => {
 	await initTheme(false);
 });
 
-/** Card height at a terminal height, through the sizing path a card really uses. */
+/** Card height at a terminal height, through the layout a card really paints. */
 function cardHeight(rows: number, base: ModalSizing = MODAL_SIZING_LARGE): number {
-	const sizing = sizingForArea(base, rows);
-	return computeModalDims(WIDTH, rows, sizing)?.modalHeight ?? 0;
+	return layoutModalCard(WIDTH, rows, base)?.modalHeight ?? 0;
 }
 
 /** Rows the card's BODY gets, which is what a list actually fills. */
 function bodyRows(rows: number, base: ModalSizing = MODAL_SIZING_LARGE): number {
-	const sizing = sizingForArea(base, rows);
-	const card = layoutModalCard(WIDTH, rows, sizing);
+	const card = layoutModalCard(WIDTH, rows, base);
 	if (!card) return 0;
+	return planModalChrome(card, { shortcuts: [{ label: "esc close" }] }).maxBodyRows;
+}
+
+/** Rows the body gets with `sizing` laid out as given, without the compact rule. */
+function bodyRowsAs(rows: number, sizing: ModalSizing): number {
+	const dims = computeModalDims(WIDTH, rows, sizing);
+	if (!dims) return 0;
+	const card = { ...dims, sizing, areaWidth: WIDTH, areaHeight: rows };
 	return planModalChrome(card, { shortcuts: [{ label: "esc close" }] }).maxBodyRows;
 }
 
@@ -79,19 +86,18 @@ function exportedSizings(): [string, ModalSizing][] {
 /**
  * Whether a sizing can pay for its own padding at the compact boundary.
  *
- * The boundary sits at `areaHeight - 2 * vMargin === MODAL_MIN_TALL_ROWS`, and the
- * card's floor when padded is `MODAL_MIN_TALL_ROWS + 4 * vPad` capped by the screen.
- * Turning padding on costs `2 * vPad` body rows at once while the card gains one row
- * per terminal row, so the floor is what covers that jump, and it can only do so if
- * the boundary height is at or above it: `2 * vMargin >= 4 * vPad`. A sizing with a
- * margin thinner than twice its padding steps DOWN at its own boundary no matter
- * where the boundary is put, because a card with no margin is the whole screen in
- * both states and the padding has nowhere to come from. That is geometry, not a
- * bug to fix, which is why it is a precondition on the table rather than a branch
- * in the code, and why the negative control below pins it.
+ * The boundary sits at `MODAL_MIN_TALL_ROWS + 2 * vPad`, where the padded body catches
+ * up with the compact one, and it is a step up only if the compact card is still on
+ * its `MODAL_MIN_TALL_ROWS` floor there: `MODAL_MIN_TALL_ROWS + 2 * vPad - 2 * vMargin`
+ * must not exceed the floor, so `vMargin >= vPad`. A sizing with a margin thinner than
+ * its padding steps DOWN at its own boundary no matter where the boundary is put,
+ * because a card with no margin is the whole screen in both states and the padding has
+ * nowhere to come from. That is geometry, not a bug to fix, which is why it is a
+ * precondition on the table rather than a branch in the code, and why the negative
+ * control below pins it.
  */
 function canPayForItsPadding(sizing: ModalSizing): boolean {
-	return sizing.vMargin >= 2 * sizing.vPad;
+	return sizing.vMargin >= sizing.vPad;
 }
 
 /**
@@ -184,8 +190,8 @@ describe("Card height as the terminal grows", () => {
 	/**
 	 * The precondition the guarantee rests on, asserted against the shipped table.
 	 *
-	 * A sizing whose margin is thinner than twice its padding cannot be monotonic,
-	 * so declaring one is the way to reintroduce the cliff without touching a line
+	 * A sizing whose margin is thinner than its padding cannot be monotonic, so
+	 * declaring one is the way to reintroduce the cliff without touching a line
 	 * of the engine. Every exported sizing satisfies it today (LARGE 7/2, MEDIUM 4/1,
 	 * SETTINGS 3/1, and the private MANAGER_SIZING 7/1); the moment one does not,
 	 * this fails and names it, which is the only warning anyone gets.
@@ -193,7 +199,7 @@ describe("Card height as the terminal grows", () => {
 	it("ships no sizing that cannot pay for its own padding", () => {
 		const offenders = exportedSizings()
 			.filter(([, sizing]) => !canPayForItsPadding(sizing))
-			.map(([name, sizing]) => `${name}: vMargin ${sizing.vMargin} < 2 * vPad ${sizing.vPad}`);
+			.map(([name, sizing]) => `${name}: vMargin ${sizing.vMargin} < vPad ${sizing.vPad}`);
 		expect(offenders).toEqual([]);
 	});
 
@@ -215,7 +221,9 @@ describe("Card height as the terminal grows", () => {
 			footerLines: 2,
 		};
 		expect(canPayForItsPadding(illegal)).toBeFalse();
-		expect(bodyRows(25, illegal)).toBeLessThan(bodyRows(24, illegal));
+		let boundary = 1;
+		while (modalNeedsCompactPadding(boundary + 1, illegal)) boundary++;
+		expect(bodyRows(boundary + 1, illegal)).toBeLessThan(bodyRows(boundary, illegal));
 	});
 });
 
@@ -251,16 +259,31 @@ describe("The heights that were broken", () => {
 
 describe("The compact-padding decision", () => {
 	/**
-	 * Compact is about whether the card has room to spare, not about how tall the
-	 * terminal is. Reading it off the terminal is what made one extra row of
-	 * window cost four rows of list.
+	 * Compact is about whether the padding costs the body rows, not about how tall
+	 * the terminal is. Reading it off the terminal is what made one extra row of
+	 * window cost four rows of list, and reading it off the card's floor kept a
+	 * LARGE card compact, and two rows short, up to 38 rows. The padding comes back
+	 * at the first height where the padded card shows more body rows than the
+	 * compact card one row shorter, so the switch is a step up and no lower height
+	 * could have taken it without a flat or falling step.
 	 */
-	it("is compact exactly while the card is still pinned to its floor", () => {
-		expect(modalNeedsCompactPadding(24, MODAL_SIZING_LARGE)).toBeTrue();
-		expect(modalNeedsCompactPadding(30, MODAL_SIZING_LARGE)).toBeTrue();
-		expect(modalNeedsCompactPadding(38, MODAL_SIZING_LARGE)).toBeTrue();
-		expect(modalNeedsCompactPadding(39, MODAL_SIZING_LARGE)).toBeFalse();
-		expect(modalNeedsCompactPadding(60, MODAL_SIZING_LARGE)).toBeFalse();
+	it("brings the padding back at the first height where it shows more body than the row below", () => {
+		const wrong: string[] = [];
+		for (const sizing of everySizing()) {
+			if (sizing.vPad === 0) continue;
+			const compact: ModalSizing = { ...sizing, hPad: 1, vPad: 0 };
+			let returns = Number.POSITIVE_INFINITY;
+			for (let rows = 9; rows <= 120 && returns === Number.POSITIVE_INFINITY; rows++) {
+				if (bodyRowsAs(rows, sizing) > bodyRowsAs(rows - 1, compact)) returns = rows;
+			}
+			for (let rows = 8; rows <= 120; rows++) {
+				if (modalNeedsCompactPadding(rows, sizing) !== rows < returns) {
+					wrong.push(`vMargin ${sizing.vMargin} vPad ${sizing.vPad} at ${rows} rows`);
+				}
+			}
+		}
+		expect(wrong).toEqual([]);
+		expect([28, 29].map(rows => modalNeedsCompactPadding(rows, MODAL_SIZING_LARGE))).toEqual([true, false]);
 	});
 
 	/**
@@ -279,10 +302,10 @@ describe("The compact-padding decision", () => {
 	 * A caller cannot supply the decision, only ask for it earlier.
 	 *
 	 * This is the ownership guarantee, stated as behaviour rather than as a scan
-	 * for a spelling. `sizingForArea` applies the height rule itself, so for every
-	 * height where the card is pinned to its floor the result is compact whatever
-	 * the caller passed, and the force flag can never carry the boundary later,
-	 * which is the only direction the cliff lives in.
+	 * for a spelling. `layoutModalCard`, the layout every card paints, applies the
+	 * height rule itself, so for every height where the card is pinned to its floor
+	 * the card is compact whatever sizing the caller passed, and the force flag can
+	 * never carry the boundary later, which is the only direction the cliff lives in.
 	 */
 	it("applies the height rule whatever the caller asks for", () => {
 		const late: string[] = [];
@@ -291,7 +314,8 @@ describe("The compact-padding decision", () => {
 				const pinned = modalNeedsCompactPadding(rows, sizing);
 				if (!pinned) continue;
 				for (const force of [false, true]) {
-					const resolved = sizingForArea(sizing, rows, force);
+					const resolved = layoutModalCard(WIDTH, rows, sizing, force)?.sizing;
+					if (!resolved) throw new Error(`no card at ${rows} rows`);
 					if (resolved.vPad !== 0 || resolved.hPad !== 1) {
 						late.push(`vMargin ${sizing.vMargin} vPad ${sizing.vPad} at ${rows} rows, force ${force}`);
 					}
@@ -303,15 +327,15 @@ describe("The compact-padding decision", () => {
 
 	/**
 	 * And a roomy card keeps its padding, so the strip is exactly the rule's answer
-	 * plus the force, never a caller's own threshold. `sizingForArea` returns the
-	 * sizing it was given, unchanged, for every height the rule leaves alone.
+	 * plus the force, never a caller's own threshold. The layout carries the sizing
+	 * it was given, unchanged, for every height the rule leaves alone.
 	 */
 	it("hands a roomy card back its own sizing", () => {
 		const surprises: string[] = [];
 		for (const sizing of everySizing()) {
 			for (let rows = 8; rows <= 120; rows++) {
 				if (modalNeedsCompactPadding(rows, sizing)) continue;
-				if (sizingForArea(sizing, rows) !== sizing) {
+				if (layoutModalCard(WIDTH, rows, sizing)?.sizing !== sizing) {
 					surprises.push(`vMargin ${sizing.vMargin} vPad ${sizing.vPad} at ${rows} rows`);
 				}
 			}
@@ -329,8 +353,7 @@ describe("Content-sized cards are unaffected", () => {
 	 */
 	it("still shrinks a card that asks for its content height", () => {
 		const rows = 30;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, rows);
-		const layout = layoutModalCard(WIDTH, rows, sizing);
+		const layout = layoutModalCard(WIDTH, rows, MODAL_SIZING_MEDIUM);
 		if (!layout) throw new Error("the area was too small to paint");
 		const plan = planModalChrome(layout, { shortcuts: [{ label: "esc close" }] });
 

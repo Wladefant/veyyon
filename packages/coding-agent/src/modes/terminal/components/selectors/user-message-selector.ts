@@ -7,7 +7,7 @@ import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -335,8 +335,7 @@ export class UserMessageSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = layoutModalCard(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, height);

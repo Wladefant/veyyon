@@ -61,7 +61,7 @@ import { withIcon } from "../../../../theme/icon-label";
 import { getCurrentThemeName, getSettingsListTheme, theme } from "../../../../theme/theme";
 import { INHERIT_EFFORT_OPTION_VALUE } from "../../../../thinking";
 import { getTabBarTheme } from "../../shared";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_SETTINGS } from "../chrome/modal-geometry";
 import {
 	BREADCRUMB_HOVER_ID,
 	type ModalShellGeometry,
@@ -1545,8 +1545,7 @@ export class SettingsSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = Math.max(1, process.stdout.rows || 40);
-		const sizing = sizingForArea(MODAL_SIZING_SETTINGS, termHeight);
-		const dims = layoutModalCard(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_SETTINGS);
 		if (!dims || dims.contentWidth < MIN_SETTINGS_CONTENT_WIDTH) return this.#renderTooSmall(width, termHeight);
 		this.#viewportTooSmall = false;
 

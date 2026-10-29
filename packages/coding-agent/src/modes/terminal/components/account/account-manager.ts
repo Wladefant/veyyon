@@ -34,7 +34,7 @@ import type { AccountInventory, AccountRow } from "../../../../session/account-i
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -1103,8 +1103,7 @@ export class AccountManagerComponent implements Component {
 		// several rows away from where they are painted. `layoutModalCard` already refuses a screen
 		// too small to draw on, which is the case a minimum height was standing in for.
 		const height = this.#terminalHeight ?? (process.stdout.rows || 40);
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = layoutModalCard(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, height);

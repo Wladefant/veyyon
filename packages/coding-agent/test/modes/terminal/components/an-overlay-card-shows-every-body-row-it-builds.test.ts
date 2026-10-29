@@ -58,7 +58,7 @@ const SHORTEST_HELD_HEIGHT: Readonly<Record<string, number>> = {
 	MCPAddWizard: 14,
 	ModelPickerComponent: 14,
 	MoveOverlay: 9,
-	PlanReviewOverlay: 14,
+	PlanReviewOverlay: 13,
 	SessionSelectorComponent: 12,
 	TreeSelectorComponent: 11,
 	UserMessageSelectorComponent: 10,

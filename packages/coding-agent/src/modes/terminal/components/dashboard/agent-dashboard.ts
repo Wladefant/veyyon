@@ -89,13 +89,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import {
-	emptyModalArea,
-	layoutModalCard,
-	MODAL_SIZING_LARGE,
-	MODAL_SIZING_MEDIUM,
-	sizingForArea,
-} from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
@@ -520,8 +514,7 @@ class AgentTerminationDialog implements Component {
 
 	render(width: number): readonly string[] {
 		const height = this.terminalRows();
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = layoutModalCard(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, height);
@@ -1253,8 +1246,7 @@ export class AgentDashboard extends Container {
 		// every other modal floated in the middle. The shell shrinks the card to
 		// `preferredBodyRows` below and re-centres it in this area.
 		const area = this.#terminalRows();
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, area);
-		const dims = layoutModalCard(width, area, sizing);
+		const dims = layoutModalCard(width, area, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return emptyModalArea(width, area);
