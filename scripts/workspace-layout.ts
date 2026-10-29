@@ -260,22 +260,6 @@ export function isVendored(path: string): boolean {
 }
 
 /**
- * Returns whether a relative file path is a test file or within a test directory.
- */
-export function isTestPath(file: string): boolean {
-	return (
-		file.endsWith(".test.ts") ||
-		file.endsWith(".test.tsx") ||
-		file.includes(".test.") ||
-		file.includes("/test/") ||
-		file.includes("/tests/") ||
-		file.includes("/__tests__/") ||
-		file.includes("/fixtures/") ||
-		file.includes("/oracles/")
-	);
-}
-
-/**
  * Filters relative paths to only those that currently exist on disk.
  */
 export function existingOnly(rootDir: string, relativePaths: readonly string[]): string[] {
