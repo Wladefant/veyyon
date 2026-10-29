@@ -50,6 +50,31 @@ afterEach(async () => {
 	setPreferredImageProvider("auto");
 });
 
+/** A tool context whose registry holds an xAI OAuth token and whose requests go to `fetchMock`. */
+function xaiContext(fetchMock: typeof fetch): CustomToolContext {
+	return {
+		fetch: fetchMock,
+		sessionManager: {
+			getCwd: () => "/tmp",
+			getSessionId: () => "test-session",
+		} as unknown as ReadonlySessionManager,
+		modelRegistry: {
+			getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
+			getProviderBaseUrl: () => undefined,
+			getAll: () => [],
+			authStorage: {
+				hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+				rotateSessionCredential: async () => false,
+			},
+			resolver: () => async () => "test-xai-token",
+		} as unknown as ModelRegistry,
+		model: undefined,
+		isIdle: () => true,
+		hasQueuedMessages: () => false,
+		abort: () => {},
+	};
+}
+
 describe("imageGenTool", () => {
 	it("registers without resolving image provider credentials", async () => {
 		const modelRegistry = {
@@ -461,29 +486,13 @@ describe("imageGenTool", () => {
 			);
 		}) as unknown as typeof fetch;
 
-		const ctx: CustomToolContext = {
-			fetch: fetchMock,
-			sessionManager: {
-				getCwd: () => "/tmp",
-				getSessionId: () => "test-session",
-			} as unknown as ReadonlySessionManager,
-			modelRegistry: {
-				getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
-				getProviderBaseUrl: () => undefined,
-				getAll: () => [],
-				authStorage: {
-					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
-					rotateSessionCredential: async () => false,
-				},
-				resolver: () => async () => "test-xai-token",
-			} as unknown as ModelRegistry,
-			model: undefined,
-			isIdle: () => true,
-			hasQueuedMessages: () => false,
-			abort: () => {},
-		};
+		const result = await imageGenTool.execute(
+			"call-xai",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			xaiContext(fetchMock),
+		);
 
-		const result = await imageGenTool.execute("call-xai", { subject: "a cat", aspect_ratio: "3:2" }, undefined, ctx);
 		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
 
 		expect(requestUrl).toBe("https://api.x.ai/v1/images/generations");
@@ -503,5 +512,31 @@ describe("imageGenTool", () => {
 		const savedPath = result.details?.imagePaths[0];
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-xai-image"));
+	});
+
+	/**
+	 * A provider's refusal reaches the model as the provider's own words with the HTTP status, so the
+	 * model can tell a bad argument from an outage. Every image provider maps its non-OK response
+	 * through one helper; xAI drives it here.
+	 */
+	it.each([
+		[
+			"a JSON error body by its message",
+			JSON.stringify({ error: { message: "aspect ratio unsupported" } }),
+			"aspect ratio unsupported",
+		],
+		["a JSON body without a message as sent", JSON.stringify({ error: {} }), JSON.stringify({ error: {} })],
+		["a plain-text body as sent", "upstream unavailable", "upstream unavailable"],
+	])("reports %s", async (_case, body, detail) => {
+		setPreferredImageProvider("xai");
+		const fetchMock: typeof fetch = (async () =>
+			new Response(body, { status: 400, headers: { "retry-after": "7" } })) as unknown as typeof fetch;
+
+		const failure = imageGenTool.execute("call-xai-error", { subject: "a cat" }, undefined, xaiContext(fetchMock));
+
+		await expect(failure).rejects.toThrow(`xAI image request failed (400): ${detail}`);
+		const error = (await failure.catch((thrown: unknown) => thrown)) as { status?: number; headers?: Headers };
+		expect(error.status).toBe(400);
+		expect(error.headers?.get("retry-after")).toBe("7");
 	});
 });

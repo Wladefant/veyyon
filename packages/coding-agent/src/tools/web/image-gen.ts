@@ -888,13 +888,23 @@ function collectOpenAIHostedImageResult(response: OpenAIHostedImageResponse): Op
 	};
 }
 
-function getOpenAIResponseErrorMessage(rawText: string): string {
+/** The `error.message` of a provider's JSON error body, or the body as sent when it holds none. */
+function providerErrorMessage(body: string): string {
 	try {
-		const parsed = JSON.parse(rawText) as { error?: { message?: string } };
-		return parsed.error?.message ?? rawText;
+		const parsed = JSON.parse(body) as { error?: { message?: string } };
+		return parsed.error?.message ?? body;
 	} catch {
-		return rawText;
+		return body;
 	}
+}
+
+/** The failure of a `label` image request whose non-OK response `resp` sent `body`. */
+function imageRequestError(label: string, resp: Response, body: string): ProviderHttpError {
+	return new ProviderHttpError(
+		`${label} image request failed (${resp.status}): ${providerErrorMessage(body)}`,
+		resp.status,
+		{ headers: resp.headers },
+	);
 }
 
 function getOpenAIBaseUrl(model: Model): string {
@@ -1007,7 +1017,7 @@ async function generateOpenAIHostedImage(
 	if (!response.ok) {
 		const errorText = await response.text();
 		throw Object.assign(
-			new Error(`OpenAI image request failed (${response.status}): ${getOpenAIResponseErrorMessage(errorText)}`),
+			new Error(`OpenAI image request failed (${response.status}): ${providerErrorMessage(errorText)}`),
 			{ status: response.status },
 		);
 	}
@@ -1313,20 +1323,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 										break;
 									}
 
-									const errorText = await resp.text();
-									let message = errorText;
-									try {
-										const parsedErr = JSON.parse(errorText) as { error?: { message?: string } };
-										message = parsedErr.error?.message ?? message;
-									} catch {
-										// Keep raw text.
-									}
-
-									lastError = new ProviderHttpError(
-										`Antigravity image request failed (${resp.status}): ${message}`,
-										resp.status,
-										{ headers: resp.headers },
-									);
+									lastError = imageRequestError("Antigravity", resp, await resp.text());
 
 									if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
 										if (!isLastEndpoint) {
@@ -1425,22 +1422,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 								signal: requestSignal,
 							});
 							const rawText = await resp.text();
-							if (!resp.ok) {
-								let message = rawText;
-								try {
-									const parsedErr = JSON.parse(rawText) as { error?: { message?: string } };
-									message = parsedErr.error?.message ?? message;
-								} catch {
-									// Keep raw text.
-								}
-								throw new ProviderHttpError(
-									`xAI image request failed (${resp.status}): ${message}`,
-									resp.status,
-									{
-										headers: resp.headers,
-									},
-								);
-							}
+							if (!resp.ok) throw imageRequestError("xAI", resp, rawText);
 							return rawText;
 						},
 						{ signal: requestSignal },
@@ -1505,20 +1487,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 								signal: requestSignal,
 							});
 							const text = await resp.text();
-							if (!resp.ok) {
-								let message = text;
-								try {
-									const parsed = JSON.parse(text) as { error?: { message?: string } };
-									message = parsed.error?.message ?? message;
-								} catch {
-									// Keep raw text.
-								}
-								throw new ProviderHttpError(
-									`OpenRouter image request failed (${resp.status}): ${message}`,
-									resp.status,
-									{ headers: resp.headers },
-								);
-							}
+							if (!resp.ok) throw imageRequestError("OpenRouter", resp, text);
 							return text;
 						},
 						{ signal: requestSignal },
@@ -1593,22 +1562,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema.value, ImageGenToolD
 							},
 						);
 						const text = await resp.text();
-						if (!resp.ok) {
-							let message = text;
-							try {
-								const parsed = JSON.parse(text) as { error?: { message?: string } };
-								message = parsed.error?.message ?? message;
-							} catch {
-								// Keep raw text.
-							}
-							throw new ProviderHttpError(
-								`Gemini image request failed (${resp.status}): ${message}`,
-								resp.status,
-								{
-									headers: resp.headers,
-								},
-							);
-						}
+						if (!resp.ok) throw imageRequestError("Gemini", resp, text);
 						return text;
 					},
 					{ signal: requestSignal },
