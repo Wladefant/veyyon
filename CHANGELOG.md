@@ -201,6 +201,7 @@
 
 ### Fixed
 
+- A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
 - Both MCP HTTP transports report a reply to a server request that the server answers with an HTTP error status, instead of dropping it.
 - A Streamable HTTP MCP notification refreshes a rejected credential and retries once, as a request does, and a failed MCP transport POST or legacy SSE connect includes the server's `WWW-Authenticate` and `Mcp-Auth-Server` challenge.
