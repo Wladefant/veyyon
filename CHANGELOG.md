@@ -166,6 +166,7 @@
 
 ### Fixed
 
+- The `lsp` diagnostics action and the diagnostics after a write name a language server or linter that failed, with its error, instead of reporting the file clean; a file no server checked is reported as not checked.
 - The first `lsp` diagnostics call or `rename_file` against a project-aware language server returns in about a second instead of 15 seconds: the file opens before the project-load wait, and a server that reports no load progress is waited on only until it publishes or 2 seconds after the open.
 - `rename_file` on a fresh TypeScript server proposes the import edits of every file importing the renamed one; it opened no file first, so tsserver loaded no project and proposed none.
 - A write reports the diagnostics its language server published for the written text; a publish that arrived before the write's file-change notice was dropped, so the write waited out its diagnostics budget and reported the file clean.
