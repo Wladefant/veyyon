@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `RELEASE_REPOSITORY` as the shared source for the product release repository.
+
+### Changed
+
+- Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+
+### Fixed
+
+- Fixed Windows `read` with redirected input changing the host process's console modes ([Refs #755](https://github.com/Wladefant/veyyon/issues/755)).
+- Bedrock stream failures retain their service status so transient server and throttling errors remain eligible for retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.6.6] - 2026-10-28
 
 ### Fixed

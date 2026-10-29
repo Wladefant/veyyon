@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows `read` with redirected input changing the host process's console modes ([Refs #755](https://github.com/Wladefant/veyyon/issues/755)).
+
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
