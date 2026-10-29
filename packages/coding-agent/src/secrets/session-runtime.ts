@@ -624,6 +624,7 @@ export class SessionSecretRuntime {
 			redactionObfuscator: redactor,
 			hasRedactions: redactor?.hasSecrets() ?? false,
 			obfuscateText: (text: string) => redactor?.obfuscate(text) ?? text,
+			pendingRedactionPrefixLength: (text: string) => redactor?.pendingRedactionPrefixLength(text) ?? 0,
 			obfuscateMessages: (messages: Message[]) => (redactor ? obfuscateMessages(redactor, messages) : messages),
 			obfuscateContext: (context: Context) => (redactor ? obfuscateProviderContext(redactor, context) : context),
 			obfuscatePayload: (payload: unknown) => obfuscateProviderPayload(payload, redactor),

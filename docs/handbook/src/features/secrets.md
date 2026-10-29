@@ -787,13 +787,37 @@ The provider boundary is applied again whenever a local transcript is sent. Resu
 
 Changing the working directory is transactional. Veyyon loads the destination runtime before committing the move, and restores both the old directory and old runtime if loading fails. A resumed session or persisted agent starts from its recorded directory before loading project-scoped secrets.
 
+## Protecting credentials read by tools
+
+Secret protection also covers configured credential resources before producer
+output is retained. A host SDK can pass resource paths through
+`protectedCredentialResources` and metadata index paths through
+`protectedCredentialMetadataIndexes`. The SDK protects its existing vault,
+vault, key, and `secrets.yml` paths through their existing path owners. An
+external working-copy integration must provide a metadata adapter; Veyyon does not guess
+resource names from filenames.
+
+The same-job immutable secret lease is available while output is produced.
+Veyyon reuses its existing obfuscator to redact `OutputSink` output before
+retention, including artifacts, result details, progress, and asynchronous
+replay. Multiline literals use prefix holdback so a chunk boundary does not
+retain a partial secret before the rest of the value arrives.
+
+Metadata indexes, their source files, and documentation remain readable.
+Trusted direct filesystem consumers also remain unaffected. This is a bounded
+producer-output safeguard, not a general sandbox: it cannot guarantee
+protection for unknown or transformed values, network exfiltration by a host
+shell, images or opaque bytes, or arbitrary host side effects. This documents
+the configured SDK boundary; it does not claim that an installed host has
+configured or deployed it, or that the host shell was exercised end to end.
+
 ## What this does not protect
 
 Be clear about the boundary.
 
 **The two stores differ on disk.** Vault entries added with `/secret` are encrypted. `secrets.yml` is a plain file: it holds declarations you wrote, in the clear, and anyone who can read it has those credentials. If a value needs to be encrypted at rest, put it in the vault rather than in `secrets.yml`.
 
-**A command the agent runs receives the real value.** So a command that prints the credential prints it for real. Its output is obfuscated again before it goes back to the model, but it reached the process, and anything that process wrote elsewhere is outside veyyon's reach. That output is also saved to the session file as it was printed, so a command that echoes a credential puts it there. The arguments veyyon itself records are redacted, but it cannot redact what a command chose to print.
+**A command the agent runs receives the real value.** A command can print it or pass it elsewhere. Configured producer-output resources are redacted before retention as described above. This does not guarantee protection for unknown or transformed values, host-shell network exfiltration, images or opaque bytes, or arbitrary host side effects.
 
 **Protection begins when the value is known.** Once you enable protection or store a value, old local transcript text containing that value is sanitized on subsequent provider requests. The local transcript is not rewritten in place.
 

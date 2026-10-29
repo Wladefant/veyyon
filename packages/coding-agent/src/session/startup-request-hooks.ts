@@ -19,6 +19,7 @@ import { expandToolArguments } from "../argot-wire";
 import type { Settings } from "../config/settings";
 import type { ExtensionRunner } from "../extensibility/extensions";
 import { SecretRequestLeases } from "../secrets/request-leases";
+import { bindProducerSecretOwner } from "../secrets/producer-owner";
 import type { SessionSecretRuntime } from "../secrets/session-runtime";
 import type { SecretRuntimeLease } from "./agent-session-types";
 import { convertToLlm } from "./messages";
@@ -156,6 +157,11 @@ export function createToolArgumentTransform(
 			execution = execution === display ? expandedDisplay : expandToolArguments(argot, execution);
 			display = expandedDisplay;
 		}
+		const lease = requestLeases.mainRequest;
+		bindProducerSecretOwner(execution, {
+			redact: text => lease.obfuscateText(text),
+			pendingPrefixLength: text => lease.pendingRedactionPrefixLength(text),
+		});
 		return { execution, display };
 	};
 }

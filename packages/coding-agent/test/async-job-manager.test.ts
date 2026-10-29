@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import {
+	currentProducerSecretOwner,
+	runWithProducerSecretOwner,
+} from "@veyyon/coding-agent/secrets/producer-owner";
 
 describe("AsyncJobManager", () => {
 	test("forwards progress updates and delivers completion", async () => {
@@ -31,6 +35,69 @@ describe("AsyncJobManager", () => {
 		expect(progressEvents).toEqual([{ text: "running step", details: { async: { state: "running" } } }]);
 		expect(completions).toEqual([{ jobId, text: "final output" }]);
 		expect(manager.getJob(jobId)?.status).toBe("completed");
+	});
+	test("retains and replays each job's progress, result, and error under its admitted redactor", async () => {
+		const completions: Array<{ jobId: string; text: string; activeRedaction: string | undefined }> = [];
+		const manager = new AsyncJobManager({
+			onJobComplete: async (jobId, text) => {
+				completions.push({
+					jobId,
+					text,
+					activeRedaction: currentProducerSecretOwner()?.redact("canary-A canary-B"),
+				});
+			},
+		});
+		const ownerA = { redact: (text: string) => text.replaceAll("canary-A", "[A]") };
+		const ownerB = { redact: (text: string) => text.replaceAll("canary-B", "[B]") };
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let running = 0;
+		const holdBoth = async (): Promise<void> => {
+			running += 1;
+			if (running === 2) entered.resolve();
+			await release.promise;
+		};
+		const progressA: string[] = [];
+		const idA = runWithProducerSecretOwner(ownerA, () =>
+			manager.register(
+				"task",
+				"job A",
+				async ({ reportProgress }) => {
+					await holdBoth();
+					await reportProgress("progress canary-A", { nested: { text: "detail canary-A" } });
+					return "result canary-A";
+				},
+				{ onProgress: text => { progressA.push(text); } },
+			),
+		);
+		const idB = runWithProducerSecretOwner(ownerB, () =>
+			manager.register("task", "job B", async () => {
+				await holdBoth();
+				throw new Error("error canary-B");
+			}),
+		);
+
+		await entered.promise;
+		release.resolve();
+		await manager.waitForAll();
+		await manager.drainDeliveries({ timeoutMs: 2_000 });
+
+		const jobA = manager.getJob(idA);
+		const jobB = manager.getJob(idB);
+		expect(progressA).toEqual(["progress [A]"]);
+		expect(jobA?.latestDetails).toEqual({ nested: { text: "detail [A]" } });
+		expect(jobA?.resultText).toBe("result [A]");
+		expect(jobB?.errorText).toBe("error [B]");
+		expect(completions).toEqual(
+			expect.arrayContaining([
+				{ jobId: idA, text: "result [A]", activeRedaction: "[A] canary-B" },
+				{ jobId: idB, text: "error [B]", activeRedaction: "canary-A [B]" },
+			]),
+		);
+		expect(jobA?.resultText).not.toContain("canary-A");
+		expect(jobB?.errorText).not.toContain("canary-B");
+		expect(completions.map(completion => completion.text).join("\n")).not.toContain("canary-A");
+		expect(completions.map(completion => completion.text).join("\n")).not.toContain("canary-B");
 	});
 
 	test("swallows progress callback errors without failing the job", async () => {
