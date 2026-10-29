@@ -17,6 +17,10 @@
 - Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
 - Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
 
+### Removed
+
+- Removed `derive-tmp.js`, a scratch probe that printed effort-variant collapses; nothing imported it and no entry point exposed it.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added
