@@ -13,7 +13,9 @@
  * The class closed is a readiness wait that ends at a fixed delay instead of the server's own signal.
  * Every state a reporting server can be in when the query arrives is swept: quiescent already, busy and
  * becoming quiescent later, busy past the wait's timeout, and the caller aborting while it is busy. A
- * server that reports no status keeps the `analyzerStatus` poll, which still settles for its window.
+ * server that reports no status keeps the `analyzerStatus` poll, which still settles for its window. An
+ * abort inside either wait returns rather than throws, the contract `waitForProjectLoaded` keeps for
+ * every server; before, an abort landing between two polls threw.
  *
  * WHAT THIS DOES NOT CATCH. Whether a real rust-analyzer's `quiescent: true` coincides with the
  * moment it answers correctly; that was measured against rust-analyzer 1.97 directly and is not
@@ -261,6 +263,37 @@ describe("a first rust-analyzer query", () => {
 		expect(outcome).toBe("ToolAbortError");
 		expect(elapsed).toBeLessThanOrEqual(400);
 	});
+
+	// `waitForProjectLoaded` returns on an abort for every server kind (see
+	// `waiting-for-project-load-does-not-accumulate-abort-listeners.test.ts`). These hold the
+	// rust-analyzer wait to the same contract once it is entered, on both of its paths: the poll
+	// spends most of its time sleeping between requests, so an abort lands in the sleep.
+	for (const reports of [true, false]) {
+		it(`returns rather than throws when the caller aborts inside the workspace wait of a server that ${reports ? "reports" : "reports no"} status`, async () => {
+			const dir = crate();
+			installFakeLsp(rustAnalyzer({ reports, quiescentAtOpen: false }, dir));
+			installFakeTime();
+
+			const { outcome, elapsed } = await driveFakeTime(
+				(async () => {
+					const client = await lspClient.getOrCreateClient(SERVER, dir);
+					await lspClient.ensureFileOpen(client, path.join(dir, "src", "main.rs"));
+					const controller = new AbortController();
+					setTimeout(() => controller.abort(), 350);
+					const started = performance.now();
+					const outcome = await lspClient.waitForProjectLoaded(client, controller.signal).then(
+						() => "returned",
+						(error: unknown) => `threw ${error instanceof Error ? error.name : String(error)}`,
+					);
+					return { outcome, elapsed: performance.now() - started };
+				})(),
+			);
+
+			expect(outcome).toBe("returned");
+			expect(elapsed).toBeGreaterThanOrEqual(350);
+			expect(elapsed).toBeLessThanOrEqual(450);
+		});
+	}
 
 	it("to a server that reports no status still polls until a workspace is listed and the settle window passes", async () => {
 		const dir = crate();

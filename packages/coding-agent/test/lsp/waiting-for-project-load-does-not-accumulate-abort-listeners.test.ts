@@ -34,8 +34,9 @@ import type { LspClient } from "@veyyon/coding-agent/lsp/types";
  * signal is now swept over the server kinds, so a branch reachable by one
  * server and not the others fails here.
  *
- * ALSO NOT CAUGHT: what the rust-analyzer wait does once it is legitimately
- * entered. This proves it is not entered after an abort, not that it behaves.
+ * ALSO NOT CAUGHT HERE: what the rust-analyzer wait does once it is legitimately entered. This proves it
+ * is not entered after an abort; `a-first-rust-analyzer-query-waits-for-the-server-not-a-fixed-delay.test.ts`
+ * holds an abort inside it to the same return-not-throw contract.
  */
 
 /**

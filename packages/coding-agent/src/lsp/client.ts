@@ -721,6 +721,8 @@ function isRustAnalyzerStatusTimeout(err: unknown): boolean {
  * reports none (a shared lspmux instance another client started without the capability) is polled with
  * `rust-analyzer/analyzerStatus` until it lists a workspace and {@link RUST_ANALYZER_WORKSPACE_READY_SETTLE_MS}
  * has passed. Either wait ends at the timeout without marking the client ready, so the next call waits again.
+ * An abort ends either wait the same way and returns rather than throws, as {@link waitForProjectLoaded} does
+ * on every server; the caller's next request reads the signal.
  */
 async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (rustAnalyzerReadyClients.has(client)) {
@@ -734,10 +736,8 @@ async function waitForRustAnalyzerWorkspace(client: LspClient, signal?: AbortSig
 	const started = Date.now();
 	const deadline = started + timeoutMs;
 	while (true) {
-		throwIfAborted(signal);
+		if (signal?.aborted) return;
 		if (serverQuiescence.has(client)) {
-			// An abort ends the wait unmarked, as it ends `waitForProjectLoaded`; the caller's next request
-			// reads the signal.
 			if (await waitForQuiescence(client, deadline - Date.now(), signal)) rustAnalyzerReadyClients.add(client);
 			return;
 		}
@@ -1052,11 +1052,6 @@ export async function waitForProjectLoaded(client: LspClient, signal?: AbortSign
 	} finally {
 		signal?.removeEventListener("abort", listener);
 	}
-	// The race above resolves on abort, so the signal has to be read again before the second
-	// wait. Without this, aborting mid-wait returns cleanly on every server and throws
-	// `AbortError` out of `waitForRustAnalyzerWorkspace` on rust-analyzer alone: one function,
-	// two contracts, decided by which language the file happened to be in.
-	if (signal?.aborted) return;
 	if (isRustAnalyzerClient(client)) {
 		await waitForRustAnalyzerWorkspace(client, signal);
 	}
