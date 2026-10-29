@@ -32,6 +32,10 @@
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
 - Cancelling or finishing an animation drops it from the motion clock at once, and the clock clears its frame interval when that was the last live animation, instead of holding both until its next frame.
 
+### Removed
+
+- Removed `@veyyon/utils/host-notification`, which re-exported `HostNotification` and `HostNotifier`; import both from `@veyyon/host/notification`. `@veyyon/utils` no longer depends on `@veyyon/host`.
+
 ## [1.5.10] - 2026-10-25
 
 ### Added

@@ -162,6 +162,7 @@
       "name": "@veyyon/tui",
       "version": "1.5.10",
       "dependencies": {
+        "@veyyon/host": "catalog:",
         "@veyyon/natives": "catalog:",
         "@veyyon/utils": "catalog:",
         "lru-cache": "catalog:",
@@ -344,7 +345,6 @@
       "name": "@veyyon/utils",
       "version": "1.5.10",
       "dependencies": {
-        "@veyyon/host": "catalog:",
         "@veyyon/natives": "catalog:",
         "handlebars": "catalog:",
         "turndown": "catalog:",
