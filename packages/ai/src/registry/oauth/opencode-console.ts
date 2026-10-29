@@ -16,7 +16,7 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
-import { pollOAuthDeviceCodeFlow } from "./device-code";
+import { loginStep, pollOAuthDeviceCodeFlow } from "./device-code";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
 import { requireTokenResponseObject } from "./token-response";
@@ -160,7 +160,6 @@ async function requestDeviceAuthorization(fetchImpl: FetchImpl, signal?: AbortSi
 			signal,
 		});
 	} catch (cause) {
-		if (signal?.aborted) throw new AIError.LoginCancelledError();
 		throw new AIError.OAuthError(
 			"Could not start the OpenCode Console login. Check the network connection, then retry.",
 			{ kind: "device-auth", provider: PROVIDER_ID, cause },
@@ -221,6 +220,7 @@ async function pollForToken(
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 		signal,
+		provider: PROVIDER_ID,
 		poll: async () => {
 			let response: Response;
 			try {
@@ -233,7 +233,6 @@ async function pollForToken(
 					signal,
 				});
 			} catch (cause) {
-				if (signal?.aborted) throw new AIError.LoginCancelledError();
 				throw new AIError.OAuthError("OpenCode Console device token request failed", {
 					kind: "polling",
 					provider: PROVIDER_ID,
@@ -411,7 +410,7 @@ export async function loginOpenCodeGo(options: OAuthController): Promise<OAuthCr
 	}
 	const fetchImpl = options.fetch ?? fetch;
 	const { signal } = options;
-	const device = await requestDeviceAuthorization(fetchImpl, signal);
+	const device = await loginStep(signal, () => requestDeviceAuthorization(fetchImpl, signal));
 	options.onAuth({
 		url: device.verificationUrl,
 		// The link already carries the code, and every surface that shows it says how to open it.

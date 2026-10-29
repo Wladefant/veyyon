@@ -8,6 +8,7 @@ import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { isRecord } from "../../utils";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
+import { loginStep, waitForNextLoginPoll } from "./device-code";
 import { generatePKCE } from "./pkce";
 import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -225,27 +226,30 @@ export async function loginOpenAICodexDevice(ctrl: OAuthController): Promise<OAu
 
 	// The fence spans the body read and its timer is cleared on settle
 	// (a bare AbortSignal.timeout stays armed for the full timeout).
-	const initData = await withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async signal => {
-		const initResponse = await fetch(DEVICE_USERCODE_URL, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ client_id: CLIENT_ID }),
-			signal,
-		});
-
-		if (!initResponse.ok) {
-			throw new AIError.OAuthError(`Device authorization initiation failed: ${initResponse.status}`, {
-				kind: "device-auth",
-				status: initResponse.status,
+	const initData = await loginStep(ctrl.signal, () =>
+		withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async scopedSignal => {
+			const signal = ctrl.signal ? AbortSignal.any([scopedSignal, ctrl.signal]) : scopedSignal;
+			const initResponse = await fetch(DEVICE_USERCODE_URL, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ client_id: CLIENT_ID }),
+				signal,
 			});
-		}
 
-		return (await initResponse.json()) as {
-			device_auth_id?: string;
-			user_code?: string;
-			interval?: string | number;
-		};
-	});
+			if (!initResponse.ok) {
+				throw new AIError.OAuthError(`Device authorization initiation failed: ${initResponse.status}`, {
+					kind: "device-auth",
+					status: initResponse.status,
+				});
+			}
+
+			return (await initResponse.json()) as {
+				device_auth_id?: string;
+				user_code?: string;
+				interval?: string | number;
+			};
+		}),
+	);
 
 	if (!initData.device_auth_id || !initData.user_code) {
 		throw new AIError.OAuthError("Device authorization response missing required fields", { kind: "validation" });
@@ -267,43 +271,45 @@ export async function loginOpenAICodexDevice(ctrl: OAuthController): Promise<OAu
 	ctrl.onProgress?.(`Waiting for browser authorization (code: ${userCode})…`);
 
 	for (let poll = 0; poll < DEVICE_MAX_POLLS; poll++) {
-		await Bun.sleep(poll === 0 ? Math.min(pollIntervalMs, DEVICE_POLL_INTERVAL_MS) : pollIntervalMs);
-
-		if (ctrl.signal?.aborted) {
-			throw new AIError.LoginCancelledError("Device authorization cancelled");
-		}
+		await waitForNextLoginPoll(
+			poll === 0 ? Math.min(pollIntervalMs, DEVICE_POLL_INTERVAL_MS) : pollIntervalMs,
+			ctrl.signal,
+		);
 
 		// The fence spans the body read and its timer is cleared on settle
 		// (a bare AbortSignal.timeout stays armed for the full timeout).
 		// `null` = authorization still pending, keep polling.
-		const pollData = await withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async signal => {
-			const pollResponse = await fetch(DEVICE_TOKEN_URL, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					device_auth_id: initData.device_auth_id,
-					user_code: userCode,
-				}),
-				signal,
-			});
-
-			// 403/404 = authorization pending, keep polling
-			if (pollResponse.status === 403 || pollResponse.status === 404) {
-				return null;
-			}
-
-			if (!pollResponse.ok) {
-				throw new AIError.OAuthError(`Device token polling failed: ${pollResponse.status}`, {
-					kind: "polling",
-					status: pollResponse.status,
+		const pollData = await loginStep(ctrl.signal, () =>
+			withScopedTimeoutSignal(TOKEN_REQUEST_TIMEOUT_MS, async scopedSignal => {
+				const signal = ctrl.signal ? AbortSignal.any([scopedSignal, ctrl.signal]) : scopedSignal;
+				const pollResponse = await fetch(DEVICE_TOKEN_URL, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						device_auth_id: initData.device_auth_id,
+						user_code: userCode,
+					}),
+					signal,
 				});
-			}
 
-			return (await pollResponse.json()) as {
-				authorization_code?: string;
-				code_verifier?: string;
-			};
-		});
+				// 403/404 = authorization pending, keep polling
+				if (pollResponse.status === 403 || pollResponse.status === 404) {
+					return null;
+				}
+
+				if (!pollResponse.ok) {
+					throw new AIError.OAuthError(`Device token polling failed: ${pollResponse.status}`, {
+						kind: "polling",
+						status: pollResponse.status,
+					});
+				}
+
+				return (await pollResponse.json()) as {
+					authorization_code?: string;
+					code_verifier?: string;
+				};
+			}),
+		);
 		if (pollData === null) {
 			continue;
 		}

@@ -30,6 +30,7 @@
 - A provider request that fails with an error the registry does not classify as transient (a host that does not resolve, a certificate that does not verify) is no longer redialed by the shared provider fetch.
 - An Anthropic connection failure reports the underlying error (`ECONNREFUSED: Unable to connect…`, `getaddrinfo ENOTFOUND …`) instead of `Connection error.`, and a host that does not resolve is no longer retried by the Anthropic stream and the turn.
 - A GitLab Duo turn whose host cannot be reached reports the connection error and is retried by the turn, instead of failing with a request to set `GITLAB_DUO_NAMESPACE_ID`.
+- A cancelled Cursor, GitHub Copilot, OpenAI Codex device, Kilo, Kimi, xAI, Perplexity, Nous Research or OpenCode login stops its pending request or poll wait, sends no further request and stores no approval that arrives after the cancel, instead of waiting out the poll interval or a hung request.
 
 ## [1.5.10] - 2026-10-25
 

@@ -7,10 +7,7 @@ export const cursorProvider = {
 	login: async (cb: OAuthLoginCallbacks) => {
 		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
 		const { loginCursor } = await import("./oauth/cursor");
-		return loginCursor(
-			url => cb.onAuth({ url }),
-			cb.onProgress ? () => cb.onProgress?.("Waiting for browser authentication...") : undefined,
-		);
+		return loginCursor(cb);
 	},
 	credential: "oauth",
 	refreshToken: async (credentials: OAuthCredentials, signal?: AbortSignal) => {

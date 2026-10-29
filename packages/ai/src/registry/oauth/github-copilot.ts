@@ -1,7 +1,6 @@
 /**
  * GitHub Copilot OAuth flow (opencode OAuth app)
  */
-import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "@veyyon/catalog/models";
 import {
 	COPILOT_API_HEADERS,
@@ -17,6 +16,7 @@ import { DAY_MS } from "@veyyon/utils/time";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { fetchGitHubCopilotJson } from "../../utils/github-copilot-http";
+import { deviceFlowTimeoutError, loginStep, waitForNextLoginPoll } from "./device-code";
 import { emitOAuthSuccessPage } from "./success-page";
 import type { OAuthCredentials } from "./types";
 
@@ -36,8 +36,6 @@ type GitHubCopilotLoginOptions = {
 	onProgress?: (message: string) => void;
 	onSuccessPage?: (url: string) => void;
 	signal?: AbortSignal;
-	pollIntervalFloorMs?: number;
-	pollIntervalScaleMs?: number;
 	fetch?: FetchImpl;
 };
 type DeviceCodeResponse = {
@@ -70,7 +68,11 @@ function getUrls(domain: string): {
 	};
 }
 
-async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<DeviceCodeResponse> {
+async function startDeviceFlow(
+	domain: string,
+	fetchImpl: FetchImpl,
+	signal: AbortSignal | undefined,
+): Promise<DeviceCodeResponse> {
 	const urls = getUrls(domain);
 	const data = await fetchGitHubCopilotJson(fetchImpl, urls.deviceCodeUrl, {
 		method: "POST",
@@ -83,6 +85,7 @@ async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<De
 			client_id: CLIENT_ID,
 			scope: "read:user",
 		}),
+		signal,
 	});
 
 	if (!data || typeof data !== "object") {
@@ -124,41 +127,33 @@ async function pollForGitHubAccessToken(
 	expiresIn: number,
 	signal: AbortSignal | undefined,
 	fetchImpl: FetchImpl,
-	pollIntervalFloorMs = 1000,
-	pollIntervalScaleMs = 1000,
 ) {
 	const urls = getUrls(domain);
 	const deadline = Date.now() + expiresIn * 1000;
-	let intervalMs = Math.max(pollIntervalFloorMs, Math.floor(intervalSeconds * pollIntervalScaleMs));
+	let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
 	let intervalMultiplier = INITIAL_POLL_INTERVAL_MULTIPLIER;
 	let slowDownResponses = 0;
 
 	while (Date.now() < deadline) {
-		if (signal?.aborted) {
-			throw new AIError.LoginCancelledError();
-		}
-
 		const remainingMs = deadline - Date.now();
-		const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
-		try {
-			await scheduler.wait(waitMs, { signal });
-		} catch {
-			throw new AIError.LoginCancelledError();
-		}
+		await waitForNextLoginPoll(Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs), signal);
 
-		const raw = await fetchGitHubCopilotJson(fetchImpl, urls.accessTokenUrl, {
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				"Content-Type": "application/json",
-				...OPENCODE_HEADERS,
-			},
-			body: JSON.stringify({
-				client_id: CLIENT_ID,
-				device_code: deviceCode,
-				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+		const raw = await loginStep(signal, () =>
+			fetchGitHubCopilotJson(fetchImpl, urls.accessTokenUrl, {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					...OPENCODE_HEADERS,
+				},
+				body: JSON.stringify({
+					client_id: CLIENT_ID,
+					device_code: deviceCode,
+					grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+				}),
+				signal,
 			}),
-		});
+		);
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
 			return (raw as DeviceTokenSuccessResponse).access_token;
@@ -174,8 +169,8 @@ async function pollForGitHubAccessToken(
 				slowDownResponses += 1;
 				intervalMs =
 					typeof interval === "number" && interval > 0
-						? Math.max(pollIntervalFloorMs, interval * pollIntervalScaleMs)
-						: Math.max(pollIntervalFloorMs, intervalMs + 5 * pollIntervalScaleMs);
+						? Math.max(1000, interval * 1000)
+						: Math.max(1000, intervalMs + 5000);
 				intervalMultiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
 				continue;
 			}
@@ -188,14 +183,7 @@ async function pollForGitHubAccessToken(
 		}
 	}
 
-	if (slowDownResponses > 0) {
-		throw new AIError.OAuthError(
-			"Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.",
-			{ kind: "timeout", provider: "github-copilot" },
-		);
-	}
-
-	throw new AIError.OAuthError("Device flow timed out", { kind: "timeout", provider: "github-copilot" });
+	throw deviceFlowTimeoutError(slowDownResponses, "github-copilot");
 }
 
 /** Far-future expiry (10 years). GitHub OAuth tokens are long-lived; no JWT exchange needed. */
@@ -335,7 +323,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 	const domain =
 		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
-	const device = await startDeviceFlow(domain, fetchImpl);
+	const device = await loginStep(options.signal, () => startDeviceFlow(domain, fetchImpl, options.signal));
 	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
 
 	const githubAccessToken = await pollForGitHubAccessToken(
@@ -345,8 +333,6 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 		device.expires_in,
 		options.signal,
 		fetchImpl,
-		options.pollIntervalFloorMs,
-		options.pollIntervalScaleMs,
 	);
 
 	const apiEndpoint = await discoverGitHubCopilotApiEndpoint(githubAccessToken, fetchImpl);

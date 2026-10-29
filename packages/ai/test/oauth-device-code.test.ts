@@ -11,7 +11,7 @@ describe("OAuth device-code polling", () => {
 	});
 
 	it("surfaces provider failure messages", async () => {
-		expect(
+		await expect(
 			pollOAuthDeviceCodeFlow({
 				poll: () => ({ status: "failed", message: "authorization denied" }),
 			}),
@@ -19,7 +19,7 @@ describe("OAuth device-code polling", () => {
 	});
 
 	it("times out pending device flows", async () => {
-		expect(
+		await expect(
 			pollOAuthDeviceCodeFlow({
 				expiresInSeconds: 0.001,
 				poll: () => ({ status: "pending" }),

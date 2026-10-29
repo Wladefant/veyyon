@@ -2,7 +2,6 @@
  * Kimi Code OAuth flow (device authorization grant)
  */
 
-import { scheduler } from "node:timers/promises";
 import {
 	KIMI_CODE_REGIONS,
 	type KimiCodeRegion,
@@ -13,6 +12,7 @@ import {
 import { $env } from "@veyyon/utils/env";
 import * as AIError from "../../error";
 import { getKimiCommonHeaders } from "../../utils/kimi-headers";
+import { loginStep, type OAuthDeviceCodePollResult, pollOAuthDeviceCodeFlow } from "./device-code";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
 import { requireTokenResponseObject } from "./token-response";
@@ -48,7 +48,10 @@ function resolveOAuthHost(region: KimiCodeRegion): string {
 	return $env.KIMI_CODE_OAUTH_HOST || $env.KIMI_OAUTH_HOST || KIMI_CODE_REGIONS[region].oauthHost;
 }
 
-async function requestDeviceAuthorization(oauthHost: string): Promise<{
+async function requestDeviceAuthorization(
+	oauthHost: string,
+	signal: AbortSignal | undefined,
+): Promise<{
 	userCode: string;
 	deviceCode: string;
 	verificationUri: string;
@@ -63,6 +66,7 @@ async function requestDeviceAuthorization(oauthHost: string): Promise<{
 			...getKimiCommonHeaders(),
 		},
 		body: new URLSearchParams({ client_id: CLIENT_ID }),
+		signal,
 	});
 
 	if (!response.ok) {
@@ -130,16 +134,13 @@ function parseTokenPayload(
 	};
 }
 
-// The wait before the next poll after a non-token response; throws when the device flow cannot continue.
-function nextPollWaitMs(payload: TokenResponse, status: number, waitMs: number): number {
+// What a non-token answer means for the flow; throws when the device flow cannot continue.
+function pollResultOf(payload: TokenResponse, status: number): OAuthDeviceCodePollResult<TokenResponse> {
 	switch (payload.error) {
 		case "authorization_pending":
-			return waitMs;
-		case "slow_down": {
-			const slowedMs = waitMs + 5000;
-			const retryAfterMs = typeof payload.interval === "number" ? payload.interval * 1000 : undefined;
-			return retryAfterMs && retryAfterMs > slowedMs ? retryAfterMs : slowedMs;
-		}
+			return { status: "pending" };
+		case "slow_down":
+			return { status: "slow_down", intervalSeconds: payload.interval };
 		case "expired_token":
 			throw new AIError.OAuthError("Kimi device authorization expired", { kind: "validation", provider: "kimi" });
 		case "access_denied":
@@ -153,45 +154,36 @@ function nextPollWaitMs(payload: TokenResponse, status: number, waitMs: number):
 }
 
 /** Poll `oauthHost` until it grants a token, and return the granting response. */
-async function pollForToken(
+function pollForToken(
 	oauthHost: string,
 	deviceCode: string,
 	intervalMs: number,
 	expiresInMs: number,
 	signal?: AbortSignal,
 ): Promise<TokenResponse> {
-	const deadline = Date.now() + expiresInMs;
-	let waitMs = Math.max(1000, intervalMs);
-
-	while (Date.now() < deadline) {
-		if (signal?.aborted) {
-			throw new AIError.LoginCancelledError();
-		}
-
-		const response = await fetch(`${oauthHost}/api/oauth/token`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				...getKimiCommonHeaders(),
-			},
-			body: new URLSearchParams({
-				client_id: CLIENT_ID,
-				device_code: deviceCode,
-				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-			}),
-		});
-
-		const payload = (await response.json()) as TokenResponse;
-		if (response.ok && payload.access_token) {
-			return payload;
-		}
-		waitMs = nextPollWaitMs(payload, response.status, waitMs);
-		await scheduler.wait(waitMs, { signal });
-	}
-
-	throw new AIError.OAuthError("Kimi device flow timed out", {
-		kind: "timeout",
+	return pollOAuthDeviceCodeFlow<TokenResponse>({
+		intervalSeconds: intervalMs / 1000,
+		expiresInSeconds: expiresInMs / 1000,
+		signal,
 		provider: "kimi",
+		poll: async () => {
+			const response = await fetch(`${oauthHost}/api/oauth/token`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/x-www-form-urlencoded",
+					...getKimiCommonHeaders(),
+				},
+				body: new URLSearchParams({
+					client_id: CLIENT_ID,
+					device_code: deviceCode,
+					grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+				}),
+				signal,
+			});
+			const payload = (await response.json()) as TokenResponse;
+			if (response.ok && payload.access_token) return { status: "complete", value: payload };
+			return pollResultOf(payload, response.status);
+		},
 	});
 }
 
@@ -236,7 +228,7 @@ export async function askKimiCodeRegion(options: OAuthController): Promise<KimiC
  */
 export async function loginKimi(options: OAuthController, region: KimiCodeRegion): Promise<OAuthCredentials> {
 	const oauthHost = resolveOAuthHost(region);
-	const device = await requestDeviceAuthorization(oauthHost);
+	const device = await loginStep(options.signal, () => requestDeviceAuthorization(oauthHost, options.signal));
 	options.onAuth?.({
 		url: device.verificationUriComplete,
 		instructions: `Enter code: ${device.userCode}`,
