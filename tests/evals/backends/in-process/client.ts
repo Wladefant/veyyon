@@ -7,7 +7,6 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import type { FrozenSkillArm } from "../../engine/skills/arms";
 import type { AgentEvent, AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@veyyon/agent-core";
@@ -15,11 +14,13 @@ import type { Model, ToolExample } from "@veyyon/ai";
 import type { AgentSession, AgentSessionEvent, AuthStorage, SessionStats } from "@veyyon/coding-agent";
 import {
 	type CreateAgentSessionResult,
+	buildSkillPromptMessage,
 	createAgentSession,
 	discoverAuthStorage,
 	ModelRegistry,
 	SessionManager,
 	Settings,
+	SKILL_PROMPT_MESSAGE_TYPE,
 } from "@veyyon/coding-agent";
 import {
 	applyPromptOverridesToSystemPrompt,
@@ -158,7 +159,7 @@ export class InProcessClient {
 		const skillArm = this.#options.skillArm;
 		const skill: NonNullable<Parameters<typeof createAgentSession>[0]>["skills"] = [];
 		if (skillArm && skillArm.content !== null) {
-			this.#skillSnapshotDir = await fs.mkdtemp(path.join(tmpdir(), "veyyon-eval-skill-"));
+			this.#skillSnapshotDir = await fs.mkdtemp(path.join(path.dirname(this.#options.cwd), ".veyyon-eval-skill-"));
 			const skillDir = path.join(this.#skillSnapshotDir, skillArm.skillName);
 			await fs.mkdir(skillDir, { recursive: true });
 			const filePath = path.join(skillDir, "SKILL.md");
@@ -193,6 +194,7 @@ export class InProcessClient {
 			toolNames: this.#options.tools ?? ["read", "edit", "write"],
 			hasUI: false,
 			enableMCP: false,
+			enableLsp: false,
 			skills: skill,
 			rules: [],
 			contextFiles: [],
@@ -208,6 +210,12 @@ export class InProcessClient {
 					`Skill experiment model mismatch: requested ${requestedModel.id}, resolved ${this.#session.model.provider}/${this.#session.model.id}`,
 				);
 			}
+		}
+
+		// Freeze the actual resource before adding its existing autoload representation to history.
+		if (skillArm && skillArm.content !== null) {
+			await this.getState();
+			await appendFrozenSkillPrompt(this.#session, skillArm);
 		}
 
 		// Subscribe to events and forward to listeners
@@ -326,6 +334,24 @@ export class InProcessClient {
 		// needs the teardown to succeed awaits `dispose()` itself, which reports in full.
 		this.dispose().catch(() => {});
 	}
+}
+
+/** Append the selected frozen skill through the same hidden autoload message the coding agent uses. */
+export async function appendFrozenSkillPrompt(session: AgentSession, arm: FrozenSkillArm): Promise<void> {
+	if (arm.content === null) return;
+	const skill = session.skills.find(candidate => candidate.name === arm.skillName);
+	if (!skill) throw new Error(`Skill arm isolation failed: ${arm.skillName} is absent from the session`);
+	const content = await fs.readFile(skill.filePath, "utf8");
+	if (content !== arm.content) {
+		throw new Error(`Skill arm isolation failed: session resource ${arm.skillName} does not match its frozen content`);
+	}
+	const builtMessage = await buildSkillPromptMessage(skill, "", "autoload");
+	session.agent.appendMessage({
+		role: "developer",
+		content: [{ type: "text", text: builtMessage.message }],
+		attribution: "agent",
+		timestamp: Date.now(),
+	});
 }
 
 const AGENT_EVENT_TYPES = new Set([

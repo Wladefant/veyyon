@@ -225,6 +225,7 @@ export class InProcessBackend implements ExecutionBackend {
 		let trialError: string | null = null;
 		let state: InProcessSessionState | undefined;
 		let timedOut = false;
+		let cancelled = false;
 		let teardownReason: string | null = null;
 		const timeoutAbort = new AbortController();
 
@@ -243,8 +244,10 @@ export class InProcessBackend implements ExecutionBackend {
 
 		// One run's signal outlives every trial in it, so a listener this trial leaves behind holds
 		// this trial's client and session state for the rest of the run.
-		const onCancel = (): void => interrupt("Trial aborted by context signal");
-		context.signal?.addEventListener("abort", onCancel, { once: true });
+		const onCancel = (): void => {
+			cancelled = true;
+			interrupt("Trial aborted by context signal");
+		};
 		if (context.signal?.aborted) onCancel();
 
 		const runClient = async (): Promise<{
@@ -313,6 +316,7 @@ export class InProcessBackend implements ExecutionBackend {
 				durationSec,
 				sessionStats,
 				error: trialError,
+				infrastructureError: trialError,
 				// A teardown that was abandoned is reported beside the score it could not affect.
 				teardownReason,
 				skillArm: state?.skillArm
@@ -333,6 +337,8 @@ export class InProcessBackend implements ExecutionBackend {
 						}
 					: undefined,
 				observedSkillHashes: state?.observedSkillHashes,
+				timedOut,
+				cancelled,
 				timeoutSec,
 				systemPrompt: state?.systemPrompt,
 				settings: state?.settings,
