@@ -21,6 +21,7 @@
 
 ### Changed
 
+- Diagnostics after an edit or write are reported when the language server publishes them instead of at the next 100ms poll, so a server that answers in 50ms reports in 51ms instead of 101ms, or in 301ms instead of 402ms when it does not echo the document version.
 - No user-visible change: ZIP central-directory reads, config-file read failures, LSP severity counts, patch line-hint matching, SQLite row updates, GitHub issue and pull request body sections, eval import rewriting, plugin enable and disable, QR penalty scoring and autoresearch loop entry each run through one helper instead of two or three copies.
 - A modal card keeps its padding from 29 rows for large cards and 27 rows for medium and settings cards, instead of 39, 33 and 31, so cards on terminals 27 to 38 rows tall show up to four more list rows.
 - No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
