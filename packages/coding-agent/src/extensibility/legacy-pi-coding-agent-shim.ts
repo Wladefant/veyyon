@@ -27,7 +27,7 @@ import {
 	parseFrontmatter as parseOmpFrontmatter,
 } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
-import type { PromptTemplate } from "../config/prompt-templates";
+import { firstLineDescription, type PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { appendNotice, formatExitCodeNotice } from "../exec/exit-notice";
@@ -1045,16 +1045,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 					const raw = await Bun.file(filePath).text();
 					const { frontmatter, body } = parseFrontmatter(raw);
 					const rawDescription = frontmatter.description;
-					let description = typeof rawDescription === "string" ? rawDescription : "";
-					if (!description) {
-						const firstLine = body.split("\n").find(line => line.trim());
-						if (firstLine) {
-							description = firstLine.slice(0, 60);
-							if (firstLine.length > 60) {
-								description += "...";
-							}
-						}
-					}
+					const description =
+						(typeof rawDescription === "string" ? rawDescription : "") || firstLineDescription(body);
 
 					const source = "(legacy-resource-loader)";
 					prompts.push({
