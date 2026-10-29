@@ -4,7 +4,7 @@
  * Calls TinyFish's search API and maps results into the unified
  * SearchResponse shape used by the web search tool.
  */
-import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform } from "../../../../provider-boundary";
@@ -44,15 +44,6 @@ interface TinyFishSearchResponse {
 	total_results?: number | null;
 	page?: number | null;
 	results?: TinyFishSearchResult[] | null;
-}
-
-/** Resolve TinyFish API key through the shared auth storage pipeline. */
-export function findApiKey(
-	authStorage: AuthStorage,
-	sessionId?: string,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
-	return authStorage.getApiKey("tinyfish", sessionId, { signal });
 }
 
 export function buildTinyFishUrl(params: TinyFishSearchParams): URL {
