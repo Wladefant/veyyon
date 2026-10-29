@@ -17,7 +17,7 @@
  * purpose.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
@@ -34,10 +34,13 @@ import {
 	snapshotGlobals,
 	UNTRACKED_ENV_NAMES,
 } from "../../packages/utils/test/helpers/global-state-leak-tracer";
-import { testFilesUnder, traceFile } from "./find-test-leaks";
+import { commandText } from "../runner-references";
+import { packagesWithTests } from "../workspace-layout";
+import { testFilesUnder, traceFile, workspaceSweepRoots } from "./find-test-leaks";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..");
 const LEAKY_FIXTURE = "packages/utils/test/fixtures/leaky-suite.fixture.ts";
+const ARMED_INTERVAL_FIXTURE = "packages/utils/test/fixtures/armed-interval.fixture.ts";
 
 describe("snapshotGlobals", () => {
 	/**
@@ -424,6 +427,21 @@ describe("driving the real runner", () => {
 		expect(result.leaks[0].diffs.map(diff => diff.key)).toContain("state.activeProfile");
 		expect(result.leaks[0].diffs.find(diff => diff.key === "state.activeProfile")?.after).toBe("leaky");
 	}, 60_000);
+
+	/**
+	 * An armed interval, end to end. The fixture leaves one interval running, stops one in its
+	 * `afterAll`, clears one inside a test and drops a fake one with `vi.useRealTimers()`. Only the
+	 * first is a leak, and the report states the fixture line that armed it. A runtime that stops
+	 * marking a stopped interval reads all four as armed and fails the exact `after` below.
+	 */
+	it("reports an interval the file left armed, at the line that armed it", () => {
+		const result = traceFile(REPO_ROOT, ARMED_INTERVAL_FIXTURE);
+
+		expect(result.runnerFailed).toBe(false);
+		expect(result.leaks.map(leak => leak.diffs)).toEqual([
+			[{ key: "state.armedIntervals", before: "(none)", after: `${ARMED_INTERVAL_FIXTURE}:17 x1` }],
+		]);
+	}, 60_000);
 });
 
 /**
@@ -534,4 +552,27 @@ describe("the gate's exit code", () => {
 			expect(gate.exitCode).toBe(0);
 		});
 	}, 60_000);
+});
+
+/**
+ * The nightly sweep's reach. Its target was the literal `packages scripts`, written when every
+ * member sat under `packages/`, and the suites under kernel/, hosts/, plugins/ and tests/ were then
+ * traced by nothing: a suite there could leave a variable or an interval behind for every later
+ * file, and no gate reported it.
+ */
+describe("the nightly sweep", () => {
+	it("walks every workspace member that ships tests, and the repo-level suites", () => {
+		const roots = workspaceSweepRoots(REPO_ROOT);
+		const members = packagesWithTests(REPO_ROOT);
+
+		expect(members.some(member => !member.startsWith("packages/"))).toBe(true);
+		expect(members.filter(member => !roots.includes(member))).toEqual([]);
+		expect(roots).toContain("scripts");
+	});
+
+	it("is the sweep the nightly workflow runs", () => {
+		const commands = commandText(readFileSync(path.join(REPO_ROOT, ".github/workflows/leak-sweep.yml"), "utf8"));
+
+		expect(commands).toContain("bun scripts/test-sandbox/find-test-leaks.ts --workspace");
+	});
 });

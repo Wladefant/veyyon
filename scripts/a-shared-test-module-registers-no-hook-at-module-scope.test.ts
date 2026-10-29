@@ -40,6 +40,7 @@ const TEST_ENTRY = /(\.test|_test|\.spec|_spec)\.(ts|tsx)$/;
 /** Modules allowed a module-scope registration, each a preload or a spawned `bun test` entry. */
 const ALLOWED = [
 	"packages/ai/test/helpers/provider-override-tripwire.ts",
+	"packages/utils/test/fixtures/armed-interval.fixture.ts",
 	"packages/utils/test/fixtures/leaky-suite.fixture.ts",
 	"packages/utils/test/fixtures/profile-leak.fixture.ts",
 	"packages/utils/test/fixtures/restoring-in-afterall.fixture.ts",

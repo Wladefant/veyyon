@@ -2,9 +2,9 @@
  * The fixtures that leak global state on purpose cannot be collected by an ordinary test run.
  *
  * WHY THIS SUITE EXISTS. `scripts/test-sandbox/find-test-leaks.ts` needs suites that really do leak, so
- * `packages/utils/test/fixtures/` holds three: one sets `VEYYON_CONFIG_DIR` and never restores it,
- * one activates a profile and leaves it active, one restores properly and exists to prove the tracer
- * does not cry wolf. They were named `*.fixture.test.ts`.
+ * `packages/utils/test/fixtures/` holds four: one sets `VEYYON_CONFIG_DIR` and never restores it,
+ * one activates a profile and leaves it active, one leaves an interval armed, and one restores
+ * properly and exists to prove the tracer does not cry wolf. They were named `*.fixture.test.ts`.
  *
  * `bun test <dir>` collects every `*.test.ts` under the directory, wherever it sits, so an ordinary
  * `bun test packages/utils/test` RAN them — and every suite that executed afterwards resolved its
@@ -48,7 +48,7 @@ describe("packages/utils/test/fixtures", () => {
 		).toEqual([]);
 	});
 
-	it("still holds the three fixtures the leak tracer drives", () => {
+	it("still holds the four fixtures the leak tracer drives", () => {
 		// The other direction. The point of the rename was to keep the fixtures, not to
 		// remove the tracer's only end-to-end evidence.
 		expect(
@@ -56,7 +56,12 @@ describe("packages/utils/test/fixtures", () => {
 				.readdirSync(FIXTURES_DIR)
 				.filter(name => name.endsWith(".fixture.ts"))
 				.sort(),
-		).toEqual(["leaky-suite.fixture.ts", "profile-leak.fixture.ts", "restoring-in-afterall.fixture.ts"]);
+		).toEqual([
+			"armed-interval.fixture.ts",
+			"leaky-suite.fixture.ts",
+			"profile-leak.fixture.ts",
+			"restoring-in-afterall.fixture.ts",
+		]);
 	});
 
 	it("keeps the environment leak in the leaky fixture, since that is what it is for", () => {

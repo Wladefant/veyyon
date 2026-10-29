@@ -1,15 +1,17 @@
 # Full global-state leak sweep: runs EVERY test file in its own process with the leak
 # tracer preloaded and diffs the process globals across each file. The per-commit gate in
-# checks.yml only checks the test files a push changed, because one process per file over
-# ~3,200 files takes far longer than a commit gate should; this is where the exhaustive
-# sweep actually happens.
+# ci.yml (`test_leaks`) only checks the test files a push changed, because one process per file over
+# every suite in the workspace takes far longer than a commit gate should; this is where the
+# exhaustive sweep actually happens.
 #
 # What it catches: a suite that leaves a `VEYYON_*`/`PI_*`/`XDG_*` variable, `HOME`,
 # `TMPDIR`, `NODE_ENV`, the working directory, or the active profile changed makes every
 # file that runs after it order-dependent, and the failures land on innocent suites. One
 # lingering `VEYYON_NO_TITLE` made three title-generator suites fail while each passed
-# alone; two suites exported the developer's real agent dir to the whole process. A
-# changed-files gate cannot see a leak introduced by a suite it did not touch, e.g. when a
+# alone; two suites exported the developer's real agent dir to the whole process. An
+# interval a suite never stopped keeps firing into later files, and one that fires while a
+# later file runs fake timers moves onto its fake clock and changes its `vi.getTimerCount()`.
+# A changed-files gate cannot see a leak introduced by a suite it did not touch, e.g. when a
 # helper both files share starts leaking.
 #
 # The second job here measures MEMORY rather than globals, and it lives beside the sweep
@@ -64,21 +66,24 @@ jobs:
         # every file reports "could not run" and the sweep measures nothing.
         uses: ./.github/actions/test-sandbox-image
       - name: Tracer self-tests
-        # Fail loudly on a broken tracer rather than sweeping 3,200 files and calling them
-        # all clean.
+        # Fail loudly on a broken tracer rather than sweeping every file and calling them all
+        # clean.
         run: bash scripts/test-sandbox/run.sh bun test scripts/test-sandbox/find-test-leaks.test.ts
       - name: Sweep every test tree
-        # The script takes directories and walks them, skipping node_modules and fixtures.
-        # It exits non-zero when any file leaks or fails to run, and prints the offending
-        # key with its before -> after values plus the test index that first changed it.
+        # `--workspace` walks every workspace member that ships tests, resolved from the member
+        # list, plus `scripts/`, skipping node_modules and fixtures. The target used to be the
+        # literal `packages scripts`, and the suites under kernel/, hosts/, plugins/ and tests/
+        # were traced by nothing. It exits non-zero when any file leaks or fails to run, and
+        # prints the offending key with its before -> after values plus the test index that
+        # first changed it.
         #
         # The sandbox kills its guest after VEYYON_SANDBOX_TIMEOUT seconds, 1800 by default.
-        # One process per file over ~4,600 files takes ~32 minutes, so the default killed
+        # One process per file over every member takes most of an hour, so the default killed
         # every run before the report printed. 100 minutes leaves the job's own 120-minute
         # limit, with ~7 minutes of setup, as the outer bound.
         env:
           VEYYON_SANDBOX_TIMEOUT: "6000"
-        run: bash scripts/test-sandbox/run.sh bun scripts/test-sandbox/find-test-leaks.ts packages scripts
+        run: bash scripts/test-sandbox/run.sh bun scripts/test-sandbox/find-test-leaks.ts --workspace
 
   memory:
     name: What one more test file costs

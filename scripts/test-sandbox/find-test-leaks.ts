@@ -26,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEAK_FILE_ENV, type LeakReport, parseLeaks } from "../../packages/utils/test/helpers/global-state-leak-tracer";
+import { packagesWithTests } from "../workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 const TRACER = "packages/utils/test/helpers/global-state-leak-preload.ts";
@@ -202,21 +203,34 @@ export function traceFile(repoRoot: string, file: string): FileResult {
 	};
 }
 
+/**
+ * The directories `--workspace` walks: every workspace member that ships tests, then the
+ * repo-level suites under `scripts/`. Resolved from the member list, so a member that lands under
+ * a new top-level directory is swept from the commit that declares it.
+ */
+export function workspaceSweepRoots(repoRoot: string = REPO_ROOT): string[] {
+	return [...packagesWithTests(repoRoot), "scripts"];
+}
+
 if (import.meta.main) {
 	const args = process.argv.slice(2);
 	const asJson = args.includes("--json");
-	const targets = args.filter(arg => !arg.startsWith("--"));
+	const targets = [
+		...(args.includes("--workspace") ? workspaceSweepRoots() : []),
+		...args.filter(arg => !arg.startsWith("--")),
+	];
 	if (targets.length === 0) {
-		console.error("usage: bun scripts/test-sandbox/find-test-leaks.ts [--json] <file-or-directory>…");
+		console.error("usage: bun scripts/test-sandbox/find-test-leaks.ts [--json] (--workspace | <file-or-directory>…)");
 		process.exit(2);
 	}
 
-	const files = targets.flatMap(target => testFilesUnder(REPO_ROOT, target));
-	// A walk that found nothing measured nothing. The sweep runs `packages scripts`,
-	// so a SKIP_DIRS entry that grows too far, a gitignore change, or a moved tree
-	// collapses the file list, and reporting "checked 0 file(s)" with exit 0 says the
-	// tree is clean when nothing was looked at. Explicit file targets always yield a
-	// file, so this only fires on a directory that really holds no suites.
+	// A member nested inside another is walked from both roots; each file is traced once.
+	const files = [...new Set(targets.flatMap(target => testFilesUnder(REPO_ROOT, target)))];
+	// A walk that found nothing measured nothing. The nightly sweep walks every member, so a
+	// SKIP_DIRS entry that grows too far, a gitignore change, or a moved tree collapses the file
+	// list, and reporting "checked 0 file(s)" with exit 0 says the tree is clean when nothing was
+	// looked at. Explicit file targets always yield a file, so this only fires on a directory that
+	// really holds no suites.
 	if (files.length === 0) {
 		console.error(`no test files under ${targets.join(", ")}: this run checked nothing`);
 		process.exit(2);
