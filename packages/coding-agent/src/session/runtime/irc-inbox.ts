@@ -225,14 +225,24 @@ export class IrcContinuationOutbox {
 	/** The receiver durably deduplicates before accepting; a crash before this ack safely replays. */
 	flush(deliver: (completion: IrcContinuation) => Promise<boolean>): Promise<void> {
 		if (this.#flushing) return this.#flushing;
-		this.#flushing = (async () => {
-			for (const completion of this.pending()) {
+		const flushing: Promise<void> = Promise.resolve().then(async () => {
+			const attempted = new Set<string>();
+			for (;;) {
+				const completion = this.pending().find(item => !attempted.has(item.id));
+				if (!completion) {
+					if (this.#flushing === flushing) this.#flushing = undefined;
+					return;
+				}
+				attempted.add(completion.id);
 				if (!await deliver(completion)) continue;
 				this.#store.appendCustomEntry("irc:continuation-delivered", completion.id);
 				this.#store.flushSync();
 				await this.#store.sync();
 			}
-		})().finally(() => { this.#flushing = undefined; });
-		return this.#flushing;
+		}).finally(() => {
+			if (this.#flushing === flushing) this.#flushing = undefined;
+		});
+		this.#flushing = flushing;
+		return flushing;
 	}
 }

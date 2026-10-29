@@ -41,11 +41,17 @@ describe("retained agent result delivery", () => {
 		expect(await replay.complete("worker", "owner", "resume-1", "ignored duplicate output")).toEqual(result);
 		expect(reopened.getEntries().filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result")).toHaveLength(1);
 	});
-	it("serializes concurrent delivery and preserves undelivered results for restart", async () => {
+	it("serializes concurrent delivery and attempts each failed result once per flush", async () => {
 		const session = store();
 		const outbox = new IrcContinuationOutbox(session);
-		await outbox.complete("worker", "owner", "resume-1", "B");
-		await outbox.flush(async () => false);
+		const first = await outbox.complete("worker", "owner", "resume-1", "B");
+		let failures = 0;
+		await outbox.flush(async completion => {
+			expect(completion.id).toBe(first.id);
+			failures++;
+			return false;
+		});
+		expect(failures).toBe(1);
 		await session.flush();
 		const reopened = await SessionManager.open(session.getSessionFile()!);
 		const replay = new IrcContinuationOutbox(reopened);

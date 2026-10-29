@@ -176,6 +176,8 @@ export interface IrcLogEntry {
 
 interface IrcWaiter {
 	from?: string;
+	/** Native completions already durable when this waiter was armed are replays, not replies. */
+	visibleCompletionIds: ReadonlySet<string>;
 	resolve: (msg: IrcMessage) => void;
 	cancel: () => void;
 }
@@ -640,8 +642,8 @@ export class IrcBus {
 
 		try {
 			const delivery = await session.deliverIrcMessage(message, opts);
+			if (message.completion) this.#takeMatchingWaiter(message.to, message.from, message.completion.id)?.resolve(message);
 			// A native result must reach durable context before a blocked caller consumes it.
-			if (message.completion) this.#takeMatchingWaiter(message.to, message.from)?.resolve(message);
 			if (!opts?.suppressRelay) this.#relayToMainUi(message, this.#scopeOf(message));
 			return {
 				to: message.to,
@@ -725,8 +727,17 @@ export class IrcBus {
 			unsubscribeLiveness?.();
 		};
 
+		const visibleCompletionIds = new Set(
+			(this.#registry.get(agentId)?.session?.sessionManager?.getEntries() ?? []).flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" &&
+				typeof Reflect.get(entry.details ?? {}, "completionId") === "string"
+					? [Reflect.get(entry.details ?? {}, "completionId") as string]
+					: [],
+			),
+		);
 		const waiter: IrcWaiter = {
 			from: filter.from,
+			visibleCompletionIds,
 			resolve: msg => settle({ kind: "message", msg }),
 			// Settles, not merely cleans up. `cancel` had no caller until
 			// `forgetAgents` gained one, and it was written as `cleanup()` alone:
@@ -823,12 +834,19 @@ export class IrcBus {
 	}
 
 	/** Resolve the OLDEST waiter for `agentId` whose from-filter accepts `from`. */
-	#takeMatchingWaiter(agentId: string, from: string): IrcWaiter | undefined {
+	#takeMatchingWaiter(agentId: string, from: string, completionId?: string): IrcWaiter | undefined {
 		const waiters = this.#waiters.get(agentId);
 		if (!waiters) return undefined;
-		const index = waiters.findIndex(waiter => !waiter.from || waiter.from === from);
+		const index = waiters.findIndex(
+			waiter =>
+				(!waiter.from || waiter.from === from) &&
+				(completionId === undefined || !waiter.visibleCompletionIds.has(completionId)),
+		);
 		if (index === -1) return undefined;
 		const [waiter] = waiters.splice(index, 1);
+		if (completionId !== undefined) {
+			for (const remaining of waiters) remaining.visibleCompletionIds.add(completionId);
+		}
 		if (waiters.length === 0) this.#waiters.delete(agentId);
 		return waiter;
 	}

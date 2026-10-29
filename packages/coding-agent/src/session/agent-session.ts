@@ -1094,6 +1094,7 @@ export class AgentSession {
 	readonly #yields = new YieldTracker();
 	#ircContinuations: IrcContinuationOutbox | undefined;
 	#ircActivePhase: string | undefined;
+	#ircWakeSettled: Promise<void> | undefined;
 	/**
 	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
@@ -1188,13 +1189,14 @@ export class AgentSession {
 			? AgentRegistry.global().actorContext(selfId).parentId
 			: parentRecord ? Reflect.get(parentRecord.details ?? {}, "from") : undefined;
 		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
-		if (typeof phaseId === "string" && selfId && typeof parentId === "string") {
+		if (typeof phaseId === "string" && selfId) {
 			if (this.#ircActivePhase === phaseId) return Promise.resolve();
-			if (!recovering && !outbox.begin(phaseId, parentRecord)) return Promise.resolve();
+			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord)) return Promise.resolve();
 			this.#ircActivePhase = phaseId;
 		}
 		const yields: YieldItem[] = [];
 		let terminal = false;
+		let published = false;
 		let phaseEnd: number | undefined;
 		const unsubscribe = this.subscribe(event => {
 			if (event.type !== "tool_execution_end" || event.toolName !== "yield" || event.isError) return;
@@ -1276,12 +1278,20 @@ export class AgentSession {
 		const ready = this.#ircActivePhase === phaseId && typeof phaseId === "string"
 			? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
 			: Promise.resolve();
-		void ready.then(() => terminal ? undefined : records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue())
+		const settled = ready.then(() => terminal ? undefined : records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue())
 			.then(() => publish(), error => publish(error))
+			.then(async () => {
+				if (typeof completionId === "string") {
+					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
+					this.sessionManager.flushSync();
+					await this.sessionManager.sync();
+				}
+				published = true;
+			})
 			.catch(error => {
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", { error: errorMessage(error) });
 			})
-			.finally(() => {
+			.finally(async () => {
 				unsubscribe();
 				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
 				if (parkedFollowUps.length > 0) {
@@ -1290,8 +1300,17 @@ export class AgentSession {
 						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
 					);
 				}
+				// Claim the next retained phase before dropping this turn's idle accounting.
+				if (published) {
+					await this.replayIrcContinuations(true).catch(error =>
+						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }));
+				}
 				this.#endInFlight();
 			});
+		this.#ircWakeSettled = settled;
+		void settled.finally(() => {
+			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
+		});
 		return ready;
 	}
 
@@ -4097,6 +4116,11 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
+		while (this.#ircWakeSettled) {
+			await this.#ircWakeSettled;
+			await this.agent.waitForIdle();
+			await this.#waitForPostPromptRecovery();
+		}
 	}
 
 	/**
@@ -7554,6 +7578,14 @@ export class AgentSession {
 			return "woken";
 		}
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
+		if (relation === "parent" && this.#ircActivePhase) {
+			// A new native phase cannot be folded into the current phase's immutable result.
+			const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+			outbox.begin(msg.id, record);
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			return "injected";
+		}
 		if (this.isStreaming) {
 			if (relation === "parent") {
 				this.agent.steer({
@@ -7585,7 +7617,7 @@ export class AgentSession {
 	}
 
 	/** Replay durable result deliveries on a retained agent's next native activation. */
-	async replayIrcContinuations(): Promise<void> {
+	async replayIrcContinuations(settling = false): Promise<void> {
 		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
 		await outbox.flush(async completion => {
 			const registry = AgentRegistry.global();
@@ -7602,7 +7634,23 @@ export class AgentSession {
 			}
 			return false;
 		});
-		if (this.isStreaming || this.#planMode.enabled || this.#ircActivePhase) return;
+		if (this.agent.state.isStreaming || (!settling && this.isStreaming) || this.#planMode.enabled || this.#ircActivePhase) return;
+		const consumed = new Set(this.sessionManager.getEntries().flatMap(entry =>
+			entry.type === "custom" && entry.customType === "irc:completion-consumed" &&
+			typeof entry.data === "string" ? [entry.data] : []));
+		const pendingCompletion = this.agent.state.messages.find(message =>
+			message.role === "custom" && message.customType === "task:continuation" &&
+			typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
+			!consumed.has(Reflect.get(message.details ?? {}, "completionId")));
+		if (pendingCompletion?.role === "custom") {
+			const from = Reflect.get(pendingCompletion.details ?? {}, "from");
+			const selfId = this.#config.agentId;
+			if (selfId && typeof from === "string" &&
+				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)) {
+				await this.#wakeForIrc([pendingCompletion], true);
+				return;
+			}
+		}
 		const retained = outbox.unfinished().find(record => {
 			const from = Reflect.get(record.details ?? {}, "from");
 			const selfId = this.#config.agentId;

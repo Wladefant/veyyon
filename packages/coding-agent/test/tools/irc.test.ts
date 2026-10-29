@@ -316,6 +316,78 @@ describe("IRC", () => {
 			expect(main.delivered).toEqual([]);
 			expect(bus.unreadCount("0-Main")).toBe(0);
 		});
+		it("completion sends resolve only the first waiter after durable acceptance", async () => {
+			const main = makeFakeSession();
+			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			const entries: { type: string; customType: string; details: { completionId: string } }[] = [];
+			Object.defineProperty(main.session, "sessionManager", {
+				value: { getEntries: () => entries },
+			});
+			main.onDeliver(message => {
+				entries.push({
+					type: "custom_message",
+					customType: "task:continuation",
+					details: { completionId: "completion-1" },
+				});
+				expect(message.completion?.id).toBe("completion-1");
+			});
+
+			const first = bus.wait("0-Main", { from: "0-Sub" }, 1000);
+			const second = bus.wait("0-Main", { from: "0-Sub" }, 20);
+			const completion = {
+				version: 1 as const,
+				id: "completion-1",
+				handle: "handle-1",
+				phaseId: "phase-1",
+				resultSource: "agent" as const,
+			};
+			const receipts = await Promise.all([
+				bus.send({ from: "0-Sub", to: "0-Main", body: "result" }, { completion }),
+				bus.send({ from: "0-Sub", to: "0-Main", body: "result" }, { completion }),
+			]);
+
+			expect(receipts.map(receipt => receipt.outcome)).toEqual(["injected", "injected"]);
+			expect(main.delivered).toHaveLength(2);
+			expect(await first).toMatchObject({ body: "result", completion });
+			expect(await second).toBeNull();
+		});
+
+		it("completion delivery failure leaves the original waiter for a successful retry", async () => {
+			const main = makeFakeSession();
+			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			const waiting = bus.wait("0-Main", { from: "0-Sub" }, 1000);
+			const completion = {
+				version: 1 as const,
+				id: "completion-retry",
+				handle: "handle-retry",
+				phaseId: "phase-retry",
+				resultSource: "agent" as const,
+			};
+			main.setError(new Error("temporary delivery failure"));
+
+			const failed = await bus.send(
+				{ from: "0-Sub", to: "0-Main", body: "result" },
+				{ completion },
+			);
+			expect(failed).toEqual({
+				to: "0-Main",
+				outcome: "failed",
+				error: "temporary delivery failure",
+			});
+			expect(await bus.send(
+				{ from: "0-Sub", to: "0-Main", body: "result" },
+				{ completion },
+			)).toEqual({ to: "0-Main", outcome: "injected" });
+
+			expect(await waiting).toMatchObject({ body: "result", completion });
+			expect(main.delivered).toHaveLength(1);
+			expect(bus.unreadCount("0-Main")).toBe(0);
+		});
+
 
 		/**
 		 * The 100-message mailbox cap, driven by two senders alternating.
