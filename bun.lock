@@ -425,7 +425,7 @@
         "@types/bun": "catalog:",
       },
       "peerDependencies": {
-        "@veyyon/coding-agent": "1.6.5",
+        "@veyyon/coding-agent": "1.6.6",
       },
     },
     "plugins/web": {

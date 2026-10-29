@@ -638,6 +638,11 @@ impl ReadCommand {
 		&self,
 		file: &brush_core::openfiles::OpenFile,
 	) -> Result<Option<brush_core::terminal::AutoModeGuard>, brush_core::Error> {
+		// Redirected input must not change the host's console modes.
+		if !file.is_terminal() {
+			return Ok(None);
+		}
+
 		let mode = brush_core::terminal::AutoModeGuard::new(file.to_owned()).ok();
 		if let Some(mode) = &mode {
 			let config = brush_core::terminal::Settings::builder()
