@@ -10,7 +10,7 @@ import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { isProjectAwareLspServer } from "./servers";
 import type { Diagnostic, LspClient, PublishedDiagnostics, ServerConfig } from "./types";
-import { fileToUri, formatDiagnostic, formatDiagnosticsSummary, sortDiagnostics } from "./utils";
+import { fileToUri, formatDiagnostic, formatDiagnosticsSummary, uniqueSortedDiagnostics } from "./utils";
 
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 export const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
@@ -328,18 +328,7 @@ export async function getDiagnosticsForFile(
 		};
 	}
 
-	// Deduplicate diagnostics by range + message (different servers might report similar issues)
-	const seen = new Set<string>();
-	const uniqueDiagnostics: Diagnostic[] = [];
-	for (const d of allDiagnostics) {
-		const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
-		if (!seen.has(key)) {
-			seen.add(key);
-			uniqueDiagnostics.push(d);
-		}
-	}
-
-	sortDiagnostics(uniqueDiagnostics);
+	const uniqueDiagnostics = uniqueSortedDiagnostics(allDiagnostics);
 	const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
 	const limited = limitDiagnosticMessages(formatted);
 	const summary = formatDiagnosticsSummary(uniqueDiagnostics);

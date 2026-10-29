@@ -98,7 +98,7 @@ export function severityToString(severity?: DiagnosticSeverity): string {
 /**
  * Sort diagnostics by severity, then by location and message.
  */
-export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
+function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	return diagnostics.sort((a, b) => {
 		const aSeverity = a.severity ?? 1;
 		const bSeverity = b.severity ?? 1;
@@ -111,6 +111,23 @@ export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 		if (aCol !== bCol) return aCol - bCol;
 		return a.message.localeCompare(b.message);
 	});
+}
+
+/**
+ * `diagnostics` with each repeat of a range and message removed, sorted by {@link sortDiagnostics}.
+ * Servers that check one file can report the same problem; the first report of each is kept.
+ */
+export function uniqueSortedDiagnostics(diagnostics: readonly Diagnostic[]): Diagnostic[] {
+	const seen = new Set<string>();
+	const unique: Diagnostic[] = [];
+	for (const diagnostic of diagnostics) {
+		const { start, end } = diagnostic.range;
+		const key = `${start.line}:${start.character}:${end.line}:${end.character}:${diagnostic.message}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(diagnostic);
+	}
+	return sortDiagnostics(unique);
 }
 
 /**

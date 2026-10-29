@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
 - No user-visible change: the `/debug` performance, dump and memory reports write their bundle through one sequence in `debug/index.ts` instead of three copies.
 - No user-visible change: the agents and import setup steps take the checklist sentinel, key hints and space-to-toggle input from `setup-wizard/scenes/wizard-list.ts` instead of two copies.
 - No user-visible change: the session-compaction-stall and session-tree-nav benches build their usage records from `emptyUsage()` instead of restating its zero fields.

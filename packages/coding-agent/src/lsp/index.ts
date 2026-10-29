@@ -100,8 +100,8 @@ import {
 	readLocationContext,
 	resolveDiagnosticTargets,
 	resolveSymbolColumn,
-	sortDiagnostics,
 	symbolKindToIcon,
+	uniqueSortedDiagnostics,
 	uriToFile,
 } from "./utils";
 import { lspToolView } from "./view";
@@ -949,18 +949,7 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 				}
 			}
 
-			// Deduplicate diagnostics
-			const seen = new Set<string>();
-			const uniqueDiagnostics: Diagnostic[] = [];
-			for (const d of allDiagnostics) {
-				const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
-				if (!seen.has(key)) {
-					seen.add(key);
-					uniqueDiagnostics.push(d);
-				}
-			}
-
-			sortDiagnostics(uniqueDiagnostics);
+			const uniqueDiagnostics = uniqueSortedDiagnostics(allDiagnostics);
 
 			if (!detailed && targets.length === 1) {
 				if (uniqueDiagnostics.length === 0) {
