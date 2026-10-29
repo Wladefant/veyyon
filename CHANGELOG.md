@@ -24,6 +24,7 @@
 
 ### Changed
 
+- A launch with arguments no longer constructs the stdin stream to describe why it skipped the first-frame replay when `VEYYON_REPLAY_DEBUG` is unset, so a print-mode turn exits in 79.3 ms instead of 81.8 ms.
 - A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
 - The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
 - No user-visible change: an abort inside the rust-analyzer workspace wait returns from `waitForProjectLoaded`, as it does for every other server, instead of throwing when it lands between two `analyzerStatus` polls.
@@ -183,6 +184,7 @@
 
 ### Fixed
 
+- `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.
 - An eval kernel whose runner exits during startup reports `kernel exited with code N` instead of `EPIPE: broken pipe, write` when the init request is written after the runner closed its stdin.
 - A JS eval cell that displays or returns a value holding a cycle shows it with `"[Circular]"` where it loops back, in 41 ms instead of 915 ms, and a value holding a function or symbol shows `"[Function: run]"` or `"Symbol(marker)"` in place; both printed `[object Object]`.
