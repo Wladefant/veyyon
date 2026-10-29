@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
-import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, postmortem } from "@veyyon/utils";
+import {
+	errorMessage,
+	getProjectDir,
+	isCancellation,
+	isTimeoutError,
+	logger,
+	postmortem,
+	toError,
+} from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
@@ -612,7 +620,7 @@ export async function executeWithKernelBase<
 				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
 			);
 		}
-		const error = err instanceof Error ? err : new Error(String(err));
+		const error = toError(err);
 		logger.error(`${errorLogLabel} execution failed`, { error: error.message });
 		throw error;
 	} finally {

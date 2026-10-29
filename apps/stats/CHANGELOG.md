@@ -4,6 +4,7 @@
 
 ### Changed
 
+- No user-visible change: the resource hook and the request drawer coerce a failed fetch with `toError` from `@veyyon/utils/type-guards` instead of inline copies.
 - No user-visible change: the Models and Tools charts take their legend and tooltip from `buildSharedPlugins`, and the Behavior and Costs charts build their line and bar configs with `timeChartData` and `timeChartOptions` instead of two copies.
 - No user-visible change: the dashboard imports `JsonBlock` and `StatusPill` from `@veyyon/tool-render` instead of two one-line re-export modules in `client/ui`.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.

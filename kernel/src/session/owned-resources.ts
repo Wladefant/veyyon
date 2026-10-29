@@ -26,6 +26,7 @@
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 81.
 import { withTimeout } from "@veyyon/utils/async";
 import * as logger from "@veyyon/utils/logger";
+import { toError } from "@veyyon/utils/type-guards";
 
 /**
  * Which owner id a disposer is keyed by.
@@ -110,7 +111,7 @@ export async function disposeOwnedResources(scope: OwnedResourceScope, ownerId: 
 				logger.debug("Released owner-scoped resources during dispose", { subsystem: name, ownerId, released });
 			}
 		} catch (error) {
-			const failure = error instanceof Error ? error : new Error(String(error));
+			const failure = toError(error);
 			logger.warn("Failed to release owner-scoped resources during dispose", {
 				subsystem: name,
 				ownerId,

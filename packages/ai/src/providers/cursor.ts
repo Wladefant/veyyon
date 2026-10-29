@@ -96,7 +96,7 @@ import { clampLow, logger } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
-import { errorMessage } from "@veyyon/utils/type-guards";
+import { errorMessage, toError } from "@veyyon/utils/type-guards";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -732,7 +732,7 @@ class CursorRunStream {
 			serverMessage = fromBinary(AgentServerMessageSchema, read.payload);
 		} catch (error) {
 			log("error", "parseServerMessage", { error: String(error) });
-			this.fail(error instanceof Error ? error : new Error(String(error)));
+			this.fail(toError(error));
 			return false;
 		}
 		const update =
@@ -771,7 +771,7 @@ class CursorRunStream {
 					messageCase: serverMessage.message.case,
 					error: errorMessage(error),
 				});
-				this.fail(error instanceof Error ? error : new Error(String(error)));
+				this.fail(toError(error));
 			})
 			.finally(() => {
 				this.#pendingMessages.delete(handled);

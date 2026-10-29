@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEexist, isEnoent, postmortem } from "@veyyon/utils";
+import { isEexist, isEnoent, postmortem, toError } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { brokerHoldsLease } from "./broker-lease";
@@ -232,7 +232,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				this.#bindSocket(await openSocket(this.#endpoint, 250));
 				return;
 			} catch (error) {
-				lastError = error instanceof Error ? error : new Error(String(error));
+				lastError = toError(error);
 				await Bun.sleep(CONNECT_RETRY_MS);
 			}
 		}
@@ -300,7 +300,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				}
 				response = parseDaemonWireResponse(decoded);
 			} catch (error) {
-				this.#rejectPending(error instanceof Error ? error : new Error(String(error)));
+				this.#rejectPending(toError(error));
 				continue;
 			}
 			const pending = this.#pending.get(response.id);
@@ -315,7 +315,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			try {
 				pending.resolve(parseDaemonRpcResult(pending.operation, response.result));
 			} catch (error) {
-				pending.reject(error instanceof Error ? error : new Error(String(error)));
+				pending.reject(toError(error));
 			}
 		}
 	}
@@ -337,7 +337,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 					if (pending) next.write(pending.line);
 				}
 			},
-			error => this.#rejectPending(error instanceof Error ? error : new Error(String(error))),
+			error => this.#rejectPending(toError(error)),
 		);
 	}
 

@@ -12,7 +12,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
+import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -191,7 +191,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 						message => ({ message, error: null as Error | null }),
 						error => ({
 							message: null,
-							error: error === awaitCancelled ? null : error instanceof Error ? error : new Error(String(error)),
+							error: error === awaitCancelled ? null : toError(error),
 						}),
 					)
 			: undefined;

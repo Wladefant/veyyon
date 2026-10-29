@@ -4,6 +4,7 @@
 
 ### Changed
 
+- SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
 - Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.

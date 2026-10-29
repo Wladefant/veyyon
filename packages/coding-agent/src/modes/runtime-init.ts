@@ -5,6 +5,8 @@
  * every non-interactive host shares. Only error reporting, shutdown behavior,
  * and UI context differ between callers — those stay as caller-supplied hooks.
  */
+
+import { toError } from "@veyyon/utils/type-guards";
 import { sessionCommandActions, sessionExtensionActions } from "../extensibility/extensions/session-actions";
 import type { ExtensionError, ExtensionUIContext } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
@@ -56,7 +58,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 				}
 			}
 			sendTask.catch(e => {
-				reportSendError("extension_send", e instanceof Error ? e : new Error(String(e)));
+				reportSendError("extension_send", toError(e));
 			});
 		},
 		sendUserMessage: (content, sendOptions) => {
@@ -67,7 +69,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 				markAgentInvokingMessage?.();
 			}
 			sendTask.catch(e => {
-				reportSendError("extension_send_user", e instanceof Error ? e : new Error(String(e)));
+				reportSendError("extension_send_user", toError(e));
 			});
 		},
 		shutdown: onShutdown ?? (() => {}),

@@ -17,7 +17,7 @@ import { structuredCloneJSON } from "@veyyon/utils/json";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
 import { readSseJson } from "@veyyon/utils/stream";
-import { asRecord, errorMessage } from "@veyyon/utils/type-guards";
+import { asRecord, errorMessage, toError } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import packageJson from "../../package.json" with { type: "json" };
 import {
@@ -2334,7 +2334,7 @@ class CodexStreamProcessor {
 		if (!canReplay) return false;
 
 		const state = websocketState;
-		const streamError = error instanceof Error ? error : new Error(String(error));
+		const streamError = toError(error);
 		const replayingBufferedOutputOverSse = this.output.content.length > 0;
 		const fatalWebSocketMessage = streamError.message.toLowerCase();
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>

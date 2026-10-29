@@ -16,6 +16,7 @@
 
 ### Changed
 
+- The log file and the postmortem handlers coerce a thrown value with `toError` from `type-guards` instead of a private `asError` and four inline copies; no user-facing change.
 - `sgrCarryAfter` reads SGR parameters in place instead of through a regular expression and a split; no user-facing change.
 - `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
 - The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.

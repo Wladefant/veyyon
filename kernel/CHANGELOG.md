@@ -6,6 +6,7 @@
 
 ### Changed
 
+- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
 - `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.

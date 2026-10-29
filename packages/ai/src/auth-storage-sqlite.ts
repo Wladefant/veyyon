@@ -24,7 +24,7 @@ import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
 import { SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
-import { errorMessage } from "@veyyon/utils/type-guards";
+import { errorMessage, toError } from "@veyyon/utils/type-guards";
 import {
 	AUTH_SCHEMA_VERSION,
 	type AuthRow,
@@ -301,7 +301,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				if (!isSqliteBusyError(err)) {
 					throw err;
 				}
-				lastBusyError = err instanceof Error ? err : new Error(String(err));
+				lastBusyError = toError(err);
 				if (attempt < maxAttempts - 1) {
 					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
 				}

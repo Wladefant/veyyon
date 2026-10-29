@@ -7,7 +7,16 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { errorMessage, getProjectDir, isThenable, logger, readJsonl, Snowflake, truncate } from "@veyyon/utils";
+import {
+	errorMessage,
+	getProjectDir,
+	isThenable,
+	logger,
+	readJsonl,
+	Snowflake,
+	toError,
+	truncate,
+} from "@veyyon/utils";
 import { RingBuffer } from "@veyyon/utils/ring";
 import type { Subprocess } from "bun";
 import { hostHasInheritableConsole } from "../../eval/py/spawn-options";
@@ -503,7 +512,7 @@ export class StdioTransport implements MCPTransport {
 			}
 		} catch (error) {
 			if (this.#connected) {
-				this.onError?.(error instanceof Error ? error : new Error(String(error)));
+				this.onError?.(toError(error));
 			}
 		} finally {
 			this.#handleClose();
@@ -749,7 +758,7 @@ export class StdioTransport implements MCPTransport {
 		const failFromSend = (error: unknown) => {
 			if (settled) return;
 			cleanup();
-			reject(error instanceof Error ? error : new Error(String(error)));
+			reject(toError(error));
 		};
 		try {
 			// Never `await` write/flush. Bun's FileSink returns a pending Promise

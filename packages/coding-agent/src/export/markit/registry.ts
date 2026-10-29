@@ -1,6 +1,7 @@
 // Adapted from markit-ai (MIT). See ./NOTICE.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { toError } from "@veyyon/utils/type-guards";
 import { DocxConverter } from "./converters/docx";
 import { EpubConverter } from "./converters/epub";
 import { PdfConverter } from "./converters/pdf";
@@ -48,7 +49,7 @@ export class Markit {
 			try {
 				return await converter.convert(input, streamInfo, this.#options);
 			} catch (err) {
-				errors.push({ converter: converter.name, error: err instanceof Error ? err : new Error(String(err)) });
+				errors.push({ converter: converter.name, error: toError(err) });
 			}
 		}
 		if (errors.length > 0) {
