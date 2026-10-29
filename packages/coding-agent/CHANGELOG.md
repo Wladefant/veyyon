@@ -101,6 +101,7 @@
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 
 ### Fixed
+- `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.
 - An eval kernel whose runner exits during startup reports `kernel exited with code N` instead of `EPIPE: broken pipe, write` when the init request is written after the runner closed its stdin.
 - A JS eval cell that displays or returns a value holding a cycle shows it with `"[Circular]"` where it loops back, in 41 ms instead of 915 ms, and a value holding a function or symbol shows `"[Function: run]"` or `"Symbol(marker)"` in place; both printed `[object Object]`.

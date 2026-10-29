@@ -738,6 +738,7 @@ export class RpcClient {
 	 *   `url` — hosts SHOULD surface it as the truncation-safe copy target so
 	 *   terminal viewport clipping cannot corrupt trailing OAuth query
 	 *   parameters (e.g. `code_challenge_method=S256`).
+	 */
 	async login(
 		providerId: string,
 		options?: {

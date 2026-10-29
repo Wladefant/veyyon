@@ -34,7 +34,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ProcessTerminal } from "@veyyon/tui/terminal";
 import { clearFirstFrameRecording, recordFirstFrame } from "../src/cli/first-frame-recorder";
-import { replayFirstFrame, takeReplayedFirstFrame } from "../src/cli/first-frame-replay";
+import {
+	isBareInteractiveLaunch,
+	RECORDED_ENV_KEYS,
+	replayFirstFrame,
+	takeReplayedFirstFrame,
+} from "../src/cli/first-frame-replay";
 
 const COLS = 100;
 const ROWS = 30;
@@ -364,6 +369,8 @@ describe("every field read as a type it does not hold", () => {
  * still worth proving, and is what actually broke, is that a recording carrying a different
  * environment than this one is refused: by a changed value, by a key it does not have, and by a key
  * it has and the recording does not.
+ */
+describe("every environment variable the frame is a function of", () => {
 	for (const key of RECORDED_ENV_KEYS) {
 		it(`is not replayed when the recording carries a different ${key}`, async () => {
 			const launch = bareLaunch();
@@ -480,6 +487,25 @@ describe("the launch a recording may be replayed onto", () => {
 		expect(isBareInteractiveLaunch()).toBe(false);
 		replayFirstFrame();
 		expect(launch.written()).toEqual([]);
+	});
+
+		Object.defineProperty(process, "stdin", {
+			configurable: true,
+			get: () => {
+				reads++;
+				return stdin;
+			},
+		});
+
+		setEnv("VEYYON_REPLAY_DEBUG", undefined);
+		replayFirstFrame();
+		expect(reads).toBe(0);
+
+		const debugFile = path.join(path.dirname(launch.file), "replay-debug.log");
+		setEnv("VEYYON_REPLAY_DEBUG", debugFile);
+		replayFirstFrame();
+		expect(reads).toBe(1);
+		expect(fs.readFileSync(debugFile, "utf8")).toBe(`${process.pid} not-bare argv=4 stdin=true stdout=true\n`);
 	});
 
 	it("is not a pipe on either side, where the bytes would land in somebody's output", async () => {
