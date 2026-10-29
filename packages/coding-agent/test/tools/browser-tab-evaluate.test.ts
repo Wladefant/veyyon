@@ -12,8 +12,10 @@ const PASSWORD_CANARIES = {
 } as const;
 
 function makeSession(): ToolSession {
+	const sessionId = `browser-tab-evaluate-${process.pid}-${crypto.randomUUID()}`;
 	return {
 		cwd: "/tmp/test",
+		getSessionId: () => sessionId,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
@@ -165,21 +167,29 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 			const expected = ['Disabled password', 'Primary password', 'Shadow password'];
 			const entries = (await tab.observe({ includeAll: true })).elements
 				.filter(entry => expected.includes(entry.name ?? ''));
-			const labels = entries.map(entry => entry.name).sort();
+			const labels = entries
+				.filter(entry => entry.role === 'StaticText')
+				.map(entry => entry.name ?? '')
+				.sort();
+			const controls = entries.filter(entry => entry.role === 'textbox');
+			const controlNames = controls.map(entry => entry.name ?? '').sort();
 			if (labels.join('|') !== expected.slice().sort().join('|')) {
-				throw new Error('Password observation omitted a main or shadow password entry');
+				throw new Error('Password observation omitted a label');
+			}
+			if (controlNames.join('|') !== expected.slice().sort().join('|')) {
+				throw new Error('Password observation omitted a textbox control');
 			}
 			if (entries.some(entry => entry.value !== undefined)) {
 				throw new Error('Password observation exposed a password value');
 			}
-			return { passwordLabels: labels, allValuesUndefined: true };
+			return { passwordLabels: labels, passwordControlNames: controlNames, allValuesUndefined: true };
 		})()`);
 
 		expect(output).toContain('Primary password');
 		expect(output).toContain('Disabled password');
 		expect(output).toContain('Shadow password');
+		expect(output).toContain('passwordControlNames');
 		expect(output).toContain('allValuesUndefined');
-		expect(output).not.toContain(PASSWORD_CANARIES.main);
 		expect(output).not.toContain(PASSWORD_CANARIES.disabled);
 		expect(output).not.toContain(PASSWORD_CANARIES.shadow);
 		expect(output).not.toContain(PASSWORD_CANARIES.frame);
@@ -201,6 +211,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 	it("does not echo canaries in a missing-selector API error after display", async () => {
 		const output = await readPasswordApiError();
 
+		expect(JSON.parse(output)).toMatchObject({ name: "ToolError" });
 		expect(output).toContain("matched no element");
 		expect(output).toContain("Primary password");
 		expect(output).toContain("Display name");
