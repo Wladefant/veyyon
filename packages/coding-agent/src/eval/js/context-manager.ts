@@ -1,7 +1,7 @@
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
-import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
+import { errorMessage, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 import { raceWithTimeout } from "@veyyon/utils/scoped-timeout";
 import {
 	createWorkerHandle,
@@ -16,10 +16,10 @@ import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
 import { attachSessionOwner } from "../executor-base";
 import { shouldDetachKernel } from "../py/spawn-options";
+import { errorFromPayload, toErrorPayload } from "./error-payload";
 import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
 import { WorkerCore } from "./worker-core";
 import type {
-	EvalRunErrorPayload,
 	EvalWorkerInbound,
 	EvalWorkerOutbound,
 	EvalWorkerTransport,
@@ -571,32 +571,6 @@ function reasonToError(reason: unknown, fallback: string): Error {
 	if (reason instanceof Error) return reason;
 	if (typeof reason === "string") return new ToolAbortError(reason);
 	return new ToolAbortError(fallback);
-}
-
-function errorFromPayload(payload: EvalRunErrorPayload): Error {
-	if (payload.isAbort) {
-		const err = new ToolAbortError(payload.message || "Execution aborted");
-		if (payload.stack) err.stack = payload.stack;
-		return err;
-	}
-	const ctor = payload.isToolError ? ToolError : Error;
-	const error = new ctor(payload.message);
-	if (payload.name) error.name = payload.name;
-	if (payload.stack) error.stack = payload.stack;
-	return error;
-}
-
-function toErrorPayload(error: unknown): EvalRunErrorPayload {
-	if (error instanceof Error) {
-		return {
-			name: error.name,
-			message: error.message,
-			stack: error.stack,
-			isAbort: isAbortError(error),
-			isToolError: error instanceof ToolError || error.name === "ToolError",
-		};
-	}
-	return { message: errorMessage(error) };
 }
 
 function spawnJsWorker(): WorkerHandle {

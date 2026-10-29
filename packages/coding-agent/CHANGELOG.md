@@ -108,6 +108,7 @@
 
 ### Fixed
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
+- A tool call aborted inside a JS eval cell rejects with `ToolAbortError` in the worker, the same error the host raises, instead of a plain `Error` carrying the abort's name.
 - `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.
 - An eval kernel whose runner exits during startup reports `kernel exited with code N` instead of `EPIPE: broken pipe, write` when the init request is written after the runner closed its stdin.
