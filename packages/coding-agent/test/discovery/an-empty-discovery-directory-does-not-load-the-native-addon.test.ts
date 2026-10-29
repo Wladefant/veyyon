@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const HELPERS_URL = pathToFileURL(path.resolve(import.meta.dirname, "../../src/discovery/helpers.ts")).href;
 const LOAD_MARKER = "native:loadNative:start";
@@ -83,8 +84,9 @@ for (const target of ${JSON.stringify(targets)}) {
 }
 process.stdout.write(JSON.stringify(scans));
 `;
+	const hermetic = hermeticSpawnEnv({ VEYYON_DEBUG_STARTUP: "1" });
 	const child = Bun.spawn([process.execPath, "-e", snippet], {
-		env: { ...process.env, VEYYON_DEBUG_STARTUP: "1" },
+		env: hermetic.env,
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -93,7 +95,7 @@ process.stdout.write(JSON.stringify(scans));
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
-	]);
+	]).finally(hermetic.cleanup);
 	expect({ exitCode, stderr: exitCode === 0 ? "" : stderr }).toEqual({ exitCode: 0, stderr: "" });
 	return { scans: JSON.parse(stdout) as unknown[][], addonLoads: stderr.split(LOAD_MARKER).length - 1 };
 }
