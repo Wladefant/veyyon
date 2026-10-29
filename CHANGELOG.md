@@ -22,9 +22,12 @@
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 - `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
 - `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.
+- `@veyyon/wire/relay-client` exports `RelayClient`, the collab relay client (send ordering, send backpressure, reconnect, fatal close codes) that the CLI host, the CLI guest and the browser guest bind with their own frame types, backoff schedule and log sink.
 
 ### Changed
 
+- No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
+- No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
 - Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
 - A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
 - The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
@@ -147,6 +150,7 @@
 - Local Ollama discovery takes a model's context window from the `num_ctx` in its `/api/show` parameters ahead of the trained length in `model_info`, as a configured `discovery.type: ollama` endpoint already did, and caps the model's output tokens at that window.
 - Both Ollama providers read capability names case-insensitively, accept a capability map as well as a list, and treat `image` as `vision`.
 - The local Ollama provider and its URL helpers moved from `provider-models/openai-compat` to `provider-models/ollama`; import `ollamaModelManagerOptions`, `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl` from there or from `@veyyon/catalog/provider-models`.
+- The guest holds sends back while its socket has 64 KiB or more queued and drains them below 32 KiB, as the CLI does, by binding `RelayClient` from `@veyyon/wire/relay-client` instead of its own copy of the relay client.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
 - The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
 - `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
@@ -193,6 +197,8 @@
 
 ### Fixed
 
+- `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
+- A tool call aborted inside a JS eval cell rejects with `ToolAbortError` in the worker, the same error the host raises, instead of a plain `Error` carrying the abort's name.
 - `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.
 - An eval kernel whose runner exits during startup reports `kernel exited with code N` instead of `EPIPE: broken pipe, write` when the init request is written after the runner closed its stdin.
