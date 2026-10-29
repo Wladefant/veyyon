@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
 ## [1.6.6] - 2026-10-28
