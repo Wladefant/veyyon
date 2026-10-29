@@ -660,30 +660,49 @@ export function getStatsByAgentType(cutoff?: number): AgentTypeStats[] {
 }
 
 /**
- * Get time series data.
+ * `columns` of `table` aggregated per `bucketMs` bucket and per `groupBy`, oldest bucket first.
+ * A `null` cutoff reads every row; an omitted one reads the last `windowMs`.
  */
-export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 * 60 * 1000): TimeSeriesPoint[] {
+function bucketedRows<Row>(
+	table: "messages" | "tool_calls",
+	columns: string,
+	groupBy: string | undefined,
+	windowMs: number,
+	cutoff: number | null | undefined,
+	bucketMs: number,
+): Row[] {
 	if (!db) return [];
-
 	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - hours * 60 * 60 * 1000) : 0;
-
 	const stmt = db.prepare(`
 		SELECT
 			(timestamp / ?) * ? as bucket,
-			COUNT(*) as requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as errors,
-			SUM(total_tokens) as tokens,
-			SUM(cost_total) as cost
-		FROM messages
+			${columns}
+		FROM ${table}
 		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket
+		GROUP BY bucket${groupBy ? `, ${groupBy}` : ""}
 		ORDER BY bucket ASC
 	`);
-
 	const rows = hasCutoff
-		? (stmt.all(bucketMs, bucketMs, seriesCutoff) as TimeSeriesRow[])
-		: (stmt.all(bucketMs, bucketMs) as TimeSeriesRow[]);
+		? stmt.all(bucketMs, bucketMs, cutoff ?? Date.now() - windowMs)
+		: stmt.all(bucketMs, bucketMs);
+	return rows as Row[];
+}
+
+/**
+ * Get time series data.
+ */
+export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 * 60 * 1000): TimeSeriesPoint[] {
+	const rows = bucketedRows<TimeSeriesRow>(
+		"messages",
+		`COUNT(*) as requests,
+			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as errors,
+			SUM(total_tokens) as tokens,
+			SUM(cost_total) as cost`,
+		undefined,
+		hours * 60 * 60 * 1000,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		requests: row.requests,
@@ -697,25 +716,14 @@ export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 
  * Get daily model usage time series data for the last N days.
  */
 export function getModelTimeSeries(days = 14, cutoff?: number | null, bucketMs = DAY_MS): ModelTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			model,
-			provider,
-			COUNT(*) as requests
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{ bucket: number; model: string; provider: string; requests: number }>;
+	const rows = bucketedRows<{ bucket: number; model: string; provider: string; requests: number }>(
+		"messages",
+		"model, provider, COUNT(*) as requests",
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -732,34 +740,25 @@ export function getModelPerformanceSeries(
 	cutoff?: number | null,
 	bucketMs = DAY_MS,
 ): ModelPerformancePoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			model,
-			provider,
-			COUNT(*) as requests,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{
+	const rows = bucketedRows<{
 		bucket: number;
 		model: string;
 		provider: string;
 		requests: number;
 		avg_ttft: number | null;
 		avg_tokens_per_second: number | null;
-	}>;
+	}>(
+		"messages",
+		`model,
+			provider,
+			COUNT(*) as requests,
+			AVG(ttft) as avg_ttft,
+			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second`,
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -855,29 +854,21 @@ export function getMessageById(id: number): MessageStats | null {
  * Get daily cost time series data for the last N days, broken down by model.
  */
 export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ${DAY_MS}) * ${DAY_MS} as bucket,
-			model,
+	const rows = bucketedRows<CostSeriesRow>(
+		"messages",
+		`model,
 			provider,
 			SUM(cost_total) as cost,
 			SUM(cost_input) as cost_input,
 			SUM(cost_output) as cost_output,
 			SUM(cost_cache_read) as cost_cache_read,
 			SUM(cost_cache_write) as cost_cache_write,
-			COUNT(*) as requests
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rows = hasCutoff ? (stmt.all(seriesCutoff) as CostSeriesRow[]) : (stmt.all() as CostSeriesRow[]);
+			COUNT(*) as requests`,
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		DAY_MS,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -1490,25 +1481,14 @@ export function getToolStatsByModel(cutoff?: number): ToolModelStats[] {
  * Get tool-call time series (one point per bucket per tool).
  */
 export function getToolTimeSeries(days = 14, cutoff?: number | null, bucketMs = DAY_MS): ToolTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			tool_name,
-			COUNT(*) as calls,
-			SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as errors
-		FROM tool_calls
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, tool_name
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{ bucket: number; tool_name: string; calls: number; errors: number }>;
+	const rows = bucketedRows<{ bucket: number; tool_name: string; calls: number; errors: number }>(
+		"tool_calls",
+		"tool_name, COUNT(*) as calls, SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as errors",
+		"tool_name",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		tool: row.tool_name,
