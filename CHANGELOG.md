@@ -18,6 +18,7 @@
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 - `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
+- `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.
 
 ### Changed
 
@@ -267,6 +268,7 @@
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
 - Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
+- A session entry holding a value that loops back to one of its own ancestors, such as a tool result from a JS eval cell that displayed a cyclic object, reaches the session file with `"[Circular]"` at the loop instead of throwing `RangeError: Maximum call stack size exceeded` and leaving the entry out of the resumed session; the persistence pass over 400 entries takes 79 µs instead of 68 µs for the check.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 - `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
