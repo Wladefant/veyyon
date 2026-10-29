@@ -11,9 +11,9 @@
 import { buildModel } from "@veyyon/catalog/build";
 import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
 import { ANTHROPIC_THINKING_BUDGETS, resolveThinkingBudget } from "../reasoning-budget";
-import { mapAnthropicToolChoice } from "../stream";
 import type { Context, Model, ModelSpec, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { mapAnthropicToolChoice } from "./anthropic-tool-choice";
 import { createProviderErrorMessage } from "./error-message";
 import { streamAnthropic, streamOpenAICompletions } from "./register-builtins";
 

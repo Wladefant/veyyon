@@ -550,11 +550,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * here, each held a copy of. Its runtime imports (`@veyyon/utils/type-guards`, `discovery/failure.ts`,
  * `model-thinking.ts` and the catalog `utils.ts`) are already here. Measured 2026-10-28 at 1530.
  *
+ * 1530 to 1531: `ai/src/providers/anthropic-tool-choice.ts`, the Anthropic `tool_choice` mapping that
+ * `ai/src/stream.ts`, `providers/gitlab-duo.ts` and `providers/openai-anthropic-shim.ts`, already
+ * here, read; it was in `stream.ts`, so the two providers and the lazy Anthropic stream each closed an
+ * import cycle through the dispatcher that loads them. Its only imports are types. Measured
+ * 2026-10-28 at 1531.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1530;
+const LAUNCH_REACH_CEILING = 1531;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

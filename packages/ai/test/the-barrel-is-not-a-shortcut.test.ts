@@ -321,6 +321,10 @@ describe("the modules that were repointed stay cut", () => {
 	 * one reader of Ollama's `/api/tags` and `/api/show` answers that the local and cloud catalogs share.
 	 * `catalog/provider-models/ollama.ts`, already on this reach, imports it, and it imports only modules
 	 * already reached, so no consumer gained an edge to a subsystem it did not already reach.
+	 *
+	 * Re-measured 2026-10-28: `shared-llm.ts` 219 -> 220 by `providers/anthropic-tool-choice.ts`, the
+	 * Anthropic `tool_choice` mapping moved out of `stream.ts`, already on this reach, so GitLab Duo and the
+	 * OpenAI/Anthropic shim stop importing the stream dispatcher. It imports only types.
 	 */
 	it.each([
 		["agent/src/proxy.ts", 152],
@@ -342,7 +346,7 @@ describe("the modules that were repointed stay cut", () => {
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 219],
+		["coding-agent/src/commit/shared-llm.ts", 220],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

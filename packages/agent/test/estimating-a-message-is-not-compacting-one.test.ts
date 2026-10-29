@@ -176,8 +176,13 @@ const PRUNING_CEILING = 197;
  * reader of Ollama's `/api/tags` and `/api/show` answers that the local and cloud catalogs share, which
  * `catalog/provider-models/ollama.ts`, already on the engine's reach, imports. Every module it imports was
  * already reached, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 318. The new module is `ai/providers/anthropic-tool-choice.ts`, the
+ * Anthropic `tool_choice` mapping moved out of `ai/stream.ts`, already on the engine's reach, so the
+ * providers that read it stop importing the stream dispatcher. Its only imports are types, so the
+ * growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 317;
+const COMPACTION_ENGINE_CEILING = 318;
 const REMOTE_SUMMARIZER_CEILING = 103;
 
 describe("the estimator is a leaf", () => {

@@ -167,9 +167,12 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * RE-MEASURED 2026-10-28 at 222: `catalog/provider-models/ollama-native.ts`, the one reader of Ollama's
 	 * `/api/tags` and `/api/show` answers that the local and cloud catalogs share, reached through
 	 * `catalog/provider-models/ollama.ts`. Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-28 at 223: `ai/providers/anthropic-tool-choice.ts`, the Anthropic `tool_choice`
+	 * mapping moved out of `ai/stream.ts`, reached through it. It imports only types. Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 222 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(222);
+	it("local-llm reaches at most 223 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(223);
 	});
 
 	/**

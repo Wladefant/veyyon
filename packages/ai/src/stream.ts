@@ -37,6 +37,7 @@ import { isAuthRetryableError } from "./error/auth-classify";
 import { resolveProviderInFlightLimit } from "./provider-inflight-limits";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
+import { mapAnthropicToolChoice } from "./providers/anthropic-tool-choice";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
@@ -1311,25 +1312,7 @@ function maxTokensWithThinkingBudget(
 	const uncappedMaxTokens = baseMaxTokens === undefined ? OUTPUT_CAP_WHEN_UNKNOWN : baseMaxTokens + thinkingBudget;
 	return Math.min(uncappedMaxTokens, modelMaxTokens ?? Number.POSITIVE_INFINITY);
 }
-export const OUTPUT_FALLBACK_BUFFER = 4000;
 const ANTHROPIC_USE_INTERLEAVED_THINKING = Bun.env.VEYYON_NO_INTERLEAVED_THINKING !== "1";
-
-export function mapAnthropicToolChoice(choice?: ToolChoice): AnthropicOptions["toolChoice"] {
-	if (!choice) return undefined;
-	if (typeof choice === "string") {
-		if (choice === "required") return "any";
-		if (choice === "auto" || choice === "none" || choice === "any") return choice;
-		return undefined;
-	}
-	if (choice.type === "tool") {
-		return choice.name ? { type: "tool", name: choice.name } : undefined;
-	}
-	if (choice.type === "function") {
-		const name = "function" in choice ? choice.function?.name : choice.name;
-		return name ? { type: "tool", name } : undefined;
-	}
-	return undefined;
-}
 
 export function mapGoogleToolChoice(
 	choice?: ToolChoice,
