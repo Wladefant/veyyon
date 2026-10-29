@@ -213,6 +213,9 @@
 - The list cards (`/resume`, `/tree`, `/copy`, `/theme`, the message picker, history search, the spend-reset, rollback and subcommand pickers, and the thinking, queue-mode and image selectors) size their list to the rows the card shows, so a short terminal shows the rows around the cursor instead of a list the card clips from the bottom.
 - The hook selector behind `ask` questions and extension `ui.select` keeps the highlighted option on screen on a terminal 8 to 10 rows tall instead of clipping it off with the options below it.
 - `/settings` and the model picker on a short terminal show fewer rows instead of cutting the active row or the list off the card, and `/copy` gives its rows to the list instead of drawing a `Preview` heading with nothing under it.
+- Stopping the interactive mode stops every spinner, rail, shimmer and loader in the transcript, nested groups included, so no transcript timer outlives the mode.
+- A shell retained for a plain-`&` background job holds one reap interval, and retaining the same shell again arms no second one.
+- No user-visible change: `resetSessionCpuLimitsForTests` disposes every limiter it drops, so a limiter's watcher interval ends with the test that created it.
 - A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.
@@ -225,6 +228,7 @@
 - `sgrCarryAfter` returns only the styles still set at the end of the text, as one SGR sequence, so a multi-line `Text` streamed one styled line at a time no longer grows every replayed row by each colour an earlier line closed (2000 lines: 17238 ms to 217 ms) and no longer opens a row with empty colour runs.
 - The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
 - A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
+- Cancelling or finishing an animation drops it from the motion clock at once, and the clock clears its frame interval when that was the last live animation, instead of holding both until its next frame.
 - The YouTube scraper downloads subtitles into `<tmpdir>/veyyon-<uid>` (mode 700) instead of by a guessable name in the shared temp directory.
 
 ## [1.5.10] - 2026-10-25
