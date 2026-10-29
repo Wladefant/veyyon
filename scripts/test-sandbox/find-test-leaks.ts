@@ -26,12 +26,11 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEAK_FILE_ENV, type LeakReport, parseLeaks } from "../../packages/utils/test/helpers/global-state-leak-tracer";
-import { packagesWithTests } from "../workspace-layout";
+import { testPreloadArgs } from "../test-preloads";
+import { packagesWithTests, typeScriptMembersOf } from "../workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 const TRACER = "packages/utils/test/helpers/global-state-leak-preload.ts";
-/** The tripwire preload every test process gets from `bunfig.toml`. */
-const TRIPWIRE = "packages/utils/test/helpers/real-data-tripwire.ts";
 /** Lines of a failing run's own output the report echoes. Enough for a bun failure block. */
 const FAILURE_TAIL_LINES = 40;
 
@@ -136,26 +135,49 @@ export function classifyRunFailure(output: string): RunFailure {
 }
 
 /**
- * `--preload` arguments for the probes the traced file's own package contributes.
- *
- * The tracer probes `@veyyon/utils` state and nothing else, deliberately: importing a
- * heavier package into every traced process risks the diagnostic initialising the very
- * state it is supposed to observe. So the dependency is inverted. A package that owns
- * module-global state worth watching drops a `test/helpers/leak-probes.ts` that calls
- * `registerLeakProbe`, and it is loaded only when tracing a file from that package.
- * The tracer never learns which packages exist.
- *
- * Silent when the package has no probes file, which is the common case.
+ * The directory, relative to the repository root, that the suite runner starts a file's test
+ * process in: the workspace member holding the file, or the root (`""`) for a file no
+ * member holds, such as a `scripts/` suite. Bun reads `bunfig.toml` from the cwd only, so tracing
+ * from anywhere else runs the file under another directory's preloads and path filters: the root's
+ * `pathIgnorePatterns` excludes `clients/python/**`, and a suite there traced from the root matched
+ * no test file at all.
  */
-function packageProbePreloadArgs(repoRoot: string, file: string): string[] {
-	const parts = file.split(path.sep);
-	if (parts[0] !== "packages" || parts.length < 2) return [];
-	const probes = path.join(repoRoot, "packages", parts[1] as string, "test", "helpers", "leak-probes.ts");
-	return fs.existsSync(probes) ? ["--preload", probes] : [];
+export function runDirectory(repoRoot: string, file: string): string {
+	const posix = file.split(path.sep).join("/");
+	return typeScriptMembersOf(repoRoot).find(member => posix.startsWith(`${member}/`)) ?? "";
 }
 
 /**
- * Runs one test file with the tracer preloaded and collects its leak lines.
+ * `--preload` arguments for the probes the traced file's own member contributes.
+ *
+ * The tracer probes `@veyyon/utils` state and nothing else, deliberately: importing a
+ * heavier package into every traced process risks the diagnostic initialising the very
+ * state it is supposed to observe. So the dependency is inverted. A member that owns
+ * module-global state worth watching drops a `test/helpers/leak-probes.ts` that calls
+ * `registerLeakProbe`, and it is loaded only when tracing a file from that member.
+ * The tracer never learns which members exist.
+ *
+ * Empty when the member has no probes file, which is the common case.
+ */
+function memberProbePreloadArgs(repoRoot: string, member: string): string[] {
+	if (member === "") return [];
+	const probes = path.join(repoRoot, member, "test", "helpers", "leak-probes.ts");
+	return fs.existsSync(probes) ? ["--preload", probes] : [];
+}
+
+/** The `bun` invocation that traces one file. */
+export interface TraceCommand {
+	args: string[];
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+}
+
+/**
+ * The command that runs one test file with the tracer preloaded.
+ *
+ * The process starts in the directory the suite runner uses ({@link runDirectory}) with the
+ * preloads the runner passes every test process, so a traced file sees the configuration its own
+ * run sees.
  *
  * The target is passed as an ABSOLUTE path. A bare relative path is a FILTER to
  * `bun test`, matched against the names of the files it discovers, and discovery
@@ -166,41 +188,51 @@ function packageProbePreloadArgs(repoRoot: string, file: string): string[] {
  * deliberate-leak fixtures live outside the `*.test.ts` glob where an ordinary
  * `bun test <dir>` cannot collect them.
  */
-export function traceFile(repoRoot: string, file: string): FileResult {
-	const run = spawnSync(
-		"bun",
+export function traceCommand(repoRoot: string, file: string): TraceCommand {
+	const member = runDirectory(repoRoot, file);
+	return {
 		// Absolute preload paths: bun resolves a bare relative path as a package
 		// specifier and reports "preload not found".
 		//
-		// Package probes load BEFORE the tracer, because the tracer takes its baseline
+		// Member probes load BEFORE the tracer, because the tracer takes its baseline
 		// snapshot at import and a probe registered afterwards would be absent from the
 		// `before` side and read as a change the moment it first appeared.
-		[
+		args: [
 			"test",
-			"--preload",
-			path.join(repoRoot, TRIPWIRE),
-			...packageProbePreloadArgs(repoRoot, file),
+			...testPreloadArgs,
+			...memberProbePreloadArgs(repoRoot, member),
 			"--preload",
 			path.join(repoRoot, TRACER),
 			path.resolve(repoRoot, file),
 		],
+		cwd: path.join(repoRoot, member),
 		// The tracer reads the file name from the environment because Bun exposes no
 		// current-test path to a hook.
-		{ cwd: repoRoot, encoding: "utf8", env: { ...process.env, [LEAK_FILE_ENV]: file } },
-	);
-	const output = `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
+		env: { ...process.env, [LEAK_FILE_ENV]: file },
+	};
+}
+
+/** The verdict on one traced file, from its exit status and its combined stdout and stderr. */
+export function traceResult(file: string, status: number | null, output: string): FileResult {
 	const leaks = parseLeaks(output);
 	// A non-zero exit with no leak lines means the file failed for its own
 	// reasons. Reported rather than swallowed: a file whose tests do not run
 	// tells this tool nothing about whether it leaks, and calling that "clean"
 	// would be a silent skip.
-	const runnerFailed = run.status !== 0 && leaks.length === 0;
+	const runnerFailed = status !== 0 && leaks.length === 0;
 	return {
 		file,
 		leaks,
 		runnerFailed,
 		...(runnerFailed ? { failure: classifyRunFailure(output), output } : {}),
 	};
+}
+
+/** Runs one test file with the tracer preloaded and collects its leak lines. */
+export function traceFile(repoRoot: string, file: string): FileResult {
+	const { args, cwd, env } = traceCommand(repoRoot, file);
+	const run = spawnSync("bun", args, { cwd, encoding: "utf8", env });
+	return traceResult(file, run.status, `${run.stdout ?? ""}\n${run.stderr ?? ""}`);
 }
 
 /**

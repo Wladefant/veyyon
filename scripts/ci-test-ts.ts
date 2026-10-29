@@ -28,6 +28,7 @@ import {
 } from "../packages/utils/test/helpers/temp-dir-janitor";
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
+import { testPreloadArgs } from "./test-preloads";
 
 export type Mode =
 	| "all"
@@ -60,27 +61,6 @@ const repoRoot = path.join(import.meta.dir, "..");
 // The parent resolves it once, hands it down, and the tripwire uses it to know
 // exactly what to forbid.
 const REAL_CONFIG_ROOT = path.join(os.homedir(), ".veyyon");
-
-// Absolute path to the real-data tripwire preload, passed to every spawned
-// `bun test`. Chunks run with their package directory as cwd, and Bun reads
-// bunfig.toml from the cwd only, so the repository-root preload is invisible from
-// packages/<name>. Relying on the root bunfig alone left every chunk of a real run
-// unprotected, which surfaced when the tripwire's own suite wrote its probe files
-// into the real config root.
-const TRIPWIRE_PRELOAD = path.join(repoRoot, "packages", "utils", "test", "helpers", "real-data-tripwire.ts");
-// The second tripwire: a suite that replaces a provider module process-wide and never restores it
-// answers every later file in the same bucket, so the failure lands on an innocent suite. It fails
-// the test that ends with an override it did not inherit, and puts the inherited value back so one
-// leak is one failure.
-const PROVIDER_OVERRIDE_PRELOAD = path.join(
-	repoRoot,
-	"packages",
-	"ai",
-	"test",
-	"helpers",
-	"provider-override-tripwire.ts",
-);
-const preloadArgs = ["--preload", TRIPWIRE_PRELOAD, "--preload", PROVIDER_OVERRIDE_PRELOAD];
 
 // A disposable HOME handed to every test child. This is PREVENTION, and it is
 // structural rather than advisory: config, credential and session paths are all
@@ -572,7 +552,7 @@ function scriptTestCommand(): TestCommand {
 		command: [
 			"bun",
 			"test",
-			...preloadArgs,
+			...testPreloadArgs,
 			"--parallel=4",
 			"--timeout",
 			"30000",
@@ -721,7 +701,7 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { smol?: b
 		command: [
 			"bun",
 			"test",
-			...preloadArgs,
+			...testPreloadArgs,
 			...(smol ? ["--smol"] : []),
 			`--parallel=${workspaceTestParallelism(pkg, parallel)}`,
 			...perPackageArgs,
@@ -841,7 +821,7 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
+			command: ["bun", "test", ...testPreloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
 		});
 	}
 	return commands;

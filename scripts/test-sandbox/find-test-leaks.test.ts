@@ -34,9 +34,10 @@ import {
 	snapshotGlobals,
 	UNTRACKED_ENV_NAMES,
 } from "../../packages/utils/test/helpers/global-state-leak-tracer";
+import { repoScriptTests, workspaceTestPackages } from "../ci-test-ts";
 import { commandText } from "../runner-references";
-import { packagesWithTests } from "../workspace-layout";
-import { testFilesUnder, traceFile, workspaceSweepRoots } from "./find-test-leaks";
+import { packagesWithTests, typeScriptMembersOf } from "../workspace-layout";
+import { runDirectory, testFilesUnder, traceFile, workspaceSweepRoots } from "./find-test-leaks";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..");
 const LEAKY_FIXTURE = "packages/utils/test/fixtures/leaky-suite.fixture.ts";
@@ -575,4 +576,38 @@ describe("the nightly sweep", () => {
 
 		expect(commands).toContain("bun scripts/test-sandbox/find-test-leaks.ts --workspace");
 	});
+});
+
+/**
+ * Where a traced file runs. Bun reads `bunfig.toml` from the cwd only, and the tracer started every
+ * file from the repository root, so a file ran under the root's configuration instead of its own
+ * member's. A suite under `clients/python/veybot/web` met the root's `pathIgnorePatterns`, matched no
+ * test file and was reported as a file that could not run. The tracer now starts each file where the
+ * suite runner starts it.
+ *
+ * Not caught: a member the runner starts from a directory other than its own, which no list here
+ * would name.
+ */
+describe("the directory a traced file runs from", () => {
+	it("is the directory the suite runner runs that file from", () => {
+		for (const member of [...workspaceTestPackages, "packages/coding-agent"]) {
+			expect(runDirectory(REPO_ROOT, `${member}/test/a.test.ts`)).toBe(member);
+		}
+		for (const file of repoScriptTests) expect(runDirectory(REPO_ROOT, file)).toBe("");
+	});
+
+	it("has one answer for every file, because no member holds another", () => {
+		const members = typeScriptMembersOf(REPO_ROOT);
+		const holding = members.filter(outer => members.some(inner => inner.startsWith(`${outer}/`)));
+
+		// A member inside another member would leave a file two candidate directories, and
+		// `runDirectory` takes the first. Decide which one the runner uses before allowing nesting.
+		expect(holding).toEqual([]);
+	});
+
+	it("starts the traced process there", () => {
+		const result = traceFile(REPO_ROOT, "packages/utils/test/fixtures/runs-from-its-member.fixture.ts");
+
+		expect(result.runnerFailed).toBe(false);
+	}, 60_000);
 });
