@@ -92,6 +92,30 @@ a host shell, images or opaque bytes, or arbitrary host side effects. It does
 not establish that an installed host configured or deployed the SDK options,
 or that shell behavior was exercised end to end.
 
+### Registering a private value
+
+Trusted host code can register one unnamed value with
+`SessionSecretRuntime.registerPrivateSecret(value: string)`. It returns a
+`ProducerSecretOwner` pinned to the immutable lease created by that
+registration. The runtime also installs the new lease as current and carries
+forward known redactions. Registration grants no expansion name or right, and
+does not add the value to the model's named inventory or tool arguments. The
+owner scopes redaction to trusted producer execution; the value itself never
+enters model arguments.
+
+Registration fails closed when the obfuscator would leave the exact value
+unchanged. This rejects inputs of one through five characters, but it is not a
+fixed-length guarantee: acceptance depends on whether the full exact value
+changes under obfuscation. The registered value is known literal text. This
+does not promise detection of arbitrary encodings, transformed values, or
+exfiltration through other host behavior.
+
+The runtime contract is covered by
+[`private-values-stay-redacted-across-leases.test.ts`](../../../packages/coding-agent/test/secrets/private-values-stay-redacted-across-leases.test.ts);
+producer-owner scoping is covered by
+[`producer-secret-owner.test.ts`](../../../packages/coding-agent/test/secrets/producer-secret-owner.test.ts).
+These tests do not establish installed-host or shell end-to-end coverage.
+
 Two modes control what happens to each secret:
 
 | Mode                  | Behavior                                                     | Reversible                                   |

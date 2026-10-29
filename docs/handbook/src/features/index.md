@@ -31,7 +31,7 @@ These add capabilities or change how the agent runs:
 | [Export and import](./export-import.md) | Moving sessions in and out |
 | [Connectors](./connectors.md) | Third-party app integrations |
 | [Approvals](./sandbox.md) | The approval-mode boundary in depth |
-| [Secrets](../architecture/secrets.md) | Credential placeholders, producer-output protection before retention, and reuse at the issue 682 boundary |
+| [Secrets](../architecture/secrets.md) | Credential placeholders, producer-output protection before retention, private value registration, and reuse at the issue 682 boundary |
 | [Code review](./review.md) | Reviewing branches, commits, and uncommitted work |
 | [Non-interactive mode](./exec.md) | Running Veyyon from a script |
 

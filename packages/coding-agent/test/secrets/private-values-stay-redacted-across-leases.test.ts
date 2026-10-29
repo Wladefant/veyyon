@@ -35,44 +35,58 @@ describe("private secret runtime registration", () => {
 	it("pins redaction to each owner and carries private values across refreshes only in redaction", async () => {
 		const fixture = await createRuntime();
 		try {
-			const installed: Array<{ revision: number }> = [];
-			fixture.runtime.attachSession({ installSecretRuntime: lease => installed.push(lease) });
+			const installed: Array<{ revision: number; obfuscateText(text: string): string }> = [];
+			fixture.runtime.attachSession({
+				installSecretRuntime: lease => installed.push(lease),
+				emitNotice: () => {},
+			});
 			const prior = fixture.runtime.lease;
-			const valueA = "synthetic-private-value-alpha-123";
-			const valueB = "synthetic-private-value-bravo-456";
+			const values = [
+				"synthetic-private-value-alpha-123",
+				"ordinary-long-private-value-bravo-456789",
+				"私有の値・秘密-long-value-東京",
+				"private\nvalue\nwith\nembedded\nlines",
+				"shell ; $(printf synthetic) | & > < ` * ? [ ]",
+			];
 
-			const ownerA = fixture.runtime.registerPrivateSecret(valueA);
-			const leaseA = fixture.runtime.lease;
-			const ownerB = fixture.runtime.registerPrivateSecret(valueB);
-			const leaseB = fixture.runtime.lease;
-
-			expect(ownerA.redact(`before ${valueA} after`)).not.toContain(valueA);
-			expect(ownerB.redact(`before ${valueB} after`)).not.toContain(valueB);
-			expect(leaseA.obfuscatePayload({ value: valueA })).not.toEqual({ value: valueA });
-			expect(leaseB.obfuscatePayload({ value: valueB })).not.toEqual({ value: valueB });
-			expect(prior.obfuscateText(valueA)).toBe(valueA);
-			expect(leaseB.expansionObfuscator?.hasNamedSecret("synthetic-private-value-alpha-123")).toBe(false);
-			expect(leaseB.expansionObfuscator?.hasNamedSecret("synthetic-private-value-bravo-456")).toBe(false);
-			expect(leaseB.expansionObfuscator?.obfuscate(valueB)).toBe(valueB);
-			expect(installed).toEqual([{ revision: leaseA.revision }, { revision: leaseB.revision }]);
+			const owners = values.map(value => fixture.runtime.registerPrivateSecret(value));
+			const currentLease = fixture.runtime.lease;
+			for (const [index, value] of values.entries()) {
+				expect(owners[index]!.redact(`before ${value} after`)).not.toContain(value);
+				expect(installed[index]!.obfuscateText(value)).not.toContain(value);
+				expect(currentLease.obfuscateText(value)).not.toContain(value);
+			}
+			expect(prior.obfuscateText(values[0]!)).toBe(values[0]);
+			expect(currentLease.expansionObfuscator?.hasNamedSecret(values[0]!) ?? false).toBe(false);
+			expect(currentLease.expansionObfuscator?.obfuscate(values[0]!) ?? values[0]).toBe(values[0]);
+			expect(installed.map(lease => lease.revision)).toEqual(values.map((_, index) => prior.revision + index + 1));
 
 			await fixture.runtime.refresh(fixture.cwd);
-			expect(fixture.runtime.lease.obfuscateText(valueA)).not.toBe(valueA);
-			expect(fixture.runtime.lease.obfuscateText(valueB)).not.toBe(valueB);
-			expect(fixture.runtime.lease.expansionObfuscator?.obfuscate(valueA)).toBe(valueA);
+			const refreshedLease = fixture.runtime.lease;
+			for (const value of values) {
+				expect(refreshedLease.obfuscateText(value)).not.toContain(value);
+				expect(refreshedLease.expansionObfuscator?.obfuscate(value) ?? value).toBe(value);
+			}
+			expect(currentLease.obfuscateText(values[0]!)).not.toBe(values[0]);
 		} finally {
 			fixture.root.remove();
 		}
 	});
 
-	it("refuses values too short to transform without exposing the input", async () => {
+	it("refuses values too short to transform before execution or vault operations", async () => {
 		const fixture = await createRuntime();
 		try {
-			expect(() => fixture.runtime.registerPrivateSecret("x")).toThrow(
-				"Refusing a private secret value that cannot be safely redacted.",
-			);
+			let executionMarker = false;
+			for (const value of ["x", "ab", "short1", "short2", "short3", "short4", "short5"]) {
+				expect(() => {
+					fixture.runtime.registerPrivateSecret(value);
+					executionMarker = true;
+				}).toThrow("Refusing a private secret value that cannot be safely redacted.");
+				expect(executionMarker).toBe(false);
+			}
 		} finally {
 			fixture.root.remove();
 		}
 	});
 });
+

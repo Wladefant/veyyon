@@ -329,7 +329,7 @@ export class SessionSecretRuntime {
 		if (redactor.obfuscate(value) === value) {
 			throw new Error("Refusing a private secret value that cannot be safely redacted.");
 		}
-		redactor.retainRedactionsFrom(this.#redactionObfuscator ?? new SecretObfuscator([]));
+		if (this.#redactionObfuscator) redactor.retainRedactionsFrom(this.#redactionObfuscator);
 		const revision = ++this.#latestRequest;
 		const lease = this.#createLease({
 			revision,

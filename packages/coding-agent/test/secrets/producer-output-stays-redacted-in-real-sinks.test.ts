@@ -64,6 +64,7 @@ describe("producer output remains redacted in actual downstream sinks", () => {
 		const manager = SessionManager.create(tempDir.path(), tempDir.path());
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("SessionManager did not create a session file");
+		await manager.ensureOnDisk();
 		const obfuscator = new SecretObfuscator([
 			{ type: "plain", origin: "config", content: CANARY, name: "PRODUCER_CANARY" },
 		]);
@@ -96,10 +97,15 @@ describe("producer output remains redacted in actual downstream sinks", () => {
 		expect(JSON.stringify(result)).not.toContain(CANARY);
 		expect(JSON.stringify(updates)).not.toContain(CANARY);
 		expect(JSON.stringify(result)).toContain(PLACEHOLDER);
+
+		const firstKeptEntryId = manager.appendMessage({ role: "user", content: "synthetic input", timestamp: 1 });
 		await persistResult(manager, result);
+		manager.appendCompaction(JSON.stringify(result), undefined, firstKeptEntryId, 1);
+		await manager.flush();
 		const journal = await fs.readFile(sessionFile, "utf8");
 		expect(journal).not.toContain(CANARY);
 		expect(journal).toContain(PLACEHOLDER);
+		expect(journal).toContain('"type":"compaction"');
 
 		const outputPath = path.join(tempDir.path(), "safe.html");
 		await exportFromFile(sessionFile, { outputPath });
@@ -120,6 +126,7 @@ describe("producer output remains redacted in actual downstream sinks", () => {
 		const manager = SessionManager.create(tempDir.path(), tempDir.path());
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("SessionManager did not create a session file");
+		await manager.ensureOnDisk();
 		const original = {
 			name: "synthetic",
 			description: "synthetic output sink test",
@@ -128,9 +135,15 @@ describe("producer output remains redacted in actual downstream sinks", () => {
 		} as unknown as AgentTool;
 		const result = await wrapToolWithMetaNotice(original).execute("synthetic-call", {} as never);
 		expect(JSON.stringify(result)).toContain(CANARY);
+
+		const firstKeptEntryId = manager.appendMessage({ role: "user", content: "synthetic input", timestamp: 1 });
 		await persistResult(manager, result);
+		manager.appendCompaction(JSON.stringify(result), undefined, firstKeptEntryId, 1);
+		await manager.flush();
 		const journal = await fs.readFile(sessionFile, "utf8");
 		expect(journal).toContain(CANARY);
+		expect(journal).toContain('"type":"compaction"');
+
 		const outputPath = path.join(tempDir.path(), "unsafe.html");
 		await exportFromFile(sessionFile, { outputPath });
 		expect(await exportedSnapshot(outputPath)).toContain(CANARY);

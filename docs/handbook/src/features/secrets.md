@@ -792,9 +792,9 @@ Changing the working directory is transactional. Veyyon loads the destination ru
 Secret protection also covers configured credential resources before producer
 output is retained. A host SDK can pass resource paths through
 `protectedCredentialResources` and metadata index paths through
-`protectedCredentialMetadataIndexes`. The SDK protects its existing vault,
-vault, key, and `secrets.yml` paths through their existing path owners. An
-external working-copy integration must provide a metadata adapter; Veyyon does not guess
+`protectedCredentialMetadataIndexes`. The SDK protects its existing vault, key,
+and `secrets.yml` paths through their existing path owners. An external
+working-copy integration must provide a metadata adapter; Veyyon does not guess
 resource names from filenames.
 
 The same-job immutable secret lease is available while output is produced.
@@ -810,6 +810,26 @@ protection for unknown or transformed values, network exfiltration by a host
 shell, images or opaque bytes, or arbitrary host side effects. This documents
 the configured SDK boundary; it does not claim that an installed host has
 configured or deployed it, or that the host shell was exercised end to end.
+
+Trusted host code may also register one unnamed value with
+`SessionSecretRuntime.registerPrivateSecret(value: string)`. Registration
+returns a `ProducerSecretOwner` pinned to the new immutable lease and installs
+that lease as current. Later leases retain the known value for redaction.
+Registration grants no expansion name or right. The value does not enter the
+model's named inventory or tool arguments. The pinned owner scopes redaction
+to trusted producer execution.
+
+Registration refuses a value when obfuscation leaves the full exact value
+unchanged. This rejects values of one through five characters, but it is not
+a fixed-length guarantee. The result depends on whether obfuscation changes
+the exact value. This protection covers known literal values, not arbitrary
+encodings or transformed values.
+
+The runtime contract is tested in
+[`private-values-stay-redacted-across-leases.test.ts`](../../../packages/coding-agent/test/secrets/private-values-stay-redacted-across-leases.test.ts).
+Owner scoping is tested in
+[`producer-secret-owner.test.ts`](../../../packages/coding-agent/test/secrets/producer-secret-owner.test.ts).
+These tests do not prove installed-host configuration or shell end-to-end behavior.
 
 ## What this does not protect
 
