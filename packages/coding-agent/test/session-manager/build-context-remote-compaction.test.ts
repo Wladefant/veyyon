@@ -121,13 +121,34 @@ function sessionEntries(activeModel?: string): SessionEntry[] {
 	];
 }
 
-function defaultAnthropicEntries(): SessionEntry[] {
-	return sessionEntries("anthropic/claude-sonnet-4");
+function codexFallbackEntries(): SessionEntry[] {
+	const entries = sessionEntries("anthropic/claude-sonnet-4");
+	const firstMessage = entries.find((entry): entry is SessionMessageEntry => entry.type === "message");
+	if (!firstMessage) throw new Error("Expected the Codex fallback fixture to have a first message");
+	firstMessage.parentId = "model-1";
+	entries.splice(1, 0, {
+		type: "model_change",
+		id: "model-1",
+		parentId: "model-0",
+		timestamp: "2025-01-01T00:00:01Z",
+		model: "openai-codex/gpt-6.1-sol",
+		role: "fallback",
+	});
+	const compaction = entries.find((entry): entry is CompactionEntry => entry.type === "compaction");
+	if (!compaction?.preserveData) throw new Error("Expected the Codex fallback fixture to have remote data");
+	const remote = compaction.preserveData[REMOTE_COMPACTION_PRESERVE_KEY] as RemoteCompactionPreserveData;
+	compaction.preserveData[REMOTE_COMPACTION_PRESERVE_KEY] = {
+		...remote,
+		provider: "openai-codex",
+		api: "openai-codex-responses",
+		model: "gpt-6.1-sol",
+	};
+	return entries;
 }
 
-test("live provider override replays Codex compaction despite an Anthropic default", () => {
-	const entries = defaultAnthropicEntries();
-	const live = buildSessionContext(entries, undefined, undefined, { activeProvider: "openai" });
+test("live Codex fallback replays compaction despite an Anthropic default", () => {
+	const entries = codexFallbackEntries();
+	const live = buildSessionContext(entries, undefined, undefined, { activeProvider: "openai-codex" });
 	expect(live.messages).toHaveLength(3);
 	expect(summaryMessage(live.messages).providerPayload?.items).toEqual(REMOTE_WINDOW);
 	expect(live.messages[1].role === "user" && live.messages[1].content).toBe("kept turn");
@@ -139,12 +160,13 @@ test("live provider override replays Codex compaction despite an Anthropic defau
 });
 
 test("foreign live provider never replays Codex encrypted data", () => {
-	const entries = defaultAnthropicEntries();
+	const entries = codexFallbackEntries();
 	const foreign = buildSessionContext(entries, undefined, undefined, { activeProvider: "anthropic" });
 	expect(foreign.messages.some(message => message.role === "compactionSummary")).toBe(false);
 	expect(JSON.stringify(foreign.messages)).not.toContain("gAAAAABpM0Yj-fake");
 	expect(foreign.messages.some(message => message.role === "user" && message.content === "turn one")).toBe(true);
 });
+
 
 function getOpenAIModel(): Model {
 	const model = getBundledModel("openai", "gpt-5.1");
