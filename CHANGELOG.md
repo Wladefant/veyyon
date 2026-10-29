@@ -113,6 +113,10 @@
 - The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
+- Ollama Cloud reports a failed, non-JSON or malformed `/api/tags` response through the discovery failure hook as a `request`, `status`, `body` or `payload` failure instead of throwing.
+- Local Ollama discovery takes a model's context window from the `num_ctx` in its `/api/show` parameters ahead of the trained length in `model_info`, as a configured `discovery.type: ollama` endpoint already did, and caps the model's output tokens at that window.
+- Both Ollama providers read capability names case-insensitively, accept a capability map as well as a list, and treat `image` as `vision`.
+- The local Ollama provider and its URL helpers moved from `provider-models/openai-compat` to `provider-models/ollama`; import `ollamaModelManagerOptions`, `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl` from there or from `@veyyon/catalog/provider-models`.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
 - `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
@@ -149,6 +153,7 @@
 
 ### Fixed
 
+- A `discovery.type: ollama` endpoint whose `/api/tags` body is not a model list fails with an error naming the URL instead of a `TypeError`, and a `/api/tags` entry that names no model is skipped instead of failing discovery.
 - Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
 - Fixed the settings card cutting its last category tabs off the sidebar on terminals too short to list them all; the sidebar now scrolls to keep the selected tab in view.
 - A bash block's `$ command` header takes the new theme's colours after a theme change.
@@ -230,6 +235,8 @@
 - Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
 - An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
+- Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
+- Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 - `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.

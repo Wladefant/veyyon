@@ -7,6 +7,15 @@
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- Ollama Cloud reports a failed, non-JSON or malformed `/api/tags` response through the discovery failure hook as a `request`, `status`, `body` or `payload` failure instead of throwing.
+- Local Ollama discovery takes a model's context window from the `num_ctx` in its `/api/show` parameters ahead of the trained length in `model_info`, as a configured `discovery.type: ollama` endpoint already did, and caps the model's output tokens at that window.
+- Both Ollama providers read capability names case-insensitively, accept a capability map as well as a list, and treat `image` as `vision`.
+- The local Ollama provider and its URL helpers moved from `provider-models/openai-compat` to `provider-models/ollama`; import `ollamaModelManagerOptions`, `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl` from there or from `@veyyon/catalog/provider-models`.
+
+### Fixed
+
+- Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
+- Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
 
 ## [1.5.10] - 2026-10-25
 

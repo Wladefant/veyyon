@@ -545,11 +545,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `session/messages.ts`, `extensions/compact-handler.ts` and `extensions/get-commands-handler.ts`)
  * are already here. Measured 2026-10-28 at 1529.
  *
+ * 1529 to 1530: `catalog/src/provider-models/ollama-native.ts`, the one reader of Ollama's `/api/tags`
+ * and `/api/show` that the local and cloud catalog providers and `config/model-discovery.ts`, already
+ * here, each held a copy of. Its runtime imports (`@veyyon/utils/type-guards`, `discovery/failure.ts`,
+ * `model-thinking.ts` and the catalog `utils.ts`) are already here. Measured 2026-10-28 at 1530.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1529;
+const LAUNCH_REACH_CEILING = 1530;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

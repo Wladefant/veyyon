@@ -90,6 +90,7 @@
 
 ### Fixed
 
+- A `discovery.type: ollama` endpoint whose `/api/tags` body is not a model list fails with an error naming the URL instead of a `TypeError`, and a `/api/tags` entry that names no model is skipped instead of failing discovery.
 - Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
 - Fixed the settings card cutting its last category tabs off the sidebar on terminals too short to list them all; the sidebar now scrolls to keep the selected tab in view.
 - A bash block's `$ command` header takes the new theme's colours after a theme change.
