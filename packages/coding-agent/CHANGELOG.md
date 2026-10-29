@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A launch whose extension, command, rule, prompt, tool and hook directories are missing or empty no longer loads the native addon to scan them, so a print-mode turn reaches its first request in 55.9 ms instead of 60.9 ms and exits in 75.0 ms instead of 79.6 ms.
 - A launch with arguments no longer constructs the stdin stream to describe why it skipped the first-frame replay when `VEYYON_REPLAY_DEBUG` is unset, so a print-mode turn exits in 79.3 ms instead of 81.8 ms.
 - A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
 - The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
