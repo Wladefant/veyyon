@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/swarm-extension",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "description": "Swarm orchestration extension for veyyon",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -37,7 +37,7 @@
     "@types/bun": "catalog:"
   },
   "peerDependencies": {
-    "@veyyon/coding-agent": "1.6.6"
+    "@veyyon/coding-agent": "1.6.7"
   },
   "engines": {
     "bun": ">=1.4.3"
