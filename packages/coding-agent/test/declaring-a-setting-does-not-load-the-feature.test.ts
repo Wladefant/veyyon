@@ -128,6 +128,7 @@ describe("registering a slash command does not load its client", () => {
 			join(SRC, "collab", "host.ts"),
 			join(SRC, "collab", "guest.ts"),
 			join(SRC, "collab", "relay-client.ts"),
+			join(REPO_ROOT, "contracts", "wire", "src", "relay-client.ts"),
 		];
 		expect(clients.filter(file => registry.files.has(file))).toEqual([]);
 	});

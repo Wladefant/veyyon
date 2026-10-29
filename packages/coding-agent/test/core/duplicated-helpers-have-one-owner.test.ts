@@ -70,6 +70,9 @@
  *    from a private timer instead of `withScopedTimeoutSignal`; its `toNonEmptyString`, which
  *    `provider-models/openai-compat.ts` kept a copy of after `utils.ts` claimed both copies were gone;
  *    and the hashline path unquoting that `input.ts` repeated from the tokenizer.
+ *  - the collab relay client (ordering, backpressure, reconnect, fatal close codes), which the CLI and
+ *    the browser guest each carried as a whole class until the browser copy had lost backpressure.
+ *    Owned by `@veyyon/wire/relay-client`; each side binds only its frame types and environment.
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
@@ -81,6 +84,7 @@ import { tryReadHeadSha } from "@veyyon/coding-agent/autoresearch/git";
 import { isFirstTokenEvent } from "@veyyon/coding-agent/cli/first-token";
 import * as collabCrypto from "@veyyon/coding-agent/collab/crypto";
 import * as collabProtocol from "@veyyon/coding-agent/collab/protocol";
+import { CollabSocket } from "@veyyon/coding-agent/collab/relay-client";
 import { refreshAfterEachApiKeyResolution } from "@veyyon/coding-agent/config/api-key-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
@@ -101,6 +105,7 @@ import { asStrictBytes } from "@veyyon/utils/bytes";
 import * as logger from "@veyyon/utils/logger";
 import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
 import * as wire from "@veyyon/wire";
+import { RelayClient } from "@veyyon/wire/relay-client";
 
 const SRC = path.join(import.meta.dir, "../../src");
 const REPO_ROOT = path.join(SRC, "../../..");
@@ -421,15 +426,27 @@ describe("the collab wire envelope", () => {
 		expect(collabProtocol.unpackEnvelope).toBe(wire.unpackEnvelope);
 		expect(collabProtocol.rewriteEnvelopePeer).toBe(wire.rewriteEnvelopePeer);
 	});
+});
+
+describe("the collab relay client", () => {
+	/**
+	 * The client half of the relay protocol decides when a frame waits, when a socket reconnects and when a
+	 * close code ends the session. The CLI and the browser guest each had the whole class, and the copies had
+	 * drifted: only the CLI held sends back while the socket's own buffer was full. The behaviour is pinned
+	 * in `contracts/wire/test/relay-client-backpressure.test.ts`; these cells are the lock that neither side
+	 * keeps a class of its own again.
+	 */
+	it("is the wire package's class under the CLI binding", () => {
+		expect(Object.getPrototypeOf(CollabSocket)).toBe(RelayClient);
+	});
 
 	/**
-	 * And the browser guest, which cannot be imported here (it is a browser-graph module in a private
-	 * package), states the same thing as an import edge: its socket packs and unpacks every envelope with
-	 * the wire package's codec. Identity would be better; the edge is what is available, and it is still
-	 * a graph fact rather than a substring.
+	 * The browser guest cannot be imported into this realm (it is a browser-graph module in a private
+	 * package), so it states the same thing as an import edge. That edge also carries the envelope codec
+	 * and the frame seal, which the relay client takes from `@veyyon/wire`.
 	 */
-	it("is what the browser guest imports too", () => {
-		expect(packageImportsOf("clients/web/src/lib/socket.ts")).toContain("@veyyon/wire");
+	it("is what the browser guest binds", () => {
+		expect(packageImportsOf("clients/web/src/lib/socket.ts")).toContain("@veyyon/wire/relay-client");
 	});
 });
 
@@ -537,29 +554,15 @@ describe("the AES-256-GCM frame seal", () => {
 	 * states it again.
 	 */
 	/**
-	 * Driven end to end across the boundary, which is the only assertion that can see a layout drift:
-	 * a GCM tag mismatch cannot distinguish a wrong key from a wrong IV length, so the host sealing and
-	 * the wire package opening (and the reverse) is the statement worth making. The three key helpers
-	 * are the wire package's own function objects, by identity.
+	 * The host keeps no seal of its own: its key helpers are the wire package's function objects, and its
+	 * relay socket seals and opens through the wire package's relay client. The module's whole surface is
+	 * pinned, so a host-side `seal` coming back fails here.
 	 */
-	it("seals on the host and opens through the wire package, and back", async () => {
+	it("is the wire package's on the host, by identity", () => {
 		expect(collabCrypto.generateRoomKey).toBe(wire.generateRoomKey);
 		expect(collabCrypto.importRoomKey).toBe(wire.importRoomKey);
 		expect(collabCrypto.generateWriteToken).toBe(wire.generateWriteToken);
-
-		const key = await collabCrypto.importRoomKey(collabCrypto.generateRoomKey());
-		const frame: collabProtocol.CollabFrame = { t: "hello", proto: 1, name: "guest-1" };
-		const sealed = await collabCrypto.seal(key, frame);
-
-		// 12-byte IV, then ciphertext and the 16-byte GCM tag. A layout change on either side moves this.
-		expect(sealed.byteLength).toBeGreaterThan(12 + 16);
-		expect(await wire.openFrame<collabProtocol.CollabFrame>(key, sealed)).toEqual(frame);
-		expect(await collabCrypto.open(key, await wire.sealFrame(key, frame))).toEqual(frame);
-
-		// A different key does not open it, so the round trip above is authentication and not a no-op.
-		const other = await collabCrypto.importRoomKey(collabCrypto.generateRoomKey());
-
-		await expect(collabCrypto.open(other, sealed)).rejects.toThrow();
+		expect(Object.keys(collabCrypto).sort()).toEqual(["generateRoomKey", "generateWriteToken", "importRoomKey"]);
 	});
 
 	/** And the browser guest states the same edge, since it cannot be imported into this realm. */
