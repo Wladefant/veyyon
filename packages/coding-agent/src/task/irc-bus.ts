@@ -177,7 +177,7 @@ export interface IrcLogEntry {
 interface IrcWaiter {
 	from?: string;
 	/** Native completions already durable when this waiter was armed are replays, not replies. */
-	visibleCompletionIds: ReadonlySet<string>;
+	visibleCompletionIds: Set<string>;
 	resolve: (msg: IrcMessage) => void;
 	cancel: () => void;
 }
