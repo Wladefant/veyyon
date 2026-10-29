@@ -424,11 +424,12 @@ describe("the collab wire envelope", () => {
 
 	/**
 	 * And the browser guest, which cannot be imported here (it is a browser-graph module in a private
-	 * package), states the same thing as an import edge. Identity would be better; the edge is what is
-	 * available, and it is still a graph fact rather than a substring.
+	 * package), states the same thing as an import edge: its socket packs and unpacks every envelope with
+	 * the wire package's codec. Identity would be better; the edge is what is available, and it is still
+	 * a graph fact rather than a substring.
 	 */
 	it("is what the browser guest imports too", () => {
-		expect(packageImportsOf("clients/web/src/lib/link.ts")).toContain("@veyyon/wire");
+		expect(packageImportsOf("clients/web/src/lib/socket.ts")).toContain("@veyyon/wire");
 	});
 });
 
@@ -468,9 +469,9 @@ describe("the collab link grammar", () => {
 		expect(parsed).toEqual({ wsUrl: `wss://relay.example.com:8443/r/${roomId}`, roomId, key, writeToken: token });
 	});
 
-	/** The browser guest, a browser-graph module this realm cannot import, states the same edge. */
+	/** The browser guest's client, a browser-graph module this realm cannot import, parses links through the same edge. */
 	it("is what the browser guest imports too", () => {
-		expect(packageImportsOf("clients/web/src/lib/link.ts")).toEqual(["@veyyon/wire"]);
+		expect(packageImportsOf("clients/web/src/lib/client.ts")).toContain("@veyyon/wire");
 	});
 });
 
