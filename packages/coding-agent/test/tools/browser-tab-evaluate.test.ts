@@ -238,7 +238,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 					<label for="prefixed-secret">Prefixed XHTML password</label>
 					<h:input id="prefixed-secret" type="password" />
 					<label for="xhtml-text">XHTML display</label>
-					<h:input id="xhtml-text" type="text" />
+					<input id="xhtml-text" type="text" />
 				</body>
 			</html>`;
 		const url = `data:application/xhtml+xml;charset=utf-8,${encodeURIComponent(xhtml)}`;
@@ -250,12 +250,16 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 				const prefixedSecret = ['PREFIXED_', 'PASSWORD_SENTINEL'].join('');
 				const ordinaryExpected = ['VISIBLE_', 'XHTML_TEXT_SENTINEL'].join('');
 				await tab.fill('#xhtml-secret', plainSecret);
-				await tab.fill('#prefixed-secret', prefixedSecret);
+				await tab.evaluate(value => {
+					const control = document.querySelector('#prefixed-secret');
+					if (!control) throw new Error('missing prefixed XHTML password');
+					control.setAttribute('value', value);
+				}, prefixedSecret);
 				await tab.fill('#xhtml-text', ordinaryExpected);
 				const seeded = await tab.evaluate(() => ({
 					contentType: document.contentType,
 					plainSecret: document.querySelector('#xhtml-secret')?.value,
-					prefixedSecret: document.querySelector('#prefixed-secret')?.value,
+					prefixedSecret: document.querySelector('#prefixed-secret')?.getAttribute('value'),
 					ordinaryValue: document.querySelector('#xhtml-text')?.value,
 				}));
 				if (
