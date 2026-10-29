@@ -489,6 +489,20 @@ describe("the launch a recording may be replayed onto", () => {
 		expect(launch.written()).toEqual([]);
 	});
 
+	/**
+	 * Reading `process.stdin` constructs the stdin stream, about 2 ms of a launch that never reads
+	 * stdin. The debug arm is the positive control: the same getter sees the read the reason makes.
+	 */
+	it("reads stdin on a command line carrying an argument only to write the debug reason", () => {
+		const launch = bareLaunch();
+		stub(process, "argv", [process.execPath, "veyyon", "-p", "hi"]);
+		const stdin = process.stdin;
+		let reads = 0;
+		const previous = Object.getOwnPropertyDescriptor(process, "stdin");
+		undo.push(() => {
+			if (previous) Object.defineProperty(process, "stdin", previous);
+			else delete (process as { stdin?: unknown }).stdin;
+		});
 		Object.defineProperty(process, "stdin", {
 			configurable: true,
 			get: () => {
