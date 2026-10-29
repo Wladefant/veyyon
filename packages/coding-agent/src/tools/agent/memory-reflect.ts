@@ -5,7 +5,7 @@ import { logger, toError, untilAborted } from "@veyyon/utils";
 import { ensureBankExists } from "../../memory/hindsight/bank";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState, servesMemoryTools } from "./memory-session";
 import { reflectToolView } from "./memory-view";
 
 const memoryReflectSchema = toolSchema("memory_reflect", () =>
@@ -36,9 +36,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryReflectTool | null {
-		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
-		return new MemoryReflectTool(session);
+		return servesMemoryTools(session) ? new MemoryReflectTool(session) : null;
 	}
 
 	async execute(_id: string, params: MemoryReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
@@ -69,10 +67,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 				}
 			}
 
-			const state = this.session.getHindsightSessionState?.();
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+			const state = requireHindsightSessionState(this.session);
 
 			try {
 				await ensureBankExists(state.client, state.bankId, state.config, state.banksSet);

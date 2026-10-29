@@ -7,7 +7,7 @@ import { isNameClaimedByAuthoredSkill } from "../../extensibility/skills";
 import { localBackend } from "../../memory/local-backend";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState } from "./memory-session";
 
 const learnSchema = toolSchema("learn", () =>
 	type({
@@ -94,10 +94,7 @@ export class LearnTool implements AgentTool<typeof learnSchema.value> {
 				throw new Error("Lesson was empty after sanitization; nothing stored.");
 			}
 		} else {
-			const state = this.session.getHindsightSessionState?.();
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+			const state = requireHindsightSessionState(this.session);
 			state.enqueueRetain(params.memory, params.context);
 			memoryMessage = "Lesson queued for retention";
 		}

@@ -10,7 +10,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { abortedPartway } from "../core/aborted-partway";
 import { throwIfAborted } from "../core/tool-errors";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState, servesMemoryTools } from "./memory-session";
 import { retainToolView } from "./memory-view";
 
 const memoryRetainSchema = toolSchema("memory_retain", () =>
@@ -100,9 +100,7 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryRetainTool | null {
-		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
-		return new MemoryRetainTool(session);
+		return servesMemoryTools(session) ? new MemoryRetainTool(session) : null;
 	}
 
 	/**
@@ -150,10 +148,7 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 			};
 		}
 
-		const state = this.session.getHindsightSessionState?.();
-		if (!state) {
-			throw new Error("Hindsight backend is not initialised for this session.");
-		}
+		const state = requireHindsightSessionState(this.session);
 
 		// Atomically enqueue the whole call. A full queue rejects before retaining
 		// any item, rather than reporting a partial success the caller cannot
