@@ -2421,6 +2421,20 @@ function applyProviderTransportOverride<T extends { baseUrl?: string; headers?: 
 	};
 }
 
+/** The OAuth login a registered provider offers to /login. */
+export interface ProviderOAuthConfig {
+	/** Display name in login UI. */
+	name: string;
+	/** Run the provider login flow and return credentials (or a plain API key) to persist. */
+	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
+	/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
+	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
+	/** Convert credentials to an API key string for requests. */
+	getApiKey?(credentials: OAuthCredentials): string;
+	/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */
+	modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
+}
+
 /**
  * Input type for registerProvider API (from extensions).
  */
@@ -2434,13 +2448,7 @@ export interface ProviderConfigInput {
 	authHeader?: boolean;
 	/** Streaming transport override — see {@link Model.transport}. */
 	transport?: Model<Api>["transport"];
-	oauth?: {
-		name: string;
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
-		getApiKey?(credentials: OAuthCredentials): string;
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
+	oauth?: ProviderOAuthConfig;
 	/**
 	 * Async factory that fetches the live model list from the provider endpoint.
 	 * When present, the result is run through the same SQLite model-cache as

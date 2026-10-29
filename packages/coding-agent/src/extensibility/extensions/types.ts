@@ -29,7 +29,6 @@ import type {
 	TextContent,
 	TSchema,
 } from "@veyyon/ai";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/oauth/types";
 import type { HostView } from "@veyyon/kernel/registry/host-view";
 import type * as TypeBox from "@veyyon/kernel/registry/typebox";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "@veyyon/kernel/registry/widget";
@@ -41,7 +40,7 @@ import type { KeyId } from "@veyyon/utils/keys";
 import type { ToolViewRenderer } from "@veyyon/view";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
-import type { ModelRegistry } from "../../config/model-registry";
+import type { ModelRegistry, ProviderOAuthConfig } from "../../config/model-registry";
 import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -1281,18 +1280,7 @@ export interface ProviderConfig {
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
 	/** OAuth provider for /login support. */
-	oauth?: {
-		/** Display name in login UI. */
-		name: string;
-		/** Run the provider login flow and return credentials (or a plain API key) to persist. */
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
-		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
-		/** Convert credentials to an API key string for requests. */
-		getApiKey?(credentials: OAuthCredentials): string;
-		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
+	oauth?: ProviderOAuthConfig;
 	/**
 	 * Async factory that fetches the live model list from the provider endpoint.
 	 * Runs through the same SQLite model-cache as built-in providers (keyed by

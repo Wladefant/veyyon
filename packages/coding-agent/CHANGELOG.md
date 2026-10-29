@@ -10,6 +10,7 @@
 - No user-visible change: the Brave, Firecrawl, Jina, Synthetic, Tavily, TinyFish and Z.AI web search providers no longer export an unused `findApiKey`.
 - No user-visible change: an MCP OAuth refresh and the credential it stores read the token endpoint, client and resource from one `resolveMcpOAuthRefreshTarget`.
 - No user-visible change: prompt templates, file slash commands and the legacy loader's extra templates derive a missing description from one `firstLineDescription`.
+- No user-visible change: the `oauth` hooks of an extension `ProviderConfig` and of `ProviderConfigInput` are one `ProviderOAuthConfig` type.
 - Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
 - A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
 - The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
