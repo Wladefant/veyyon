@@ -100,6 +100,7 @@
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 
 ### Fixed
+- An eval kernel whose runner exits during startup reports `kernel exited with code N` instead of `EPIPE: broken pipe, write` when the init request is written after the runner closed its stdin.
 - A JS eval cell that displays or returns a value holding a cycle shows it with `"[Circular]"` where it loops back, in 41 ms instead of 915 ms, and a value holding a function or symbol shows `"[Function: run]"` or `"Symbol(marker)"` in place; both printed `[object Object]`.
 - A tool block whose arguments hold a cycle states them as `[unserializable]` in 2 µs instead of about 1 s, and arguments carrying code or prose serialize faster, 16.5 µs instead of 28.0 µs for a 50 KB write.
 - The `lsp` diagnostics action and the diagnostics after a write name a language server or linter that failed, with its error, instead of reporting the file clean; a file no server checked is reported as not checked.

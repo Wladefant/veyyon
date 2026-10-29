@@ -750,6 +750,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		try {
 			await this.#writeLine(payload);
 		} catch (err) {
+			// A write breaks when the runner closed its stdin, which it does by exiting. The exit states why
+			// and the broken pipe does not, and the write can lose the race to the exit observer, so the
+			// failure waits for the exit within the shutdown grace: an exit in that window settles this
+			// execution with its exit code before the broken pipe is reported.
+			await this.#waitForExitWithTimeout(this.#options.shutdownGraceMs);
 			pending.cancelled = true;
 			pending.error = {
 				name: "TransportError",
