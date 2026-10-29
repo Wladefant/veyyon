@@ -18,12 +18,16 @@
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
 - `getToolWireSchemaCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/tool-wire-schemas.json`.
+- `getModelReferenceCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/model-references.json`, and `BuildStore` in `@veyyon/utils/build-store` persists values one compiled build computed in one JSON file that only that build reads.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 - `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
 - `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.
 
 ### Changed
 
+- A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
+- The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
+- A launch whose extension, command, rule, prompt, tool and hook directories are missing or empty no longer loads the native addon to scan them, so a print-mode turn reaches its first request in 55.9 ms instead of 60.9 ms and exits in 75.0 ms instead of 79.6 ms.
 - A launch with arguments no longer constructs the stdin stream to describe why it skipped the first-frame replay when `VEYYON_REPLAY_DEBUG` is unset, so a print-mode turn exits in 79.3 ms instead of 81.8 ms.
 - A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
 - The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
@@ -122,6 +126,7 @@
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 - Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
+- The tool wire-schema store is a `BuildStore` from `@veyyon/utils/build-store`, created with `createToolWireSchemaStore(build, filePath)`, and a `cache/tool-wire-schemas.json` in the earlier layout is ignored and rewritten; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
 - Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
@@ -132,6 +137,8 @@
 - `mapAnthropicToolChoice` moved from `stream.ts` to `providers/anthropic-tool-choice.ts` and `OUTPUT_FALLBACK_BUFFER` to `providers/anthropic.ts`, so the Anthropic, GitLab Duo and Kimi Code/Synthetic providers no longer import the stream dispatcher; both names stay exported from `@veyyon/ai`; no user-facing change.
 - `providerFinishErrorMessage` and `PROVIDER_FINISH_ERROR_PATTERN` moved from `error/provider.ts` to `error/classes.ts`, so the turn error domain no longer closes an import cycle through the error classifier; both stay exported from `@veyyon/ai/error`; no user-facing change.
 - xAI OIDC discovery, device-code and token-refresh responses parse their JSON body through one helper; no user-facing change.
+- `resolveBundledModelReference` in a compiled build stores each answer, a bundled model or none, in the profile's `cache/model-references.json` under the build's id, and a later launch of that build reads the answer instead of indexing the catalog's model ids.
+- `bundledCatalogDigest` returns `process.env.VEYYON_CATALOG_DIGEST` when it is set, which the compiled binary defines at build time, instead of reading and hashing `models.json`.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - Ollama Cloud reports a failed, non-JSON or malformed `/api/tags` response through the discovery failure hook as a `request`, `status`, `body` or `payload` failure instead of throwing.
