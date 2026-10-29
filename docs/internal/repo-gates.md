@@ -11,9 +11,9 @@ and covers workspace type checking and linting, Rust formatting and clippy, secr
 commits the change adds, changelog coherence, and the repo script gates.
 
 `ci.yml` is the build and runtime gate on `main`, PRs and release dispatches, entirely on
-GitHub-hosted runners (`ubuntu-22.04`, `macos-14`, and the OS matrix — no self-hosted dependency). It
+GitHub-hosted runners (`ubuntu-22.04`, `macos-14`, `windows-latest`, and the OS matrix — no self-hosted dependency). It
 compiles the product and native addons, runs the full test matrix and the global-state isolation
-check of changed suites, and exercises the installers and CLI runtime. Dispatched at a `v*` tag it also builds the per-platform binaries, verifies their
+check of changed suites, and exercises the installers and CLI runtime. Pushed as a `v*` tag it also builds the per-platform binaries, verifies their
 SHA-256 sidecars and runtime smoke tests, publishes the GitHub release, and redeploys
 `veyyon.dev/changelog`. That is the whole published surface.
 
@@ -50,17 +50,23 @@ because the account's five concurrent macOS slots were being spent four at a tim
 an artifact the commit had not changed. `scripts/install-methods-coverage.test.ts` fails if a monitor
 comes back onto the push path.
 
-## Three coding-agent buckets run two chunks at a time
+## The coding-agent buckets run their chunks side by side
 
 The coding-agent UI, runtime and native buckets share one runner job. Each bucket is split into
 chunks of 5 or 10 files, and each chunk is its own `bun test` process. `ciChunksAtOnce` in
 `codingAgentBucketPlans` (`scripts/ci-test-ts.ts`) sets how many chunk processes of one bucket CI
-runs side by side: two for the UI, runtime and native buckets, one for the singleton bucket.
+runs side by side: two for the UI bucket, three for the runtime and native buckets, one for the
+singleton bucket.
 Run 40581477474 spent 10.9 minutes on the native bucket and 4.3 on the runtime bucket, one chunk
 at a time, in the longest job of the run. The UI bucket took 128 s one chunk at a time and 66 s two
-at a time on four pinned CPUs, with the sum of its chunk times up 5%. The width multiplies the job's
-peak RSS, never one process's. `scripts/no-coding-agent-bucket-runs-as-one-process.test.ts` fails
-when a mode that reaches the singleton bucket runs more than one chunk at a time.
+at a time on four pinned CPUs, with the sum of its chunk times up 5%; at three the sum rose 33%,
+which is contention a frame-timed suite should not run under. On two physical cores (four threads),
+the runtime bucket took 67-72 s at two, 56 s at three and 53 s at four, and the native bucket 151 s
+at two and 118 s at three with a 1.56 GB peak. In run 40827326956 the bucket job was the longest of
+the run at 507 s, 221 s of it the native bucket and 106 s the runtime bucket, both at two. The width
+multiplies the job's peak RSS, never one process's.
+`scripts/no-coding-agent-bucket-runs-as-one-process.test.ts` fails when a mode that reaches the
+singleton bucket runs more than one chunk at a time.
 
 ## Why the changelog gate is push-based
 
@@ -96,4 +102,4 @@ HTML. The `Site` workflow builds the handbook before deploying to Cloudflare Pag
 
 The mdbook version is pinned to v0.5.2. A different version renders content-hashed filenames
 differently, so CI and local builds use the same pinned version.
-*Verified against `bc9b41a845` on 2026-10-27.*
+*Verified against `fb7537bc9` on 2026-10-28.*

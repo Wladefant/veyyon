@@ -172,7 +172,9 @@ export const validModes: Record<Mode, true> = {
 // bucket from 128 s to 66 s with the chunk-time sum up 5%; three took it to 56 s with
 // the sum up 33%, which is contention a frame-timed suite should not run under. The
 // runtime and native buckets mostly wait on child processes, sockets and timers, so
-// two at a time roughly halves them as well.
+// they run three at a time: on two physical cores (four threads) pinned to match
+// that runner, the runtime bucket took 67-72 s at two, 56 s at three and 53 s at
+// four, and the native bucket 151 s at two and 118 s at three with a 1.56 GB peak.
 interface CodingAgentBucketPlan {
 	label: string;
 	parallel: number;
@@ -184,8 +186,8 @@ interface CodingAgentBucketPlan {
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
 	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 2 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
 };
 
 const BUCKET_OF_MODE: Partial<Record<Mode, CodingAgentBucket>> = {
