@@ -163,9 +163,13 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * RE-MEASURED 2026-10-25 at 221: `ai/prompts/tool-choice/any.md` and `ai/prompts/tool-choice/named.md`,
 	 * the request text that asks for a tool call a wire cannot force, reached through `ai/prompts/registry.ts`.
 	 * Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-28 at 222: `catalog/provider-models/ollama-native.ts`, the one reader of Ollama's
+	 * `/api/tags` and `/api/show` answers that the local and cloud catalogs share, reached through
+	 * `catalog/provider-models/ollama.ts`. Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 221 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(221);
+	it("local-llm reaches at most 222 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(222);
 	});
 
 	/**

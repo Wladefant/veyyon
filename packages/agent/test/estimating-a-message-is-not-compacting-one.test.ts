@@ -171,8 +171,13 @@ const PRUNING_CEILING = 197;
  * added. The engine reaches all three through the `@veyyon/utils` barrel and the remote summarizer the
  * first two through `@veyyon/utils/dirs`; every module they import was already on both reaches, so the
  * growth is those files and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 317. The new module is `catalog/provider-models/ollama-native.ts`, the one
+ * reader of Ollama's `/api/tags` and `/api/show` answers that the local and cloud catalogs share, which
+ * `catalog/provider-models/ollama.ts`, already on the engine's reach, imports. Every module it imports was
+ * already reached, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 316;
+const COMPACTION_ENGINE_CEILING = 317;
 const REMOTE_SUMMARIZER_CEILING = 103;
 
 describe("the estimator is a leaf", () => {
