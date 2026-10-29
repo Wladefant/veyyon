@@ -106,9 +106,12 @@
 - The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
 - MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
+- The Streamable HTTP and legacy HTTP+SSE MCP transports send every JSON-RPC message through one `postJsonRpc` with one auth-retry path, and a refreshed credential replaces the transport's headers instead of writing into the configuration object it was created with.
 
 ### Fixed
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
+- Both MCP HTTP transports report a reply to a server request that the server answers with an HTTP error status, instead of dropping it.
+- A Streamable HTTP MCP notification refreshes a rejected credential and retries once, as a request does, and a failed MCP transport POST or legacy SSE connect includes the server's `WWW-Authenticate` and `Mcp-Auth-Server` challenge.
 - A tool call aborted inside a JS eval cell rejects with `ToolAbortError` in the worker, the same error the host raises, instead of a plain `Error` carrying the abort's name.
 - `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.

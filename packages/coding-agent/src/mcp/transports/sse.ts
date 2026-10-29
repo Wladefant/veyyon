@@ -1,9 +1,9 @@
-import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseEvents, Snowflake } from "@veyyon/utils";
 import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
+	JsonRpcNotification,
 	JsonRpcRequest,
 	JsonRpcResponse,
 	MCPRequestOptions,
@@ -13,8 +13,8 @@ import type {
 } from "../types";
 import { answerServerRequest } from "../types";
 import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../unattributable-error";
-import { rebuildMCPToolCallParamsForAttempt } from "./http";
-import { mcpHttpFailureMessage } from "./http-failure";
+import { type JsonRpcPostTarget, postJsonRpc } from "./http";
+import { mcpHttpFailure } from "./http-failure";
 import { reportUndeliveredServerResponse } from "./server-response-delivery";
 import {
 	describeMCPTarget,
@@ -52,6 +52,16 @@ export class LegacySseTransport implements MCPTransport {
 	/** Called on 401/403 to attempt token refresh. Returns updated headers or null. */
 	onAuthError?: () => Promise<Record<string, string> | null>;
 
+	readonly #postTarget: JsonRpcPostTarget = {
+		serverUrl: () => this.#config.url,
+		headers: () => ({ ...JSON_RPC_POST_HEADERS, ...this.#config.headers }),
+		authRefresh: () => this.onAuthError,
+		adoptHeaders: headers => {
+			// Replaced rather than merged into, so the caller's config object is never written.
+			this.#config = { ...this.#config, headers };
+		},
+	};
+
 	constructor(config: MCPSseServerConfig) {
 		this.#config = config;
 	}
@@ -84,10 +94,7 @@ export class LegacySseTransport implements MCPTransport {
 				signal: operation.signal,
 			});
 
-			if (!response.ok) {
-				const text = await response.text();
-				throw new Error(mcpHttpFailureMessage(this.#config.url, response.status, text));
-			}
+			if (!response.ok) throw await mcpHttpFailure(this.#config.url, response);
 			if (!response.body) {
 				throw new Error(mcpEmptyResponseBodyMessage({ url: this.#config.url }));
 			}
@@ -242,12 +249,7 @@ export class LegacySseTransport implements MCPTransport {
 		}
 
 		const id = Snowflake.next();
-		const body = {
-			jsonrpc: "2.0" as const,
-			id,
-			method,
-			params: params ?? {},
-		};
+		const body: JsonRpcRequest = { jsonrpc: "2.0", id, method, params: params ?? {} };
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
 		const operation = createMCPTimeout(timeout, options?.signal);
 		const deferred = Promise.withResolvers<unknown>();
@@ -277,10 +279,6 @@ export class LegacySseTransport implements MCPTransport {
 
 		try {
 			const response = await this.#postJson(body, operation.signal);
-			if (!response.ok) {
-				const text = await response.text();
-				throw new Error(mcpHttpFailureMessage(this.#config.url, response.status, text));
-			}
 			await response.body?.cancel();
 			return (await deferred.promise) as T;
 		} catch (error) {
@@ -302,19 +300,9 @@ export class LegacySseTransport implements MCPTransport {
 		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
 		const operation = createMCPTimeout(timeout);
 		try {
-			const response = await this.#postJson(
-				{
-					jsonrpc: "2.0" as const,
-					method,
-					params: params ?? {},
-				},
-				operation.signal,
-			);
+			const notification: JsonRpcNotification = { jsonrpc: "2.0", method, params: params ?? {} };
+			const response = await this.#postJson(notification, operation.signal);
 			operation.clear();
-			if (!response.ok) {
-				const text = await response.text();
-				throw new Error(mcpHttpFailureMessage(this.#config.url, response.status, text));
-			}
 			await response.body?.cancel();
 		} catch (error) {
 			operation.clear();
@@ -325,38 +313,11 @@ export class LegacySseTransport implements MCPTransport {
 		}
 	}
 
-	async #postJson(
-		body: JsonRpcRequest | JsonRpcResponse | { jsonrpc: "2.0"; method: string; params: Record<string, unknown> },
-		signal?: AbortSignal,
-	): Promise<Response> {
+	/** POST one JSON-RPC message to the endpoint the server announced; see {@link postJsonRpc}. */
+	async #postJson(body: JsonRpcMessage, signal?: AbortSignal): Promise<Response> {
 		const endpointUrl = this.#endpointUrl;
 		if (!endpointUrl) throw new Error(mcpNotConnectedMessage({ url: this.#config.url }, "POST"));
-		const postHeaders = (): Record<string, string> => ({ ...JSON_RPC_POST_HEADERS, ...this.#config.headers });
-		let response = await fetch(endpointUrl, {
-			method: "POST",
-			headers: postHeaders(),
-			body: JSON.stringify(body),
-			signal,
-		});
-		const status = AIError.status(response);
-		if (!this.onAuthError || (status !== 401 && status !== 403)) return response;
-
-		const refreshedHeaders = await this.onAuthError();
-		if (!refreshedHeaders) return response;
-		await response.body?.cancel();
-		this.#config.headers = refreshedHeaders;
-		let retryBody: typeof body = body;
-		if ("params" in body) {
-			const retryParams = await rebuildMCPToolCallParamsForAttempt(body.params);
-			retryBody = { ...body, params: retryParams } as typeof body;
-		}
-		response = await fetch(endpointUrl, {
-			method: "POST",
-			headers: postHeaders(),
-			body: JSON.stringify(retryBody),
-			signal,
-		});
-		return response;
+		return postJsonRpc(this.#postTarget, endpointUrl, body, signal);
 	}
 
 	/**

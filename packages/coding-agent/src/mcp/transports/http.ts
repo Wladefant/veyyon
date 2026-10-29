@@ -4,13 +4,13 @@
  * Implements JSON-RPC 2.0 over HTTP POST with optional SSE streaming.
  * Based on MCP spec 2025-03-26.
  */
-import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseJson, Snowflake } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
+	JsonRpcNotification,
 	JsonRpcRequest,
 	JsonRpcResponse,
 	MCPHttpServerConfig,
@@ -20,7 +20,7 @@ import type {
 	ServerRequestResponse,
 } from "../types";
 import { answerServerRequest } from "../types";
-import { mcpHttpFailureMessage } from "./http-failure";
+import { mcpHttpFailure } from "./http-failure";
 import { reportUndeliveredServerResponse } from "./server-response-delivery";
 import {
 	mcpEmptyResponseBodyMessage,
@@ -68,6 +68,59 @@ export async function rebuildMCPToolCallParamsForAttempt(
 	if (!attemptFactory) return params;
 	return { ...params, arguments: await attemptFactory() };
 }
+
+/** Where {@link postJsonRpc} sends a message, and how it adopts a refreshed credential. */
+export interface JsonRpcPostTarget {
+	/** The configured server URL, which a failure names. */
+	serverUrl(): string;
+	/** The headers of one attempt, read again for the auth retry after {@link adoptHeaders}. */
+	headers(): Record<string, string>;
+	/** The credential refresh to run on a 401 or 403, when the server has one. */
+	authRefresh(): (() => Promise<Record<string, string> | null>) | undefined;
+	/** Keeps refreshed headers for the retry and every later request. */
+	adoptHeaders(headers: Record<string, string>): void;
+	/** Reads each response before its status is judged. */
+	onResponse?(response: Response): void;
+}
+
+async function sendJsonRpc(
+	target: JsonRpcPostTarget,
+	url: string,
+	body: JsonRpcMessage,
+	signal: AbortSignal | undefined,
+): Promise<Response> {
+	const response = await fetch(url, { method: "POST", headers: target.headers(), body: JSON.stringify(body), signal });
+	target.onResponse?.(response);
+	return response;
+}
+
+/**
+ * POST one JSON-RPC message to `url` for either HTTP transport. A 401 or 403 runs the target's
+ * credential refresh once and sends the message again with the refreshed headers, rebuilding
+ * provider-bound tool arguments for the new attempt. A response that is still not OK is thrown as
+ * {@link mcpHttpFailure}, so a caller only ever receives a 2xx response.
+ */
+export async function postJsonRpc(
+	target: JsonRpcPostTarget,
+	url: string,
+	body: JsonRpcMessage,
+	signal: AbortSignal | undefined,
+): Promise<Response> {
+	let response = await sendJsonRpc(target, url, body, signal);
+	const refresh = response.status === 401 || response.status === 403 ? target.authRefresh() : undefined;
+	if (refresh) {
+		const refreshed = await refresh();
+		if (refreshed) {
+			await response.body?.cancel();
+			target.adoptHeaders(refreshed);
+			const retryBody =
+				"params" in body ? { ...body, params: await rebuildMCPToolCallParamsForAttempt(body.params) } : body;
+			response = await sendJsonRpc(target, url, retryBody, signal);
+		}
+	}
+	if (!response.ok) throw await mcpHttpFailure(target.serverUrl(), response);
+	return response;
+}
 /**
  * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
  *
@@ -97,6 +150,20 @@ export class HttpTransport implements MCPTransport {
 	onRequest?: (method: string, params: unknown) => Promise<unknown>;
 	/** Called on 401/403 to attempt token refresh. Returns updated headers or null. */
 	onAuthError?: () => Promise<Record<string, string> | null>;
+
+	readonly #postTarget: JsonRpcPostTarget = {
+		serverUrl: () => this.config.url,
+		headers: () => this.#requestHeaders(JSON_RPC_POST_HEADERS),
+		authRefresh: () => this.onAuthError,
+		adoptHeaders: headers => {
+			// Replaced rather than merged into, so the caller's config object is never written.
+			this.config = { ...this.config, headers };
+		},
+		onResponse: response => {
+			const sessionId = response.headers.get("Mcp-Session-Id");
+			if (sessionId) this.#sessionId = sessionId;
+		},
+	};
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
 
@@ -241,72 +308,18 @@ export class HttpTransport implements MCPTransport {
 		params?: Record<string, unknown>,
 		options?: MCPRequestOptions,
 	): Promise<T> {
-		try {
-			return await this.#executeRequest<T>(method, params, options);
-		} catch (error) {
-			// Retry once on auth failure if onAuthError is wired
-			const status = error instanceof Error ? AIError.status(error) : undefined;
-			if (this.onAuthError && (status === 401 || status === 403)) {
-				const newHeaders = await this.onAuthError();
-				if (newHeaders) {
-					// Persist refreshed headers so subsequent requests use them directly
-					this.config = { ...this.config, headers: newHeaders };
-					const retryParams = await rebuildMCPToolCallParamsForAttempt(params);
-					return this.#executeRequest<T>(method, retryParams, options);
-				}
-			}
-			throw error;
-		}
-	}
-
-	async #executeRequest<T>(
-		method: string,
-		params: Record<string, unknown> | undefined,
-		options: MCPRequestOptions | undefined,
-	): Promise<T> {
 		if (!this.#connected) {
 			throw new Error(mcpNotConnectedMessage({ url: this.config.url }, `request "${method}"`));
 		}
 
 		const id = Snowflake.next();
-		const body = {
-			jsonrpc: "2.0" as const,
-			id,
-			method,
-			params: params ?? {},
-		};
-
-		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
+		const body: JsonRpcRequest = { jsonrpc: "2.0", id, method, params: params ?? {} };
 
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
 		const operation = createMCPTimeout(timeout, options?.signal);
 
 		try {
-			const response = await fetch(this.config.url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal: operation.signal,
-			});
-
-			// Check for session ID in response
-			const newSessionId = response.headers.get("Mcp-Session-Id");
-			if (newSessionId) {
-				this.#sessionId = newSessionId;
-			}
-
-			if (!response.ok) {
-				const text = await response.text();
-				const wwwAuthenticate = response.headers.get("WWW-Authenticate");
-				const mcpAuthServer = response.headers.get("Mcp-Auth-Server");
-				const authHints = [
-					wwwAuthenticate ? `WWW-Authenticate: ${wwwAuthenticate}` : null,
-					mcpAuthServer ? `Mcp-Auth-Server: ${mcpAuthServer}` : null,
-				]
-					.filter(Boolean)
-					.join("; ");
-				throw new Error(mcpHttpFailureMessage(this.config.url, response.status, text, authHints || undefined));
-			}
+			const response = await postJsonRpc(this.#postTarget, this.config.url, body, operation.signal);
 
 			const contentType = response.headers.get("Content-Type") ?? "";
 
@@ -402,54 +415,17 @@ export class HttpTransport implements MCPTransport {
 	 * POST a JSON-RPC response back to the server (for server-to-client requests
 	 * received via SSE).
 	 *
-	 * A failure here used to be swallowed with the comment "best-effort response
-	 * delivery". It is not best-effort from the server's side: the server asked a
-	 * question (a sampling or elicitation request), we did the work to answer it,
-	 * and then dropped the answer on the floor. The server waits on a reply that
-	 * is never coming, and the operator sees an MCP tool that hangs with nothing
-	 * anywhere connecting the hang to the send that failed (Law 10).
-	 *
-	 * Delivery is still not retried beyond the existing auth retry, because a
-	 * dead connection cannot be talked into life from here. What changes is that
-	 * the undelivered reply is reported.
+	 * The server is waiting on this answer, so a reply that does not arrive is
+	 * reported: a send that throws and a send the server answers with a status
+	 * other than 2xx alike. Delivery is retried only by the auth retry of
+	 * {@link postJsonRpc}.
 	 */
 	async #sendServerResponse(body: ServerRequestResponse): Promise<void> {
 		if (!this.#connected) return;
-		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
-		const timeout = resolveMCPTimeoutMs(this.config.timeout);
-		const operation = createMCPTimeout(timeout);
+		const operation = createMCPTimeout(resolveMCPTimeoutMs(this.config.timeout));
 		try {
-			const resp = await fetch(this.config.url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal: operation.signal,
-			});
-			// Retry once on auth failure if onAuthError is wired
-			if (this.onAuthError && (resp.status === 401 || resp.status === 403)) {
-				await resp.body?.cancel();
-				const newHeaders = await this.onAuthError();
-				if (newHeaders) {
-					this.config.headers ??= {};
-					Object.assign(this.config.headers, newHeaders);
-					Object.assign(headers, newHeaders);
-					operation.clear();
-					const retryOperation = createMCPTimeout(timeout);
-					try {
-						const retry = await fetch(this.config.url, {
-							method: "POST",
-							headers,
-							body: JSON.stringify(body),
-							signal: retryOperation.signal,
-						});
-						await retry.body?.cancel();
-					} finally {
-						retryOperation.clear();
-					}
-					return;
-				}
-			}
-			await resp.body?.cancel();
+			const response = await postJsonRpc(this.#postTarget, this.config.url, body, operation.signal);
+			await response.body?.cancel();
 		} catch (sendError) {
 			reportUndeliveredServerResponse({
 				url: this.config.url,
@@ -467,30 +443,14 @@ export class HttpTransport implements MCPTransport {
 			throw new Error(mcpNotConnectedMessage({ url: this.config.url }, `notification "${method}"`));
 		}
 
-		const body = {
-			jsonrpc: "2.0" as const,
-			method,
-			params: params ?? {},
-		};
-
-		const headers = this.#requestHeaders(JSON_RPC_POST_HEADERS);
+		const body: JsonRpcNotification = { jsonrpc: "2.0", method, params: params ?? {} };
 
 		const timeout = resolveMCPTimeoutMs(this.config.timeout);
 		const operation = createMCPTimeout(timeout);
 
 		try {
-			const response = await fetch(this.config.url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal: operation.signal,
-			});
-
-			// 202 Accepted is success for notifications
-			if (!response.ok && response.status !== 202) {
-				const text = await response.text();
-				throw new Error(mcpHttpFailureMessage(this.config.url, response.status, text));
-			}
+			// 202 Accepted is the usual answer to a notification, and a 2xx like any other.
+			const response = await postJsonRpc(this.#postTarget, this.config.url, body, operation.signal);
 
 			// The server may piggyback server-to-client requests or notifications
 			// on the notification response (MCP Streamable HTTP spec). Read them.
