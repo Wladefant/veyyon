@@ -233,6 +233,20 @@ export function filterBySource(tools: DiscoverableTool[], source: DiscoverableTo
 	return tools.filter(t => t.source === source);
 }
 
+/**
+ * The MCP tools among `tools`, as discoverable descriptors in iteration order. Selects by name before
+ * building a descriptor, so the built-in and extension tools of a registry are never described.
+ */
+export function collectMCPTools(tools: Iterable<AgentTool>): DiscoverableTool[] {
+	const mcp: DiscoverableTool[] = [];
+	for (const tool of tools) {
+		if (!isMCPToolName(tool.name)) continue;
+		const meta = getDiscoverableTool(tool);
+		if (meta) mcp.push(meta);
+	}
+	return mcp;
+}
+
 export function formatDiscoverableToolServerSummary(server: DiscoverableToolServerSummary): string {
 	return `${server.name} (${formatCount("tool", server.toolCount)})`;
 }

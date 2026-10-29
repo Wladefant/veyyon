@@ -23,9 +23,9 @@ import { countToolsForAutoDiscovery, type EffectiveToolDiscoveryMode } from "../
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
+	collectMCPTools,
 	type DiscoverableTool,
 	type DiscoverableToolSearchIndex,
-	filterBySource,
 	isMCPToolName,
 	selectDiscoverableToolNamesByServer,
 } from "../../discovery/tool-index";
@@ -105,7 +105,7 @@ export class ToolDiscovery {
 
 	/** Re-read the MCP tools the registry offers, after the registry's MCP entries changed. */
 	reindexMCPTools(): void {
-		const mcpTools = filterBySource(collectDiscoverableTools(this.#host.registry.values()), "mcp");
+		const mcpTools = collectMCPTools(this.#host.registry.values());
 		this.#mcpTools = new Map(mcpTools.map(tool => [tool.name, tool] as const));
 		this.invalidate();
 	}

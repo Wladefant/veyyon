@@ -12,8 +12,8 @@ import { type BucketRulesOptions, bucketRules, type RuleBuckets } from "../disco
 import type { EffectiveToolDiscoveryMode } from "../discovery/mode";
 import {
 	collectDiscoverableTools,
+	collectMCPTools,
 	type DiscoverableTool,
-	filterBySource,
 	formatDiscoverableToolServerSummary,
 	summarizeDiscoverableTools,
 } from "../discovery/tool-index";
@@ -260,7 +260,7 @@ export function promptDiscoverableTools(input: {
 					});
 				})
 			: [];
-	const mcp = input.mcpDiscoveryEnabled ? filterBySource(collectDiscoverableTools(input.tools.values()), "mcp") : [];
+	const mcp = input.mcpDiscoveryEnabled ? collectMCPTools(input.tools.values()) : [];
 	const tools = local.concat(mcp);
 	return {
 		tools,

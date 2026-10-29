@@ -170,12 +170,29 @@ function normalizeTool(
 	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 	const description = tool.description ?? "";
 	const examplesBlock = exampleDialect
-		? renderToolExamples({ ...spec, parameters } as Tool, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
+		? renderToolExamples(exampleTool(spec, parameters), exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 		: "";
 	// Every agent normalizes its own tool list, so an appended examples block would otherwise
 	// leave one copy of each description per live agent.
 	const finalDescription = examplesBlock ? internString(`${description}\n\n${examplesBlock}`) : description;
 	return { ...spec, parameters, description: finalDescription } as Tool;
+}
+
+/**
+ * The tool `renderToolExamples` renders a call of: `spec`, with `parameters` behind an accessor and
+ * supplied again as `wireParameters`. `parameters` is the wire schema already, and `toolWireSchema`
+ * serves a supplied `wireParameters` as it is; handed as a data property it would convert the wire
+ * schema again, and the schema `i` was injected into is a new object on every launch, so no stamp
+ * from an earlier conversion applies.
+ */
+function exampleTool(spec: Record<PropertyKey, unknown>, parameters: TSchema): Tool {
+	return {
+		...spec,
+		get parameters() {
+			return parameters;
+		},
+		wireParameters: parameters as Record<string, unknown>,
+	} as Tool;
 }
 
 /**
