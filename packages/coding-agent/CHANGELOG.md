@@ -112,6 +112,7 @@
 - The stdio, Streamable HTTP and legacy HTTP+SSE MCP transports classify a server's messages through one `routeIncomingMessage`, and the two HTTP transports POST the answer to a server request through one `deliverServerResponse`.
 
 ### Fixed
+- The advisor no longer receives a configured secret written in the primary model's thinking; thinking blocks pass through the secret obfuscator like text and tool arguments.
 - A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
 - Both MCP HTTP transports report a reply to a server request that the server answers with an HTTP error status, instead of dropping it.
