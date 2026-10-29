@@ -44,6 +44,7 @@ const ALLOWED = [
 	"packages/utils/test/fixtures/leaky-suite.fixture.ts",
 	"packages/utils/test/fixtures/profile-leak.fixture.ts",
 	"packages/utils/test/fixtures/restoring-in-afterall.fixture.ts",
+	"packages/utils/test/fixtures/runs-from-its-member.fixture.ts",
 	"packages/utils/test/helpers/global-state-leak-preload.ts",
 	"packages/utils/test/helpers/rss-after-each-file.ts",
 ];
