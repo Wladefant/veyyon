@@ -891,23 +891,9 @@ async function handleSetEnabled(
 	const installedPlugins = new Set((await mktMgr.listInstalledPlugins()).map(p => p.id));
 
 	for (const name of plugins) {
-		if (installedPlugins.has(name)) {
-			try {
-				await mktMgr.setPluginEnabled(name, enabled, flags.scope);
-				if (flags.json) {
-					console.log(JSON.stringify({ [jsonKey]: name }));
-				} else {
-					console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
-				}
-			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${errorMessage(err)}`));
-				process.exit(1);
-			}
-			continue;
-		}
-
 		try {
-			await manager.setEnabled(name, enabled);
+			if (installedPlugins.has(name)) await mktMgr.setPluginEnabled(name, enabled, flags.scope);
+			else await manager.setEnabled(name, enabled);
 			if (flags.json) {
 				console.log(JSON.stringify({ [jsonKey]: name }));
 			} else {

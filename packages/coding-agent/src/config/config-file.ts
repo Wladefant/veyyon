@@ -487,14 +487,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		try {
 			content = fs.readFileSync(this.#resolveReadPath(), "utf-8").trim();
 		} catch (error) {
-			if (isEnoent(error)) {
-				return this.#storeCache({ status: "not-found" });
-			}
-			logger.warn("Failed to read config file", { path: this.path(), error });
-			return this.#storeCache({
-				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }, this.#resolveReadPath()),
-				status: "error",
-			});
+			return this.#readFailed(error);
 		}
 		return this.#parseContent(content);
 	}
@@ -507,16 +500,21 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		try {
 			content = (await Bun.file(this.#resolveReadPath()).text()).trim();
 		} catch (error) {
-			if (isEnoent(error)) {
-				return this.#storeCache({ status: "not-found" });
-			}
-			logger.warn("Failed to read config file", { path: this.path(), error });
-			return this.#storeCache({
-				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }, this.#resolveReadPath()),
-				status: "error",
-			});
+			return this.#readFailed(error);
 		}
 		return this.#parseContent(content);
+	}
+
+	/** The cached result for a file that could not be read: not found when absent, else a read error. */
+	#readFailed(error: unknown): LoadResult<T> {
+		if (isEnoent(error)) {
+			return this.#storeCache({ status: "not-found" });
+		}
+		logger.warn("Failed to read config file", { path: this.path(), error });
+		return this.#storeCache({
+			error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }, this.#resolveReadPath()),
+			status: "error",
+		});
 	}
 
 	load(): T | null {

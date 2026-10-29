@@ -449,21 +449,22 @@ function formatIssueView(data: GhIssueViewData, input: { issue: string; repo?: s
 	pushLine(lines, "Updated", data.updatedAt);
 	pushLine(lines, "Labels", formatLabels(data.labels));
 	pushLine(lines, "URL", data.url);
-	lines.push("");
-	lines.push("## Body");
-	lines.push("");
-	lines.push(normalizeText(data.body) || "No description provided.");
-
-	if ((input.comments ?? true) && data.comments) {
-		const commentSection = formatCommentsSection(data.comments);
-		if (commentSection.length > 0) {
-			lines.push("");
-			const cs = commentSection;
-			for (let li = 0; li < cs.length; li++) lines.push(cs[li]!);
-		}
-	}
+	pushBody(lines, data.body);
+	if ((input.comments ?? true) && data.comments) pushSection(lines, formatCommentsSection(data.comments));
 
 	return lines.join("\n").trim();
+}
+
+/** The `## Body` block, with a stand-in line for an empty body. */
+function pushBody(lines: string[], body: string | null | undefined): void {
+	lines.push("", "## Body", "", normalizeText(body) || "No description provided.");
+}
+
+/** Append `section` after a blank line; an empty section appends nothing. */
+function pushSection(lines: string[], section: readonly string[]): void {
+	if (section.length === 0) return;
+	lines.push("");
+	for (const line of section) lines.push(line);
 }
 
 function formatPrFiles(files: GhPrFile[] | undefined): string[] {
@@ -500,44 +501,12 @@ function formatPrView(data: GhPrViewData, input: { pr?: string; repo?: string; c
 	pushLine(lines, "Updated", data.updatedAt);
 	pushLine(lines, "Labels", formatLabels(data.labels));
 	pushLine(lines, "URL", data.url);
-	lines.push("");
-	lines.push("## Body");
-	lines.push("");
-	lines.push(normalizeText(data.body) || "No description provided.");
-
-	const fileSection = formatPrFiles(data.files);
-	if (fileSection.length > 0) {
-		lines.push("");
-		const fs = fileSection;
-		for (let li = 0; li < fs.length; li++) lines.push(fs[li]!);
-	}
-
-	if ((input.comments ?? true) && data.reviews) {
-		const reviewSection = formatReviewsSection(data.reviews);
-		if (reviewSection.length > 0) {
-			lines.push("");
-			const rs = reviewSection;
-			for (let li = 0; li < rs.length; li++) lines.push(rs[li]!);
-		}
-	}
-
-	if ((input.comments ?? true) && data.reviewComments) {
-		const reviewCommentsSection = formatReviewCommentsSection(data.reviewComments);
-		if (reviewCommentsSection.length > 0) {
-			lines.push("");
-			const rcs = reviewCommentsSection;
-			for (let li = 0; li < rcs.length; li++) lines.push(rcs[li]!);
-		}
-	}
-
-	if ((input.comments ?? true) && data.comments) {
-		const commentSection = formatCommentsSection(data.comments);
-		if (commentSection.length > 0) {
-			lines.push("");
-			const cs = commentSection;
-			for (let li = 0; li < cs.length; li++) lines.push(cs[li]!);
-		}
-	}
+	pushBody(lines, data.body);
+	pushSection(lines, formatPrFiles(data.files));
+	const withComments = input.comments ?? true;
+	if (withComments && data.reviews) pushSection(lines, formatReviewsSection(data.reviews));
+	if (withComments && data.reviewComments) pushSection(lines, formatReviewCommentsSection(data.reviewComments));
+	if (withComments && data.comments) pushSection(lines, formatCommentsSection(data.comments));
 
 	return lines.join("\n").trim();
 }

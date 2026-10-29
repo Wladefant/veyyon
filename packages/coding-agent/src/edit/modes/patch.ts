@@ -606,6 +606,24 @@ function getHunkHintIndex(hunk: DiffHunk, currentIndex: number): number | undefi
 }
 
 /**
+ * The innermost context part searched again from the hunk's line hint, as a single match. Undefined
+ * without a hint, with a hint behind `searchStart`, or when nothing matches from the hint on.
+ */
+function matchFromLineHint(
+	lines: string[],
+	part: string,
+	lineHint: number | undefined,
+	searchStart: number,
+	allowFuzzy: boolean,
+): ContextLineResult | undefined {
+	if (lineHint === undefined) return undefined;
+	const hintStart = Math.max(0, lineHint - 1);
+	if (hintStart < searchStart) return undefined;
+	const hinted = findContextLine(lines, part, hintStart, { allowFuzzy });
+	return hinted.index === undefined ? undefined : { ...hinted, matchCount: 1, matchIndices: [hinted.index] };
+}
+
+/**
  * Find hierarchical context in file lines.
  *
  * Handles three formats:
@@ -637,15 +655,8 @@ function findHierarchicalContext(
 			const result = findContextLine(lines, part, currentStart, { allowFuzzy });
 
 			if (result.matchCount !== undefined && result.matchCount > 1) {
-				if (isLast && lineHint !== undefined) {
-					const hintStart = Math.max(0, lineHint - 1);
-					if (hintStart >= currentStart) {
-						const hintedResult = findContextLine(lines, part, hintStart, { allowFuzzy });
-						if (hintedResult.index !== undefined) {
-							return { ...hintedResult, matchCount: 1, matchIndices: [hintedResult.index] };
-						}
-					}
-				}
+				const hinted = isLast ? matchFromLineHint(lines, part, lineHint, currentStart, allowFuzzy) : undefined;
+				if (hinted) return hinted;
 				return {
 					index: undefined,
 					confidence: result.confidence,
@@ -656,16 +667,8 @@ function findHierarchicalContext(
 			}
 
 			if (result.index === undefined) {
-				if (isLast && lineHint !== undefined) {
-					const hintStart = Math.max(0, lineHint - 1);
-					if (hintStart >= currentStart) {
-						const hintedResult = findContextLine(lines, part, hintStart, { allowFuzzy });
-						if (hintedResult.index !== undefined) {
-							return { ...hintedResult, matchCount: 1, matchIndices: [hintedResult.index] };
-						}
-					}
-				}
-				return { index: undefined, confidence: result.confidence };
+				const hinted = isLast ? matchFromLineHint(lines, part, lineHint, currentStart, allowFuzzy) : undefined;
+				return hinted ?? { index: undefined, confidence: result.confidence };
 			}
 
 			if (isLast) {
