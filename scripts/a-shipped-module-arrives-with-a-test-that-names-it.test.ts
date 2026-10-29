@@ -256,7 +256,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/utils/github-copilot-http.ts",
 	"packages/ai/src/utils/openrouter-headers.ts",
 	"packages/ai/src/utils/parse-bind.ts",
-	"packages/ai/src/utils/provider-fetch.ts",
 	"packages/ai/src/utils/schema/adapt.ts",
 	"packages/ai/src/utils/schema/dereference.ts",
 	"packages/ai/src/utils/schema/equality.ts",
