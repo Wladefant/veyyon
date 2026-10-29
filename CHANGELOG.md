@@ -22,6 +22,8 @@
 ### Changed
 
 - The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
+- No user-visible change: an abort inside the rust-analyzer workspace wait returns from `waitForProjectLoaded`, as it does for every other server, instead of throwing when it lands between two `analyzerStatus` polls.
+- No user-visible change: the collab guest, eval executor, markit registry, launch client, MCP stdio transport, RPC prompt result, extension send, TTS client, IRC tool and memory tools coerce a thrown value with `toError` from `@veyyon/utils` instead of nineteen inline copies.
 - Diagnostics after an edit or write are reported when the language server publishes them instead of at the next 100ms poll, so a server that answers in 50ms reports in 51ms instead of 101ms, or in 301ms instead of 402ms when it does not echo the document version.
 - No user-visible change: ZIP central-directory reads, config-file read failures, LSP severity counts, patch line-hint matching, SQLite row updates, GitHub issue and pull request body sections, eval import rewriting, plugin enable and disable, QR penalty scoring and autoresearch loop entry each run through one helper instead of two or three copies.
 - A modal card keeps its padding from 29 rows for large cards and 27 rows for medium and settings cards, instead of 39, 33 and 31, so cards on terminals 27 to 38 rows tall show up to four more list rows.
@@ -111,6 +113,7 @@
 - The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
 - MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
+- SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
 - Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
 - Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
@@ -127,10 +130,12 @@
 - Both Ollama providers read capability names case-insensitively, accept a capability map as well as a list, and treat `image` as `vision`.
 - The local Ollama provider and its URL helpers moved from `provider-models/openai-compat` to `provider-models/ollama`; import `ollamaModelManagerOptions`, `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl` from there or from `@veyyon/catalog/provider-models`.
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
+- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
 - `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
 - The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
+- No user-visible change: the resource hook and the request drawer coerce a failed fetch with `toError` from `@veyyon/utils/type-guards` instead of inline copies.
 - No user-visible change: the Models and Tools charts take their legend and tooltip from `buildSharedPlugins`, and the Behavior and Costs charts build their line and bar configs with `timeChartData` and `timeChartOptions` instead of two copies.
 - No user-visible change: the dashboard imports `JsonBlock` and `StatusPill` from `@veyyon/tool-render` instead of two one-line re-export modules in `client/ui`.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
@@ -150,6 +155,7 @@
 - Esc and Ctrl+C paint on the next frame unless their handler arms a double-press window through the new `TUI.holdFrameForInput()`, which replaces the engine's one-frame hold on every Esc and Ctrl+C.
 - A key press lets the frame its handler requests and the next one skip the 30 fps cadence, and pulls forward a frame already waiting out the cadence, so an answer a handler awaits paints without an extra frame interval.
 - `FramePacer`'s comments in `core/frame-pacing.ts` are shorter, keeping the module under its size ceiling; behavior is unchanged.
+- The log file and the postmortem handlers coerce a thrown value with `toError` from `type-guards` instead of a private `asError` and four inline copies; no user-facing change.
 - `sgrCarryAfter` reads SGR parameters in place instead of through a regular expression and a split; no user-facing change.
 - `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
 - The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
