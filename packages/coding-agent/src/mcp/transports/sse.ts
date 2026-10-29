@@ -1,21 +1,24 @@
 import { isAbortError, logger, readSseEvents, Snowflake } from "@veyyon/utils";
+import {
+	describeJsonRpcError,
+	type IncomingMessageRoutes,
+	rejectAllPending,
+	reportUnattributableError,
+	routeIncomingMessage,
+} from "../incoming-message";
 import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
 	JsonRpcNotification,
 	JsonRpcRequest,
-	JsonRpcResponse,
 	MCPRequestOptions,
 	MCPSseServerConfig,
 	MCPTransport,
-	ServerRequestResponse,
 } from "../types";
 import { answerServerRequest } from "../types";
-import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../unattributable-error";
-import { type JsonRpcPostTarget, postJsonRpc } from "./http";
+import { deliverServerResponse, type JsonRpcPostTarget, postJsonRpc } from "./http";
 import { mcpHttpFailure } from "./http-failure";
-import { reportUndeliveredServerResponse } from "./server-response-delivery";
 import {
 	describeMCPTarget,
 	mcpEmptyResponseBodyMessage,
@@ -59,6 +62,35 @@ export class LegacySseTransport implements MCPTransport {
 		adoptHeaders: headers => {
 			// Replaced rather than merged into, so the caller's config object is never written.
 			this.#config = { ...this.#config, headers };
+		},
+	};
+
+	readonly #incoming: IncomingMessageRoutes = {
+		server: () => this.#config.url,
+		response: response => {
+			const pending = this.#pending.get(response.id);
+			if (!pending) return;
+			this.#pending.delete(response.id);
+			this.#release(pending);
+			if (response.error) pending.reject(new Error(describeJsonRpcError(response.error)));
+			else pending.resolve(response.result);
+		},
+		serverRequest: request => {
+			void answerServerRequest(this.onRequest, request).then(answer => {
+				const endpointUrl = this.#endpointUrl;
+				if (!this.#connected || !endpointUrl) return;
+				return deliverServerResponse(
+					this.#postTarget,
+					endpointUrl,
+					answer,
+					resolveMCPTimeoutMs(this.#config.timeout),
+				);
+			});
+		},
+		notification: (method, params) => this.onNotification?.(method, params),
+		unattributableError: error => {
+			const failed = rejectAllPending(this.#pending, error, request => this.#release(request));
+			this.onError?.(reportUnattributableError(this.#config.url, error, failed));
 		},
 	};
 
@@ -163,11 +195,7 @@ export class LegacySseTransport implements MCPTransport {
 					throw error;
 				}
 
-				const messages = Array.isArray(payload) ? payload : [payload];
-				for (const message of messages) {
-					if (typeof message !== "object" || message === null) continue;
-					this.#dispatchMessage(message as JsonRpcMessage);
-				}
+				routeIncomingMessage(payload, this.#incoming);
 			}
 			if (!endpointReceived) {
 				endpointReady.reject(
@@ -189,53 +217,6 @@ export class LegacySseTransport implements MCPTransport {
 			if (endpointReceived) {
 				this.#rejectPending(new Error(mcpStreamClosedMessage({ url: this.#config.url }, "its SSE stream ended")));
 			}
-		}
-	}
-
-	#dispatchMessage(message: JsonRpcMessage): void {
-		// An error the server could not attribute to a request (`"id": null`), which the spec
-		// requires for a parse error. `this.#pending.get(null)` misses, so it used to fall past
-		// every branch below and be dropped, and each caller waited out its timeout and reported
-		// that the server had not answered. The connection cannot parse what we send, so every
-		// request on it is dead.
-		if (isUnattributableError(message)) {
-			const error = message.error as { code: number; message: string };
-			const failed = rejectAllPending(this.#pending, error, request => {
-				request.operation.clear();
-				if (request.abortHandler) request.operation.signal?.removeEventListener("abort", request.abortHandler);
-			});
-			logger.warn("MCP server reported an error it could not attribute to a request", {
-				server: this.#config.url,
-				code: error.code,
-				message: error.message,
-				failedRequests: failed,
-			});
-			this.onError?.(new Error(describeJsonRpcError(error)));
-			return;
-		}
-		if ("id" in message && message.id != null && ("result" in message || "error" in message)) {
-			const pending = this.#pending.get(message.id);
-			if (pending) {
-				this.#pending.delete(message.id);
-				pending.operation.clear();
-				if (pending.abortHandler) pending.operation.signal?.removeEventListener("abort", pending.abortHandler);
-				const response = message as JsonRpcResponse;
-				if (response.error) {
-					pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
-				} else {
-					pending.resolve(response.result);
-				}
-				return;
-			}
-		}
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(body =>
-				this.#sendServerResponse(body),
-			);
-			return;
-		}
-		if ("method" in message && !("id" in message)) {
-			this.onNotification?.(message.method, message.params);
 		}
 	}
 
@@ -283,8 +264,7 @@ export class LegacySseTransport implements MCPTransport {
 			return (await deferred.promise) as T;
 		} catch (error) {
 			this.#pending.delete(id);
-			operation.clear();
-			if (pending.abortHandler) operation.signal?.removeEventListener("abort", pending.abortHandler);
+			this.#release(pending);
 			if (operation.isTimeoutAbort(error)) {
 				throw new Error(mcpTimeoutMessage({ url: this.#config.url }, `request "${method}"`, timeout));
 			}
@@ -320,37 +300,16 @@ export class LegacySseTransport implements MCPTransport {
 		return postJsonRpc(this.#postTarget, endpointUrl, body, signal);
 	}
 
-	/**
-	 * POST a JSON-RPC response back to the server.
-	 *
-	 * Same contract, and same fix, as the streamable-HTTP transport: a dropped
-	 * reply leaves the server waiting on an answer we computed and discarded, so
-	 * the undelivered reply is reported rather than swallowed (Law 10).
-	 */
-	async #sendServerResponse(body: ServerRequestResponse): Promise<void> {
-		if (!this.#connected) return;
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
-		const operation = createMCPTimeout(timeout);
-		try {
-			const response = await this.#postJson(body, operation.signal);
-			operation.clear();
-			await response.body?.cancel();
-		} catch (sendError) {
-			operation.clear();
-			reportUndeliveredServerResponse({
-				url: this.#config.url,
-				requestId: body.id,
-				kind: body.error ? "error" : "result",
-				cause: sendError,
-			});
-		}
+	/** Stop one in-flight request's timer and abort listener; the caller has taken it out of the map. */
+	#release(pending: PendingLegacySseRequest): void {
+		pending.operation.clear();
+		if (pending.abortHandler) pending.operation.signal?.removeEventListener("abort", pending.abortHandler);
 	}
 
 	#rejectPending(error: Error): void {
 		for (const [id, pending] of this.#pending) {
 			this.#pending.delete(id);
-			pending.operation.clear();
-			if (pending.abortHandler) pending.operation.signal?.removeEventListener("abort", pending.abortHandler);
+			this.#release(pending);
 			pending.reject(error);
 		}
 	}

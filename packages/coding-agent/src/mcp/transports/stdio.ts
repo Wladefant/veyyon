@@ -21,18 +21,17 @@ import { RingBuffer } from "@veyyon/utils/ring";
 import type { Subprocess } from "bun";
 import { hostHasInheritableConsole } from "../../eval/py/spawn-options";
 import { buildMcpChildEnv } from "../child-environment";
+import {
+	describeJsonRpcError,
+	type IncomingMessageRoutes,
+	rejectAllPending,
+	reportIgnoredMessage,
+	reportUnattributableError,
+	routeIncomingMessage,
+} from "../incoming-message";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
-import type {
-	JsonRpcMessage,
-	JsonRpcRequest,
-	JsonRpcResponse,
-	MCPRequestOptions,
-	MCPStdioServerConfig,
-	MCPTransport,
-	ServerRequestResponse,
-} from "../types";
+import type { MCPRequestOptions, MCPStdioServerConfig, MCPTransport, ServerRequestResponse } from "../types";
 import { answerServerRequest, toJsonRpcError } from "../types";
-import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../unattributable-error";
 import { terminateMcpServerTree } from "./process-tree";
 import { mcpNotConnectedMessage, mcpTimeoutMessage } from "./transport-failure";
 
@@ -493,21 +492,13 @@ export class StdioTransport implements MCPTransport {
 			for await (const line of readJsonl(this.#process.stdout)) {
 				if (!this.#connected) break;
 				try {
-					this.#handleMessage(line as JsonRpcMessage);
+					routeIncomingMessage(line, this.#incoming);
 				} catch (error) {
 					// A dropped line is not always harmless: if it was the RESPONSE to a
 					// pending request, that request now waits until its timeout with no
-					// explanation, and the operator sees an MCP tool that hangs. The
-					// loop still continues, because one bad line should not kill a
-					// working server, but the line no longer disappears (Law 10).
-					logger.warn("Ignored an unreadable message from an MCP server", {
-						server: this.config.command,
-						error: errorMessage(error),
-						// Truncated: a server can emit an arbitrarily large line, and the log
-						// is for identifying WHICH message was lost, not for reproducing it.
-						line: truncate(String(JSON.stringify(line) ?? line), 500),
-						fix: "If a tool call from this server hangs, this is likely why. Check the server's own logs.",
-					});
+					// explanation. The loop continues, because one bad line should not
+					// kill a working server, but the line is reported.
+					reportIgnoredMessage(this.config.command, line, errorMessage(error));
 				}
 			}
 		} catch (error) {
@@ -562,58 +553,24 @@ export class StdioTransport implements MCPTransport {
 		}
 	}
 
-	#handleMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
-		if (Array.isArray(message)) {
-			for (const m of message) this.#handleMessage(m);
-			return;
-		}
-		// An error the server could not attribute to a request (`"id": null`), which the spec
-		// requires for a parse error. It used to fall past every branch below and be dropped, so
-		// each caller waited out its timeout and reported that the server had not answered. The
-		// connection cannot parse what we send, so every request on it is dead.
-		if (isUnattributableError(message)) {
-			const error = message.error as { code: number; message: string };
+	readonly #incoming: IncomingMessageRoutes = {
+		server: () => this.config.command,
+		response: response => {
+			const pending = this.#pendingRequests.get(response.id);
+			if (!pending) return;
+			this.#pendingRequests.delete(response.id);
+			if (response.error) pending.reject(new Error(describeJsonRpcError(response.error)));
+			else pending.resolve(response.result);
+		},
+		serverRequest: request => {
+			void answerServerRequest(this.onRequest, request).then(answer => this.#sendResponse(answer));
+		},
+		notification: (method, params) => this.onNotification?.(method, params),
+		unattributableError: error => {
 			const failed = rejectAllPending(this.#pendingRequests, error);
-			logger.warn("MCP server reported an error it could not attribute to a request", {
-				server: this.config.command,
-				code: error.code,
-				message: error.message,
-				failedRequests: failed,
-			});
-			this.onError?.(new Error(describeJsonRpcError(error)));
-			return;
-		}
-
-		// Server-to-client request: has both method and id
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(response =>
-				this.#sendResponse(response),
-			);
-			return;
-		}
-
-		// Response to our request: has id
-		if ("id" in message && message.id != null) {
-			const response = message as JsonRpcResponse;
-			const responseId = response.id as string | number;
-			const pending = this.#pendingRequests.get(responseId);
-			if (pending) {
-				this.#pendingRequests.delete(responseId);
-				if (response.error) {
-					pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
-				} else {
-					pending.resolve(response.result);
-				}
-			}
-			return;
-		}
-
-		// Notification: has method but no id
-		if ("method" in message) {
-			const notification = message as { method: string; params?: unknown };
-			this.onNotification?.(notification.method, notification.params);
-		}
-	}
+			this.onError?.(reportUnattributableError(this.config.command, error, failed));
+		},
+	};
 
 	#sendResponse(response: ServerRequestResponse): void {
 		if (!this.#connected || !this.#process?.stdin) return;

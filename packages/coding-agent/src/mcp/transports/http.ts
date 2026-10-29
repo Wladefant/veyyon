@@ -6,6 +6,12 @@
  */
 import { isAbortError, logger, readSseJson, Snowflake } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
+import {
+	describeJsonRpcError,
+	type IncomingMessageRoutes,
+	reportUnattributableError,
+	routeIncomingMessage,
+} from "../incoming-message";
 import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
@@ -121,6 +127,36 @@ export async function postJsonRpc(
 	if (!response.ok) throw await mcpHttpFailure(target.serverUrl(), response);
 	return response;
 }
+
+/**
+ * POST the answer to a server-to-client request back to the server, for either HTTP transport.
+ *
+ * The server is waiting on this answer, so a reply that does not arrive is reported: a send that
+ * throws and a send the server answers with a status other than 2xx alike. Delivery is retried
+ * only by the auth retry of {@link postJsonRpc}.
+ */
+export async function deliverServerResponse(
+	target: JsonRpcPostTarget,
+	url: string,
+	body: ServerRequestResponse,
+	timeoutMs: number,
+): Promise<void> {
+	const operation = createMCPTimeout(timeoutMs);
+	try {
+		const response = await postJsonRpc(target, url, body, operation.signal);
+		await response.body?.cancel();
+	} catch (cause) {
+		reportUndeliveredServerResponse({
+			url: target.serverUrl(),
+			requestId: body.id,
+			kind: body.error ? "error" : "result",
+			cause,
+		});
+	} finally {
+		operation.clear();
+	}
+}
+
 /**
  * Best-effort startup deadline for the optional Streamable HTTP GET SSE listener.
  *
@@ -163,6 +199,27 @@ export class HttpTransport implements MCPTransport {
 			const sessionId = response.headers.get("Mcp-Session-Id");
 			if (sessionId) this.#sessionId = sessionId;
 		},
+	};
+
+	/** Messages on the GET stream, and those a request's response stream does not take for itself. */
+	readonly #incoming: IncomingMessageRoutes = {
+		server: () => this.config.url,
+		// A response travels on the stream of the POST that sent its request; one arriving anywhere
+		// else answers nothing this client is waiting on.
+		response: () => {},
+		serverRequest: request => {
+			void answerServerRequest(this.onRequest, request).then(answer => {
+				if (!this.#connected) return;
+				return deliverServerResponse(
+					this.#postTarget,
+					this.config.url,
+					answer,
+					resolveMCPTimeoutMs(this.config.timeout),
+				);
+			});
+		},
+		notification: (method, params) => this.onNotification?.(method, params),
+		unattributableError: error => this.onError?.(reportUnattributableError(this.config.url, error, 0)),
 	};
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
@@ -270,36 +327,18 @@ export class HttpTransport implements MCPTransport {
 			if (wasConnected) this.onClose?.();
 		});
 	}
+
 	async #readSSEStream(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
 		try {
-			for await (const message of readSseJson<JsonRpcMessage>(body, signal)) {
+			for await (const message of readSseJson<unknown>(body, signal)) {
 				if (!this.#connected) break;
-				this.#dispatchSSEMessage(message);
+				routeIncomingMessage(message, this.#incoming);
 			}
 		} catch (error) {
 			if (error instanceof Error && !isAbortError(error)) {
 				logger.debug("HTTP SSE stream error", { url: this.config.url, error: error.message });
 				this.onError?.(error);
 			}
-		}
-	}
-
-	/** Route an SSE message (or batch) to the appropriate handler. */
-	#dispatchSSEMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
-		if (Array.isArray(message)) {
-			for (const m of message) this.#dispatchSSEMessage(m);
-			return;
-		}
-		// Server-to-client request: has both method and id
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(body =>
-				this.#sendServerResponse(body),
-			);
-			return;
-		}
-		// Notification: has method but no id
-		if ("method" in message && !("id" in message)) {
-			this.onNotification?.(message.method, message.params);
 		}
 	}
 
@@ -332,7 +371,7 @@ export class HttpTransport implements MCPTransport {
 			const result = (await response.json()) as JsonRpcResponse;
 
 			if (result.error) {
-				throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
+				throw new Error(describeJsonRpcError(result.error));
 			}
 
 			return result.result as T;
@@ -357,6 +396,33 @@ export class HttpTransport implements MCPTransport {
 
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
 		let captured = false;
+		const settle = (outcome: () => void): void => {
+			captured = true;
+			operation.clear();
+			outcome();
+		};
+		// This stream carries the answer to one request. An error that names no request answers that
+		// one, as the same error in a JSON body does; every other message goes where the GET stream's
+		// would, while this client is still connected.
+		const routes: IncomingMessageRoutes = {
+			server: this.#incoming.server,
+			response: response => {
+				if (captured || response.id !== expectedId) return;
+				settle(() =>
+					response.error ? reject(new Error(describeJsonRpcError(response.error))) : resolve(response.result as T),
+				);
+			},
+			serverRequest: request => {
+				if (this.#connected) this.#incoming.serverRequest(request);
+			},
+			notification: (method, params) => {
+				if (this.#connected) this.#incoming.notification(method, params);
+			},
+			unattributableError: error => {
+				if (!captured) settle(() => reject(new Error(describeJsonRpcError(error))));
+				else if (this.#connected) this.#incoming.unattributableError(error);
+			},
+		};
 
 		// Drain the SSE stream from a single iterator. We resolve the deferred
 		// promise as soon as the matching response arrives, then keep iterating
@@ -366,27 +432,8 @@ export class HttpTransport implements MCPTransport {
 		// controller", so we must not exit the loop early.
 		const drain = async (): Promise<void> => {
 			try {
-				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, signal)) {
-					const messages = Array.isArray(raw) ? raw : [raw];
-					for (const message of messages) {
-						if (
-							!captured &&
-							"id" in message &&
-							message.id === expectedId &&
-							("result" in message || "error" in message)
-						) {
-							captured = true;
-							operation.clear();
-							if (message.error) {
-								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
-							} else {
-								resolve(message.result as T);
-							}
-							continue;
-						}
-						if (!this.#connected) continue;
-						this.#dispatchSSEMessage(message);
-					}
+				for await (const frame of readSseJson<unknown>(response.body!, signal)) {
+					routeIncomingMessage(frame, routes);
 				}
 				if (!captured) {
 					reject(new Error(mcpNoResponseForRequestMessage({ url: this.config.url }, expectedId)));
@@ -409,33 +456,6 @@ export class HttpTransport implements MCPTransport {
 
 		void drain();
 		return promise;
-	}
-
-	/**
-	 * POST a JSON-RPC response back to the server (for server-to-client requests
-	 * received via SSE).
-	 *
-	 * The server is waiting on this answer, so a reply that does not arrive is
-	 * reported: a send that throws and a send the server answers with a status
-	 * other than 2xx alike. Delivery is retried only by the auth retry of
-	 * {@link postJsonRpc}.
-	 */
-	async #sendServerResponse(body: ServerRequestResponse): Promise<void> {
-		if (!this.#connected) return;
-		const operation = createMCPTimeout(resolveMCPTimeoutMs(this.config.timeout));
-		try {
-			const response = await postJsonRpc(this.#postTarget, this.config.url, body, operation.signal);
-			await response.body?.cancel();
-		} catch (sendError) {
-			reportUndeliveredServerResponse({
-				url: this.config.url,
-				requestId: body.id,
-				kind: body.error ? "error" : "result",
-				cause: sendError,
-			});
-		} finally {
-			operation.clear();
-		}
 	}
 
 	async notify(method: string, params?: Record<string, unknown>): Promise<void> {

@@ -107,11 +107,15 @@
 - MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
 - The Streamable HTTP and legacy HTTP+SSE MCP transports send every JSON-RPC message through one `postJsonRpc` with one auth-retry path, and a refreshed credential replaces the transport's headers instead of writing into the configuration object it was created with.
+- The stdio, Streamable HTTP and legacy HTTP+SSE MCP transports classify a server's messages through one `routeIncomingMessage`, and the two HTTP transports POST the answer to a server request through one `deliverServerResponse`.
 
 ### Fixed
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
 - Both MCP HTTP transports report a reply to a server request that the server answers with an HTTP error status, instead of dropping it.
 - A Streamable HTTP MCP notification refreshes a rejected credential and retries once, as a request does, and a failed MCP transport POST or legacy SSE connect includes the server's `WWW-Authenticate` and `Mcp-Auth-Server` challenge.
+- An MCP server's error that names no request (`"id": null`, such as a parse error) fails a Streamable HTTP request with the server's code and message instead of reporting that the server never answered, and on the Streamable HTTP GET stream it reaches the client's error handler instead of being dropped.
+- A Streamable HTTP or legacy HTTP+SSE MCP server message that carries a method and a null id is delivered as a notification, as over stdio, instead of being dropped.
+- An MCP server frame that is not a JSON-RPC message is logged as an ignored message on every transport, where an object with neither a method nor an id was dropped without a log line, and over Streamable HTTP a frame that is not an object failed the request it arrived on.
 - A tool call aborted inside a JS eval cell rejects with `ToolAbortError` in the worker, the same error the host raises, instead of a plain `Error` carrying the abort's name.
 - `RpcClient.login` is defined again; an unterminated doc comment above it had turned the method into a comment, so calling it threw `client.login is not a function`.
 - A binary update whose download fails before the disk has created the partial file no longer leaves a `veyyon.<id>.new` beside the installed binary; the removal ran before the file's open landed, and the open then created it.
