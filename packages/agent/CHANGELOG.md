@@ -11,6 +11,7 @@
 - Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 - Tool normalization renders a tool's examples against the wire schema it already built instead of converting that schema again; the examples text is unchanged.
+- Building a request's stable prefix renders each tool's description once instead of twice and hashes the prefix fingerprint only when it is read, so the first provider turn of a print-mode session is built in 0.88 ms instead of 1.60 ms.
 
 ### Fixed
 

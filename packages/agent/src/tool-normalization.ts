@@ -154,7 +154,7 @@ function normalizeTool(
 ): Tool {
 	const intentMode = resolveIntentMode(tool.intent);
 	const doInjectIntent = injectIntent && intentMode !== "omit";
-	const spec = specWithoutSchema(tool);
+	const spec = specWithoutReplacedFields(tool);
 	// When the full catalog is rendered into the system prompt, ship the tool
 	// specs without their descriptions (top-level + nested schema annotations)
 	// so they are not duplicated on the wire. Strip the STABLE wire schema (the
@@ -195,16 +195,20 @@ function exampleTool(spec: Record<PropertyKey, unknown>, parameters: TSchema): T
 	} as Tool;
 }
 
+/** The fields {@link normalizeTool} replaces with their wire form; copying them would build each one for nothing. */
+const REPLACED_FIELDS: ReadonlySet<PropertyKey> = new Set(["parameters", "wireParameters", "description"]);
+
 /**
- * The own enumerable properties of `tool` a spread copies, without `parameters` and `wireParameters`.
+ * The own enumerable properties of `tool` a spread copies, without the {@link REPLACED_FIELDS}.
  *
  * A wrapped tool forwards every property through an enumerable accessor, so spreading it reads
- * `parameters`, which builds the schema the caller is about to replace with its wire form.
+ * `parameters`, which builds the schema the caller is about to replace with its wire form, and
+ * `description`, which several tools render from a prompt template on every read.
  */
-function specWithoutSchema(tool: AnyAgentTool): Record<PropertyKey, unknown> {
+function specWithoutReplacedFields(tool: AnyAgentTool): Record<PropertyKey, unknown> {
 	const spec: Record<PropertyKey, unknown> = {};
 	for (const key of Reflect.ownKeys(tool)) {
-		if (key === "parameters" || key === "wireParameters") continue;
+		if (REPLACED_FIELDS.has(key)) continue;
 		if (!Object.prototype.propertyIsEnumerable.call(tool, key)) continue;
 		spec[key] = (tool as unknown as Record<PropertyKey, unknown>)[key];
 	}
