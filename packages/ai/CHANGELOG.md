@@ -8,6 +8,7 @@
 
 ### Changed
 
+- No user-visible change: Claude and OpenAI Codex usage build a percent-used amount through one `usageAmountFromUsedPercent` in `usage/shared`.
 - The tool wire-schema store is a `BuildStore` from `@veyyon/utils/build-store`, created with `createToolWireSchemaStore(build, filePath)`, and a `cache/tool-wire-schemas.json` in the earlier layout is ignored and rewritten; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
