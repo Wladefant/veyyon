@@ -77,11 +77,13 @@ export interface IrcDetails {
 	waited?: IrcMessage | null;
 	inbox?: IrcMessage[];
 	peers?: IrcPeerInfo[];
+	identity?: { selfId: string; parentId?: string; ancestorIds: string[]; scope?: string };
 }
 
 function formatIncoming(msg: IrcMessage): string {
 	const replyTag = msg.replyTo ? ` (reply to ${msg.replyTo})` : "";
-	return `[${msg.id}] ${msg.from}${replyTag}: ${msg.body}`;
+	const source = msg.actor ? `agent/${msg.actor.relation}` : "unknown legacy source";
+	return `[${msg.id}] ${msg.from} [${source}]${replyTag}: ${msg.body}`;
 }
 
 export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
@@ -489,12 +491,8 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 	// pair of filters that restated the caller, advisor and scope rules a
 	// second time; two spellings of one rule is how the drift starts. Parked
 	// peers are listed because messaging one revives it, which is supported.
-	const ancestors = new Set<string>();
-	let parentId = registry.get(senderId)?.parentId;
-	while (parentId && parentId !== senderId && !ancestors.has(parentId)) {
-		ancestors.add(parentId);
-		parentId = registry.get(parentId)?.parentId;
-	}
+	const identity = registry.actorContext(senderId);
+	const ancestors = new Set(identity.ancestorIds);
 	const peers = registry.listAddressableBy(senderId).map(ref => ({
 		id: ref.id,
 		displayName: ref.displayName,
@@ -506,7 +504,12 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 		lastActivity: ref.lastActivity,
 		activity: ref.activity,
 	}));
-	const lines: string[] = [];
+	const lines: string[] = [
+		`Self: ${identity.selfId}`,
+		`Direct parent: ${identity.parentId ?? "unknown"}. Use this ID for local assignment questions; Main remains the root alias.`,
+		`Ancestors: ${identity.ancestorIds.join(", ") || "none verified"}`,
+		"Ancestors delegate work; activity alone is not a competing writer. Actual overlapping peer writes still require coordination.",
+	];
 	if (peers.length === 0) {
 		lines.push("No other agents.");
 	} else {
@@ -535,7 +538,7 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 	}
 	return {
 		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "list", from: senderId, peers },
+		details: { op: "list", from: senderId, peers, identity },
 	};
 }
 

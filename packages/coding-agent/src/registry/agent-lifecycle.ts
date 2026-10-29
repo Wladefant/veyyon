@@ -135,6 +135,9 @@ const REVIVE_RECHECK_MS = 1_000;
  * already let go of.
  */
 export function syncStatusWithTurns(registry: AgentRegistry, id: string, session: AgentSession): void {
+	void session.replayIrcContinuations?.().catch(error => {
+		logger.warn("Retained agent continuation delivery failed", { id, error: errorMessage(error) });
+	});
 	session.subscribe(event => {
 		const status = registry.get(id)?.status;
 		if (event.type === "agent_start" && status === "idle") registry.setStatus(id, "running");
