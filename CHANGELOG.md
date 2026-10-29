@@ -11,17 +11,20 @@
 ### Added
 
 - `AGENT_EVENT_TYPES` in `@veyyon/agent-core/types` lists every agent event type and fails to compile when the event union gains a type it lacks.
+- `toolSchema(id, build)` in `@veyyon/ai/utils/schema/tool-schema` holds a tool parameter schema with its wire form, which a compiled build stores per build in the profile's `cache/tool-wire-schemas.json`, and `Tool.wireParameters` supplies that wire form to a request without building `parameters`.
 - `AppliedCompletion` in `@veyyon/utils/autocomplete` is the draft and cursor that `AutocompleteProvider.applyCompletion` and `applyAutocompleteCompletion` return.
 - `wrapIndex(index, count)` in `@veyyon/utils/math` maps `index` onto a ring of `count` slots, so a step past either end of a list lands on the other end.
 - `packageModuleReach(repoRoot, src, namesRelativeTo?)` in `@veyyon/utils/module-reach-workspace` returns one package's `reach`, `reachedNames` and `runtimeImportsOf` over the workspace resolution with one shared memo; no user-facing change.
 - `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
 - `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
+- `getToolWireSchemaCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/tool-wire-schemas.json`.
 - `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
 - `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
 - `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.
 
 ### Changed
 
+- A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
 - The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
 - No user-visible change: an abort inside the rust-analyzer workspace wait returns from `waitForProjectLoaded`, as it does for every other server, instead of throwing when it lands between two `analyzerStatus` polls.
 - No user-visible change: the collab guest, eval executor, markit registry, launch client, MCP stdio transport, RPC prompt result, extension send, TTS client, IRC tool and memory tools coerce a thrown value with `toError` from `@veyyon/utils` instead of nineteen inline copies.
@@ -116,6 +119,7 @@
 - The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
 - MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
 - The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
+- Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
 - The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
 - SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
 - Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
