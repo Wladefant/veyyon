@@ -176,6 +176,13 @@ function curveSettles(curve: AnimationCurve): boolean {
 }
 
 /**
+ * The release of the clock an animation is registered with, run when the animation settles outside
+ * a tick (`cancel`, `finish`), so the clock drops it, and stops ticking when it held nothing else,
+ * at once rather than on its next frame.
+ */
+const releaseOnSettle = new WeakMap<Animation, (animation: Animation) => void>();
+
+/**
  * A single running value. Read `value` during render; the clock advances it.
  * An animation is inert once `done`, and the clock forgets it.
  */
@@ -253,6 +260,7 @@ export class Animation {
 		this.#value = this.#target;
 		this.#velocity = 0;
 		this.#done = true;
+		releaseOnSettle.get(this)?.(this);
 		this.#onFrame?.(this.#value);
 		this.#onDone?.();
 	}
@@ -260,6 +268,7 @@ export class Animation {
 	/** Settle where it stands, without reaching the target and without onDone. */
 	cancel(): void {
 		this.#done = true;
+		releaseOnSettle.get(this)?.(this);
 	}
 
 	/** Advance by `dtMs`. Returns true while the animation is still live. */
@@ -357,18 +366,14 @@ export class MotionClock {
 			animation.finish();
 			return animation;
 		}
-		if (!animation.done) {
-			this.#live.add(animation);
-			this.#ensureTicking();
-		}
+		if (!animation.done) this.#register(animation);
 		return animation;
 	}
 
 	/** Re-register an animation that was retargeted after settling. */
 	resume(animation: Animation): void {
 		if (animation.done) return;
-		this.#live.add(animation);
-		this.#ensureTicking();
+		this.#register(animation);
 	}
 
 	/** Advance every live animation by the time since the previous tick. */
@@ -386,6 +391,17 @@ export class MotionClock {
 		this.#live.clear();
 		this.#stopTicking();
 	}
+
+	#register(animation: Animation): void {
+		this.#live.add(animation);
+		releaseOnSettle.set(animation, this.#release);
+		this.#ensureTicking();
+	}
+
+	readonly #release = (animation: Animation): void => {
+		if (!this.#live.delete(animation)) return;
+		if (this.#live.size === 0) this.#stopTicking();
+	};
 
 	#ensureTicking(): void {
 		if (!this.#autoTick || this.#timer !== null) return;
