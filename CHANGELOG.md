@@ -31,6 +31,8 @@
 - No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
 - No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
 - No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` from `session/session-entries.ts` instead of restating the zero usage record, so the status row evaluates no session-context or compaction module.
+- No user-visible change: the Antigravity, xAI, OpenRouter, Gemini and OpenAI image providers read a refused request's message through one `providerErrorMessage` in `tools/web/image-gen.ts` instead of five copies, and the GitHub run watch and run result reports write their header lines through one `pushRunHeader`.
+- No user-visible change: the assistant message component takes its `ImageContent` type from `@veyyon/ai`, as every other coding-agent module does, instead of `@veyyon/model`, which the package does not declare.
 - The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
 - No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
 - A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
@@ -111,6 +113,8 @@
 - The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
 - The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
+- `mapAnthropicToolChoice` moved from `stream.ts` to `providers/anthropic-tool-choice.ts` and `OUTPUT_FALLBACK_BUFFER` to `providers/anthropic.ts`, so the Anthropic, GitLab Duo and Kimi Code/Synthetic providers no longer import the stream dispatcher; both names stay exported from `@veyyon/ai`; no user-facing change.
+- `providerFinishErrorMessage` and `PROVIDER_FINISH_ERROR_PATTERN` moved from `error/provider.ts` to `error/classes.ts`, so the turn error domain no longer closes an import cycle through the error classifier; both stay exported from `@veyyon/ai/error`; no user-facing change.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
 - `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
 - Ollama Cloud reports a failed, non-JSON or malformed `/api/tags` response through the discovery failure hook as a `request`, `status`, `body` or `payload` failure instead of throwing.
@@ -123,9 +127,11 @@
 - The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
 - The shell's built-in output filters compile their output-stage regular expressions the first time each filter applies instead of when the registry loads; a filter file loaded from config still rejects a bad regular expression at load.
 - No user-visible change: the Models and Tools charts take their legend and tooltip from `buildSharedPlugins`, and the Behavior and Costs charts build their line and bar configs with `timeChartData` and `timeChartOptions` instead of two copies.
+- No user-visible change: the dashboard imports `JsonBlock` and `StatusPill` from `@veyyon/tool-render` instead of two one-line re-export modules in `client/ui`.
 - The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
+- No user-visible change: the terminal capabilities read `HostNotification` from `@veyyon/host/notification` instead of a `@veyyon/utils` re-export.
 - `HoverController.set` returns whether the hovered row changed, so a caller repaints only on a change.
 - No user-visible change: `Editor` types an applied completion as `AppliedCompletion`.
 - A height-capped `Editor` scrolls to the row its layout paints the cursor on instead of laying out the draft a second time, so a keystroke and its frame in a 4000-line draft take about 110 µs instead of about 165 µs.
@@ -150,6 +156,8 @@
 
 - `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
 - The terminal's `emitCustomToolSessionEvent` and `showToolError` are removed; nothing called them; no user-facing change.
+- Removed `derive-tmp.js`, a scratch probe that printed effort-variant collapses; nothing imported it and no entry point exposed it.
+- Removed `@veyyon/utils/host-notification`, which re-exported `HostNotification` and `HostNotifier`; import both from `@veyyon/host/notification`. `@veyyon/utils` no longer depends on `@veyyon/host`.
 
 ### Fixed
 
