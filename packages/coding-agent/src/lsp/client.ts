@@ -66,6 +66,27 @@ export function onDiagnosticsPublish(client: LspClient, listener: () => void): (
 	};
 }
 
+/** A `$/progress` value: the work-done kind and, on `begin`, the title of the work. */
+export interface WorkDoneProgress {
+	kind?: string;
+	title?: string;
+}
+
+type ProgressListener = (token: string | number, progress: WorkDoneProgress) => void;
+
+/** Callbacks run on every `$/progress` a client receives. */
+const progressListeners = new WeakMap<LspClient, Set<ProgressListener>>();
+
+/** Runs `listener` on every `$/progress` `client` receives until the returned function is called. */
+export function onProgress(client: LspClient, listener: ProgressListener): () => void {
+	const listeners = progressListeners.get(client) ?? new Set<ProgressListener>();
+	progressListeners.set(client, listeners);
+	listeners.add(listener);
+	return () => {
+		listeners.delete(listener);
+	};
+}
+
 /** Negative cache of recent init failures so a broken server fails fast instead of re-spawning per call. */
 const INIT_FAILURE_BACKOFF_MS = 3 * 60 * 1000;
 const initFailures = new Map<string, { at: number; message: string }>();
@@ -403,7 +424,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 									version: params.version ?? null,
 								});
 							} else if (message.method === "$/progress" && message.params) {
-								const params = message.params as { token: string | number; value?: { kind?: string } };
+								const params = message.params as { token: string | number; value?: WorkDoneProgress };
 								clientsReportingProgress.add(client);
 								if (params.value?.kind === "begin") {
 									client.activeProgressTokens.add(params.token);
@@ -412,6 +433,10 @@ async function startMessageReader(client: LspClient): Promise<void> {
 									if (client.activeProgressTokens.size === 0) {
 										client.resolveProjectLoaded();
 									}
+								}
+								const listeners = progressListeners.get(client);
+								if (listeners && params.value) {
+									for (const listener of listeners) listener(params.token, params.value);
 								}
 							}
 						}

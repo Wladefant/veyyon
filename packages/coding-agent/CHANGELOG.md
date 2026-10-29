@@ -99,6 +99,7 @@
 - `rename_file` on a fresh TypeScript server proposes the import edits of every file importing the renamed one; it opened no file first, so tsserver loaded no project and proposed none.
 - A write reports the diagnostics its language server published for the written text; a publish that arrived before the write's file-change notice was dropped, so the write waited out its diagnostics budget and reported the file clean.
 - A language server that exits during startup is reported with its exit code and stderr, such as `pyright: LSP server exited (code 1): ModuleNotFoundError: No module named 'pyright'`, instead of `LSP reader stopped; client torn down`.
+- The `lsp` diagnostics action reports a Rust file's `cargo check` errors and lints instead of `OK` for a file that does not compile: it runs rust-analyzer's compiler check and waits for it, and a check still running at the call's timeout is named in the server notes.
 
 - A `discovery.type: ollama` endpoint whose `/api/tags` body is not a model list fails with an error naming the URL instead of a `TypeError`, and a `/api/tags` entry that names no model is skipped instead of failing discovery.
 - Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.

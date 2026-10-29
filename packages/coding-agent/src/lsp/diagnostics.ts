@@ -6,7 +6,15 @@
 import { errorMessage } from "@veyyon/utils";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
-import { getOrCreateClient, LspResponseError, onDiagnosticsPublish, sendRequest, waitForProjectLoaded } from "./client";
+import {
+	getOrCreateClient,
+	LspResponseError,
+	onDiagnosticsPublish,
+	onProgress,
+	sendNotification,
+	sendRequest,
+	waitForProjectLoaded,
+} from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { isProjectAwareLspServer } from "./servers";
@@ -198,6 +206,71 @@ export async function waitForDiagnostics(
 		return [];
 	}
 	return client.diagnostics.get(uri)?.diagnostics ?? [];
+}
+
+/** The work-done progress tokens rust-analyzer reports a compiler check under: `rust-analyzer/flycheck/<n>`. */
+const FLYCHECK_PROGRESS_PREFIX = "rust-analyzer/flycheck/";
+
+/**
+ * How long a check requested with `rust-analyzer/runFlycheck` has to begin before it is taken as not
+ * started. rust-analyzer begins one about 70ms after the request; a workspace with no check never does.
+ */
+const FLYCHECK_START_GRACE_MS = 1_000;
+
+/** How the compiler check {@link runFlycheck} requested ended. */
+export type FlycheckOutcome =
+	| { readonly status: "finished" }
+	| { readonly status: "not-started" }
+	| { readonly status: "unfinished"; readonly title: string };
+
+/**
+ * Runs the server's compiler check (`rust-analyzer/runFlycheck`, rust-analyzer's `cargo check`) for the
+ * package of `uri`, or for every workspace when `uri` is undefined, and waits until the check ends or
+ * `deadline` (epoch ms) passes. Throws on abort.
+ *
+ * rust-analyzer ends a check's progress while handling the check's results and publishes what it found
+ * after them, so a `finished` check's publish can trail its end. A request answered after the end is
+ * answered after that publish, so the check's diagnostics are recorded when this resolves `finished`.
+ */
+export async function runFlycheck(
+	client: LspClient,
+	uri: string | undefined,
+	deadline: number,
+	signal?: AbortSignal,
+): Promise<FlycheckOutcome> {
+	const running = new Map<string | number, string>();
+	let began = false;
+	let ended = false;
+	const wake = { began: Promise.withResolvers<void>(), ended: Promise.withResolvers<void>() };
+	const stopListening = onProgress(client, (token, progress) => {
+		if (typeof token !== "string" || !token.startsWith(FLYCHECK_PROGRESS_PREFIX)) return;
+		if (progress.kind === "begin") {
+			began = true;
+			running.set(token, progress.title ?? "cargo check");
+			wake.began.resolve();
+		} else if (progress.kind === "end" && running.delete(token) && running.size === 0) {
+			ended = true;
+			wake.ended.resolve();
+		}
+	});
+	try {
+		const textDocument = uri === undefined ? null : { uri };
+		await sendNotification(client, "rust-analyzer/runFlycheck", { textDocument }, signal);
+		await sleepUntil(Math.min(Date.now() + FLYCHECK_START_GRACE_MS, deadline), signal, wake.began.promise);
+		throwIfAborted(signal);
+		if (!began) return { status: "not-started" };
+		await sleepUntil(deadline, signal, wake.ended.promise);
+		throwIfAborted(signal);
+		if (!ended) return { status: "unfinished", title: running.values().next().value ?? "cargo check" };
+		const left = deadline - Date.now();
+		if (left > 0) {
+			await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, left).catch(() => undefined);
+			throwIfAborted(signal);
+		}
+		return { status: "finished" };
+	} finally {
+		stopListening();
+	}
 }
 
 /** Result from getDiagnosticsForFile */

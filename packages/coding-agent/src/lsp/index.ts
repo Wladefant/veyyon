@@ -38,6 +38,8 @@ import { getLinterClient } from "./clients";
 import { getServersForFile, type LspConfig, loadConfig } from "./config";
 import {
 	BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS,
+	type FlycheckOutcome,
+	runFlycheck,
 	SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	waitForDiagnostics,
 } from "./diagnostics";
@@ -218,6 +220,18 @@ export async function warmupLspServers(cwd: string, options?: LspWarmupOptions):
  */
 export function getLspStatus(): LspServerStatus[] {
 	return getActiveClients();
+}
+
+/** What a compiler check that did not finish leaves out of a diagnostics report; nothing for one that did. */
+function flycheckNote(outcome: FlycheckOutcome, timeoutSec: number): string | undefined {
+	switch (outcome.status) {
+		case "finished":
+			return undefined;
+		case "not-started":
+			return "no compiler check started; only the server's own analysis is reported";
+		case "unfinished":
+			return `${outcome.title} was still running at the ${timeoutSec}s timeout, so its errors are not reported; raise \`timeout\` to wait for it`;
+	}
 }
 
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
@@ -894,6 +908,10 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 		const diagnosticsWaitTimeoutMs = detailed
 			? Math.min(BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS, timeoutSec * 1000)
 			: Math.min(SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS, timeoutSec * 1000);
+		// A compiler check ends early enough to report what it found before the operation's own timeout
+		// aborts the call. One check per server covers the target, or every workspace for a batch.
+		const checkDeadline = Date.now() + timeoutSec * 1000 - diagnosticsWaitTimeoutMs;
+		const checks = new Map<LspClient, Promise<FlycheckOutcome>>();
 		const results: string[] = [];
 		const allServerNames = new Set<string>();
 		if (truncatedGlobTargets) {
@@ -938,6 +956,15 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 					if (isProjectAwareLspServer(serverConfig)) {
 						await waitForProjectLoaded(client, signal);
 						throwIfAborted(signal);
+					}
+					if (serverConfig.capabilities?.flycheck) {
+						let check = checks.get(client);
+						if (!check) {
+							check = runFlycheck(client, detailed ? undefined : uri, checkDeadline, signal);
+							checks.set(client, check);
+						}
+						const note = flycheckNote(await check, timeoutSec);
+						if (note) serverNotes.push(`  ${serverName}: ${note}`);
 					}
 					const expectedDocumentVersion = client.openFiles.get(uri)?.version;
 					const diagnostics = await waitForDiagnostics(client, uri, {
