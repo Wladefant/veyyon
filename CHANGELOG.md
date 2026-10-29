@@ -161,6 +161,7 @@
 
 - `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
 - The terminal's `emitCustomToolSessionEvent` and `showToolError` are removed; nothing called them; no user-facing change.
+- The `ssr`, `expandMacro`, `runnables` and `relatedTests` LSP server capabilities are removed from the built-in rust-analyzer entry and the documentation; no code read them, and a config that still sets them loads unchanged.
 - Removed `derive-tmp.js`, a scratch probe that printed effort-variant collapses; nothing imported it and no entry point exposed it.
 - Removed `@veyyon/utils/host-notification`, which re-exported `HostNotification` and `HostNotifier`; import both from `@veyyon/host/notification`. `@veyyon/utils` no longer depends on `@veyyon/host`.
 
@@ -171,6 +172,7 @@
 - `rename_file` on a fresh TypeScript server proposes the import edits of every file importing the renamed one; it opened no file first, so tsserver loaded no project and proposed none.
 - A write reports the diagnostics its language server published for the written text; a publish that arrived before the write's file-change notice was dropped, so the write waited out its diagnostics budget and reported the file clean.
 - A language server that exits during startup is reported with its exit code and stderr, such as `pyright: LSP server exited (code 1): ModuleNotFoundError: No module named 'pyright'`, instead of `LSP reader stopped; client torn down`.
+- The `lsp` diagnostics action reports a Rust file's `cargo check` errors and lints instead of `OK` for a file that does not compile: it runs rust-analyzer's compiler check and waits for it, and a check still running at the call's timeout is named in the server notes.
 - A `discovery.type: ollama` endpoint whose `/api/tags` body is not a model list fails with an error naming the URL instead of a `TypeError`, and a `/api/tags` entry that names no model is skipped instead of failing discovery.
 - Fixed the plan review card dropping its option rows off the bottom on narrow terminals where the footer shortcuts wrap.
 - Fixed the settings card cutting its last category tabs off the sidebar on terminals too short to list them all; the sidebar now scrolls to keep the selected tab in view.
