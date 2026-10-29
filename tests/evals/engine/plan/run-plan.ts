@@ -19,6 +19,7 @@ import type {
 import { requirePathSegment } from "../package-paths";
 import { sanitizeVariantName } from "../run/layout";
 import { expandVariantMatrix, type VariantMatrixSelection } from "./variant-matrix";
+import { bindSkillExperiment, type SkillExperimentBinding } from "../skills/binding";
 
 export class EmptyTaskSelectionError extends Error {
 	readonly suiteName: string;
@@ -100,6 +101,8 @@ export interface RunPlanRequest {
 	readonly runId?: string;
 	readonly now?: () => Date;
 	readonly harnesses: HarnessLookup;
+	readonly skillCriteria?: { readonly minimumImprovement: number };
+	readonly skillPhase?: "pilot" | "feedback" | "score" | "final";
 }
 
 export interface RunPlan {
@@ -111,6 +114,8 @@ export interface RunPlan {
 	readonly cells: readonly TrialCell[];
 	readonly repeats: number;
 	readonly context: SuiteContext;
+	readonly skillBinding?: SkillExperimentBinding;
+	readonly skillPhase?: "pilot" | "feedback" | "score" | "final";
 }
 
 function runIdFor(suiteName: string, at: Date): string {
@@ -151,6 +156,9 @@ export async function buildRunPlan(request: RunPlanRequest): Promise<RunPlan> {
 	const harnessRegistry = request.harnesses;
 	for (const variant of variants) {
 		const harness = harnessRegistry.require(variant.harness);
+		if (variant.skillArm && (suite.backend !== "in-process" || variant.harness !== "veyyon")) {
+			throw new Error("Skill experiments require the veyyon in-process resource snapshot boundary.");
+		}
 		if (!harness.backends[suite.backend]) {
 			throw new UnboundHarnessBackendError(variant.harness, suite.id, suite.backend);
 		}
@@ -191,16 +199,22 @@ export async function buildRunPlan(request: RunPlanRequest): Promise<RunPlan> {
 		}
 	}
 
+	const provenance = await suite.provenance(context);
+	const skillBinding = variants.some(variant => variant.skillArm)
+		? await bindSkillExperiment(variants, provenance, request.skillCriteria)
+		: undefined;
 	const at = (request.now ?? (() => new Date()))();
 	return {
 		runId: request.runId ?? runIdFor(suite.id, at),
 		suite,
-		provenance: await suite.provenance(context),
+		provenance,
 		variants,
 		tasks,
 		cells,
 		repeats,
 		context,
+		...(skillBinding ? { skillBinding } : {}),
+		...(request.skillPhase ? { skillPhase: request.skillPhase } : {}),
 	};
 }
 

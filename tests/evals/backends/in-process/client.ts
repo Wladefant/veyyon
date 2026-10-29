@@ -5,6 +5,11 @@
  * Eliminates ~2-3s CLI startup overhead per task by creating sessions
  * in-process and sharing auth/model infrastructure across tasks.
  */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import type { FrozenSkillArm } from "../../engine/skills/arms";
 import type { AgentEvent, AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@veyyon/agent-core";
 import type { Model, ToolExample } from "@veyyon/ai";
 import type { AgentSession, AgentSessionEvent, AuthStorage, SessionStats } from "@veyyon/coding-agent";
@@ -21,6 +26,7 @@ import {
 	loadAndValidateConfigOverlay,
 	loadAndValidatePromptOverlay,
 } from "../../engine/plan/overlays";
+import { parseModelId } from "../../engine/trial/model";
 
 export type InProcessEventListener = (event: AgentEvent) => void;
 
@@ -39,7 +45,6 @@ export interface DumpedTool {
 	readonly examples?: readonly ToolExample[];
 }
 
-/** What a live in-process session reports about itself. */
 export interface InProcessSessionState {
 	readonly sessionFile?: string;
 	readonly systemPrompt?: string[];
@@ -47,6 +52,8 @@ export interface InProcessSessionState {
 	readonly thinkingLevel?: ThinkingLevel | undefined;
 	readonly dumpTools?: readonly DumpedTool[];
 	readonly settings?: Settings;
+	readonly skillArm?: FrozenSkillArm;
+	readonly observedSkillHashes?: readonly { readonly name: string; readonly contentHash: string }[];
 }
 
 export interface InProcessClientOptions {
@@ -68,6 +75,8 @@ export interface InProcessClientOptions {
 	promptVariantPath?: string | null;
 	/** Pre-loaded prompt overrides map */
 	promptOverrides?: Record<string, string> | null;
+	/** Frozen skill resource used for this experimental arm; baseline omits it. */
+	skillArm?: FrozenSkillArm;
 	/** Pre-constructed settings instance */
 	settings?: Settings;
 }
@@ -108,6 +117,7 @@ export class InProcessClient {
 	#sessionResult: CreateAgentSessionResult | null = null;
 	#eventListeners: InProcessEventListener[] = [];
 	#unsubscribe: (() => void) | null = null;
+	#skillSnapshotDir: string | null = null;
 	#options: InProcessClientOptions;
 
 	constructor(options: InProcessClientOptions) {
@@ -145,6 +155,23 @@ export class InProcessClient {
 			const loaded = await loadAndValidatePromptOverlay(this.#options.promptVariantPath, this.#options.cwd);
 			promptOverrides = loaded.overrides;
 		}
+		const skillArm = this.#options.skillArm;
+		const skill: NonNullable<Parameters<typeof createAgentSession>[0]>["skills"] = [];
+		if (skillArm && skillArm.content !== null) {
+			this.#skillSnapshotDir = await fs.mkdtemp(path.join(tmpdir(), "veyyon-eval-skill-"));
+			const skillDir = path.join(this.#skillSnapshotDir, skillArm.skillName);
+			await fs.mkdir(skillDir, { recursive: true });
+			const filePath = path.join(skillDir, "SKILL.md");
+			await fs.writeFile(filePath, skillArm.content, { encoding: "utf8", flag: "wx" });
+			await fs.chmod(filePath, 0o444);
+			skill.push({
+				name: skillArm.skillName,
+				description: "Frozen skill experiment resource",
+				filePath,
+				baseDir: skillDir,
+				source: "eval-experiment",
+			});
+		}
 
 		const result = await createAgentSession({
 			cwd: this.#options.cwd,
@@ -166,8 +193,7 @@ export class InProcessClient {
 			toolNames: this.#options.tools ?? ["read", "edit", "write"],
 			hasUI: false,
 			enableMCP: false,
-			enableLsp: false,
-			skills: [],
+			skills: skill,
 			rules: [],
 			contextFiles: [],
 			disableExtensionDiscovery: true,
@@ -175,6 +201,14 @@ export class InProcessClient {
 
 		this.#sessionResult = result;
 		this.#session = result.session;
+		if (this.#options.skillArm) {
+			const requestedModel = parseModelId(this.#options.model);
+			if (requestedModel.provider !== this.#session.model.provider || requestedModel.model !== this.#session.model.id) {
+				throw new Error(
+					`Skill experiment model mismatch: requested ${requestedModel.id}, resolved ${this.#session.model.provider}/${this.#session.model.id}`,
+				);
+			}
+		}
 
 		// Subscribe to events and forward to listeners
 		this.#unsubscribe = this.#session.subscribe((event: AgentSessionEvent) => {
@@ -210,7 +244,6 @@ export class InProcessClient {
 		await this.#session!.followUp(text);
 		await this.#session!.waitForIdle();
 	}
-
 	abort(): void {
 		this.#session?.abort();
 	}
@@ -233,6 +266,21 @@ export class InProcessClient {
 
 	async getState(): Promise<InProcessSessionState> {
 		const session = this.#session!;
+		const skills = session.skills;
+		const selectedArm = this.#options.skillArm;
+		const selectedResource = selectedArm?.content === null || !selectedArm
+			? undefined
+			: skills.find(skill => skill.name === selectedArm.skillName);
+		if (selectedArm?.content === null && skills.some(skill => skill.name === selectedArm.skillName)) {
+			throw new Error(`Baseline skill arm contamination: ${selectedArm.skillName} is present in the session`);
+		}
+		if (selectedArm?.content !== null && selectedArm) {
+			if (!selectedResource) throw new Error(`Skill arm isolation failed: ${selectedArm.skillName} is absent from the session`);
+			const actualContent = await fs.readFile(selectedResource.filePath, "utf8");
+			if (actualContent !== selectedArm.content) {
+				throw new Error(`Skill arm isolation failed: session resource ${selectedArm.skillName} does not match its frozen content`);
+			}
+		}
 		return {
 			sessionFile: undefined,
 			systemPrompt: session.systemPrompt,
@@ -245,8 +293,14 @@ export class InProcessClient {
 				examples: tool.examples,
 			})),
 			settings: session.settings,
+			skillArm: selectedArm,
+			observedSkillHashes: await Promise.all(skills.map(async skill => ({
+				name: skill.name,
+				contentHash: createHash("sha256").update(await fs.readFile(skill.filePath, "utf8"), "utf8").digest("hex"),
+			}))),
 		};
 	}
+	
 
 	async dispose(): Promise<void> {
 		this.#unsubscribe?.();
@@ -260,6 +314,10 @@ export class InProcessClient {
 		}
 		this.#sessionResult = null;
 		this.#eventListeners = [];
+		if (this.#skillSnapshotDir) {
+			await fs.rm(this.#skillSnapshotDir, { recursive: true, force: true });
+			this.#skillSnapshotDir = null;
+		}
 	}
 
 	[Symbol.dispose](): void {

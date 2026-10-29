@@ -23,6 +23,7 @@ import type {
 	VariantAxis,
 } from "../../engine/contracts";
 import { runsDir as defaultRunsDir } from "../../engine/package-paths";
+import type { FrozenSkillArm } from "../../engine/skills/arms";
 import {
 	type DiscoverSharedInfraOptions,
 	discoverSharedInfra,
@@ -198,6 +199,7 @@ export class InProcessBackend implements ExecutionBackend {
 			const loaded = await loadAndValidatePromptOverlay(promptVariantPath, context.workDir);
 			promptOverrides = loaded.overrides;
 		}
+		const skillArm = (variant as typeof variant & { readonly skillArm?: FrozenSkillArm }).skillArm;
 
 		const clientOptions: InProcessClientOptions = {
 			cwd: trialDir,
@@ -210,6 +212,7 @@ export class InProcessBackend implements ExecutionBackend {
 			shared: this.#sharedInfra ?? undefined,
 			configPath: resolvedConfigPath,
 			promptOverrides,
+			skillArm,
 		};
 
 		const startTime = Date.now();
@@ -312,8 +315,24 @@ export class InProcessBackend implements ExecutionBackend {
 				error: trialError,
 				// A teardown that was abandoned is reported beside the score it could not affect.
 				teardownReason,
-				timedOut,
-				infrastructureError: timedOut ? trialError : undefined,
+				skillArm: state?.skillArm
+					? {
+							id: state.skillArm.id,
+							kind: state.skillArm.kind,
+							contentHash: state.skillArm.contentHash,
+							sourceHash: state.skillArm.sourceHash,
+							recipeHash: state.skillArm.recipeHash,
+							omittedComponents: state.skillArm.omittedComponents,
+						}
+					: undefined,
+				resolvedModel: state?.model
+					? {
+							provider: state.model.provider,
+							id: state.model.id,
+							version: (state.model as typeof state.model & { version?: string }).version ?? null,
+						}
+					: undefined,
+				observedSkillHashes: state?.observedSkillHashes,
 				timeoutSec,
 				systemPrompt: state?.systemPrompt,
 				settings: state?.settings,
