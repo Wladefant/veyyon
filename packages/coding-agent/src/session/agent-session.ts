@@ -1216,7 +1216,7 @@ export class AgentSession {
 				if (text.trim()) { lastAssistantText = text; break; }
 			}
 			const init = this.sessionManager.getEntries().findLast(entry => entry.type === "session_init");
-			const assembled = terminal ? assembleYieldResult(yields, lastAssistantText,
+			const assembled = terminal && last?.status !== "aborted" ? assembleYieldResult(yields, lastAssistantText,
 				init?.outputSchema === undefined ? undefined : arrayValuedLabels(init.outputSchema)) : undefined;
 			let resultSource: "agent" | "harness" = failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
 				? "harness" : "agent";
@@ -7578,13 +7578,16 @@ export class AgentSession {
 			return "woken";
 		}
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
-		if (relation === "parent" && this.#ircActivePhase) {
-			// A new native phase cannot be folded into the current phase's immutable result.
+		if (relation === "parent") {
 			const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
-			outbox.begin(msg.id, record);
-			await this.sessionManager.ensureOnDisk();
-			await this.sessionManager.sync();
-			return "injected";
+			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
+				// Preserve both phase boundaries and the order of input retained across a restart.
+				outbox.begin(msg.id, record);
+				await this.sessionManager.ensureOnDisk();
+				await this.sessionManager.sync();
+				if (!this.#ircActivePhase) await this.replayIrcContinuations();
+				return "injected";
+			}
 		}
 		if (this.isStreaming) {
 			if (relation === "parent") {

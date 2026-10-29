@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Retained agents deliver each parent-requested native continuation through a separate durable result without changing their first result ([#766](https://github.com/Wladefant/veyyon/issues/766)).
+
 ## [1.6.7] - 2026-10-29
 
 ### Fixed
