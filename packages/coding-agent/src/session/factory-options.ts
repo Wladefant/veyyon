@@ -48,6 +48,8 @@ export interface CreateAgentSessionOptions {
 	cwd?: string;
 	/** Agent config directory for this session. Default: `getAgentDir()`, i.e. `~/.veyyon/profiles/<active profile>/agent`. */
 	agentDir?: string;
+	/** Global config root override for isolated session storage and secret discovery. */
+	globalConfigRoot?: string;
 	/** Additional resources that agent tools may not read as plain files. */
 	protectedCredentialResources?: readonly ProtectedCredentialResource[];
 	/** Metadata indexes used to derive additional protected credential paths. */

@@ -12,6 +12,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
+import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
