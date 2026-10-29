@@ -23,6 +23,13 @@ describe("splitTasks", () => {
 		const ids = [...first.feedback, ...first.score, ...first.final].map(task => task.id);
 		expect(new Set(ids).size).toBe(100);
 	});
+	test("supports only a declared 80-task cohort with disjoint 16/16/48 membership", () => {
+		const cohort = tasks.slice(0, 80);
+		const split = splitTasks(cohort, "authorized-80", 80);
+		expect([split.feedback.length, split.score.length, split.final.length]).toEqual([16, 16, 48]);
+		expect(new Set([...split.feedback, ...split.score, ...split.final].map(task => task.id)).size).toBe(80);
+		expect(() => splitTasks(cohort, "undeclared-80")).toThrow(/exactly 100/);
+	});
 
 	test("keeps hash-collision assignments stable for collation-ignorable task ids", () => {
 		const collidingIds = [

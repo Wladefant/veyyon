@@ -118,7 +118,7 @@ describe("skill experiment report evidence", () => {
 	});
 
 	it("does not pair variants across different config, model, harness, build, or attachment groups", () => {
-		for (const overrides: Partial<Variant>[] of [
+		for (const overrides of [
 			{ configPath: "config-b" },
 			{ model: "model-b" },
 			{ harness: "harness-b" },

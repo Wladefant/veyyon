@@ -19,7 +19,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { appendFrozenSkillPrompt } from "../../backends/in-process/client";
+import { appendFrozenSkillPrompt, observeFrozenSkillPrompt } from "../../backends/in-process/client";
 import { buildSkillArms } from "../../engine/skills/arms";
 
 const BASE_CONTENT = "Baseline-only context.";
@@ -71,7 +71,13 @@ describe("frozen skill body reaches the in-process model context", () => {
 					modelRegistry: new ModelRegistry(authStorage, path.join(cwd, "models.yml")),
 					skills: skill,
 				});
+				if (arm.content !== null) {
+					await expect(observeFrozenSkillPrompt(session, arm)).rejects.toThrow("body is absent from model history");
+				}
 				await appendFrozenSkillPrompt(session, arm);
+				const receipt = await observeFrozenSkillPrompt(session, arm);
+				expect(receipt.present).toBe(arm.content !== null);
+				expect(receipt.contentHash).toBe(arm.content === null ? null : arm.contentHash);
 				expect(session.systemPrompt).toEqual([CORE_SYSTEM_PROMPT]);
 				expect(session.agent.state.messages.filter(message => message.role === "developer")).toHaveLength(arm.content === null ? 0 : 1);
 				await session.prompt("Respond with done.");

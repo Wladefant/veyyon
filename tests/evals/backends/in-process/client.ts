@@ -55,6 +55,7 @@ export interface InProcessSessionState {
 	readonly settings?: Settings;
 	readonly skillArm?: FrozenSkillArm;
 	readonly observedSkillHashes?: readonly { readonly name: string; readonly contentHash: string }[];
+	readonly observedSkillPrompt?: ObservedSkillPrompt;
 }
 
 export interface InProcessClientOptions {
@@ -205,16 +206,16 @@ export class InProcessClient {
 		this.#session = result.session;
 		if (this.#options.skillArm) {
 			const requestedModel = parseModelId(this.#options.model);
-			if (requestedModel.provider !== this.#session.model.provider || requestedModel.model !== this.#session.model.id) {
+			const resolvedModel = this.#session.model;
+			if (!resolvedModel || requestedModel.provider !== resolvedModel.provider || requestedModel.model !== resolvedModel.id) {
 				throw new Error(
-					`Skill experiment model mismatch: requested ${requestedModel.id}, resolved ${this.#session.model.provider}/${this.#session.model.id}`,
+					`Skill experiment model mismatch: requested ${requestedModel.id}, resolved ${resolvedModel?.provider ?? "unknown"}/${resolvedModel?.id ?? "unknown"}`,
 				);
 			}
 		}
 
 		// Freeze the actual resource before adding its existing autoload representation to history.
 		if (skillArm && skillArm.content !== null) {
-			await this.getState();
 			await appendFrozenSkillPrompt(this.#session, skillArm);
 		}
 
@@ -289,6 +290,7 @@ export class InProcessClient {
 				throw new Error(`Skill arm isolation failed: session resource ${selectedArm.skillName} does not match its frozen content`);
 			}
 		}
+		const observedSkillPrompt = selectedArm ? await observeFrozenSkillPrompt(session, selectedArm) : undefined;
 		return {
 			sessionFile: undefined,
 			systemPrompt: session.systemPrompt,
@@ -302,6 +304,7 @@ export class InProcessClient {
 			})),
 			settings: session.settings,
 			skillArm: selectedArm,
+			observedSkillPrompt,
 			observedSkillHashes: await Promise.all(skills.map(async skill => ({
 				name: skill.name,
 				contentHash: createHash("sha256").update(await fs.readFile(skill.filePath, "utf8"), "utf8").digest("hex"),
@@ -334,6 +337,36 @@ export class InProcessClient {
 		// needs the teardown to succeed awaits `dispose()` itself, which reports in full.
 		this.dispose().catch(() => {});
 	}
+}
+
+export interface ObservedSkillPrompt {
+	readonly role: "developer";
+	readonly attribution: "agent";
+	readonly present: boolean;
+	readonly contentHash: string | null;
+	readonly messageHash: string | null;
+}
+
+/** Verify the resource treatment against actual history, not its declared metadata. */
+export async function observeFrozenSkillPrompt(session: AgentSession, arm: FrozenSkillArm): Promise<ObservedSkillPrompt> {
+	if (arm.content === null) {
+		return { role: "developer", attribution: "agent", present: false, contentHash: null, messageHash: null };
+	}
+	const skill = session.skills.find(candidate => candidate.name === arm.skillName);
+	if (!skill) throw new Error(`Skill prompt observation failed: ${arm.skillName} resource is absent`);
+	const built = await buildSkillPromptMessage(skill, "", "autoload");
+	const observed = session.agent.state.messages.find(message => {
+		if (message.role !== "developer" || message.attribution !== "agent" || typeof message.content === "string") return false;
+		return message.content.some(block => block.type === "text" && block.text === built.message);
+	});
+	if (!observed) throw new Error(`Skill prompt observation failed: ${arm.skillName} body is absent from model history`);
+	return {
+		role: "developer",
+		attribution: "agent",
+		present: true,
+		contentHash: createHash("sha256").update(arm.content).digest("hex"),
+		messageHash: createHash("sha256").update(built.message).digest("hex"),
+	};
 }
 
 /** Append the selected frozen skill through the same hidden autoload message the coding agent uses. */

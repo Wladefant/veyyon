@@ -63,7 +63,7 @@ describe("skill-bound run plans", () => {
 	it("retains frozen snapshots for baseline, full content and each ablation in paired task order", async () => {
 		expect(arms.map(arm => arm.kind)).toEqual(["baseline", "full", "ablation", "ablation"]);
 		const variants = expandVariantMatrix({ harnesses: ["veyyon"], models: [MODEL], skillArms: arms });
-		expect(variants.map(variant => variant.skillArm)).toEqual(arms);
+		expect(variants.map(variant => variant.skillArm)).toEqual([...arms]);
 		expect(variants.map(variant => variant.skillArm?.content)).toEqual([
 			null,
 			content,
@@ -84,7 +84,7 @@ describe("skill-bound run plans", () => {
 			...variantNames.map(name => [taskIds[1], 2, name]),
 		]);
 		expect(run.tasks.map(task => task.id)).toEqual(taskIds);
-		expect(run.variants.map(variant => variant.skillArm)).toEqual(arms);
+		expect(run.variants.map(variant => variant.skillArm)).toEqual([...arms]);
 		expect(run.skillBinding?.modelRevision).toBeNull();
 	}, 180_000);
 
@@ -100,7 +100,15 @@ describe("skill-bound run plans", () => {
 
 	it("refuses a backend outside the veyyon in-process boundary instead of dropping its skill resource", async () => {
 		await expect(buildRunPlan({
-			suite: { ...suite, backend: "harbor" },
+			suite: {
+				...suite,
+				backend: "harbor",
+				discoverTasks: suite.discoverTasks,
+				describeTask: suite.describeTask,
+				provenance: suite.provenance,
+				scoreTrial: suite.scoreTrial,
+				preflight: suite.preflight,
+			},
 			harnesses,
 			selection: { harnesses: ["veyyon"], models: [MODEL], skillArms: arms },
 		})).rejects.toThrow("Skill experiments require the veyyon in-process resource snapshot boundary");
@@ -351,8 +359,8 @@ describe("skill-bound run plans", () => {
 		const declarationFor = (
 			activePlan: RunPlan,
 			activeRunsDir: string,
-			activeCandidate = candidate,
-			activeSelection = selection,
+			activeCandidate: FinalSkillUseDeclaration["candidate"] = candidate,
+			activeSelection: FinalSkillUseDeclaration["selection"] = selection,
 			resume = false,
 			identity = claimIdentity,
 		): FinalSkillUseDeclaration => ({
@@ -396,6 +404,31 @@ describe("skill-bound run plans", () => {
 			async cleanup() {},
 		};
 		const common = { plan, backend, workDir: temp.path(), runsDir, harnesses };
+		const incompatibleCalls = { preflight: 0, prepare: 0, trial: 0 };
+		const incompatibleBackend = {
+			...backend,
+			id: "container" as const,
+			async preflight() {
+				incompatibleCalls.preflight++;
+				return { ok: true };
+			},
+			async prepare() {
+				incompatibleCalls.prepare++;
+			},
+			async runTrial() {
+				incompatibleCalls.trial++;
+				return {};
+			},
+		};
+		await expect(
+			executeRun({
+				...common,
+				plan: { ...plan, skillPhase: "pilot" },
+				runsDir: temp.join("unsupported-backend"),
+				backend: incompatibleBackend,
+			}),
+		).rejects.toThrow(/Skill experiments require the veyyon in-process resource snapshot boundary/);
+		expect(incompatibleCalls).toEqual({ preflight: 0, prepare: 0, trial: 0 });
 		const cacheClaimPath = path.join(
 			cacheDir(),
 			"skill-final-claims",
@@ -468,6 +501,7 @@ describe("skill-bound run plans", () => {
 				}),
 			).rejects.toThrow();
 			const replacementHash = "c".repeat(64);
+			const replacementCandidate = { ...candidate, candidateHash: replacementHash };
 			const replacementArm = { ...candidateArm, id: `candidate-${replacementHash.slice(0, 12)}`, content: "Different candidate.", contentHash: replacementHash, recipeHash: replacementHash };
 			const replacementVariant = { ...selectedVariant, skillArm: replacementArm };
 			const replacementPlan = { ...plan, variants: [replacementVariant] };
@@ -497,8 +531,13 @@ describe("skill-bound run plans", () => {
 				...candidateBinding,
 				datasetFingerprint: "d".repeat(64),
 				splitFingerprint: "f".repeat(64),
+				resolvedModel: { provider: "anthropic", id: "claude-sonnet-4-6", version: null },
 			};
-			const incumbentCandidate = { ...candidate, binding: incumbentBinding };
+			const incumbentCandidate = {
+				...candidate,
+				resolvedModel: { provider: "anthropic", id: "claude-sonnet-4-6", version: null },
+				binding: incumbentBinding,
+			};
 			const incumbentSelection = Object.freeze({
 				winner: "incumbent" as const,
 				candidateHash,
@@ -508,14 +547,15 @@ describe("skill-bound run plans", () => {
 				minimumImprovement: 0,
 				score: Object.freeze({
 					selected: "incumbent",
-					reason: "incomplete-score-data",
-					incumbentMean: null,
-					candidateMean: null,
+					reason: "unknown-model-revision",
+					incumbentMean: 0,
+					candidateMean: 1,
 				}),
 			});
 			markFinalSkillSelectionVerified(incumbentSelection);
 			const incumbentIdentity = {
 				...claimIdentity,
+				model: "anthropic/claude-sonnet-4-6@unknown",
 				datasetFingerprint: incumbentBinding.datasetFingerprint,
 				splitFingerprint: incumbentBinding.splitFingerprint,
 			};
@@ -533,7 +573,7 @@ describe("skill-bound run plans", () => {
 						started++;
 						return {
 							extra: {
-								resolvedModel: candidate.resolvedModel,
+								resolvedModel: incumbentCandidate.resolvedModel,
 								skillArm: {
 									id: full!.id,
 									kind: "full",

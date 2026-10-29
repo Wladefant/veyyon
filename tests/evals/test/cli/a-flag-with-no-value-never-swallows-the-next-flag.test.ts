@@ -86,6 +86,18 @@ describe("axis flags", () => {
 			"typescript-edit",
 		]);
 	});
+	it("accepts the diagnostic pilot phase without a tuning split", () => {
+		const args = parseEvalsArgs([
+			"--skill-experiment",
+			"skills/example.json",
+			"--skill-phase",
+			"pilot",
+			"--limit",
+			"1",
+		]);
+		expect(args.skillPhase).toBe("pilot");
+		expect(args.skillSplitSeed).toBeNull();
+	});
 });
 
 describe("numeric flags", () => {

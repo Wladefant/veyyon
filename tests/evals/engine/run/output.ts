@@ -19,6 +19,13 @@ import { errorMessage, logger } from "@veyyon/utils";
 import type { EvalRunRecord } from "./record";
 import { runDirFor } from "./layout";
 import type { EvalSuite, SuiteReportContext } from "../contracts";
+import { createSkillExperimentReport, SKILL_EXPERIMENT_REPORT_FILE } from "../skills/report";
+
+/** Persist the skill experiment summary beside the run record, without changing suite reporting. */
+async function writeSkillExperimentOutput(runDir: string, record: EvalRunRecord): Promise<void> {
+	const report = createSkillExperimentReport(record);
+	if (report) await fs.writeFile(path.join(runDir, SKILL_EXPERIMENT_REPORT_FILE), `${JSON.stringify(report, null, 2)}\n`);
+}
 
 /** Filename the run record is written under, inside the run's directory. */
 export const RUN_RECORD_FILE = "run.json";
@@ -50,9 +57,17 @@ export async function writeRunOutput(options: WriteRunOutputOptions): Promise<st
 	const runDir = runDirFor(options.runsDir, options.record.id);
 	await fs.mkdir(runDir, { recursive: true });
 	await fs.writeFile(path.join(runDir, RUN_RECORD_FILE), `${JSON.stringify(options.record, null, 2)}\n`);
+	let skillReportFailure: string | null = null;
+	try {
+		await writeSkillExperimentOutput(runDir, options.record);
+	} catch (error) {
+		skillReportFailure = errorMessage(error);
+		logger.error("skill experiment report failed", { runId: options.record.id, error });
+	}
+
 
 	const render = options.suite.writeRunReport;
-	if (!render) return null;
+	if (!render) return skillReportFailure;
 	const context: SuiteReportContext = {
 		runDir,
 		model: reportModel(options.models),
@@ -62,7 +77,7 @@ export async function writeRunOutput(options: WriteRunOutputOptions): Promise<st
 	};
 	try {
 		await render.call(options.suite, context);
-		return null;
+		return skillReportFailure;
 	} catch (error) {
 		const reason = errorMessage(error);
 		logger.error("suite report failed", { runId: options.record.id, suite: options.suite.id, error });

@@ -337,6 +337,7 @@ export class InProcessBackend implements ExecutionBackend {
 						}
 					: undefined,
 				observedSkillHashes: state?.observedSkillHashes,
+				observedSkillPrompt: state?.observedSkillPrompt,
 				timedOut,
 				cancelled,
 				timeoutSec,

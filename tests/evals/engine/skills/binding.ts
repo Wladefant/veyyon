@@ -16,6 +16,14 @@ export interface SkillExperimentBinding {
 	readonly modelRevision: null;
 	readonly criteriaHash: string | null;
 	readonly armFingerprint: string;
+	readonly cohortSize: 80 | 100;
+}
+
+/** Refuse an unapplied resource treatment even when a caller supplies an already-built plan. */
+export function requireSkillArmSupport(variants: readonly Variant[], backend: string): void {
+	if (variants.some(variant => variant.skillArm && (backend !== "in-process" || variant.harness !== "veyyon"))) {
+		throw new Error("Skill experiments require the veyyon in-process resource snapshot boundary.");
+	}
 }
 
 async function hashSources(roots: readonly string[]): Promise<string> {
@@ -59,6 +67,7 @@ export async function bindSkillExperiment(
 	variants: readonly Variant[],
 	provenance: SuiteProvenance,
 	criteria?: { readonly minimumImprovement: number },
+	cohortSize: 80 | 100 = 100,
 ): Promise<SkillExperimentBinding> {
 	if (criteria && (!Number.isFinite(criteria.minimumImprovement) || criteria.minimumImprovement < 0)) {
 		throw new Error("Skill selection criteria require a finite minimumImprovement >= 0.");
@@ -92,10 +101,16 @@ export async function bindSkillExperiment(
 		requestedModels: Object.freeze([...new Set(variants.map(variant => variant.model))].sort()),
 		modelRevision: null,
 		criteriaHash: criteria ? computeVariantFingerprint({ config: criteria }) : null,
-		armFingerprint: computeVariantFingerprint({ config: variants.map(variant => ({
-			harness: variant.harness,
-			model: variant.model,
-			skill: variant.skillArm,
-		})) }),
+		armFingerprint: computeVariantFingerprint({
+			config: {
+				cohortSize,
+				variants: variants.map(variant => ({
+					harness: variant.harness,
+					model: variant.model,
+					skill: variant.skillArm,
+				})),
+			},
+		}),
+		cohortSize,
 	});
 }

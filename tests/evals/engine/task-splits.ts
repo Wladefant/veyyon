@@ -6,20 +6,34 @@ export const TASK_SPLIT_SIZES = {
 	final: 60,
 } as const;
 
+export const DECLARED_SKILL_COHORT_SIZES = {
+	80: { feedback: 16, score: 16, final: 48 },
+	100: TASK_SPLIT_SIZES,
+} as const;
+
+export type DeclaredSkillCohortSize = keyof typeof DECLARED_SKILL_COHORT_SIZES;
+
+
 export interface TaskSplits {
 	readonly feedback: readonly TaskDescriptor[];
 	readonly score: readonly TaskDescriptor[];
 	readonly final: readonly TaskDescriptor[];
 }
-
 /**
- * Create the fixed-size learning, candidate-scoring, and final-evaluation sets.
- * Stable hashing makes membership independent of input order. The final set is
- * returned separately and never participates in feedback or candidate scoring.
+ * Create fixed-size learning, scoring, and final sets. An 80-task split is
+ * available only when callers pass the explicitly declared manifest size.
  */
-export function splitTasks(tasks: readonly TaskDescriptor[], seed: string): TaskSplits {
-	if (tasks.length !== 100) {
-		throw new Error(`Expected exactly 100 tasks for a 20/20/60 split; received ${tasks.length}.`);
+export function splitTasks(tasks: readonly TaskDescriptor[], seed: string, declaredCohortSize?: number): TaskSplits {
+	const sizes = declaredCohortSize === undefined
+		? TASK_SPLIT_SIZES
+		: DECLARED_SKILL_COHORT_SIZES[declaredCohortSize as DeclaredSkillCohortSize];
+	const expectedCount = declaredCohortSize ?? 100;
+	if (!sizes || tasks.length !== expectedCount) {
+		throw new Error(
+			declaredCohortSize === undefined
+				? `Expected exactly 100 tasks for a 20/20/60 split; received ${tasks.length}.`
+				: `Expected a declared 80-task cohort for a 16/16/48 split; received ${tasks.length}.`,
+		);
 	}
 	if (!seed) throw new Error("A non-empty split seed is required.");
 
@@ -38,11 +52,10 @@ export function splitTasks(tasks: readonly TaskDescriptor[], seed: string): Task
 			(left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
 		);
 	});
-
 	return {
-		feedback: ordered.slice(0, TASK_SPLIT_SIZES.feedback),
-		score: ordered.slice(TASK_SPLIT_SIZES.feedback, TASK_SPLIT_SIZES.feedback + TASK_SPLIT_SIZES.score),
-		final: ordered.slice(TASK_SPLIT_SIZES.feedback + TASK_SPLIT_SIZES.score),
+		feedback: ordered.slice(0, sizes.feedback),
+		score: ordered.slice(sizes.feedback, sizes.feedback + sizes.score),
+		final: ordered.slice(sizes.feedback + sizes.score),
 	};
 }
 
