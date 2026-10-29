@@ -9,6 +9,9 @@
  *
  * Not caught: a third kind of execution block not added to `BLOCKS`, and how often the header is rebuilt
  * between invalidations, which changes no output.
+ *
+ * Colour is pinned on: under `NO_COLOR` both themes draw the header bold and uncoloured, so the two
+ * frames match and the non-vacuity check fails for a reason that has nothing to do with invalidation.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
@@ -16,6 +19,7 @@ import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/comp
 import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { requireTheme } from "../../../helpers/require-theme";
+import { useFullColor } from "../../../helpers/theme-assertions";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
@@ -38,6 +42,8 @@ function finished(open: () => ExecutionBlock): ExecutionBlock {
 	block.setComplete(0, false);
 	return block;
 }
+
+useFullColor();
 
 afterEach(async () => {
 	await useTheme("dark");
