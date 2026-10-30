@@ -746,6 +746,34 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 /** Shared across events: every payload decode is a complete, non-streaming call. */
 const PAYLOAD_DECODER = new TextDecoder();
 
+/**
+ * Event-stream failures arrive inside HTTP 200 responses. Preserve the service
+ * status so retry classification can distinguish transient failures from rejection.
+ * Unknown shapes stay terminal. Names are case-insensitive across frame dialects.
+ */
+function bedrockStreamExceptionStatus(code: string): number {
+	switch (code.trim().toLowerCase()) {
+		case "accessdeniedexception":
+			return 403;
+		case "internalserverexception":
+			return 500;
+		case "modelerrorexception":
+		case "modelstreamerrorexception":
+			return 424;
+		case "modelnotreadyexception":
+		case "throttlingexception":
+			return 429;
+		case "modeltimeoutexception":
+			return 408;
+		case "resourcenotfoundexception":
+			return 404;
+		case "serviceunavailableexception":
+			return 503;
+		default:
+			return 400;
+	}
+}
+
 /** The error an `exception` or `error` frame reports, or undefined for any other frame. */
 function frameError(frame: EventStreamMessage): AIError.BedrockApiError | undefined {
 	switch (frame.headers[":message-type"]) {
@@ -753,12 +781,18 @@ function frameError(frame: EventStreamMessage): AIError.BedrockApiError | undefi
 			const exceptionType = frame.headers[":exception-type"] || "Exception";
 			const payload = safeParsePayload(frame.payload) as { message?: string } | undefined;
 			const message = payload?.message || PAYLOAD_DECODER.decode(frame.payload);
-			return new AIError.BedrockApiError(`${exceptionType}: ${message}`, 400, { code: exceptionType });
+			return new AIError.BedrockApiError(
+				`${exceptionType}: ${message}`,
+				bedrockStreamExceptionStatus(exceptionType),
+				{
+					code: exceptionType,
+				},
+			);
 		}
 		case "error": {
 			const code = frame.headers[":error-code"] || "UnknownError";
 			const message = frame.headers[":error-message"] || PAYLOAD_DECODER.decode(frame.payload);
-			return new AIError.BedrockApiError(`${code}: ${message}`, 400, { code });
+			return new AIError.BedrockApiError(`${code}: ${message}`, bedrockStreamExceptionStatus(code), { code });
 		}
 		default:
 			return undefined;

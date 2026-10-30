@@ -406,7 +406,7 @@ export class SessionBranch {
 		}
 
 		// Update agent state — build display context to populate agent messages.
-		const stateContext = session.sessionManager.buildSessionContext();
+		const stateContext = session.sessionManager.buildSessionContext({ activeProvider: session.model?.provider });
 		// RENDER PATH, and async: this rebuilds the agent's display state after a
 		// branch move, so a throw left the TUI with no transcript at all. Await the
 		// refresh a stale revision needs, then degrade per string.
@@ -431,7 +431,7 @@ export class SessionBranch {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
-			const rawContext = session.sessionManager.buildSessionContext();
+			const rawContext = session.sessionManager.buildSessionContext({ activeProvider: session.model?.provider });
 			return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
 		}
 		return { editorText, cancelled: false, summaryEntry, sessionContext: stateContext };

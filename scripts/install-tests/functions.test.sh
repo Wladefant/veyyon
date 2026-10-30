@@ -2237,25 +2237,25 @@ fake_curl_url() { # effective-url
   resolve_latest_tag
 }
 check "the tag is taken from the redirect target" \
-    "$(fake_curl_url "https://github.com/santhreal/veyyon/releases/tag/v1.2.3")" "v1.2.3"
+    "$(fake_curl_url "https://github.com/Wladefant/veyyon/releases/tag/v1.2.3")" "v1.2.3"
 check "a prerelease-shaped tag survives intact" \
-    "$(fake_curl_url "https://github.com/santhreal/veyyon/releases/tag/v0.0.1-rc1")" "v0.0.1-rc1"
+    "$(fake_curl_url "https://github.com/Wladefant/veyyon/releases/tag/v0.0.1-rc1")" "v0.0.1-rc1"
 # A redirect that did not land on a tag page means GitHub answered with something
 # other than a release: an interstitial, a moved repo, a captive portal. Taking
 # the last path segment anyway is how an installer ends up trying to download a
 # binary for the version "latest".
 check "a redirect that is not a tag page is refused" \
-    "$( fake_curl_url "https://github.com/santhreal/veyyon/releases" >/dev/null 2>&1; echo $? )" "1"
+    "$( fake_curl_url "https://github.com/Wladefant/veyyon/releases" >/dev/null 2>&1; echo $? )" "1"
 check "a login interstitial is refused" \
-    "$( fake_curl_url "https://github.com/login?return_to=%2Fsanthreal%2Fveyyon" >/dev/null 2>&1; echo $? )" "1"
+    "$( fake_curl_url "https://github.com/login?return_to=%2FWladefant%2Fveyyon" >/dev/null 2>&1; echo $? )" "1"
 check "a captive portal's landing page is refused" \
     "$( fake_curl_url "http://wifi.example.net/portal" >/dev/null 2>&1; echo $? )" "1"
 check "an empty tag after the marker is refused" \
-    "$( fake_curl_url "https://github.com/santhreal/veyyon/releases/tag/" >/dev/null 2>&1; echo $? )" "1"
+    "$( fake_curl_url "https://github.com/Wladefant/veyyon/releases/tag/" >/dev/null 2>&1; echo $? )" "1"
 # And nothing is printed on the failing paths, so a caller that ignores the exit
 # status cannot end up with a URL fragment where a version belongs.
 check "a refused redirect prints no tag" \
-    "$( fake_curl_url "https://github.com/santhreal/veyyon/releases" 2>/dev/null )" ""
+    "$( fake_curl_url "https://github.com/Wladefant/veyyon/releases" 2>/dev/null )" ""
 # A curl that fails outright (no network, DNS failure) is a failure, not an
 # empty tag.
 check "a failed request is a failure" \
@@ -2277,7 +2277,7 @@ check "the lookup discards the body" \
 check "the lookup goes to github.com, not the API host" \
     "$(curl_args_of_lookup | grep -c 'api\.github\.com')" "0"
 check "the lookup asks for the latest release by name" \
-    "$(curl_args_of_lookup | grep -c 'https://github.com/santhreal/veyyon/releases/latest')" "1"
+    "$(curl_args_of_lookup | grep -c 'https://github.com/Wladefant/veyyon/releases/latest')" "1"
 # Every network call in this installer retries a transient failure; a lookup that
 # quietly did not would turn one dropped packet into a failed install.
 check "the lookup retries like every other fetch" \

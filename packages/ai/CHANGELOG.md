@@ -9,6 +9,11 @@
 - Report non-streaming success bodies and provider rejection text without repeated sentences.
 - Keep exhausted Cursor allowances parked for their reset window and retain gateway usage on early stream completion.
 - Request a fresh Codex browser sign-in with password reauthentication.
+## [1.6.6] - 2026-10-29
+
+### Fixed
+
+- Bedrock stream failures retain their service status so transient server and throttling errors remain eligible for retry ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.6.0] - 2026-10-28
 

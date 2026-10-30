@@ -22,6 +22,7 @@ import { buildRollbackRows } from "../src/cli/rollback-cli";
 import { getAllReleases, runAutoUpdate, runUpdateCommand } from "../src/cli/update-cli";
 import { Settings } from "../src/config/settings";
 import { checkForNewVersion } from "../src/main";
+import { releaseTagUrl } from "./helpers/release-redirect";
 
 const realFetch = globalThis.fetch;
 let tempDir = "";
@@ -43,7 +44,7 @@ function stubGithubRedirect(version: string): void {
 	globalThis.fetch = (async () =>
 		new Response(null, {
 			status: 302,
-			headers: { location: `https://github.com/santhreal/veyyon/releases/tag/v${version}` },
+			headers: { location: releaseTagUrl(`v${version}`) },
 		})) as unknown as typeof fetch;
 }
 
@@ -54,6 +55,20 @@ describe("startup update check: checkForNewVersion", () => {
 		const release = await checkForNewVersion("1.4.0");
 
 		expect(release).toEqual({ tag: "v0.0.1", version: "0.0.1" });
+	});
+	it("offers the published release when running a local-tagged version", async () => {
+		stubGithubRedirect("1.6.4");
+
+		const release = await checkForNewVersion("1.6.3-local");
+
+		expect(release).toEqual({ tag: "v1.6.4", version: "1.6.4" });
+	});
+	it("returns the published release when local and published versions have the same base", async () => {
+		stubGithubRedirect("1.6.3");
+
+		const release = await checkForNewVersion("1.6.3-local");
+
+		expect(release).toEqual({ tag: "v1.6.3", version: "1.6.3" });
 	});
 
 	it("returns undefined when the latest release matches the running version", async () => {

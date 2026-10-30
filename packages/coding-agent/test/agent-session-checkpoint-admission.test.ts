@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { mkdir, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -10,10 +12,9 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { type } from "arktype";
 import { persistNativeHandoffIdentity } from "../src/checkpoints/native-recovery";
+import { readSessionOwnershipMarker } from "../src/checkpoints/session-ownership-marker";
 
 const zeroUsage = {
 	input: 0,
@@ -29,6 +30,7 @@ const environmentKeys = [
 	"VEYYON_CHECKPOINT_URL",
 	"VEYYON_CHECKPOINT_TOKEN",
 	"VEYYON_CHECKPOINT_KEY",
+	"VEYYON_CHECKPOINT_SESSION",
 ] as const;
 const previousEnvironment = new Map(environmentKeys.map(key => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
@@ -52,6 +54,7 @@ afterEach(async () => {
 
 async function createCheckpointHarness(
 	streamResponder: (streamCount: number, model: Model<Api>) => AssistantMessage,
+	transferred = true,
 ) {
 	tempDir = TempDir.createSync("@checkpoint-admission-");
 	authStorage = await AuthStorage.create(join(tempDir.path(), "auth.db"));
@@ -63,33 +66,36 @@ async function createCheckpointHarness(
 	const sessionManager = SessionManager.create(tempDir.path(), join(tempDir.path(), "sessions"));
 	const sessionFile = sessionManager.getSessionFile();
 	const sessionId = sessionManager.getSessionId();
-	await sessionManager.ensureOnDisk();
 	const identity = { version: 1 as const, targetNode: "laptop-b", transferId: "handoff-1", transferEpoch: 7 };
-	await persistNativeHandoffIdentity(sessionFile, identity);
+	if (transferred) {
+		await sessionManager.ensureOnDisk();
+		await persistNativeHandoffIdentity(sessionFile, identity);
+	}
 	const sessionsDirectory = dirname(sessionFile);
 	await mkdir(sessionsDirectory, { recursive: true });
-	await writeFile(
-		join(sessionsDirectory, "checkpoint-ownership.json"),
-		JSON.stringify({
-			version: 1,
-			sessionId,
-			...identity,
-			claimToken: "a-long-enough-single-use-claim",
-			epoch: 7,
-		}),
-		{ mode: 0o600 },
-	);
-	await writeFile(
-		join(sessionsDirectory, "..", "recovery.json"),
-		JSON.stringify({ sessionId, checkpointTransfer: true }),
-	);
+	if (transferred) {
+		await writeFile(
+			join(sessionsDirectory, "checkpoint-ownership.json"),
+			JSON.stringify({
+				version: 1,
+				sessionId,
+				...identity,
+				claimToken: "a-long-enough-single-use-claim",
+				epoch: 7,
+			}),
+			{ mode: 0o600 },
+		);
+		await writeFile(join(sessionsDirectory, "..", "recovery.json"), JSON.stringify({ sessionId, checkpointTransfer: true }));
+	}
 	process.env.VEYYON_CHECKPOINT_NODE = "laptop-b";
 	process.env.VEYYON_CHECKPOINT_URL = "https://checkpoint.test";
 	process.env.VEYYON_CHECKPOINT_TOKEN = "test-token";
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32, 9).toString("base64");
 	let renewals = 0;
+	const requests: string[] = [];
 	globalThis.fetch = async (input, init) => {
-		const action = new URL(String(input)).pathname.split("/").pop();
+		const action = new URL(String(input)).pathname.split("/").pop() ?? "";
+		requests.push(action);
 		const parsed: unknown = init?.body ? JSON.parse(String(init.body)) : undefined;
 		const ownerNode =
 			parsed && typeof parsed === "object" && "ownerNode" in parsed && typeof parsed.ownerNode === "string"
@@ -105,6 +111,8 @@ async function createCheckpointHarness(
 				resumeToken: "a-rotated-resume-capability",
 			});
 		if (action === "finalize") return Response.json({ ok: true });
+		if (action === "lease")
+			return Response.json({ ownerNode, epoch: 8, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "" });
 		if (action === "renew" && ++renewals > 1) return Response.json({ error: "lease lost" }, { status: 409 });
 		if (action === "renew")
 			return Response.json({ ownerNode, epoch: 8, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "" });
@@ -140,9 +148,13 @@ async function createCheckpointHarness(
 	session = new AgentSession({ agent, sessionManager, settings, modelRegistry, toolRegistry: new Map([[tool.name, tool]]) });
 	return {
 		session,
+		sessionManager,
+		sessionFile,
+		sessionId,
 		getExecutions: () => executions,
 		getRenewals: () => renewals,
 		getStreamCount: () => streamCount,
+		getRequests: () => requests,
 	};
 }
 
@@ -221,3 +233,52 @@ test(
 	},
 	5000,
 );
+test("a genuinely lazy session acquires ordinary ownership before its first prompt", async () => {
+	const { session, sessionFile, getRequests, getStreamCount } = await createCheckpointHarness(
+		(_streamCount, model) => ({
+			role: "assistant",
+			content: [{ type: "text", text: "ordinary prompt completed" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: zeroUsage,
+			stopReason: "stop",
+			timestamp: Date.now(),
+		}),
+		false,
+	);
+	process.env.VEYYON_CHECKPOINT_SESSION = session.sessionManager.getSessionId();
+	await expect(stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+	await expect(readSessionOwnershipMarker(sessionFile, session.sessionManager.getSessionId())).resolves.toBeNull();
+	await expect(stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+	await session.prompt("ordinary lazy prompt");
+	await session.waitForIdle();
+	expect(session.state.messages.at(-1)).toMatchObject({
+		role: "assistant",
+		content: [{ type: "text", text: "ordinary prompt completed" }],
+	});
+	expect(getRequests()).toContain("lease");
+	expect(getRequests()).not.toContain("claim");
+	expect(getStreamCount()).toBe(1);
+});
+
+test("a non-ENOENT lazy session ownership error blocks prompt admission", async () => {
+	const { session, sessionFile, getRequests, getStreamCount } = await createCheckpointHarness(
+		(_streamCount, model) => ({
+			role: "assistant",
+			content: [{ type: "text", text: "must not stream" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: zeroUsage,
+			stopReason: "stop",
+			timestamp: Date.now(),
+		}),
+		false,
+	);
+	process.env.VEYYON_CHECKPOINT_SESSION = session.sessionManager.getSessionId();
+	await mkdir(sessionFile);
+	await expect(session.prompt("blocked lazy prompt")).rejects.toMatchObject({ code: "EISDIR" });
+	expect(getStreamCount()).toBe(0);
+	expect(getRequests()).toEqual([]);
+});

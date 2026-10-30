@@ -9,6 +9,7 @@
 // JSON-RPC 2.0 Types
 // =============================================================================
 
+import { RELEASE_REPOSITORY } from "@veyyon/utils";
 import type { SourceMeta } from "../discovery/capability/types";
 
 export interface JsonRpcRequest {
@@ -173,8 +174,7 @@ export interface MCPSseServerConfig extends MCPServerConfigBase {
 
 export type MCPServerConfig = MCPStdioServerConfig | MCPHttpServerConfig | MCPSseServerConfig;
 
-export const MCP_CONFIG_SCHEMA_URL =
-	"https://raw.githubusercontent.com/santhreal/veyyon/main/packages/coding-agent/src/config/mcp-schema.json";
+export const MCP_CONFIG_SCHEMA_URL = `https://raw.githubusercontent.com/${RELEASE_REPOSITORY}/main/packages/coding-agent/src/config/mcp-schema.json`;
 
 /** Root mcp.json/.mcp.json file structure */
 export interface MCPConfigFile {

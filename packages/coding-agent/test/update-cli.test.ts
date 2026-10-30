@@ -80,6 +80,11 @@ describe("getLatestRelease reads GitHub Releases, not npm", () => {
 		const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
 		expect(headers?.["User-Agent"]).toContain("veyyon");
 	});
+	it("fetches the fork release endpoint rather than upstream releases", async () => {
+		const { calls } = mockFetch(releaseRedirect("v1.2.3"));
+		await updateCli.getLatestRelease(1000);
+		expect(calls[0]?.url).toBe("https://github.com/Wladefant/veyyon/releases/latest");
+	});
 
 	/**
 	 * `api.github.com` allows 60 requests an hour per IP without a token, and that
@@ -130,10 +135,10 @@ describe("getLatestRelease reads GitHub Releases, not npm", () => {
 	 * ends up trying to install the version "latest".
 	 */
 	it.each([
-		["the releases index", "https://github.com/santhreal/veyyon/releases"],
-		["a login interstitial", "https://github.com/login?return_to=%2Fsanthreal%2Fveyyon"],
+		["the releases index", "https://github.com/Wladefant/veyyon/releases"],
+		["a login interstitial", "https://github.com/login?return_to=%2FWladefant%2Fveyyon"],
 		["a captive portal", "http://wifi.example.net/portal"],
-		["a tag page with no tag on it", "https://github.com/santhreal/veyyon/releases/tag/"],
+		["a tag page with no tag on it", "https://github.com/Wladefant/veyyon/releases/tag/"],
 	])("refuses a redirect to %s", async (_name: string, location: string) => {
 		mockFetch(new Response(null, { status: 302, headers: { location } }));
 
@@ -529,7 +534,7 @@ describe("update-cli release-info errors", () => {
 		// stacked on one another. The inner message states what it could not do
 		// and lets the outer one supply the "failed".
 		expect(combined).not.toContain("updates: Failed");
-		expect(combined).toContain("github.com/santhreal/veyyon/releases/latest");
+		expect(combined).toContain("github.com/Wladefant/veyyon/releases/latest");
 		expect(combined).not.toContain("api.github.com");
 		expect(combined).not.toContain("registry.npmjs.org");
 		expect(combined).toContain("HTTP 404");
@@ -828,7 +833,7 @@ describe("runAutoUpdate", () => {
  * exact substrings, never `!is_empty`.
  */
 describe("formatBinaryDownloadFailure names the version, asset, and fix", () => {
-	const URL = "https://github.com/santhreal/veyyon/releases/download/v1.0.99/veyyon-linux-x64";
+	const URL = "https://github.com/Wladefant/veyyon/releases/download/v1.0.99/veyyon-linux-x64";
 
 	it("on 404 names the missing asset, the version, and points at update --check", () => {
 		// The rollback/old-version case: the version or the platform asset does not
@@ -836,7 +841,7 @@ describe("formatBinaryDownloadFailure names the version, asset, and fix", () => 
 		const msg = formatBinaryDownloadFailure(404, "Not Found", URL, "1.0.99", "veyyon-linux-x64");
 		expect(msg).toBe(
 			"Failed to download release binary from " +
-				"https://github.com/santhreal/veyyon/releases/download/v1.0.99/veyyon-linux-x64: " +
+				"https://github.com/Wladefant/veyyon/releases/download/v1.0.99/veyyon-linux-x64: " +
 				"HTTP 404 Not Found — release v1.0.99 has no veyyon-linux-x64 asset. The version " +
 				"may not exist, or its build for your platform and architecture was not published. " +
 				"Run `veyyon update --check` to see the latest available version.",
@@ -860,7 +865,7 @@ describe("formatBinaryDownloadFailure names the version, asset, and fix", () => 
 		const msg = formatBinaryDownloadFailure(500, "Internal Server Error", URL, "1.0.99", "veyyon-linux-x64");
 		expect(msg).toBe(
 			"Failed to download release binary from " +
-				"https://github.com/santhreal/veyyon/releases/download/v1.0.99/veyyon-linux-x64: " +
+				"https://github.com/Wladefant/veyyon/releases/download/v1.0.99/veyyon-linux-x64: " +
 				"HTTP 500 Internal Server Error",
 		);
 		expect(msg).not.toContain("rate-limiting");
@@ -920,7 +925,7 @@ describe("parseSha256Sidecar reads the sha256sum format strictly", () => {
  * (Law 10). The mismatch message must name both digests so the operator sees it.
  */
 describe("verifyDownloadChecksum is a fail-closed integrity gate", () => {
-	const SIDECAR = "https://github.com/santhreal/veyyon/releases/download/v1.0.99/veyyon-linux-x64.sha256";
+	const SIDECAR = "https://github.com/Wladefant/veyyon/releases/download/v1.0.99/veyyon-linux-x64.sha256";
 
 	async function writeBinary(bytes: string): Promise<{ filePath: string; hash: string }> {
 		const dir = await makeTempDir();
