@@ -1,11 +1,13 @@
 /**
- * WHY: a replacement lane used to start without durable predecessor state or a slice bound.
- * These tests drive TaskTool through restart, competing claims and a two-successor chain.
- * The model executor is the external boundary; no model or external-action replay safety is claimed.
+ * WHY: successors previously lost predecessor state, accepted drift, and started outside their slice.
+ * This suite drives TaskTool's real scheduler, durable claims, checkpoint reader and writer; it closes their
+ * observable contracts for inline/background batches, every task/agent workflow input, refusal ordering, and bounds.
+ * It does not prove real crashes, cross-process coordination, exact-once external actions, or model behavior.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -13,11 +15,14 @@ import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import * as executor from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import * as atomicWriter from "@veyyon/utils/atomic-write";
 import { TempDir } from "@veyyon/utils";
-import { makeToolSession } from "../helpers/tool-session";
+import { makeToolSession, type ToolSessionOverrides } from "../helpers/tool-session";
 
 const assignment = "Continue the same slice.";
 const agent: AgentDefinition = { name: "task", description: "Work", systemPrompt: "Work", source: "bundled" };
+const writeAtomicJson = atomicWriter.atomicWriteJson;
 
 function result(options: executor.ExecutorOptions): SingleResult {
 	return {
@@ -67,7 +72,7 @@ describe("explicit bounded lane successors", () => {
 		dir[Symbol.dispose]();
 	});
 
-	async function tool() {
+	async function tool(overrides: ToolSessionOverrides = {}) {
 		return TaskTool.create(
 			makeToolSession({
 				cwd: dir.path(),
@@ -77,6 +82,7 @@ describe("explicit bounded lane successors", () => {
 				getSessionSpawns: () => "*",
 				getModelString: () => "openai/gpt-5",
 				getActiveModelString: () => "openai/gpt-5",
+				...overrides,
 			}),
 		);
 	}
@@ -84,6 +90,7 @@ describe("explicit bounded lane successors", () => {
 	async function dispatch(name: string, successorOf?: string) {
 		return (await tool()).execute(name, { agent: "task", name, task: assignment, successorOf } as TaskParams);
 	}
+
 
 	it("reads the predecessor checkpoint after all process-local state is lost", async () => {
 		await dispatch("Original");
@@ -136,7 +143,7 @@ describe("explicit bounded lane successors", () => {
 		if (!file) throw new Error("No durable checkpoint");
 		const checkpointPath = path.join(directory, file);
 		const original = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
-		for (const bytes of ["{", JSON.stringify({ ...original, version: 2 })]) {
+		for (const bytes of ["{", JSON.stringify({ ...original, version: 3 })]) {
 			await fs.writeFile(checkpointPath, bytes);
 			const refused = await dispatch("Invalid", predecessor);
 			expect(refused.isError).toBe(true);
@@ -157,6 +164,233 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(2);
 		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
 	});
+	it("aggregates a refused successor inside an inline batch", async () => {
+		settings.override("agent.batch", true);
+		const original = await (await tool()).execute("Original", {
+			context: "Shared task context",
+			tasks: [{ agent: "task", name: "Original", task: assignment }],
+		} as TaskParams);
+		const predecessor = original.details?.results[0]?.id;
+		if (!predecessor) throw new Error("No original batch result");
+		await (await tool()).execute("First", {
+			context: "Shared task context",
+			tasks: [{ agent: "task", name: "First", task: assignment, successorOf: predecessor }],
+		} as TaskParams);
+		const refusal = await (await tool()).execute("Batch", {
+			context: "Shared task context",
+			tasks: [
+				{ agent: "task", name: "Accepted", task: "Continue independently." },
+				{ agent: "task", name: "Refused", task: assignment, successorOf: predecessor },
+			],
+		} as TaskParams);
+		expect(refusal.isError).toBe(true);
+		expect(JSON.stringify(refusal.content)).toContain("successor-claimed");
+		expect(executed).toHaveLength(3);
+	});
+
+	it("preserves refusal text in a failed background successor job", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		await dispatch("First", predecessor);
+		settings.override("async.enabled", true);
+		const started = await (await tool({ asyncJobManager: manager })).execute("Background refusal", {
+			agent: "task",
+			name: "Background refusal",
+			task: assignment,
+			successorOf: predecessor,
+		} as TaskParams);
+		expect(started.isError).not.toBe(true);
+		await manager.waitForAll();
+		const job = manager.getAllJobs()[0];
+		expect(job?.status).toBe("failed");
+		expect(job?.errorText).toContain("successor-claimed");
+		await manager.dispose();
+	});
+
+	it("pins batch task, shared context, output schema and resolved cwd", async () => {
+		settings.override("agent.batch", true);
+		const originalSchema = { type: "object", properties: { value: { type: "string" } } };
+		const first = await (await tool({ outputSchema: originalSchema })).execute("Original", {
+			context: "Shared task context",
+			tasks: [{ agent: "task", name: "Original", task: assignment }],
+		} as TaskParams);
+		const predecessor = first.details?.results[0]?.id;
+		if (!predecessor) throw new Error("No original batch result");
+		await fs.mkdir(dir.join("elsewhere"), { recursive: true });
+		const variants: Array<{ context: string; task: string; cwd?: string; outputSchema?: unknown }> = [
+			{ context: "Changed shared context", task: assignment, outputSchema: originalSchema },
+			{ context: "Shared task context", task: `${assignment} Changed`, outputSchema: originalSchema },
+			{ context: "Shared task context", task: assignment, cwd: dir.join("elsewhere"), outputSchema: originalSchema },
+			{
+				context: "Shared task context",
+				task: assignment,
+				outputSchema: { type: "object", properties: { other: { type: "number" } } },
+			},
+		];
+		for (const [index, variant] of variants.entries()) {
+			const refused = await (await tool({ outputSchema: variant.outputSchema })).execute(`Drift${index}`, {
+				context: variant.context,
+				tasks: [{ agent: "task", name: `Drift${index}`, task: variant.task, cwd: variant.cwd, successorOf: predecessor }],
+			} as TaskParams);
+			expect(refused.isError).toBe(true);
+			expect(JSON.stringify(refused.content)).toContain("successor-workflow-changed");
+		}
+		expect(executed).toHaveLength(1);
+	});
+
+	const agentFieldChanges = {
+		name: { value: "renamed", pinned: true },
+		description: { value: "Changed description", pinned: false },
+		systemPrompt: { value: "Changed system prompt", pinned: true },
+		tools: { value: ["read"], pinned: true },
+		spawns: { value: ["task"], pinned: true },
+		model: { value: ["openai/gpt-4.1"], pinned: true },
+		thinkingLevel: { value: "high", pinned: true },
+		output: { value: { type: "object", properties: { value: { type: "string" } } }, pinned: true },
+		blocking: { value: true, pinned: true },
+		autoloadSkills: { value: ["different-work"], pinned: true },
+		contextVariant: { value: "lane", pinned: true },
+		skillList: { value: ["different-skill"], pinned: true },
+		readSummarize: { value: false, pinned: true },
+		source: { value: "project", pinned: false },
+		filePath: { value: "/repo/.agents/task.md", pinned: false },
+	} satisfies Record<keyof AgentDefinition, { value: unknown; pinned: boolean }>;
+
+	it.each(Object.entries(agentFieldChanges))("decides %s drift before claiming the predecessor", async (field, change) => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const changedDefinition = { ...agent, [field]: change.value } as AgentDefinition;
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [changedDefinition], projectAgentsDir: null });
+		if (field === "name") settings.override("agent.agents", { task: { enabled: true }, renamed: { enabled: true } });
+		const changed = await (await tool()).execute("Changed", {
+			agent: changedDefinition.name, name: "Changed", task: assignment, successorOf: predecessor,
+		} as TaskParams);
+		if (!change.pinned) {
+			expect(changed.isError).not.toBe(true);
+			expect(executed).toHaveLength(2);
+			return;
+		}
+		expect(changed.isError).toBe(true);
+		expect(JSON.stringify(changed.content)).toContain("successor-workflow-changed");
+		expect(executed).toHaveLength(1);
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
+		const restored = await dispatch("Restored", predecessor);
+		expect(restored.isError).not.toBe(true);
+		expect(executed).toHaveLength(2);
+		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
+	}, 2_000);
+
+	it("rejects missing and non-directory cwd before consuming the claim", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const notDirectory = dir.join("not-directory");
+		await fs.writeFile(notDirectory, "plain file");
+		for (const cwd of [dir.join("missing"), notDirectory]) {
+			const refused = await (await tool()).execute("Bad cwd", {
+				agent: "task",
+				name: "Bad cwd",
+				task: assignment,
+				cwd,
+				successorOf: predecessor,
+			} as TaskParams);
+			expect(refused.isError).toBe(true);
+		}
+		await dispatch("Valid cwd", predecessor);
+		expect(executed).toHaveLength(2);
+	});
+
+	it("confines checkpoint lookup to the session directory without changing outside files", async () => {
+		await dispatch("Original");
+		const directory = dir.join("parent");
+		const checkpointName = (await fs.readdir(directory)).find(name => name.endsWith(".checkpoint.json"));
+		if (!checkpointName) throw new Error("No durable checkpoint");
+		const checkpoint = JSON.parse(await fs.readFile(path.join(directory, checkpointName), "utf8"));
+		const traversalCheckpoint = dir.join("escape.checkpoint.json");
+		const traversalId = "../escape";
+		const absoluteId = dir.join("absolute");
+		const absoluteCheckpoint = `${absoluteId}.checkpoint.json`;
+		await fs.writeFile(traversalCheckpoint, JSON.stringify({ ...checkpoint, agentId: traversalId }));
+		await fs.writeFile(absoluteCheckpoint, JSON.stringify({ ...checkpoint, agentId: absoluteId }));
+		const traversalBefore = await fs.readFile(traversalCheckpoint, "utf8");
+		const absoluteBefore = await fs.readFile(absoluteCheckpoint, "utf8");
+		for (const predecessor of [traversalId, absoluteId]) {
+			const refused = await dispatch("Traversal", predecessor);
+			expect(refused.isError).toBe(true);
+		}
+		expect(await fs.readFile(traversalCheckpoint, "utf8")).toBe(traversalBefore);
+		expect(await fs.readFile(absoluteCheckpoint, "utf8")).toBe(absoluteBefore);
+		expect(executed).toHaveLength(1);
+	});
+
+	it("waits for checkpoint persistence before returning the task result", async () => {
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		vi.spyOn(atomicWriter, "atomicWriteJson").mockImplementation(async (file, value, options) => {
+			if (String(file).endsWith(".checkpoint.json")) {
+				entered.resolve();
+				await gate.promise;
+			}
+			return writeAtomicJson(file, value, options);
+		});
+		let delivered = false;
+		const pending = dispatch("Pending").then(value => {
+			delivered = true;
+			return value;
+		});
+		await entered.promise;
+		try {
+			await setImmediate();
+			expect(delivered).toBe(false);
+		} finally {
+			gate.resolve();
+		}
+		expect((await pending).isError).not.toBe(true);
+	}, 2_000);
+
+	it("surfaces checkpoint writer failures instead of returning a clean lane result", async () => {
+		vi.spyOn(atomicWriter, "atomicWriteJson").mockImplementation(async (file, value, options) => {
+			if (String(file).endsWith(".checkpoint.json")) throw new Error("checkpoint disk failure");
+			return writeAtomicJson(file, value, options);
+		});
+		const failed = await dispatch("Write failure");
+		expect(failed.isError).toBe(true);
+		expect(JSON.stringify(failed.details)).toContain("successor-checkpoint-write-failed");
+		expect(JSON.stringify(failed.details)).toContain("checkpoint disk failure");
+	});
+
+	it("rejects wrong checkpoint identity, required shape and stale version one", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const directory = dir.join("parent");
+		const file = (await fs.readdir(directory)).find(name => name.endsWith(".checkpoint.json"));
+		if (!file) throw new Error("No durable checkpoint");
+		const checkpointPath = path.join(directory, file);
+		const original = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+		const invalidCheckpoints: Array<[string, unknown]> = [
+			["wrong agent ID", { ...original, agentId: "Wrong identity" }],
+			["missing required results", { ...original, results: undefined }],
+			["stale version one", { ...original, version: 1 }],
+		];
+		for (const [caseName, invalid] of invalidCheckpoints) {
+			await fs.writeFile(checkpointPath, JSON.stringify(invalid));
+			const refused = await dispatch("Invalid shape", predecessor);
+			expect(refused.isError, caseName).toBe(true);
+			expect(JSON.stringify(refused.content)).toContain("successor-checkpoint-unavailable");
+			expect(executed).toHaveLength(1);
+		}
+	});
+
+	it("completes concurrent claims and the third-successor refusal within a deadline", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		await Promise.all([dispatch("One", predecessor), dispatch("Two", predecessor)]);
+		expect(executed).toHaveLength(2);
+		await dispatch("Second", executed[1].id);
+		const third = await dispatch("Third", executed[2].id);
+		expect(third.isError).toBe(true);
+		expect(JSON.stringify(third.content)).toContain("successor-limit");
+	}, 2_000);
 
 	it("refuses workflow drift instead of silently resuming different topology", async () => {
 		await dispatch("Original");
