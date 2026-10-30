@@ -17,10 +17,6 @@
 
 ### Changed
 
-### Fixed
-
-
-## [1.6.6] - 2026-10-28
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
 
 ### Fixed
