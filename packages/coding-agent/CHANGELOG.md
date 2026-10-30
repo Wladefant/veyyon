@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence before replacing a local summary, rejects stale records, and keeps the execution session and pending work ownership intact ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
