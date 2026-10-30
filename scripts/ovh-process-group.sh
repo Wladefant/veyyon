@@ -6,6 +6,7 @@ child_pid=
 cleaning=0
 
 cleanup() {
+  trap '' INT TERM
   local i
   (( cleaning )) && return
   cleaning=1
@@ -29,6 +30,7 @@ cleanup() {
 }
 
 on_signal() {
+  trap '' INT TERM
   local signal="$1" status="$2"
   if [[ -z "$child_pid" && -n "${!:-}" ]]; then
     child_pid=$!
