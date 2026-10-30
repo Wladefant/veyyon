@@ -1,0 +1,200 @@
+/**
+ * Read a precise, bounded slice of an existing session record.
+ *
+ * Unlike history:// overview formatting, this returns the stored JSONL entry
+ * without normalizing text or dropping tool arguments. An entry can still
+ * contain an externalized blob reference or a historic prune marker: this
+ * reader does not pretend such references are the original media bytes.
+ * No writer or session lock is opened.
+ */
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+
+const DEFAULT_PAGE_CHARACTERS = 8_000;
+const MAX_PAGE_CHARACTERS = 12_000;
+const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+
+export interface ExactHistoryRequest {
+	entryId: string;
+	leafId?: string;
+	offset: number;
+	limit: number;
+}
+
+export interface ExactHistoryResult {
+	status: "ok" | "missing" | "not_on_branch" | "unavailable";
+	entryId: string;
+	leafId?: string;
+	sessionId?: string;
+	recordType?: string;
+	source: "stored-jsonl" | "live-session";
+	offset?: number;
+	totalCharacters?: number;
+	fragment?: string;
+	nextOffset?: number | null;
+	detail?: string;
+}
+
+function idParam(input: string | null, name: string): string {
+	if (!input || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input)) {
+		throw new Error("history:// exact read requires a valid " + name + " (1-128 ID characters)");
+	}
+	return input;
+}
+
+function numericParam(input: string | null, name: string, fallback: number, maximum: number): number {
+	if (input === null) return fallback;
+	if (!/^(0|[1-9][0-9]*)$/.test(input)) {
+		throw new Error("history:// exact read " + name + " must be a nonnegative integer");
+	}
+	const n = Number(input);
+	if (!Number.isSafeInteger(n) || n > maximum) {
+		throw new Error("history:// exact read " + name + " exceeds the supported range");
+	}
+	return n;
+}
+
+/** An absent entry parameter leaves the old concise history:// behavior unchanged. */
+export function parseExactHistoryRequest(url: URL): ExactHistoryRequest | undefined {
+	if (!url.searchParams.has("entry")) return undefined;
+	const entryId = idParam(url.searchParams.get("entry"), "entry");
+	const leaf = url.searchParams.get("leaf");
+	const leafId = leaf === null ? undefined : idParam(leaf, "leaf");
+	const offset = numericParam(url.searchParams.get("offset"), "offset", 0, Number.MAX_SAFE_INTEGER);
+	const limit = numericParam(url.searchParams.get("limit"), "limit", DEFAULT_PAGE_CHARACTERS, MAX_PAGE_CHARACTERS);
+	if (limit === 0) throw new Error("history:// exact read limit must be at least 1");
+	return { entryId, leafId, offset, limit };
+}
+
+function page(
+	raw: string,
+	request: ExactHistoryRequest,
+	leafId: string,
+	source: ExactHistoryResult["source"],
+	recordType: string,
+	sessionId?: string,
+): ExactHistoryResult {
+	// Page by Unicode code point rather than UTF-8 byte or JS UTF-16 offsets;
+	// splitting a multibyte character would corrupt a supposedly exact read.
+	const characters = Array.from(raw);
+	if (request.offset > characters.length) {
+		return {
+			status: "missing", entryId: request.entryId, leafId, sessionId, source,
+			detail: "Page offset is beyond the end of this saved record",
+		};
+	}
+	const next = Math.min(characters.length, request.offset + request.limit);
+	return {
+		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType,
+		offset: request.offset, totalCharacters: characters.length,
+		fragment: characters.slice(request.offset, next).join(""),
+		nextOffset: next < characters.length ? next : null,
+		detail: "Exact saved record text; historic pruning and external blob references are not reversed",
+	};
+}
+
+function onBranch(parents: ReadonlyMap<string, string | undefined>, entryId: string, leafId: string): boolean {
+	const seen = new Set<string>();
+	let current: string | undefined = leafId;
+	while (current && !seen.has(current)) {
+		if (current === entryId) return true;
+		seen.add(current);
+		current = parents.get(current);
+	}
+	return false;
+}
+
+/**
+ * Read-only stream scan: retains only ID/parent relationships and the selected
+ * JSON line, not a second resident copy of the full transcript.
+ */
+export async function readStoredHistoryEntry(
+	filePath: string,
+	request: ExactHistoryRequest,
+): Promise<ExactHistoryResult> {
+	const parents = new Map<string, string | undefined>();
+	let sessionId: string | undefined;
+	let lastId: string | undefined;
+	let raw: string | undefined;
+	let recordType: string | undefined;
+	let incomplete = false;
+	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
+	const lines = createInterface({ input, crlfDelay: Infinity });
+	try {
+		for await (const line of lines) {
+			if (!line.startsWith("{")) continue; // optional title slot and blank lines
+			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
+				incomplete = true;
+				continue; // refuse to materialize exceptionally large records
+			}
+			let record: unknown;
+			try {
+				record = JSON.parse(line);
+			} catch {
+				incomplete = true;
+				continue;
+			}
+			if (!record || typeof record !== "object") continue;
+			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
+			if (entry.type === "session") {
+				if (typeof entry.id === "string") sessionId = entry.id;
+				continue;
+			}
+			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
+			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
+			lastId = entry.id;
+			if (entry.id === request.entryId) {
+				raw = line;
+				recordType = entry.type;
+			}
+		}
+	} finally {
+		lines.close();
+		input.destroy();
+	}
+	const leafId = request.leafId ?? lastId;
+	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
+		return {
+			status: incomplete ? "unavailable" : "missing", entryId: request.entryId, leafId,
+			sessionId, source: "stored-jsonl",
+			detail: incomplete ? "A malformed or oversized record prevents a reliable negative lookup" :
+				"No stored record or requested branch leaf was found",
+		};
+	}
+	if (!onBranch(parents, request.entryId, leafId)) {
+		return {
+			status: incomplete ? "unavailable" : "not_on_branch", entryId: request.entryId,
+			leafId, sessionId, source: "stored-jsonl",
+			detail: incomplete ? "A record could not be inspected to verify branch membership" :
+				"Record exists, but is not an ancestor of the selected branch leaf",
+		};
+	}
+	return page(raw, request, leafId, "stored-jsonl", recordType, sessionId);
+}
+
+/** For intentionally non-persistent sessions only; loaded sessions use the disk source. */
+export function readLiveHistoryEntry(
+	branch: readonly SessionEntry[],
+	request: ExactHistoryRequest,
+): ExactHistoryResult {
+	const leafIndex = request.leafId
+		? branch.findIndex(entry => entry.id === request.leafId)
+		: branch.length - 1;
+	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : request.leafId;
+	const index = branch.findIndex(entry => entry.id === request.entryId);
+	if (index < 0 || leafIndex < 0) {
+		return {
+			status: "missing", entryId: request.entryId, leafId, source: "live-session",
+			detail: "Entry or branch leaf not present in the active in-memory branch",
+		};
+	}
+	if (index > leafIndex) {
+		return {
+			status: "not_on_branch", entryId: request.entryId, leafId, source: "live-session",
+			detail: "Entry is newer than the selected branch leaf",
+		};
+	}
+	const entry = branch[index]!;
+	return page(JSON.stringify(entry), request, leafId!, "live-session", entry.type);
+}
