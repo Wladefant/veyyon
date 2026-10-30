@@ -123,4 +123,28 @@ describe("buildParams tool_choice reconciliation (#2652)", () => {
 		);
 		expect(params.tool_choice).toEqual({ type: "function", name: "read_file" });
 	});
+
+	test("asks for no call to a tool the request dropped", () => {
+		const { params } = buildParams(
+			makeModel(),
+			{
+				systemPrompt: [],
+				messages: [{ role: "user", content: "go", timestamp: 1 }],
+				tools: [goodTool, badTool],
+			},
+			{ toolChoice: { type: "tool", name: "mcp__server__bad" } },
+			undefined,
+		);
+		expect(JSON.stringify(params.input)).not.toContain("This turn must call");
+	});
+
+	test("asks for no call when the request dropped every tool", () => {
+		const { params } = buildParams(
+			makeModel(),
+			{ systemPrompt: [], messages: [{ role: "user", content: "go", timestamp: 1 }], tools: [badTool] },
+			{ toolChoice: "required" },
+			undefined,
+		);
+		expect(JSON.stringify(params.input)).not.toContain("This turn must call");
+	});
 });

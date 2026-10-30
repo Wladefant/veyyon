@@ -109,15 +109,6 @@ import { REMOTE_REFRESH_SENTINEL, RESET_CREDIT_PROVIDERS } from "./auth-storage/
 import { CredentialRanking, isAllowanceSpent, leadWithChosenAccount } from "./auth-storage/usage-ranking";
 import { UsageReporting } from "./auth-storage/usage-reporting";
 import {
-	redactingUsageLogger,
-	redactUsageError,
-	redactUsageReport,
-	redactUsageShape,
-	redactUsageValue,
-	usageCredentialSecrets,
-	usageErrorStatus,
-} from "./auth-storage/usage-redaction";
-import {
 	getScopedUsageLimits,
 	getUsageReportMetadataValue,
 	getUsageReportScopeAccountId,
@@ -146,7 +137,7 @@ import type {
 	OAuthProvider,
 	OAuthProviderId,
 } from "./registry/oauth/types";
-import type { Provider } from "./types";
+import type { ModelAccountAccess, Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
@@ -197,10 +188,9 @@ async function defaultConfigValueResolver(config: string): Promise<string | unde
 // A credential store has no business knowing how each provider reports its quota, and importing the
 // eleven backends here is what put the streaming engine on this module's path.
 
-
 /**
- * Cap on remembered withheld-quota notice keys (one per exhausted window per account). Sized like
- * the disabled-event backlog: a handful of accounts times a handful of windows a day.
+ * Cap on remembered withheld notices (one per account, block scope and refused model). Sized like
+ * the disabled-event backlog: a handful of accounts times a handful of models.
  */
 const MAX_WITHHELD_QUOTA_NOTICES = 64;
 
@@ -323,10 +313,6 @@ function mergeRefreshedOAuthCredential(previous: OAuthCredential, fresh: OAuthCr
  * Reads from storage on reload(), manages round-robin credential selection,
  * usage limit tracking, and OAuth token refresh.
  */
-/** Bump when what usage history may hold changes and rows written before must be dropped. */
-const USAGE_HISTORY_PURGE_MARKER = "usage_history:purged";
-const USAGE_HISTORY_PURGE_VERSION = "1";
-const USAGE_HISTORY_PURGE_MARKER_TTL_SEC = 10 * 365 * 24 * 60 * 60;
 
 export class AuthStorage {
 	// Default backoff when no reset time available
@@ -350,6 +336,10 @@ export class AuthStorage {
 	readonly #ranking: CredentialRanking;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#fallbackResolver?: (provider: string) => string | undefined;
+	#modelAccountAccessResolver?: (
+		provider: string,
+		modelId: string,
+	) => Readonly<Record<string, ModelAccountAccess>> | undefined;
 	#store: AuthCredentialStore;
 	#configValueResolver: (config: string) => Promise<string | undefined>;
 	/** OAuth token refresh: the single-flight, the cross-process lease and the token endpoint call. */
@@ -364,12 +354,13 @@ export class AuthStorage {
 		{ from: { credentialId: number; label: string }; reason: CredentialFailoverReason; cause: string; at: number }
 	> = new Map();
 	/**
-	 * `provider:credentialId:retryAtMs` of every withheld-quota notice already emitted, so one
-	 * exhausted window is announced once however many times the turn retries into it. Keyed by the
-	 * window's own end, so the NEXT exhaustion of the same account is a new notice rather than a
-	 * silent one.
+	 * End of the window each withheld notice announced, keyed by `provider:credentialId:scope`. A mark
+	 * inside an announced window that is still open extends it and announces nothing, so one exhausted
+	 * window is announced once however many retries, turns and failing request layers re-enter it, and
+	 * however far each one moves its end. A mark after the window closed is the NEXT exhaustion and is
+	 * announced again. A refused model's window never closes.
 	 */
-	#withheldQuotaNotices: Set<string> = new Set();
+	#withheldNotices: Map<string, number> = new Map();
 	/**
 	 * Exhaustion-driven movement between accounts, off unless a host opts in.
 	 *
@@ -637,6 +628,16 @@ export class AuthStorage {
 	 */
 	setFallbackResolver(resolver: (provider: string) => string | undefined): void {
 		this.#fallbackResolver = resolver;
+	}
+
+	/**
+	 * Set the lookup of a model's per-account listing ({@link Model.accountAccess}). An account whose
+	 * entry states the model is not listed sorts after every account that may use it.
+	 */
+	setModelAccountAccessResolver(
+		resolver: (provider: string, modelId: string) => Readonly<Record<string, ModelAccountAccess>> | undefined,
+	): void {
+		this.#modelAccountAccessResolver = resolver;
 	}
 
 	/**
@@ -1255,7 +1256,6 @@ export class AuthStorage {
 			)
 			.map(entry => entry.candidate);
 	}
-
 
 	async #selectApiKeyCredential(
 		provider: string,
@@ -2556,27 +2556,22 @@ export class AuthStorage {
 			// be revisited, so the one moment the setting costs something is the one
 			// moment it announces itself. Counted and announced here rather than at the call site
 			// because the block scope and provider type key that decide "blocked" are private to
-			// this class, and because the dedupe key is this window's own end.
+			// this class.
 			const idleSiblings = siblings.filter(candidate => siblingBlockedUntil(candidate.index) === undefined).length;
-			if (idleSiblings > 0) {
-				const noticeKey = `${provider}:${targetCredentialId}:${blockedUntil}`;
-				if (!this.#withheldQuotaNotices.has(noticeKey)) {
-					// Keys accumulate one per exhausted window per account. Drop the whole set past a
-					// cap rather than tracking ages: the worst a cleared key costs is one repeated
-					// notice, and a window that old has already reset.
-					if (this.#withheldQuotaNotices.size >= MAX_WITHHELD_QUOTA_NOTICES) this.#withheldQuotaNotices.clear();
-					this.#withheldQuotaNotices.add(noticeKey);
-					this.#events.emitUsageLimitWithheld({
-						provider,
-						account: {
-							credentialId: targetCredentialId,
-							label: this.#accountNoticeLabel(provider, targetCredentialId),
-						},
-						idleSiblings,
-						reason: "quota",
-						retryAtMs: blockedUntil,
-					});
-				}
+			if (
+				idleSiblings > 0 &&
+				this.#withheldNoticeDue(`${provider}:${targetCredentialId}:${blockScope ?? ""}`, blockedUntil)
+			) {
+				this.#events.emitUsageLimitWithheld({
+					provider,
+					account: {
+						credentialId: targetCredentialId,
+						label: this.#accountNoticeLabel(provider, targetCredentialId),
+					},
+					idleSiblings,
+					reason: "quota",
+					retryAtMs: blockedUntil,
+				});
 			}
 			return {
 				switched: false,
@@ -2639,14 +2634,17 @@ export class AuthStorage {
 				candidate !== index &&
 				entry.credential.type === target.credential.type &&
 				!this.#authDeadCredentials.has(entry.id) &&
-				!this.#planExcludesModel(provider, candidate, modelId),
+				!this.#planExcludesModel(provider, candidate, modelId) &&
+				!this.#listingExcludesModel(provider, candidate, modelId),
 		).length;
 		if (idleSiblings === 0) return { switched: false };
 		if (!this.isLoadBalancingEnabled()) {
-			const noticeKey = `${provider}:${target.id}:${modelNotInPlanScope(modelId)}`;
-			if (!this.#withheldQuotaNotices.has(noticeKey)) {
-				if (this.#withheldQuotaNotices.size >= MAX_WITHHELD_QUOTA_NOTICES) this.#withheldQuotaNotices.clear();
-				this.#withheldQuotaNotices.add(noticeKey);
+			if (
+				this.#withheldNoticeDue(
+					`${provider}:${target.id}:${modelNotInPlanScope(modelId)}`,
+					Number.POSITIVE_INFINITY,
+				)
+			) {
 				this.#events.emitUsageLimitWithheld({
 					provider,
 					account: { credentialId: target.id, label: this.#accountNoticeLabel(provider, target.id) },
@@ -2666,6 +2664,28 @@ export class AuthStorage {
 		return { switched: true };
 	}
 
+	/**
+	 * Whether a withheld notice for `key` is due, recording `windowEnd` as the end of what it describes.
+	 * Due when nothing was announced for `key` or the announced window has closed; a mark inside an
+	 * open window extends it instead. The window is the account's, not the mark's: a request layer that
+	 * parks for a minute and a retry layer that parks for half an hour describe one exhaustion, and a
+	 * retry that arrives seconds later computes a different end for the same one.
+	 */
+	#withheldNoticeDue(key: string, windowEnd: number): boolean {
+		const announcedUntil = this.#withheldNotices.get(key);
+		if (announcedUntil !== undefined && announcedUntil > Date.now()) {
+			if (windowEnd > announcedUntil) this.#withheldNotices.set(key, windowEnd);
+			return false;
+		}
+		// Drop the whole map past the cap rather than tracking ages: the worst a cleared key costs is
+		// one repeated notice.
+		if (announcedUntil === undefined && this.#withheldNotices.size >= MAX_WITHHELD_QUOTA_NOTICES) {
+			this.#withheldNotices.clear();
+		}
+		this.#withheldNotices.set(key, windowEnd);
+		return true;
+	}
+
 	/** Whether the account at `index` is recorded as unable to serve `modelId` on its plan. */
 	#planExcludesModel(provider: string, index: number, modelId: string | undefined): boolean {
 		if (modelId === undefined) return false;
@@ -2675,6 +2695,18 @@ export class AuthStorage {
 		return (
 			this.#blocks.getScopedBlockedUntil(provider, providerKey, index, modelNotInPlanScope(modelId)) !== undefined
 		);
+	}
+
+	/**
+	 * Whether model discovery listed the account at `index` and found `modelId` absent from its listing.
+	 * An account discovery did not list, or a credential with no account id, is not excluded.
+	 */
+	#listingExcludesModel(provider: string, index: number, modelId: string | undefined): boolean {
+		if (modelId === undefined || this.#modelAccountAccessResolver === undefined) return false;
+		const credential = this.#getStoredCredentials(provider)[index]?.credential;
+		const accountId = credential?.type === "oauth" ? credential.accountId : undefined;
+		if (accountId === undefined) return false;
+		return this.#modelAccountAccessResolver(provider, modelId)?.[accountId]?.listed === false;
 	}
 
 	/**
@@ -2732,9 +2764,12 @@ export class AuthStorage {
 		// with the most headroom proactively and fall back intelligently when rate-limited.
 		const movementAllowed = this.isLoadBalancingEnabled();
 		// A plan refusal on record steers selection only when the session may move: with movement off
-		// the home account keeps leading for every model, and its refusal reaches the caller.
+		// the home account keeps leading for every model, and its refusal reaches the caller. An account
+		// discovery found not listed the model is excluded in both modes, like a plan requirement: its
+		// listing states it cannot use the model, so leading with it fails the request.
 		const excludesModel = (index: number): boolean =>
-			movementAllowed && this.#planExcludesModel(provider, index, options?.modelId);
+			this.#listingExcludesModel(provider, index, options?.modelId) ||
+			(movementAllowed && this.#planExcludesModel(provider, index, options?.modelId));
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&

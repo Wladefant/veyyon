@@ -53,6 +53,7 @@ import { fetchProviderWithRetry } from "../utils/provider-fetch";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { toolWireSchema } from "../utils/schema/wire";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream, type EventStreamMessage } from "./aws-eventstream";
 import { type AwsCredentials, signRequest } from "./aws-sigv4";
@@ -447,31 +448,31 @@ class BedrockTurn {
 
 	async #buildRequest(): Promise<ConverseStreamRequest> {
 		const model = this.#model;
-		const context = this.#context;
 		const options = this.#options;
-		const cacheRetention = resolveCacheRetention(options.cacheRetention);
-		const messages = convertMessages(context, model, cacheRetention);
-		const { toolConfig: rawToolConfig, sentinelInjected } = planToolConfig(
-			context.tools,
-			resolveBedrockToolChoice(options.toolChoice, model.id),
-			messages,
-		);
-		this.#sentinelInjected = sentinelInjected;
-		let toolConfig = rawToolConfig;
-		let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
-
-		// Some models (Opus/Sonnet 5.5) reject forced tool use outright; keep the
-		// tools offered under `auto` and leave thinking intact.
-		const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
 		const id = model.id.toLowerCase();
 		const isOpusOrSonnet55 =
 			isAnthropicOpus55Model(model.id) || id.includes("claude-sonnet-5-5") || id.includes("claude-3-7-sonnet-5-5");
 		const supportsForcedToolChoice =
 			(model.compat as { supportsForcedToolChoice?: boolean } | undefined)?.supportsForcedToolChoice ??
 			!isOpusOrSonnet55;
-		if (toolConfig && forcedChoice && !supportsForcedToolChoice) {
-			toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
-		} else if (toolConfig && forcedChoice && additionalModelRequestFields) {
+		const requestedToolChoice = resolveBedrockToolChoice(options.toolChoice, model.id);
+		const toolChoice =
+			!supportsForcedToolChoice && (requestedToolChoice === "any" || typeof requestedToolChoice === "object")
+				? "auto"
+				: requestedToolChoice;
+		const context = carryRequiredToolCall(
+			this.#context,
+			options.toolChoice,
+			typeof toolChoice === "object" ? "named" : toolChoice === "any" ? "any" : "open",
+		);
+		const cacheRetention = resolveCacheRetention(options.cacheRetention);
+		const messages = convertMessages(context, model, cacheRetention);
+		const { toolConfig, sentinelInjected } = planToolConfig(context.tools, toolChoice, messages);
+		this.#sentinelInjected = sentinelInjected;
+		let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
+
+		const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
+		if (toolConfig && forcedChoice && additionalModelRequestFields) {
 			// Bedrock rejects thinking + forced tool_choice.
 			additionalModelRequestFields = undefined;
 		}

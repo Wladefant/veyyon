@@ -35,6 +35,8 @@ export const OPENAI_HEADERS = {
 	SUBAGENT: "x-openai-subagent",
 	/** Responses Lite transport marker (codex-rs `add_responses_lite_header`); value is always `"true"`. */
 	RESPONSES_LITE: "x-openai-internal-codex-responses-lite",
+	/** Model routing hint (codex-rs `X_CODEX_ROUTING_HINT_HEADER`); the value is built by {@link codexRoutingHint}. */
+	ROUTING_HINT: "x-codex-routing-hint",
 } as const;
 
 export const OPENAI_HEADER_VALUES = {
@@ -47,6 +49,28 @@ export const URL_PATHS = {
 	RESPONSES: "/responses",
 	CODEX_RESPONSES: "/codex/responses",
 } as const;
+
+/** A header value codex-rs `HeaderValue::from_str` accepts and `Headers` sends unchanged: tab and visible ASCII. */
+const ROUTING_HINT_VALUE = /^[\t\x20-\x7e]+$/;
+
+/** The request body fields the routing hint is derived from. */
+export interface CodexRoutedBody {
+	readonly model?: unknown;
+	readonly service_tier?: unknown;
+}
+
+/**
+ * The `x-codex-routing-hint` value for a Codex Responses request body (codex-rs `build_routing_hint_header`):
+ * `model=<model>;tier=<tier>` when the body sets `service_tier`, `model=<model>` otherwise. The value is
+ * derived from the body that is sent, so the hint and the body state the same model. Undefined when the body
+ * states no model, or when the value is not a valid header value, which codex-rs omits.
+ */
+export function codexRoutingHint(body: CodexRoutedBody): string | undefined {
+	const { model, service_tier: tier } = body;
+	if (typeof model !== "string" || model.length === 0) return undefined;
+	const hint = typeof tier === "string" && tier.length > 0 ? `model=${model};tier=${tier}` : `model=${model}`;
+	return ROUTING_HINT_VALUE.test(hint) ? hint : undefined;
+}
 
 /**
  * The namespace under which a ChatGPT OAuth token carries its Codex authorization claims.

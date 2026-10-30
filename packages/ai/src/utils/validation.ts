@@ -34,6 +34,7 @@ import { upgradeJsonSchemaTo202012 } from "./schema/draft";
 import {
 	isJsonSchemaValueValid,
 	type JsonSchemaValidationIssue,
+	matchesJsonSchemaType,
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
 import { stamp } from "./schema/stamps";
@@ -70,26 +71,7 @@ const NUMERIC_STRING_PATTERN = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
  * Used to verify that a parsed JSON value is actually what the schema wants.
  */
 function matchesExpectedType(value: unknown, expectedTypes: string[]): boolean {
-	return expectedTypes.some(type => {
-		switch (type) {
-			case "string":
-				return typeof value === "string";
-			case "number":
-				return typeof value === "number" && Number.isFinite(value);
-			case "integer":
-				return typeof value === "number" && Number.isInteger(value);
-			case "boolean":
-				return typeof value === "boolean";
-			case "null":
-				return value === null;
-			case "array":
-				return Array.isArray(value);
-			case "object":
-				return isRecord(value);
-			default:
-				return false;
-		}
-	});
+	return expectedTypes.some(type => matchesJsonSchemaType(value, type));
 }
 
 function tryParseNumberString(value: string, expectedTypes: string[]): { value: unknown; changed: boolean } {

@@ -353,8 +353,9 @@ describe("openai-codex streaming", () => {
 		const context = createCodexTestContext();
 		const requestedUrls: string[] = [];
 		const sse = createCompletedCodexSse("Hello");
-		const fetchMock = vi.fn(async (input: string | URL) => {
-			requestedUrls.push(typeof input === "string" ? input : input.toString());
+		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			// The account's model listing (a GET) precedes the first turn; this test pins the turn endpoint.
+			if (init?.method === "POST") requestedUrls.push(typeof input === "string" ? input : input.toString());
 			return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
 

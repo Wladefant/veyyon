@@ -4,9 +4,9 @@
 
 import { type CodexTokenIdentity, OPENAI_HEADER_VALUES, readCodexTokenIdentity } from "@veyyon/catalog/wire/codex";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
-import { isRecord } from "@veyyon/utils/type-guards";
 import { OAuthCallbackFlow, type OAuthCallbackFlowOptions } from "./callback-server";
 import { generatePKCE } from "./pkce";
 import { requireTokenResponseObject } from "./token-response";
@@ -69,7 +69,18 @@ export function formatOpenAICodexTokenEndpointError(status: number, bodyText: st
 		return `${status} ${trimmed}`;
 	}
 }
-/** Builds the Codex browser OAuth URL used by browser login; exported for auth regression tests. */
+/**
+ * Builds the Codex browser OAuth URL used by browser login; exported for auth regression tests.
+ *
+ * `prompt=login` makes auth.openai.com, an OpenID Connect server that honors `prompt`, run a fresh
+ * sign-in instead of completing the authorize request from the browser's existing sign-in, whose
+ * authentication method and time the issued token would carry. Individual Daybreak trusted access requires
+ * a hardware-key sign-in, and a token from any other sign-in reports `individual_blue_security_signin_required`
+ * and is refused with `cyber_policy`. `prompt=login` alone still issues such a token: auth.openai.com accepts
+ * a passkey or push approval. `reauth=password` with `max_age=0`, the parameters the Codex app adds when its
+ * Daybreak refusal starts a fresh sign-in, yield a token whose `verified_access` reports the cyber program
+ * active. `force_challenge=true` is the parameter chatgpt.com sends when it re-authenticates.
+ */
 export function createOpenAICodexAuthorizationUrl(args: {
 	state: string;
 	redirectUri: string;
@@ -87,6 +98,10 @@ export function createOpenAICodexAuthorizationUrl(args: {
 		state: args.state,
 		id_token_add_organizations: "true",
 		codex_cli_simplified_flow: "true",
+		prompt: "login",
+		reauth: "password",
+		max_age: "0",
+		force_challenge: "true",
 		originator,
 	});
 

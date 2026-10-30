@@ -10,6 +10,8 @@ import { toFields, toStringValue } from "@veyyon/catalog/utils";
 import {
 	CODEX_BASE_URL,
 	CODEX_CLIENT_VERSION,
+	type CodexRoutedBody,
+	codexRoutingHint,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
@@ -86,7 +88,7 @@ import {
 	PRE_RESPONSE_STALL_ATTEMPTS,
 } from "../utils/first-event-budget";
 import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
-import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
+import { eventStreamBody, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
@@ -106,6 +108,7 @@ import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, tool
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+import { type CodexAccessPrograms, resolveCodexAccessPrograms } from "./openai-codex/access-programs";
 import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import { CodexCompactionV2Accumulator } from "./openai-codex/compaction-v2";
 import {
@@ -1552,12 +1555,20 @@ async function buildCodexRequestContext(
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
 ): Promise<CodexRequestContext> {
-	const transformedBody = await buildTransformedCodexRequestBody(
-		model,
-		context,
-		options,
-		getOpenAIPromptCacheKey(options),
-	);
+	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+	if (!apiKey) throw new AIError.MissingApiKeyError(model.provider);
+	const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, {
+		accountId: getCodexAccountId(apiKey),
+		fetch: options?.fetch,
+		signal: options?.signal,
+		waitMs:
+			options?.streamFirstEventTimeoutMs ??
+			getOpenAIStreamFirstEventTimeoutMs(options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs()),
+	});
+	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, {
+		promptCacheKey: getOpenAIPromptCacheKey(options),
+		accessPrograms,
+	});
 	return createCodexRequestContext(model, transformedBody, options, {
 		isolateCompactionTransport: true,
 		startNewTurn: options?.codexCompaction ? undefined : !isCodexWithinTurnContinuation(context),
@@ -1889,13 +1900,13 @@ export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
-	promptCacheKey = getOpenAIPromptCacheKey(options),
+	request: { promptCacheKey?: string; accessPrograms?: CodexAccessPrograms } = {},
 ): Promise<RequestBody> {
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
 		input: convertCodexResponsesMessages(model, context),
 		stream: true,
-		prompt_cache_key: promptCacheKey,
+		prompt_cache_key: request.promptCacheKey ?? getOpenAIPromptCacheKey(options),
 	};
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
@@ -1932,6 +1943,7 @@ export async function buildTransformedCodexRequestBody(
 		textVerbosity: options?.textVerbosity,
 		include: options?.include,
 		responsesLite: options?.responsesLite,
+		accessPrograms: request.accessPrograms,
 	};
 
 	return transformRequestBody(params, model, codexOptions, { developerMessages });
@@ -2043,6 +2055,9 @@ async function openCodexWebSocketTransport(
 		requestContext.responsesLite,
 		requestContext.requestMetadata,
 	);
+	// The upgrade is the one place a websocket carries headers, so the hint states the model of the
+	// frame as `onPayload` left it.
+	setCodexRoutingHint(websocketHeaders, websocketRequest);
 	const requestBodyForState = structuredCloneJSON(requestContext.transformedBody);
 	// `onPayload` may rewrite the outgoing frame (e.g. drop `stream_options`);
 	// recorded state must reflect what was actually sent — the sequential-cutoff
@@ -2145,7 +2160,7 @@ async function openCodexSseTransport(
 	const canAppendBeforeRequest = state?.canAppend === true;
 	let wireBody = body;
 	let wireJson: string | undefined;
-	const prepareBody = async (): Promise<string> => {
+	const prepareBody = async (): Promise<CodexSseAttempt> => {
 		// Serialize once. The hook, when present, gets an isolated parse of
 		// exactly those bytes; when no extension handles the event the wire
 		// object is the untouched original and the recorded bytes are reused.
@@ -2165,7 +2180,7 @@ async function openCodexSseTransport(
 		// Keep the 400 dump honest: record the body actually sent on this attempt.
 		wireJson = wireParams === body ? bodyJson : JSON.stringify(wireParams);
 		requestContext.wireBodyJson = wireJson;
-		return wireJson;
+		return { json: wireJson, body: wireParams };
 	};
 	// Preserve payload capture for callers that intentionally use an
 	// already-aborted signal without issuing a physical request.
@@ -3287,7 +3302,6 @@ const streamOpenAICodexResponsesOnce = (
 			if (requestContext.websocketState) {
 				requestContext.websocketState.lastTransport = initialTransport.transport;
 			}
-
 			processingContext = new CodexStreamProcessor({
 				runtime,
 				model,
@@ -3404,11 +3418,22 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 	return stream;
 };
 
+/**
+ * Opens the session's Codex websocket before its first request. The turn that follows reuses the socket, so the
+ * upgrade carries the routing hint that turn's body derives: the wire model and `serviceTier`.
+ */
 export async function prewarmOpenAICodexResponses(
 	model: Model<"openai-codex-responses">,
 	options?: Pick<
 		OpenAICodexResponsesOptions,
-		"apiKey" | "headers" | "sessionId" | "signal" | "preferWebsockets" | "providerSessionState" | "responsesLite"
+		| "apiKey"
+		| "headers"
+		| "sessionId"
+		| "signal"
+		| "preferWebsockets"
+		| "providerSessionState"
+		| "responsesLite"
+		| "serviceTier"
 	>,
 ): Promise<void> {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -3449,6 +3474,9 @@ export async function prewarmOpenAICodexResponses(
 		responsesLite,
 		requestIdentity,
 	);
+	const routedBody: { model: string; service_tier?: ServiceTier | null } = { model: model.requestModelId ?? model.id };
+	applyOpenAIServiceTier(routedBody, options?.serviceTier, model);
+	setCodexRoutingHint(headers, routedBody);
 	await logger.time(
 		"prewarmCodex:establishWs",
 		getOrCreateCodexWebSocketConnection,
@@ -4490,8 +4518,8 @@ async function openCodexSseEventStream(
 	maxRetryDelayMs: number | undefined,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
-	/** The serialized body for one attempt, called before each attempt. */
-	serializeBody: () => string | Promise<string> = () => JSON.stringify(body),
+	/** The body one attempt sends and its serialization, prepared before each attempt. */
+	prepareAttempt: () => CodexSseAttempt | Promise<CodexSseAttempt> = () => ({ json: JSON.stringify(body), body }),
 	metadataState: Pick<CodexWebSocketSessionState, "modelsEtag"> | undefined = state,
 ): Promise<OpenAIStreamHandle<Record<string, unknown>>> {
 	const headers = createCodexHeaders(
@@ -4546,14 +4574,17 @@ async function openCodexSseEventStream(
 			signal,
 			prepareInit: async () => {
 				clearPreResponseTimeout?.();
-				const bodyJson = await serializeBody();
-				const compressedBody = allowCompression ? compressCodexRequestBody(bodyJson, url) : undefined;
+				const attempt = await prepareAttempt();
+				const compressedBody = allowCompression ? compressCodexRequestBody(attempt.json, url) : undefined;
 				if (compressedBody !== undefined) {
 					headers.set("content-encoding", "zstd");
 				} else {
 					headers.delete("content-encoding");
 				}
-				lastSentBody = compressedBody ?? bodyJson;
+				lastSentBody = compressedBody ?? attempt.json;
+				const routingHint = codexRoutingHint(attempt.body);
+				if (routingHint) headers.set(OPENAI_HEADERS.ROUTING_HINT, routingHint);
+				else headers.delete(OPENAI_HEADERS.ROUTING_HINT);
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
 				return { body: lastSentBody, signal: watchdog.signal };
@@ -4602,7 +4633,7 @@ async function openCodexSseEventStream(
 	if (!response.body) {
 		throw new CodexProviderStreamError("No response body", { retryable: false });
 	}
-	const events = readSseJson<Record<string, unknown>>(response.body, signal, event =>
+	const events = readSseJson<Record<string, unknown>>(eventStreamBody(response, response.body, url), signal, event =>
 		notifyRawSseEvent(onSseEvent, { event: event.event, data: event.data, raw: event.raw.slice() }),
 	);
 	return { events, response, requestId: response.headers.get("x-request-id") };
@@ -4644,6 +4675,8 @@ function createCodexHeaders(
 		headers.delete("x-client-request-id");
 	}
 	headers.delete(OPENAI_HEADERS.INSTALLATION_ID);
+	// Derived from the body each request sends; a caller's value would state a model the body may not.
+	headers.delete(OPENAI_HEADERS.ROUTING_HINT);
 	if (requestMetadata) {
 		applyCodexCompatibilityHeaders(headers, requestMetadata);
 	} else {
@@ -4675,6 +4708,18 @@ function createCodexHeaders(
 		headers.delete("content-type");
 	}
 	return headers;
+}
+
+/** One SSE attempt: the body it sends and that body's serialization. */
+interface CodexSseAttempt {
+	json: string;
+	body: RequestBody;
+}
+
+/** Sets the `x-codex-routing-hint` `body` derives on headers {@link createCodexHeaders} built. */
+function setCodexRoutingHint(headers: Headers, body: CodexRoutedBody): void {
+	const routingHint = codexRoutingHint(body);
+	if (routingHint) headers.set(OPENAI_HEADERS.ROUTING_HINT, routingHint);
 }
 
 /**
@@ -4968,7 +5013,6 @@ function normalizeInputMessageContent(
 		) ?? []
 	);
 }
-
 
 type CodexToolPayload =
 	| {

@@ -22,7 +22,7 @@ import { OpenAIHttpError } from "../error";
 export { OpenAIHttpError };
 
 import type { FetchImpl } from "../types";
-import { captureHttpErrorResponse } from "./http-inspector";
+import { captureHttpErrorResponse, eventStreamBody } from "./http-inspector";
 import { fetchProviderWithRetry } from "./provider-fetch";
 
 /**
@@ -97,7 +97,7 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 		});
 	}
 	return {
-		events: readSseJson<TEvent>(response.body, init.signal, init.onSseEvent),
+		events: readSseJson<TEvent>(eventStreamBody(response, response.body, init.url), init.signal, init.onSseEvent),
 		response,
 		requestId: response.headers.get("x-request-id"),
 	};

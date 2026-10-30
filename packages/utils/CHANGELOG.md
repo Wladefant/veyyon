@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Parse rate-limit reset windows stated in words.
 ## [1.6.6] - 2026-10-28
 
 ### Added

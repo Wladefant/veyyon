@@ -1,35 +1,37 @@
-import type { Api, Model, ToolChoice } from "@veyyon/ai";
+import type { Api, KnownApi, Model, ToolChoice } from "@veyyon/ai";
 
 /**
- * Build a provider-aware tool choice that targets one specific tool when supported.
- * Providers that only expose required/any forcing may still honor named choices by
- * narrowing their request tool list before transport.
+ * The choice that requires one named tool, per API. `tool` and `function` are the two spellings of
+ * a named choice; every provider reads both. A wire that cannot force the call sends the
+ * requirement as request text, so every API but Google's names the tool. Google's three APIs
+ * require any tool.
+ */
+const NAMED_TOOL_CHOICE: Record<KnownApi, "tool" | "function" | "required"> = {
+	"anthropic-messages": "tool",
+	"bedrock-converse-stream": "tool",
+	"openai-codex-responses": "function",
+	"openai-responses": "function",
+	"openai-completions": "function",
+	"azure-openai-responses": "function",
+	openrouter: "function",
+	"ollama-chat": "function",
+	"google-generative-ai": "required",
+	"google-gemini-cli": "required",
+	"google-vertex": "required",
+	"cursor-agent": "tool",
+	"devin-agent": "tool",
+	"gitlab-duo-agent": "tool",
+};
+
+/**
+ * Build a provider-aware tool choice that targets one specific tool. Returns `undefined` for an
+ * API no built-in provider implements.
  */
 export function buildNamedToolChoice(toolName: string, model?: Model<Api>): ToolChoice | undefined {
-	if (!model) return undefined;
-
-	if (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") {
-		return { type: "tool", name: toolName };
-	}
-
-	if (
-		model.api === "openai-codex-responses" ||
-		model.api === "openai-responses" ||
-		model.api === "openai-completions" ||
-		model.api === "azure-openai-responses"
-	) {
-		return { type: "function", name: toolName };
-	}
-
-	if (model.api === "ollama-chat") {
-		return { type: "function", name: toolName };
-	}
-
-	if (model.api === "google-generative-ai" || model.api === "google-gemini-cli" || model.api === "google-vertex") {
-		return "required";
-	}
-
-	return undefined;
+	if (!model || !Object.hasOwn(NAMED_TOOL_CHOICE, model.api)) return undefined;
+	const form = NAMED_TOOL_CHOICE[model.api as KnownApi];
+	if (form === "required") return "required";
+	return form === "tool" ? { type: "tool", name: toolName } : { type: "function", name: toolName };
 }
 
 /**

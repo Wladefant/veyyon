@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replace single-account `Model.accessPrograms` with per-account `Model.accountAccess` in discovered models.
+
+### Added
+
+- Add declared default and mandatory reasoning metadata to `ModelReasoningOptions`.
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

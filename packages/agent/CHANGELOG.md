@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve required tool calls as text when an in-band dialect cannot force them.
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

@@ -148,6 +148,8 @@ export const PROMPT_IDS: readonly string[] = [
 	"thinking/difficulty-local",
 	"titles/marker-instruction",
 	"titles/system",
+	"tool-choice/any",
+	"tool-choice/named",
 	"tools/apply-patch",
 	"tools/ask",
 	"tools/ast-edit",
