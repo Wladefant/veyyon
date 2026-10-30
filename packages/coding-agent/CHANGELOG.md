@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

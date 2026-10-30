@@ -706,6 +706,8 @@ export interface ManagedKernelSession<TKernel extends SessionKernel = SessionKer
 
 export interface StartingManagedKernelSession<TKernel extends SessionKernel = SessionKernel> extends SessionOwnerState {
 	promise: Promise<ManagedKernelSession<TKernel>>;
+	/** Startup belongs to the shared session, not to any one waiter's cancellation or deadline. */
+	startupAbort: AbortController;
 	/** Callers currently awaiting this startup, by owner key. An owner leaves only with its last waiter. */
 	waiters: Map<string, number>;
 	/** Owners explicitly released during startup, distinct from fallback-owner adoption. */
@@ -782,13 +784,26 @@ export class KernelSessionPool<
 		const ownerKey = options.kernelOwnerId ?? sessionId;
 		const inFlight = this.#startingSessions.get(sessionKey);
 		if (inFlight) {
+			if (inFlight.startupAbort.signal.aborted) {
+				await waitForPromiseWithCancellation(
+					inFlight.promise.catch(() => undefined),
+					options,
+					this.#cancelledErrorClass,
+				);
+				return await this.acquireSession(sessionKey, sessionId, cwd, options);
+			}
 			attachSessionOwner(inFlight, sessionId, options.kernelOwnerId);
 			return await this.#awaitStartup(sessionKey, inFlight, ownerKey, options);
 		}
 
 		let startingSession!: StartingManagedKernelSession<TKernel>;
+		const startupAbort = new AbortController();
 		const startPromise = (async () => {
-			const kernel = await this.#options.startKernel(cwd, options);
+			const kernel = await this.#options.startKernel(cwd, {
+				...options,
+				signal: startupAbort.signal,
+				deadlineMs: undefined,
+			});
 			const session: ManagedKernelSession<TKernel> = {
 				sessionKey,
 				sessionId,
@@ -814,6 +829,7 @@ export class KernelSessionPool<
 			ownerIds: new Set(),
 			hasFallbackOwner: false,
 			promise: startPromise,
+			startupAbort,
 			waiters: new Map(),
 			disposedOwnerIds: new Set(),
 		};
@@ -849,8 +865,8 @@ export class KernelSessionPool<
 			if (starting.disposedOwnerIds.has(ownerKey)) throw new this.#cancelledErrorClass(false);
 			return session;
 		} catch (error) {
-			// Another caller with the same owner may still be waiting; the owner stays until the last one leaves.
 			if (leave() === 0) starting.ownerIds.delete(ownerKey);
+			if (starting.ownerIds.size === 0) starting.startupAbort.abort(error);
 			const session = this.#sessions.get(sessionKey);
 			if (session?.ownerIds === starting.ownerIds && session.ownerIds.size === 0 && starting.waiters.size === 0) {
 				await this.resetSession(sessionKey);
@@ -972,6 +988,7 @@ export class KernelSessionPool<
 			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
 			starting.ownerIds.delete(ownerId);
 			starting.disposedOwnerIds.add(ownerId);
+			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));
 			// Keep startup visible until its eventual runner exits. Another live
 			// owner may still join this startup without creating a second process.
 		}
