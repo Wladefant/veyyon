@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
@@ -17,6 +21,8 @@
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+
+## [1.6.6] - 2026-10-28
 
 ### Fixed
 
