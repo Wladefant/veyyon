@@ -2,16 +2,31 @@
 
 ## [Unreleased]
 
+- The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+## [1.6.8] - 2026-10-30
+
+- Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
+
+## [1.6.7] - 2026-10-29
+
+### Fixed
+
+- Live provider context compaction now preserves provider-specific context.
+
+## [1.6.6] - 2026-10-28
+
 ### Changed
 
 ### Fixed
 
-- MCP HTTP streams skip malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+
 ## [1.6.6] - 2026-10-28
+- Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
 
 ### Fixed
 
 - Nested lanes see their delegating ancestors separately from other lanes in IRC and receive their parent identity with the assignment ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
+- Fixed Windows `read` with redirected input changing the host process's console modes ([Refs #755](https://github.com/Wladefant/veyyon/issues/755)).
 
 ## [1.6.5] - 2026-10-28
 
