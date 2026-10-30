@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,6 +27,8 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // from the command the way it did when the wording became "priority tier".
 import { PRIORITY_TIER_COMMAND_LABEL } from "@veyyon/coding-agent/config/service-tier";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
+import type { RuntimeMCPConfig } from "@veyyon/coding-agent/mcp/runtime-config";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
@@ -495,7 +497,10 @@ afterEach(async () => {
 });
 
 async function createHarness(
-	options: { elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse> } = {},
+	options: {
+		elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse>;
+		runtimeMCPConfig?: RuntimeMCPConfig;
+	} = {},
 ): Promise<AgentHarness> {
 	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "veyyon-acp-test-"));
 	cleanupRoots.push(root);
@@ -530,7 +535,7 @@ async function createHarness(
 		return session as unknown as AgentSession;
 	};
 
-	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession);
+	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession, options.runtimeMCPConfig);
 	if (options.elicitationHandler) {
 		// Drive `initialize` so the agent caches `clientCapabilities.elicitation.form`
 		// and `#requestAcpPlanApprovalChoice` actually goes through the elicitation.
@@ -561,6 +566,42 @@ async function waitForBootstrapGuard(): Promise<void> {
 }
 
 describe("ACP agent", () => {
+	it("keeps run-only MCP servers on client-list replacement and rejects shadowing before reconnecting", async () => {
+		const connected: string[][] = [];
+		const connect = spyOn(MCPManager.prototype, "connectServers").mockImplementation(async configs => {
+			connected.push(Object.keys(configs).sort());
+			return { tools: [], errors: new Map(), connectedServers: Object.keys(configs), exaApiKeys: [] };
+		});
+		const harness = await createHarness({
+			runtimeMCPConfig: {
+				path: "/pilot/mcp.json",
+				configs: { fleet: { type: "stdio", command: "pilot-connector" } },
+			},
+		});
+		try {
+			const created = await harness.agent.newSession({
+				cwd: harness.cwdA,
+				mcpServers: [{ name: "editor", command: "editor-connector", args: [], env: [] }],
+			});
+			expect(connected.at(-1)).toEqual(["editor", "fleet"]);
+			await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
+			expect(connected.at(-1)).toEqual(["fleet"]);
+			await expect(
+				harness.agent.loadSession({
+					sessionId: created.sessionId,
+					cwd: harness.cwdA,
+					mcpServers: [{ name: "fleet", command: "replacement", args: [], env: [] }],
+				}),
+			).rejects.toThrow("conflicts");
+			expect(connected).toHaveLength(2);
+			await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
+			expect(connected.at(-1)).toEqual(["fleet"]);
+		} finally {
+			harness.abortController.abort();
+			connect.mockRestore();
+		}
+	});
+
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();
 		const first = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

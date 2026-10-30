@@ -71,6 +71,10 @@ export async function discoverAndLoadMCPTools(cwd: string, options?: MCPToolsLoa
 	try {
 		result = await manager.discoverAndConnect(discoverOptions);
 	} catch (error) {
+		if (options?.runtimeConfig) {
+			await manager.disconnectAll();
+			throw error;
+		}
 		// If discovery fails entirely, return empty result
 		const message = errorMessage(error);
 		return {
