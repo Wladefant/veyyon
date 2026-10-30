@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 
 ## [1.6.8] - 2026-10-30
 
@@ -12,15 +13,6 @@
 
 - Live provider context compaction now preserves provider-specific context.
 
-## [1.6.6] - 2026-10-28
-
-### Changed
-
-- Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
-
-### Fixed
-
-- Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 ## [1.6.6] - 2026-10-28
 
 ### Fixed
