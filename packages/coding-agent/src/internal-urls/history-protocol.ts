@@ -15,10 +15,19 @@
  * URL forms:
  * - history:// - Index of all registry + on-disk agents (id, status, kind, last activity)
  * - history://<agentId> - Concise markdown transcript of that agent
+ * - history://<agentId>?q=term - Bounded, branch-aware search returning entry IDs
+ * - history://<agentId>?entry=<entryId>&offset=0&limit=8000 - Exact stored record page
  */
 
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
-import { parseExactHistoryRequest, readLiveHistoryEntry, readStoredHistoryEntry } from "./history-exact";
+import {
+	parseExactHistoryRequest,
+	parseHistorySearchRequest,
+	readLiveHistoryEntry,
+	readStoredHistoryEntry,
+	searchLiveHistoryEntries,
+	searchStoredHistoryEntries,
+} from "./history-exact";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
@@ -85,6 +94,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		const visible = registry.list().filter(ref => ref.kind !== "advisor");
 
 		if (!agentId) {
+			if (url.searchParams.has("entry") || url.searchParams.has("q")) {
+				throw new Error("history:// search and exact reads require an agent ID");
+			}
 			const content = await renderIndex(visible);
 			return {
 				url: url.href,
@@ -106,8 +118,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// Resolve only registry-owned or uniquely discovered session files, never a
 		// path supplied in the URL. The multi-conversation refusal above still applies.
 		const exactRequest = parseExactHistoryRequest(url);
-		if (exactRequest) {
-			if (!agentId) throw new Error("history:// exact reads require an agent ID");
+		const searchRequest = parseHistorySearchRequest(url);
+		if (exactRequest || searchRequest) {
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
 			if (!sessionFile) {
 				const disk = await sessionFilesFromDisk();
@@ -115,13 +127,18 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				sessionFile = found?.[1];
 			}
 			if (sessionFile) {
-				const result = await readStoredHistoryEntry(sessionFile, exactRequest);
+				const result = exactRequest
+					? await readStoredHistoryEntry(sessionFile, exactRequest)
+					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
 				const content = JSON.stringify(result, null, 2);
 				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
-					notes: ["Read-only stored session record; externalized blobs are not expanded"] };
+					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
 			}
 			if (ref?.session) {
-				const result = readLiveHistoryEntry(ref.session.sessionManager.getBranch(), exactRequest);
+				const branch = ref.session.sessionManager.getBranch();
+				const result = exactRequest
+					? readLiveHistoryEntry(branch, exactRequest)
+					: searchLiveHistoryEntries(branch, searchRequest!);
 				const content = JSON.stringify(result, null, 2);
 				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
 					notes: ["Active in-memory branch; no persistent session file"] };
@@ -268,6 +285,6 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 	for (const entry of entries) {
 		lines.push(`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} |`);
 	}
-	lines.push("", "Read a transcript with `read history://<id>`.");
+	lines.push("", "Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.");
 	return `${lines.join("\n")}\n`;
 }
