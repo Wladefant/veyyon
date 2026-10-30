@@ -57,6 +57,8 @@ describe("history:// across conversations", () => {
 		const resolve = new HistoryProtocolHandler().resolve(new URL("history://Scout") as never);
 
 		await expect(resolve).rejects.toThrow(/2 conversations at once/);
+		await expect(new HistoryProtocolHandler().resolve(new URL("history://Scout?entry=entry-one") as never))
+			.rejects.toThrow(/2 conversations at once/);
 	});
 
 	/** The index is the same leak in table form: every conversation's agents in one list. */
