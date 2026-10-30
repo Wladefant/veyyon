@@ -7,6 +7,8 @@ import {
 	parseExactHistoryRequest,
 	readLiveHistoryEntry,
 	readStoredHistoryEntry,
+	parseHistorySearchRequest,
+	searchStoredHistoryEntries,
 } from "../history-exact";
 
 describe("history exact record lookup", () => {
@@ -102,5 +104,35 @@ describe("history exact record lookup", () => {
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&limit=999999"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=-1"))).toThrow();
 		expect(parseExactHistoryRequest(new URL("history://Scout"))).toBeUndefined();
+	});
+	it("finds stored evidence IDs on the selected branch and returns newest matches first", async () => {
+		const dir = TempDir.createSync("@veyyon-history-search-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "early decision: project atlas" },
+				{ type: "message", id: "b", parentId: "a", message: "project atlas sibling" },
+				{ type: "message", id: "c", parentId: "a", message: "later correction: project atlas" },
+			];
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const request = parseHistorySearchRequest(new URL("history://Scout?q=project%20atlas&limit=5"))!;
+			const result = await searchStoredHistoryEntries(file, request);
+			expect(result.status).toBe("ok");
+			expect(result.sessionId).toBe("s1");
+			expect(result.matches.map(match => match.entryId)).toEqual(["c", "a"]);
+			expect(result.matches[0]?.preview).toContain("later correction");
+			const sibling = await searchStoredHistoryEntries(file, { ...request, leafId: "b" });
+			expect(sibling.matches.map(match => match.entryId)).toEqual(["b", "a"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
+		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
+		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
+		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=a"))).toThrow();
+		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=thing&limit=999"))).toThrow();
 	});
 });
