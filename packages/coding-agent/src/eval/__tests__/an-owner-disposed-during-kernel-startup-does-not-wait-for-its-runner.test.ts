@@ -1,8 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import type { Process } from "@veyyon/natives";
 import type { Subprocess } from "bun";
 import { KernelExecutionCancelledError, type KernelExecutorBaseOptions, KernelSessionPool } from "../executor-base";
-import { BaseKernel } from "../kernel-base";
+import { BaseKernel, initializeKernelSubprocess } from "../kernel-base";
 
 // WHY THIS SUITE EXISTS (issue 639: eval runners outlive their session)
 // --------------------------------------------------------------------
@@ -357,5 +357,92 @@ describe("an owner disposed during kernel startup", () => {
 		expect(session.kernel.isAlive()).toBe(true);
 		expect((await session.kernel.execute("1 + 1")).status).toBe("ok");
 		await pool.disposeByOwner("shared");
+	});
+	it("keeps shared startup alive when the first waiter's deadline expires", async () => {
+		vi.useFakeTimers();
+		try {
+			const ready = Promise.withResolvers<BaseKernel>();
+			const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+			const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+				languageName: "Test",
+				logLabel: "shared-startup-deadline",
+				startKernel: async (_cwd, options) => {
+					if (options.deadlineMs !== undefined) {
+						setTimeout(
+							() => runner.finish(null),
+							Math.max(0, options.deadlineMs - Date.now()),
+						);
+					}
+					options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
+					return await ready.promise;
+				},
+			});
+			const first = pool.acquireSession(KEY, "session", process.cwd(), {
+				kernelOwnerId: "first",
+				deadlineMs: Date.now() + 30,
+			});
+			const shared = acquire(pool, "shared");
+			await vi.advanceTimersByTimeAsync(30);
+			await expect(first).rejects.toThrow(KernelExecutionCancelledError);
+			ready.resolve(runner.kernel);
+			const session = await shared;
+			expect([...session.ownerIds]).toEqual(["shared"]);
+			expect(session.kernel.isAlive()).toBe(true);
+			expect((await session.kernel.execute("1 + 1")).status).toBe("ok");
+			await pool.disposeByOwner("shared");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("keeps an unconfirmed failed startup fenced until its runner exit is confirmed", async () => {
+		class FailedStartupKernel extends TestKernel {
+			exitConfirmed = false;
+			shutdownCalls = 0;
+
+			override async executeWithBudget(): Promise<void> {
+				throw new Error("startup failed");
+			}
+
+			override async shutdown(): Promise<{ confirmed: boolean }> {
+				this.shutdownCalls += 1;
+				return { confirmed: this.exitConfirmed };
+			}
+		}
+		const failed = new FailedStartupKernel("failed-startup", {
+			languageName: "Test",
+			traceIpc: false,
+			exitPayload: EXIT_PAYLOAD,
+			shutdownGraceMs: 20,
+		});
+		const replacement = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		let starts = 0;
+		const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+			languageName: "Test",
+			logLabel: "failed-startup-exit-fence",
+			startKernel: async () => {
+				starts += 1;
+				if (starts === 1) {
+					return await initializeKernelSubprocess(failed, {
+						initScript: "init",
+						preludeScript: "prelude",
+						languageName: "Test",
+						releaseReason: "startup-failed",
+					});
+				}
+				return replacement.kernel;
+			},
+		});
+
+		await expect(acquire(pool, "owner")).rejects.toThrow("startup failed");
+		expect(failed.shutdownCalls).toBe(1);
+		await expect(acquire(pool, "owner")).rejects.toThrow();
+		expect(starts).toBe(1);
+		expect(failed.shutdownCalls).toBe(2);
+
+		failed.exitConfirmed = true;
+		const session = await acquire(pool, "owner");
+		expect(starts).toBe(2);
+		expect(session.kernel).toBe(replacement.kernel);
+		await pool.disposeByOwner("owner");
 	});
 });
