@@ -35,6 +35,8 @@ import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ProtectedCredentialResource } from "../secrets/protected-resources";
+import type { SecretIntakeHostConfiguration } from "../secrets/intake-host";
+
 import type { ClaimedTicket, TopicReplenishmentEngine } from "../task/topic-replenishment";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { EventBus } from "../utils/event-bus";
@@ -48,6 +50,8 @@ export interface CreateAgentSessionOptions {
 	cwd?: string;
 	/** Agent config directory for this session. Default: `getAgentDir()`, i.e. `~/.veyyon/profiles/<active profile>/agent`. */
 	agentDir?: string;
+	/** Host-approved secret intake operations for native root sessions. */
+	secretIntake?: SecretIntakeHostConfiguration;
 	/** Additional resources that agent tools may not read as plain files. */
 	protectedCredentialResources?: readonly ProtectedCredentialResource[];
 	/** Metadata indexes used to derive additional protected credential paths. */

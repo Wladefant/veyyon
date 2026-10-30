@@ -22,6 +22,7 @@ export const agentTools = {
 	retain: async s => (await import("./memory-retain")).MemoryRetainTool.createIf(s),
 	recall: async s => (await import("./memory-recall")).MemoryRecallTool.createIf(s),
 	reflect: async s => (await import("./memory-reflect")).MemoryReflectTool.createIf(s),
+	secret_request: async s => (await import("./secret-request")).SecretRequestTool.createIf(s),
 	learn: async s => (await import("./learn")).LearnTool.createIf(s),
 	manage_skill: async s => (await import("./manage-skill")).ManageSkillTool.createIf(s),
 	// The two Argot folder tools exist only when the session holds a codec; with

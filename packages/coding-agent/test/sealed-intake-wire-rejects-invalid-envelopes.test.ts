@@ -6,6 +6,8 @@ import {
 	sealSecretSubmission,
 } from "../src/secrets/intake-crypto";
 import {
+	decodeSecretIntakeBase64Url,
+	encodeSecretIntakeBase64Url,
 	parseSecretRequestMetadata,
 	parseSecretSubmission,
 	type SecretRequestMetadata,
@@ -56,11 +58,9 @@ describe("sealed secret intake wire", () => {
 
 	test("rejects ciphertext tampering, wrong nonce, and changed authenticated metadata", async () => {
 		const submission = await sealSecretSubmission(fixture.metadata, "synthetic secret");
-		const bytes = Uint8Array.from(atob(submission.ciphertext.replace(/-/g, "+").replace(/_/g, "/") + "=="), (character) => character.charCodeAt(0));
+		const bytes = decodeSecretIntakeBase64Url(submission.ciphertext, 16, 8192 + 16);
 		bytes[0] ^= 1;
-		let binary = "";
-		for (const byte of bytes) binary += String.fromCharCode(byte);
-		const tampered = { ...submission, ciphertext: btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "") };
+		const tampered = { ...submission, ciphertext: encodeSecretIntakeBase64Url(bytes) };
 		await expect(openSecretSubmission(fixture.metadata, tampered, await serverPrivateKey())).rejects.toThrow("Secret intake operation failed");
 		await expect(openSecretSubmission(fixture.metadata, { ...submission, nonce: "AQECAwQFBgcICQoLDA0ODw" }, await serverPrivateKey())).rejects.toThrow("Secret intake operation failed");
 		await expect(openSecretSubmission({ ...fixture.metadata, projectId: "other-project" }, submission, await serverPrivateKey())).rejects.toThrow("Secret intake operation failed");
@@ -73,5 +73,7 @@ describe("sealed secret intake wire", () => {
 		await expect(sealSecretSubmission(fixture.metadata, "")).rejects.toThrow("Secret intake operation failed");
 		await expect(sealSecretSubmission(fixture.metadata, `${value}x`)).rejects.toThrow("Secret intake operation failed");
 		await expect(sealSecretSubmission(fixture.metadata, "é".repeat(4097))).rejects.toThrow("Secret intake operation failed");
+		await expect(sealSecretSubmission(fixture.metadata, "\uD800")).rejects.toThrow("Secret intake operation failed");
+		await expect(sealSecretSubmission(fixture.metadata, "\uDC00")).rejects.toThrow("Secret intake operation failed");
 	});
 });

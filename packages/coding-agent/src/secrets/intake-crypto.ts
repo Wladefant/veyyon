@@ -53,6 +53,18 @@ export async function sealSecretSubmission(metadataValue: SecretRequestMetadata,
 	let nonce: Uint8Array | undefined;
 	try {
 		const metadata = parseSecretRequestMetadata(metadataValue);
+		if (typeof value !== "string") return safeFailure();
+		for (let index = 0; index < value.length; index++) {
+			const codeUnit = value.charCodeAt(index);
+			if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+				if (index + 1 >= value.length) return safeFailure();
+				const next = value.charCodeAt(index + 1);
+				if (next < 0xdc00 || next > 0xdfff) return safeFailure();
+				index++;
+			} else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+				return safeFailure();
+			}
+		}
 		plaintext = encoder.encode(value);
 		if (plaintext.byteLength === 0 || plaintext.byteLength > MAX_SECRET_UTF8_BYTES) return safeFailure();
 		nonce = decodeSecretIntakeBase64Url(metadata.nonce, 16, 64);

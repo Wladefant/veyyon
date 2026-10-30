@@ -6,6 +6,7 @@ import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmo
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
+import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -27,7 +28,27 @@ export interface TerminalControlTarget {
 	abort(): Promise<boolean>;
 	history(): { entryId: string; text: string }[];
 	subscribe(listener: (event: unknown) => void): () => void;
+	registerSecretIntake?(registration: TerminalSecretRegistration): Promise<TerminalSecretActorContext>;
+	secretIntakeContext?(): TerminalSecretActorContext | undefined;
+	secretRequest?(request: TerminalSecretRequest): Promise<SecretRequestMetadata>;
 }
+
+export type TerminalSecretActorContext = {
+	actorId: string;
+	ownerSessionId: string;
+	projectId: string;
+};
+
+export type TerminalSecretRegistration = {
+	version: 1;
+	actorId: string;
+	ownerSessionId: string;
+	transport: "telegram" | "local";
+};
+
+export type TerminalSecretRequest =
+	| { action: "get" | "decline" | "cancel"; requestId: string; context: TerminalSecretActorContext }
+	| { action: "submit"; requestId: string; submission: SecretSubmission; context: TerminalSecretActorContext };
 
 export interface TerminalControlOptions {
 	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
@@ -114,6 +135,14 @@ export async function serveTerminalControl(
 	root = getConfigRootDir(),
 	options: TerminalControlOptions = {},
 ): Promise<() => void> {
+	const secretIntakeContext = (): TerminalSecretActorContext | undefined =>
+		target.secretRequest ? target.secretIntakeContext?.() : undefined;
+	const secretIntakeCapability = () => {
+		const context = secretIntakeContext();
+		return context ? { version: 1 as const, sealed: true as const, context } : undefined;
+	};
+	const capabilities = (): readonly string[] =>
+		secretIntakeContext() ? [...TERMINAL_CAPABILITIES, "secret-intake"] : TERMINAL_CAPABILITIES;
 	const directory = path.join(root, "run", "terminals");
 	await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(directory);
@@ -425,6 +454,40 @@ export async function serveTerminalControl(
 						let result: unknown;
 						switch (request.op) {
 							case "subscribe": {
+								if (request.secretIntake !== undefined) {
+									const registration = request.secretIntake;
+									const registrationKeys = ["version", "actorId", "ownerSessionId", "transport"];
+									if (
+										typeof registration !== "object" ||
+										registration === null ||
+										Array.isArray(registration) ||
+										Object.keys(registration).length !== registrationKeys.length ||
+										Object.keys(registration).some(key => !registrationKeys.includes(key)) ||
+										registration.version !== 1 ||
+										typeof registration.actorId !== "string" ||
+										registration.actorId.length === 0 ||
+										typeof registration.ownerSessionId !== "string" ||
+										registration.ownerSessionId.length === 0 ||
+										(registration.transport !== "telegram" && registration.transport !== "local") ||
+										!target.registerSecretIntake
+									) {
+										throw new Error("Secret intake registration refused");
+									}
+									try {
+										const context = await target.registerSecretIntake(registration as TerminalSecretRegistration);
+										if (
+											context.actorId !== registration.actorId ||
+											context.ownerSessionId !== registration.ownerSessionId ||
+											typeof context.projectId !== "string" ||
+											context.projectId.length === 0
+										) {
+											throw new Error("Secret intake registration refused");
+										}
+										await publish();
+									} catch {
+										throw new Error("Secret intake registration refused");
+									}
+								}
 								const fullHistory = target.history();
 								const cursorIndex =
 									typeof request.cursor === "string" && request.cursor
@@ -604,13 +667,50 @@ export async function serveTerminalControl(
 								for (const delivery of deliveries.values()) delivery.watchers.clear();
 								result = { rotated: true };
 								break;
+							case "secret_request": {
+								if (!target.secretRequest) throw new Error("Secret intake request refused");
+								const allowed =
+									request.action === "submit"
+										? ["id", "version", "token", "sessionId", "op", "action", "requestId", "submission", "context"]
+										: ["id", "version", "token", "sessionId", "op", "action", "requestId", "context"];
+								if (
+									Object.keys(request).some(key => !allowed.includes(key)) ||
+									!["get", "submit", "decline", "cancel"].includes(request.action) ||
+									typeof request.requestId !== "string" ||
+									typeof request.context !== "object" ||
+									request.context === null ||
+									Object.keys(request.context).length !== 3 ||
+									Object.keys(request.context).some(key => !["actorId", "ownerSessionId", "projectId"].includes(key)) ||
+									typeof request.context.actorId !== "string" ||
+									typeof request.context.ownerSessionId !== "string" ||
+									typeof request.context.projectId !== "string" ||
+									(request.action === "submit" &&
+										(typeof request.submission !== "object" ||
+											request.submission === null ||
+											request.submission.requestId !== request.requestId))
+								) {
+									throw new Error("Secret intake request refused");
+								}
+								try {
+									result = { request: await target.secretRequest(request) };
+								} catch {
+									throw new Error("Secret intake request refused");
+								}
+								break;
+							}
 							case "ping":
-								result = { ...target.identity(), pid: process.pid, capabilities: TERMINAL_CAPABILITIES };
+								result = { ...target.identity(), pid: process.pid, capabilities: capabilities() };
 								break;
 							default:
 								throw new Error("Unknown terminal operation");
 						}
-						send(socket, { id, ok: true, result });
+						const intake = request.op === "subscribe" ? secretIntakeCapability() : undefined;
+						send(socket, {
+							id,
+							ok: true,
+							result,
+							...(intake ? { secretIntake: intake } : {}),
+						});
 					} catch (error) {
 						send(socket, { id, ok: false, error: String(error) });
 					}
@@ -655,7 +755,7 @@ export async function serveTerminalControl(
 				token: credential,
 				loadedVersion: build.version,
 				loadedBuildSha: build.buildSha,
-				capabilities: TERMINAL_CAPABILITIES,
+				capabilities: capabilities(),
 			};
 			await writeOwner(recordPath, record);
 			if (closed) {
