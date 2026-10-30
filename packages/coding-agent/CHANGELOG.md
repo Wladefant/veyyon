@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Eval tool calls keep framework intent metadata out of execution arguments while preserving tool-declared intent fields ([Refs #753](https://github.com/Wladefant/veyyon/issues/753)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
