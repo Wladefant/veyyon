@@ -44,6 +44,10 @@ When context is rebuilt (`buildSessionContext`):
 4. `branch_summary` entries are converted to `branchSummary` messages.
 5. `custom_message` entries are converted to `custom` messages.
 
+Live session rebuilds select replayable remote compactions using the active
+provider, even when it differs from the persisted default model. Offline readers
+without an active-provider override retain the default-model behavior.
+
 `convertToLlm()` transforms these custom roles into LLM-facing messages, through these static
 templates:
 
