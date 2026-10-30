@@ -222,7 +222,7 @@ export function parseHistorySearchRequest(url: URL): HistorySearchRequest | unde
 	if (!url.searchParams.has("q")) return undefined;
 	if (url.searchParams.has("entry")) throw new Error("Use either q= for search or entry= for an exact read");
 	const query = (url.searchParams.get("q") ?? "").trim();
-	if (query.length < 2 || query.length > 180 || /[\\x00-\\x1f]/.test(query)) {
+	if (query.length < 2 || query.length > 180 || /[\x00-\x1f]/.test(query)) {
 		throw new Error("history:// search requires 2-180 printable query characters");
 	}
 	const leaf = url.searchParams.get("leaf");
