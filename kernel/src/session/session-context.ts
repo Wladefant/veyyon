@@ -106,9 +106,8 @@ function isUsableCompaction(entry: CompactionEntry, activeProvider: string | und
 }
 
 /**
- * The compaction a context rebuild applies to `path` on `activeProvider` (the
- * `provider` half of the branch's default model): the NEWEST entry that can stand
- * in for the span it hid, or null when none can.
+ * The compaction a context rebuild applies to `path` on `activeProvider`: the
+ * NEWEST entry that can stand in for the span it hid, or null when none can.
  *
  * Newest usable, not newest. A server-side compaction minted by one provider is
  * unreadable to the next, and treating the latest entry as the only candidate made
@@ -139,6 +138,8 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/** Provider actively reading this rebuilt live context; absent for offline readers. */
+	activeProvider?: string;
 	/**
 	 * Transcript mode only: keep `toolCall` blocks that have no matching
 	 * `toolResult` on the path instead of stripping them. Pass this when the
@@ -379,15 +380,15 @@ function contextProvider(settings: BranchSettings): string | undefined {
 }
 
 /**
- * The compaction whose keep boundary a context built from `path` starts at, as
- * {@link buildSessionContextFromPath} applies it: the newest one the branch's default model can
- * read, or null when none can and the context sends the whole branch. The model a session runs on
- * can differ from that default (a resume onto another model, a fallback, a temporary pick), and a
- * pass that resolved the boundary for it walked history the prompt does not hold, reading every
- * cold entry of it back from disk.
+ * The compaction whose keep boundary a context built from `path` starts at.
+ * Offline callers default to the branch's persisted default model; live callers
+ * pass the provider actually reading the context.
  */
-export function contextCompaction(path: readonly SessionEntry[]): CompactionEntry | null {
-	return getEffectiveCompactionEntry(path, contextProvider(readBranchSettings(path)));
+export function contextCompaction(
+	path: readonly SessionEntry[],
+	activeProvider?: string,
+): CompactionEntry | null {
+	return getEffectiveCompactionEntry(path, activeProvider ?? contextProvider(readBranchSettings(path)));
 }
 
 /**
@@ -686,7 +687,7 @@ export function buildSessionContextFromPath(
 	options?: BuildSessionContextOptions,
 ): SessionContext {
 	const settings = readBranchSettings(path);
-	const activeProvider = contextProvider(settings);
+	const activeProvider = options?.activeProvider ?? contextProvider(settings);
 	const compaction = getEffectiveCompactionEntry(path, activeProvider) ?? settings.latestCompaction;
 	const transcript = options?.transcript === true;
 	const out = new ContextMessages(transcript);
