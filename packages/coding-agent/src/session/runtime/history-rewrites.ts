@@ -143,14 +143,16 @@ export class HistoryRewrites {
 		const { supersedeReads, dropUseless } = host.settings.getGroup("compaction");
 		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = host.sessionStore.getBranch();
+		const keepBoundaryId = host.keepBoundaryId(branchEntries);
+		const staged = this.#stageToolResults(branchEntries, keepBoundaryId);
 		const result = pruneSupersededToolResults(
-			branchEntries,
+			staged,
 			host.withPlanProtection({
 				supersedeKey: supersedeReads ? readToolSupersedeKey : undefined,
 				pruneUseless: dropUseless,
 				protectedTools: [...DEFAULT_PRUNE_CONFIG.protectedTools],
 				// The whole sent region is flushed only once the cache is cold (idle past the 1h TTL).
-				keepBoundaryId: host.keepBoundaryId(branchEntries),
+				keepBoundaryId,
 				idleFlushMs: PRUNE_IDLE_FLUSH_MS,
 				// As in `pruneOverflow`: a prefix-bound model pays for an in-place rewrite with the
 				// thinking blocks recorded after it, which the cache math cannot price, so eligibility
@@ -159,9 +161,9 @@ export class HistoryRewrites {
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		await this.#commit(result.prunedEntries);
+		const referenceTokens = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-stale");
 		host.syncTodos();
-		return result;
+		return { prunedCount: result.prunedCount, tokensSaved: Math.max(0, result.tokensSaved - referenceTokens) };
 	}
 
 	/**

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.6.8] - 2026-10-30
