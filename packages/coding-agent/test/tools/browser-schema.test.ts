@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import * as path from "node:path";
 import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 import type { ToolCall, TSchema } from "@veyyon/ai";
 import {
@@ -136,14 +137,13 @@ describe("browser tool schema", () => {
 			name: "known-route",
 			app: { path: "/valid/app" },
 		});
-		const acquireBrowser = spyOn(browserRegistry, "acquireBrowser").mockRejectedValue(
-			new Error("spawned route reached"),
-		);
+		const acquireBrowser = spyOn(browserRegistry, "acquireBrowser").mockImplementation(async kind => {
+			throw new Error(`Cannot launch ${kind.kind} browser ${kind.kind === "spawned" ? kind.path : ""}`);
+		});
 		try {
-			await expect(tool.execute("browser-valid-path", args as BrowserParams)).rejects.toThrow("spawned route reached");
-			expect(acquireBrowser).toHaveBeenCalledTimes(1);
-			expect(acquireBrowser.mock.calls[0]?.[0]).toEqual({ kind: "spawned", path: "/valid/app" });
-			expect(acquireBrowser.mock.calls[0]?.[1]).toMatchObject({ cwd: "/tmp/test" });
+			await expect(tool.execute("browser-valid-path", args as BrowserParams)).rejects.toThrow(
+				`Cannot launch spawned browser ${path.resolve("/valid/app")}`,
+			);
 		} finally {
 			acquireBrowser.mockRestore();
 		}

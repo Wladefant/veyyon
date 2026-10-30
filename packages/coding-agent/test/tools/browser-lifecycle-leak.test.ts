@@ -180,6 +180,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 
 		const browser = await acquireBrowser(makeKind("foreign-close"), { cwd: "/tmp" });
 		await acquireTab("foreign-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browser, { kill: false });
 		const tool = new BrowserTool(makeToolSession("session-B"));
 
 		await expect(tool.execute("close-foreign", { action: "close", name: "foreign-tab" })).rejects.toThrow(
@@ -201,6 +202,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 
 		const browser = await acquireBrowser(makeKind("anonymous-close"), { cwd: "/tmp" });
 		await acquireTab("anonymous-tab", browser, { timeoutMs: 1_000 });
+		await releaseBrowser(browser, { kill: false });
 		const tool = new BrowserTool(makeToolSession());
 
 		await expect(tool.execute("close-anonymous", { action: "close", name: "anonymous-tab" })).rejects.toThrow(
@@ -224,7 +226,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const browserA = await acquireBrowser(makeKind("close-all-a"), { cwd: "/tmp" });
 		const browserB = await acquireBrowser(makeKind("close-all-b"), { cwd: "/tmp" });
 		await acquireTab("lane-a-tab", browserA, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browserA, { kill: false });
 		await acquireTab("lane-b-tab", browserB, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browserB, { kill: false });
 		const tool = new BrowserTool(makeToolSession("session-B"));
 
 		await tool.execute("close-owned", { action: "close", all: true });
