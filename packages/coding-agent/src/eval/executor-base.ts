@@ -876,6 +876,7 @@ export class KernelSessionPool<
 			const nextKernel = await this.#options.startKernel(cwd, options);
 			session.kernel = nextKernel;
 			this.#retiring.delete(session);
+			this.#logOwnership(session, "owned");
 		})();
 		this.#transitions.set(session.sessionKey, replacing);
 		try {
@@ -965,6 +966,7 @@ export class KernelSessionPool<
 				continue;
 			}
 			session.ownerIds.delete(ownerId);
+			this.#logOwnership(session, "owned");
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
 			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
