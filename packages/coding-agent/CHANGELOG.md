@@ -5,6 +5,16 @@
 ### Fixed
 
 - Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
+- Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+## [1.6.8] - 2026-10-30
+
+- Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
+
+## [1.6.7] - 2026-10-29
+
+### Fixed
+
+- Live provider context compaction now preserves provider-specific context.
 
 ## [1.6.6] - 2026-10-28
 

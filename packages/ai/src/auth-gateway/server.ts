@@ -57,11 +57,15 @@ import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 // `parseBind` lives in ../utils/parse-bind so the gateway and broker can't
 // drift on accepted inputs (e.g. empty hostname, IPv6 brackets).
 
-const FORMAT_ROUTES: Record<string, { module: FormatModule; label: string }> = {
+const FORMAT_ROUTES = {
 	"/v1/chat/completions": { module: openaiChat, label: "openai-chat" },
 	"/v1/messages": { module: anthropicMessages, label: "anthropic-messages" },
 	"/v1/responses": { module: openaiResponses, label: "openai-responses" },
-};
+} satisfies Record<string, { module: FormatModule; label: string }>;
+
+const PI_NATIVE_PATH = "/v1/pi/stream";
+
+export type AuthGatewayCompletionPath = keyof typeof FORMAT_ROUTES | typeof PI_NATIVE_PATH;
 
 // (passthrough fast-path removed — it bypassed pi-ai provider logic, in
 // particular the Anthropic Claude-Code OAuth system-prompt prefix injection.
@@ -702,14 +706,14 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				}
 
 				// Provider-format dispatch.
-				const formatRoute = FORMAT_ROUTES[pathname];
+				const formatRoute = FORMAT_ROUTES[pathname as keyof typeof FORMAT_ROUTES];
 				if (formatRoute && req.method === "POST") {
 					return redactResponse(withCors(await handleFormatEndpoint(formatRoute, requestOpts, req, peer), req), secrets);
 				}
 
 				// Pi-native fast path. Same auth + provider plumbing as the
 				// foreign-wire routes, just without the wire-format translation.
-				if (req.method === "POST" && pathname === "/v1/pi/stream") {
+				if (req.method === "POST" && pathname === PI_NATIVE_PATH) {
 					return redactResponse(withCors(await handlePiNative(requestOpts, req, peer), req), secrets);
 				}
 
