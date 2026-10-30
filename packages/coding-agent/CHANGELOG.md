@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
+
 ### Fixed
 
 - Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
