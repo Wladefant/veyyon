@@ -18,6 +18,7 @@
  */
 
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import { parseExactHistoryRequest, readLiveHistoryEntry, readStoredHistoryEntry } from "./history-exact";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
@@ -99,6 +100,33 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
 			const lower = agentId.toLowerCase();
 			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
+		}
+
+		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
+		// Resolve only registry-owned or uniquely discovered session files, never a
+		// path supplied in the URL. The multi-conversation refusal above still applies.
+		const exactRequest = parseExactHistoryRequest(url);
+		if (exactRequest) {
+			if (!agentId) throw new Error("history:// exact reads require an agent ID");
+			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
+			if (!sessionFile) {
+				const disk = await sessionFilesFromDisk();
+				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
+				sessionFile = found?.[1];
+			}
+			if (sessionFile) {
+				const result = await readStoredHistoryEntry(sessionFile, exactRequest);
+				const content = JSON.stringify(result, null, 2);
+				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
+					notes: ["Read-only stored session record; externalized blobs are not expanded"] };
+			}
+			if (ref?.session) {
+				const result = readLiveHistoryEntry(ref.session.sessionManager.getBranch(), exactRequest);
+				const content = JSON.stringify(result, null, 2);
+				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
+					notes: ["Active in-memory branch; no persistent session file"] };
+			}
+			// Preserve the existing ambiguous/unknown-agent diagnostic below.
 		}
 
 		if (!ref) {
