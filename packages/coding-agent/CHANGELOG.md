@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
+
 ### Fixed
 
 - Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
@@ -15,7 +19,6 @@
 ## [1.6.6] - 2026-10-28
 
 ### Changed
-- Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
 
