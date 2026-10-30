@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- An external command started by the shell or a PTY starts at nice 10 (`BELOW_NORMAL_PRIORITY_CLASS` on Windows) instead of at the host's own priority.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 

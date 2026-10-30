@@ -115,6 +115,7 @@
 - The stdio, Streamable HTTP and legacy HTTP+SSE MCP transports classify a server's messages through one `routeIncomingMessage`, and the two HTTP transports POST the answer to a server request through one `deliverServerResponse`.
 
 ### Fixed
+- Every process a session spawns (bash and PTY commands, eval kernels, `launch` processes, MCP and language servers, the managed browser) starts at nice 10 (`BELOW_NORMAL_PRIORITY_CLASS` on Windows), so a parallel build or media job no longer stalls the terminal and desktop.
 - The advisor no longer receives a configured secret written in the primary model's thinking; thinking blocks pass through the secret obfuscator like text and tool arguments.
 - A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.

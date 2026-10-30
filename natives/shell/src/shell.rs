@@ -1500,6 +1500,7 @@ impl SpawnObserver for process::SpawnRegistry {
 	}
 
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
+		cpu_budget::lower_spawn_priority(pid);
 		// Pin a stable process reference *now*, before the pid can be recycled.
 		// On Windows an open handle keeps the pid slot reserved for the lifetime
 		// of the handle; on Linux the pidfd carries identity; on macOS the

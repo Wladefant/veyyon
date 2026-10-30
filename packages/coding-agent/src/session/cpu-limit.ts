@@ -82,6 +82,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { formatLimitFileValue, formatSystemdCpuQuota, memoryCapControls } from "@veyyon/kernel/session/cgroup-format";
 import {
@@ -127,8 +128,34 @@ export const CPU_LIMIT_WINDOW_SAMPLES = 3;
 /** Fraction of the budget that counts as "at the wall" for a single sample. */
 const SATURATION_RATIO = 0.95;
 
+/**
+ * Nice level every process a session spawns starts at: bash commands, eval
+ * kernels, `launch` processes, MCP and language servers, the managed browser.
+ * Agent work then yields the CPU to the desktop, the terminal and the harness
+ * itself whenever they contend, and loses nothing on an idle machine. On
+ * Windows the same value selects `BELOW_NORMAL_PRIORITY_CLASS`. The native
+ * spawn points (brush external commands, the PTY) apply the same level from
+ * `veyyon_shell::cpu_budget::SPAWN_NICE`.
+ */
+export const SPAWN_NICE = 10;
+
 /** Nice level applied to budget members on sustained saturation where no kernel quota exists. */
-export const CPU_LIMIT_SATURATION_NICE = 10;
+export const CPU_LIMIT_SATURATION_NICE = 19;
+
+/**
+ * Start a freshly spawned child at {@link SPAWN_NICE}. A child inherits the
+ * harness level, so a harness already at or below that priority leaves it
+ * alone. Best-effort: a child that already exited, or a host that refuses the
+ * change, keeps the level it inherited and the spawn proceeds.
+ */
+export function lowerSpawnPriority(pid: number): void {
+	try {
+		if (os.getPriority() >= SPAWN_NICE) return;
+		os.setPriority(pid, SPAWN_NICE);
+	} catch (error) {
+		logger.debug("Spawn priority: setPriority failed", { pid, error: errorMessage(error) });
+	}
+}
 
 /** The piece of the native `CpuBudgetGroup` the limiter drives. */
 export interface CpuBudgetGroupHandle {
@@ -476,7 +503,7 @@ export class SessionCpuLimit {
 			this.#denied = false;
 			this.#window = [];
 			if (this.#reniced) {
-				this.#group?.renice(0);
+				this.#group?.renice(SPAWN_NICE);
 				this.#reniced = false;
 			}
 			if (this.#group) await this.#setQuota(0);
@@ -741,7 +768,7 @@ export class SessionCpuLimit {
 			this.#denied = false;
 			this.#killWave = 0;
 			if (this.#reniced) {
-				group.renice(0);
+				group.renice(SPAWN_NICE);
 				this.#reniced = false;
 			}
 		}
@@ -1268,9 +1295,11 @@ export function rekeySessionCpuLimit(previousId: string, nextId: string): Sessio
  * An adoption closure for spawn sites that know their session only by a
  * live id lookup. Resolves the limiter at each call, so a limiter registered
  * after the closure is created (session construction order) still applies.
+ * The child starts at {@link SPAWN_NICE} whether or not any budget is set.
  */
 export function sessionCpuAdoption(getSessionId: () => string | null): (pid: number) => void {
 	return pid => {
+		lowerSpawnPriority(pid);
 		const limiter = sessionCpuLimit(getSessionId());
 		if (!limiter) return;
 		void limiter
@@ -1315,9 +1344,11 @@ export function sessionCpuExecHooks(getSessionId: () => string | null): SessionC
  * language servers, debug adapters, the managed browser, speech, and plugin
  * installs. Every session in the process shares those, so pinning them to
  * whichever session happened to trigger them would be arbitrary; the root
- * session's budget is the one that outlives them all.
+ * session's budget is the one that outlives them all. The child starts at
+ * {@link SPAWN_NICE} whether or not any budget is set.
  */
 export function adoptIntoPrimarySessionCpuBudget(pid: number): void {
+	lowerSpawnPriority(pid);
 	const limiter = primarySessionCpuLimit();
 	if (!limiter) return;
 	void limiter
