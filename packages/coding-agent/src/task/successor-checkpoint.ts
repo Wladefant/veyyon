@@ -7,7 +7,7 @@ import { isEexist } from "@veyyon/utils/fs-error";
 import type { AgentDefinition, SingleResult } from "./types";
 
 const checkpointSchema = type({
-	version: "1",
+	version: "2",
 	sliceId: "string",
 	agentId: "string",
 	generation: "0 | 1 | 2",
@@ -28,10 +28,19 @@ export function successorWorkflow(input: {
 	return createHash("sha256")
 		.update(
 			JSON.stringify({
+				// Description and source/file paths are discovery metadata, not the child's behavior.
 				name: input.agent.name,
 				systemPrompt: input.agent.systemPrompt,
 				tools: input.agent.tools,
 				spawns: input.agent.spawns,
+				model: input.agent.model,
+				thinkingLevel: input.agent.thinkingLevel,
+				output: input.agent.output,
+				blocking: input.agent.blocking,
+				autoloadSkills: input.agent.autoloadSkills,
+				contextVariant: input.agent.contextVariant,
+				skillList: input.agent.skillList,
+				readSummarize: input.agent.readSummarize,
 				assignment: input.assignment,
 				context: input.context,
 				cwd: input.cwd,
@@ -64,7 +73,7 @@ export async function claimSuccessorCheckpoint(
 		if (parsed instanceof type.errors || parsed.agentId !== predecessorId) throw new Error("Invalid checkpoint");
 		checkpoint = parsed;
 	} catch {
-		throw new Error(`successor-checkpoint-unavailable: no valid version 1 checkpoint for ${predecessorId}`);
+		throw new Error(`successor-checkpoint-unavailable: no valid version 2 checkpoint for ${predecessorId}`);
 	}
 	if (checkpoint.generation >= 2) {
 		throw new Error(`successor-limit: slice ${checkpoint.sliceId} already used its two successors`);
@@ -98,7 +107,7 @@ export async function writeSuccessorCheckpoint(
 	predecessor?: SuccessorCheckpoint,
 ): Promise<void> {
 	const checkpoint: SuccessorCheckpoint = {
-		version: 1,
+		version: 2,
 		sliceId: predecessor?.sliceId ?? result.id,
 		agentId: result.id,
 		generation: predecessor ? (predecessor.generation === 0 ? 1 : 2) : 0,
