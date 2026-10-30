@@ -326,4 +326,32 @@ describe("an owner disposed during kernel startup", () => {
 		expect(await runner.kernel.shutdown({ timeoutMs: 20 })).toEqual({ confirmed: true });
 		expect(bounds).toEqual([20, 20]);
 	});
+
+	it("keeps a shared startup usable when its first caller aborts", async () => {
+		const ready = Promise.withResolvers<BaseKernel>();
+		const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+			languageName: "Test",
+			logLabel: "shared-startup-cancellation",
+			startKernel: async (_cwd, options) => {
+				// Model the external startup's real abort-to-process-exit boundary.
+				options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
+				return await ready.promise;
+			},
+		});
+		const abort = new AbortController();
+		const first = pool.acquireSession(KEY, "session", process.cwd(), {
+			kernelOwnerId: "first",
+			signal: abort.signal,
+		});
+		const shared = acquire(pool, "shared");
+		abort.abort(new Error("first owner left"));
+		await expect(first).rejects.toThrow(KernelExecutionCancelledError);
+		ready.resolve(runner.kernel);
+		const session = await shared;
+		expect([...session.ownerIds]).toEqual(["shared"]);
+		expect(session.kernel.isAlive()).toBe(true);
+		expect((await session.kernel.execute("1 + 1")).status).toBe("ok");
+		await pool.disposeByOwner("shared");
+	});
 });
