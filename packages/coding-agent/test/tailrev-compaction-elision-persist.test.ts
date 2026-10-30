@@ -218,4 +218,28 @@ describe("a successful compaction persists a pointered, correctly estimated elis
 		expect(onDisk).toContain(`artifact://${artifactId}`);
 		expect(onDisk).not.toContain(HUGE);
 	});
+	for (const mode of ["missing-id", "write-error"] as const) {
+		it(`does not commit compaction if recovery artifact save fails (${mode})`, async () => {
+			const original = JSON.stringify(sessionManager.getBranch());
+			expect(original).toContain(HUGE);
+			const saved = vi.spyOn(sessionManager, "saveArtifact").mockImplementation(async () => {
+				if (mode === "write-error") throw new Error("disk full");
+				return undefined;
+			});
+			await expect(session.compact()).rejects.toThrow(
+				"recovery artifact for the kept tail was not saved",
+			);
+			expect(saved).toHaveBeenCalled();
+			const after = JSON.stringify(sessionManager.getBranch());
+			expect(after).toBe(original);
+			expect(after).not.toContain("output elided by compaction");
+			expect(sessionManager.getBranch().some(entry => entry.type === "compaction")).toBe(false);
+			// A restarted session must not load a newly appended boundary whose
+			// corresponding recovery artifact was never persisted.
+			const file = sessionManager.getSessionFile();
+			expect(file).toBeDefined();
+			const onDisk = await fs.readFile(file!, "utf8");
+			expect(onDisk).toContain(HUGE);
+		});
+	}
 });
