@@ -120,6 +120,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		const exactRequest = parseExactHistoryRequest(url);
 		const searchRequest = parseHistorySearchRequest(url);
 		if (exactRequest || searchRequest) {
+			// Navigation moves the active leaf without rewriting the append-only file.
+			// Its last record may therefore belong to a different, abandoned branch.
+			if (ref?.session) {
+				const selectedLeaf = ref.session.sessionManager.getLeafId();
+				if (exactRequest && exactRequest.leafId === undefined) exactRequest.leafId = selectedLeaf;
+				if (searchRequest && searchRequest.leafId === undefined) searchRequest.leafId = selectedLeaf;
+			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
 			if (!sessionFile) {
 				const disk = await sessionFilesFromDisk();
@@ -137,8 +144,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			if (ref?.session) {
 				const branch = ref.session.sessionManager.getBranch();
 				const result = exactRequest
-					? readLiveHistoryEntry(branch, exactRequest)
-					: searchLiveHistoryEntries(branch, searchRequest!);
+					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
+					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());
 				const content = JSON.stringify(result, null, 2);
 				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
 					notes: ["Active in-memory branch; no persistent session file"] };
@@ -288,3 +295,4 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 	lines.push("", "Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.");
 	return `${lines.join("\n")}\n`;
 }
+

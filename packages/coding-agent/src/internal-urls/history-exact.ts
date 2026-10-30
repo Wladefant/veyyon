@@ -7,23 +7,82 @@
  * reader does not pretend such references are the original media bytes.
  * No writer or session lock is opened.
  */
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 
 const DEFAULT_PAGE_CHARACTERS = 8_000;
 const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+const MAX_INDEX_ENTRIES = 100_000;
+const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+
+function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
+	try {
+		return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts, bytes)).replace(/\r$/, "");
+	} catch {
+		return undefined;
+	}
+}
+
+/** Discard an oversized line while streaming, before allocating its full text. */
+async function* storedLines(filePath: string): AsyncGenerator<string | undefined> {
+	const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
+	let parts: Buffer[] = [];
+	let bytes = 0;
+	let oversized = false;
+	let scannedBytes = 0;
+	try {
+		for await (const chunk of input) {
+			const buffer = chunk as Buffer;
+			scannedBytes += buffer.length;
+			if (scannedBytes > MAX_SCANNED_BYTES) {
+				yield undefined;
+				return;
+			}
+			let start = 0;
+			while (start < buffer.length) {
+				const newline = buffer.indexOf(10, start);
+				const end = newline < 0 ? buffer.length : newline;
+				if (!oversized) {
+					bytes += end - start;
+					if (bytes > MAX_RECORD_BYTES) {
+						oversized = true;
+						parts = [];
+					} else {
+						parts.push(buffer.subarray(start, end));
+					}
+				}
+				if (newline >= 0) {
+					yield oversized ? undefined : decodeRecord(parts, bytes);
+					parts = [];
+					bytes = 0;
+					oversized = false;
+				}
+				start = newline < 0 ? buffer.length : newline + 1;
+			}
+		}
+		if (oversized || bytes > 0) yield oversized ? undefined : decodeRecord(parts, bytes);
+	} finally {
+		input.destroy();
+	}
+}
+
+function isFileReadError(error: unknown): boolean {
+	return error instanceof Error && "code" in error;
+}
 
 export interface ExactHistoryRequest {
 	entryId: string;
-	leafId?: string;
+	leafId?: string | null;
+	revision?: string;
 	offset: number;
 	limit: number;
 }
 
 export interface ExactHistoryResult {
-	status: "ok" | "missing" | "not_on_branch" | "unavailable";
+	status: "ok" | "missing" | "not_on_branch" | "unavailable" | "stale";
+	revision?: string;
 	entryId: string;
 	leafId?: string;
 	sessionId?: string;
@@ -64,7 +123,22 @@ export function parseExactHistoryRequest(url: URL): ExactHistoryRequest | undefi
 	const offset = numericParam(url.searchParams.get("offset"), "offset", 0, Number.MAX_SAFE_INTEGER);
 	const limit = numericParam(url.searchParams.get("limit"), "limit", DEFAULT_PAGE_CHARACTERS, MAX_PAGE_CHARACTERS);
 	if (limit === 0) throw new Error("history:// exact read limit must be at least 1");
-	return { entryId, leafId, offset, limit };
+	const revision = url.searchParams.get("revision") ?? undefined;
+	if (revision !== undefined && !/^[a-f0-9]{64}$/.test(revision)) {
+		throw new Error("history:// revision must be the returned SHA-256 token");
+	}
+	if (offset > 0 && (!revision || !leafId)) {
+		throw new Error("history:// continuation requires the previous page's leaf and revision");
+	}
+	return { entryId, leafId, revision, offset, limit };
+}
+
+function recordDigest(raw: string): string {
+	return createHash("sha256").update(raw, "utf8").digest("hex");
+}
+
+function recordRevision(digest: string, source: ExactHistoryResult["source"], leafId: string, sessionId?: string): string {
+	return createHash("sha256").update(JSON.stringify([1, source, sessionId ?? null, leafId, digest])).digest("hex");
 }
 
 function page(
@@ -75,21 +149,35 @@ function page(
 	recordType: string,
 	sessionId?: string,
 ): ExactHistoryResult {
+	if (request.offset > 0 && (!request.revision || !request.leafId)) {
+		throw new Error("history:// continuation requires the previous page's leaf and revision");
+	}
+	const revision = recordRevision(recordDigest(raw), source, leafId, sessionId);
+	if (request.revision !== undefined && request.revision !== revision) {
+		return {
+			status: "stale", entryId: request.entryId, leafId, sessionId, source, revision,
+			detail: "Record or selected branch changed; restart the read at offset zero",
+		};
+	}
 	// Page by Unicode code point rather than UTF-8 byte or JS UTF-16 offsets;
 	// splitting a multibyte character would corrupt a supposedly exact read.
-	const characters = Array.from(raw);
-	if (request.offset > characters.length) {
+	let totalCharacters = 0;
+	let fragment = "";
+	for (const character of raw) {
+		if (totalCharacters >= request.offset && totalCharacters < request.offset + request.limit) fragment += character;
+		totalCharacters++;
+	}
+	if (request.offset > totalCharacters) {
 		return {
 			status: "missing", entryId: request.entryId, leafId, sessionId, source,
 			detail: "Page offset is beyond the end of this saved record",
 		};
 	}
-	const next = Math.min(characters.length, request.offset + request.limit);
+	const next = Math.min(totalCharacters, request.offset + request.limit);
 	return {
-		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType,
-		offset: request.offset, totalCharacters: characters.length,
-		fragment: characters.slice(request.offset, next).join(""),
-		nextOffset: next < characters.length ? next : null,
+		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType, revision,
+		offset: request.offset, totalCharacters, fragment,
+		nextOffset: next < totalCharacters ? next : null,
 		detail: "Exact saved record text; historic pruning and external blob references are not reversed",
 	};
 }
@@ -119,15 +207,13 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
-	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
-	const lines = createInterface({ input, crlfDelay: Infinity });
 	try {
-		for await (const line of lines) {
-			if (!line.startsWith("{")) continue; // optional title slot and blank lines
-			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
+		for await (const line of storedLines(filePath)) {
+			if (line === undefined) {
 				incomplete = true;
-				continue; // refuse to materialize exceptionally large records
+				continue;
 			}
+			if (!line.startsWith("{")) continue; // optional title slot and blank lines
 			let record: unknown;
 			try {
 				record = JSON.parse(line);
@@ -142,6 +228,10 @@ export async function readStoredHistoryEntry(
 				continue;
 			}
 			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
+			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
+				incomplete = true;
+				break;
+			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
 			if (entry.id === request.entryId) {
@@ -149,16 +239,19 @@ export async function readStoredHistoryEntry(
 				recordType = entry.type;
 			}
 		}
-	} finally {
-		lines.close();
-		input.destroy();
+	} catch (error) {
+		if (!isFileReadError(error)) throw error;
+		return {
+			status: "unavailable", entryId: request.entryId, source: "stored-jsonl",
+			detail: "Stored session file could not be read; this is not a negative evidence lookup",
+		};
 	}
-	const leafId = request.leafId ?? lastId;
+	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
-			status: incomplete ? "unavailable" : "missing", entryId: request.entryId, leafId,
+			status: request.revision ? "stale" : incomplete ? "unavailable" : "missing", entryId: request.entryId, leafId,
 			sessionId, source: "stored-jsonl",
-			detail: incomplete ? "A malformed or oversized record prevents a reliable negative lookup" :
+			detail: incomplete ? "Malformed/oversized records or the 128 MiB/100,000-entry scan bound prevents a reliable negative lookup" :
 				"No stored record or requested branch leaf was found",
 		};
 	}
@@ -177,41 +270,42 @@ export async function readStoredHistoryEntry(
 export function readLiveHistoryEntry(
 	branch: readonly SessionEntry[],
 	request: ExactHistoryRequest,
+	sessionId?: string,
 ): ExactHistoryResult {
-	const leafIndex = request.leafId
+	const leafIndex = request.leafId === null ? -1 : request.leafId
 		? branch.findIndex(entry => entry.id === request.leafId)
 		: branch.length - 1;
-	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : request.leafId;
+	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : request.leafId ?? undefined;
 	const index = branch.findIndex(entry => entry.id === request.entryId);
 	if (index < 0 || leafIndex < 0) {
 		return {
-			status: "missing", entryId: request.entryId, leafId, source: "live-session",
+			status: request.revision ? "stale" : "missing", entryId: request.entryId, leafId, sessionId, source: "live-session",
 			detail: "Entry or branch leaf not present in the active in-memory branch",
 		};
 	}
 	if (index > leafIndex) {
 		return {
-			status: "not_on_branch", entryId: request.entryId, leafId, source: "live-session",
+			status: "not_on_branch", entryId: request.entryId, leafId, sessionId, source: "live-session",
 			detail: "Entry is newer than the selected branch leaf",
 		};
 	}
 	const entry = branch[index]!;
-	return page(JSON.stringify(entry), request, leafId!, "live-session", entry.type);
+	return page(JSON.stringify(entry), request, leafId!, "live-session", entry.type, sessionId);
 }
 
 /** A bounded raw-record text search that discovers IDs for exact reads. */
 export interface HistorySearchRequest {
 	query: string;
-	leafId?: string;
+	leafId?: string | null;
 	limit: number;
 }
 export interface HistorySearchResult {
-	status: "ok" | "partial" | "missing_branch";
+	status: "ok" | "partial" | "missing_branch" | "unavailable";
 	sessionId?: string;
 	leafId?: string;
 	query: string;
 	source: "stored-jsonl" | "live-session";
-	matches: Array<{ entryId: string; recordType: string; preview: string }>;
+	matches: Array<{ entryId: string; recordType: string; preview: string; revision: string }>;
 	detail: string;
 }
 
@@ -251,20 +345,18 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
-	const candidates: HistorySearchResult["matches"] = [];
+	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
 	let incomplete = false;
-	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
-	const lines = createInterface({ input, crlfDelay: Infinity });
 	try {
-		for await (const line of lines) {
-			if (!line.startsWith("{")) continue;
-			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
+		for await (const line of storedLines(filePath)) {
+			if (line === undefined) {
 				incomplete = true;
 				continue;
 			}
+			if (!line.startsWith("{")) continue;
 			let record: unknown;
 			try {
 				record = JSON.parse(line);
@@ -279,6 +371,10 @@ export async function searchStoredHistoryEntries(
 				continue;
 			}
 			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
+			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
+				incomplete = true;
+				break;
+			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
 			if (!line.toLowerCase().includes(query)) continue;
@@ -287,14 +383,17 @@ export async function searchStoredHistoryEntries(
 				incomplete = true;
 			}
 			candidates.push({
-				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query),
+				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query), digest: recordDigest(line),
 			});
 		}
-	} finally {
-		lines.close();
-		input.destroy();
+	} catch (error) {
+		if (!isFileReadError(error)) throw error;
+		return {
+			status: "unavailable", query: request.query, source: "stored-jsonl", matches: [],
+			detail: "Stored session file could not be read; this is not a negative evidence lookup",
+		};
 	}
-	const leafId = request.leafId ?? lastId;
+	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
 	if (!leafId || !parents.has(leafId)) {
 		return {
 			status: "missing_branch", sessionId, leafId, query: request.query,
@@ -302,12 +401,13 @@ export async function searchStoredHistoryEntries(
 			detail: "Requested session branch was not found",
 		};
 	}
-	const matches = candidates.filter(item => onBranch(parents, item.entryId, leafId)).reverse().slice(0, request.limit);
+	const matches = candidates.filter(item => onBranch(parents, item.entryId, leafId)).reverse().slice(0, request.limit)
+		.map(({ digest, ...match }) => ({ ...match, revision: recordRevision(digest, "stored-jsonl", leafId, sessionId) }));
 	return {
 		status: incomplete ? "partial" : "ok", sessionId, leafId, query: request.query,
 		source: "stored-jsonl", matches,
 		detail: incomplete
-			? "Not exhaustive: malformed/oversized records or more than 500 candidates; stored text only, blobs not searched"
+			? "Not exhaustive: malformed/oversized records or more than 500 candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
 			: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
 }
@@ -316,14 +416,15 @@ export async function searchStoredHistoryEntries(
 export function searchLiveHistoryEntries(
 	branch: readonly SessionEntry[],
 	request: HistorySearchRequest,
+	sessionId?: string,
 ): HistorySearchResult {
-	const leafIndex = request.leafId
+	const leafIndex = request.leafId === null ? -1 : request.leafId
 		? branch.findIndex(entry => entry.id === request.leafId)
 		: branch.length - 1;
-	const leafId = branch[leafIndex]?.id ?? request.leafId;
+	const leafId = branch[leafIndex]?.id ?? request.leafId ?? undefined;
 	if (leafIndex < 0) {
 		return {
-			status: "missing_branch", leafId, query: request.query, source: "live-session",
+			status: "missing_branch", leafId, sessionId, query: request.query, source: "live-session",
 			matches: [], detail: "Requested leaf is not in the active in-memory branch",
 		};
 	}
@@ -333,10 +434,14 @@ export function searchLiveHistoryEntries(
 		const entry = branch[i]!;
 		const raw = JSON.stringify(entry);
 		if (!raw.toLowerCase().includes(query)) continue;
-		matches.push({ entryId: entry.id, recordType: entry.type, preview: previewAt(raw, query) });
+		matches.push({
+			entryId: entry.id, recordType: entry.type, preview: previewAt(raw, query),
+			revision: recordRevision(recordDigest(raw), "live-session", leafId!, sessionId),
+		});
 	}
 	return {
-		status: "ok", leafId, query: request.query, source: "live-session", matches,
+		status: "ok", leafId, sessionId, query: request.query, source: "live-session", matches,
 		detail: "Bounded newest-first matches in the active in-memory branch",
 	};
 }
+
