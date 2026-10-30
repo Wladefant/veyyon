@@ -9,6 +9,9 @@
 ### Fixed
 
 - Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
+## [1.6.8] - 2026-10-30
+
+- Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
 
 ## [1.6.7] - 2026-10-29
 
