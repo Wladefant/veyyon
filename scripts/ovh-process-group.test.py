@@ -65,7 +65,22 @@ def kill_test_pids(pids):
             pass
 
 
-def run_case(name, command, expected, sig=None, need_tree=False):
+def wait_for_cleanup_sleep(proc):
+    # The wrapper's sleep is the real escalation window, not a guessed delay.
+    deadline = time.monotonic() + 3
+    children = Path(f"/proc/{proc.pid}/task/{proc.pid}/children")
+    while proc.poll() is None and time.monotonic() < deadline:
+        for pid in children.read_text().split():
+            try:
+                if Path(f"/proc/{pid}/comm").read_text().strip() == "sleep":
+                    return
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        time.sleep(.005)
+    raise AssertionError("wrapper did not enter cleanup escalation")
+
+
+def run_case(name, command, expected, sig=None, need_tree=False, repeated_sig=None):
     with tempfile.TemporaryDirectory() as directory:
         pidfile = Path(directory) / "pids"
         env = dict(os.environ, PIDFILE=str(pidfile))
@@ -78,6 +93,9 @@ def run_case(name, command, expected, sig=None, need_tree=False):
                 require(len(pids) == len(set(pids)), f"{name}: PID file contains duplicate PIDs: {pids}")
             if sig is not None:
                 os.kill(proc.pid, sig)
+            if repeated_sig is not None:
+                wait_for_cleanup_sleep(proc)
+                os.kill(proc.pid, repeated_sig)
             status = proc.wait(timeout=4)
             require(status == expected, f"{name}: status {status}, expected {expected}")
             if pids:
@@ -122,6 +140,7 @@ def main():
     run_case("timeout", ["timeout", "--signal=TERM", "1.5", "python3", "-c", TREE, "sleep"], 124, need_tree=True)
     run_case("INT", ["python3", "-c", TREE, "sleep"], 130, signal.SIGINT, True)
     run_case("TERM escalation", ["python3", "-c", TREE, "stubborn"], 143, signal.SIGTERM, True)
+    run_case("repeated TERM escalation", ["python3", "-c", TREE, "stubborn"], 143, signal.SIGTERM, True, signal.SIGTERM)
     workflow_shell = "bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail"
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "step.sh"
@@ -129,7 +148,7 @@ def main():
         script.write_text("printf ok | tee \"$OUTPUT\"\n")
         result = subprocess.run(["bash", str(WRAPPER), "bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], env=dict(os.environ, OUTPUT=str(output)), timeout=4, check=False)
         require(result.returncode == 0 and output.read_text() == "ok", f"workflow shell pipeline failed: {workflow_shell}")
-    print("ovh-process-group: 8 passed, 0 failed")
+    print("ovh-process-group: 9 passed, 0 failed")
 
 
 if __name__ == "__main__":
