@@ -18,6 +18,9 @@
  * not exist to be observed: a one-conversation test proves nothing either way.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { HistoryProtocolHandler } from "../history-protocol";
@@ -89,6 +92,32 @@ describe("history:// across conversations", () => {
 	 * run, which is every interactive session, still resolves. Without this a
 	 * refusal that broke `history://` outright would look like a fix.
 	 */
+	it("serves the stored entry only through a registered agent, without a session writer", async () => {
+		const temp = TempDir.createSync("@veyyon-history-handler-");
+		try {
+			liveRoot("acp:a", "session-a");
+			const file = path.join(temp.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "session-a" }),
+				JSON.stringify({ type: "message", id: "record-one", parentId: null, message: "original text" }),
+			].join("\n") + "\n");
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "acp:a",
+				session: null, sessionFile: file, status: "parked",
+			});
+			const result = await new HistoryProtocolHandler().resolve(
+				new URL("history://Scout?entry=record-one&limit=1000") as never,
+			);
+			expect(result.contentType).toBe("application/json");
+			const payload = JSON.parse(result.content) as { status: string; fragment: string; sessionId: string };
+			expect(payload.status).toBe("ok");
+			expect(payload.fragment).toContain("original text");
+			expect(payload.sessionId).toBe("session-a");
+		} finally {
+			await temp.remove();
+		}
+	});
+
 	it("resolves normally when the process drives one conversation", async () => {
 		liveRoot("acp:a", "session-a");
 		AgentRegistry.global().register({
