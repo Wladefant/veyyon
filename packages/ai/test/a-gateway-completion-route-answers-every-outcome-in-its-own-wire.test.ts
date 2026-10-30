@@ -6,8 +6,8 @@
 // server and asserts every reachable outcome byte for byte against that route's own `formatError`,
 // so a route that answers in another wire's envelope, swaps a status, drops the classifier, or loses
 // a step fails here. A request without an accepted bearer never reaches the first step and gets the
-// gateway's plain 401. The routes are read from the server's own table, so a new route turns this
-// suite red until it has a fixture.
+// gateway's plain 401. The fixture keys must match the server's production route type, so the
+// package type check rejects a new route until it has a fixture.
 //
 // Not caught: the 499 every step answers once the client has closed its connection, which no client
 // can read back through a real server; the content of the success bodies beyond the reply text and
@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis } from "@veyyon/ai/api-registry";
 import { type AuthGatewayServerHandle, startAuthGateway } from "@veyyon/ai/auth-gateway";
+import type { AuthGatewayCompletionPath } from "@veyyon/ai/auth-gateway/server";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { classifyGatewayError } from "@veyyon/ai/error/gateway";
 import * as anthropicMessages from "@veyyon/ai/providers/anthropic-messages-server";
@@ -52,7 +53,7 @@ interface RouteFixture {
 
 const userTurn = [{ role: "user", content: "hello gateway" }];
 
-const ROUTES: Record<string, RouteFixture> = {
+const ROUTES = {
 	"/v1/chat/completions": {
 		wire: openaiChat,
 		request: (model, stream) => ({ model, stream, messages: userTurn }),
@@ -85,7 +86,7 @@ const ROUTES: Record<string, RouteFixture> = {
 		responseMarker: '{"message":{"role":"assistant"',
 		streamMarker: '"type":"text_delta"',
 	},
-};
+} satisfies Record<AuthGatewayCompletionPath, RouteFixture>;
 
 const REPLY = "gateway sweep reply";
 const keyed = createMockModel({ provider: "openrouter", id: "mock/sweep-keyed" });
