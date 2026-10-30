@@ -443,7 +443,8 @@ Selection and execution:
                             suite name (--tasks deep-swe=smoke.txt) to scope it; an
   --skill-experiment <path> frozen manifest arms for in-process experiments
   --skill-phase <phase>     pilot runs 1-2 real tasks (diagnostic only); feedback/score/final
-                            use the seeded 20/20/60 split from exactly 100 verified tasks
+                            default to 100 verified tasks (20 feedback/20 score/60 final);
+                            an explicit cohortSize: 80 manifest uses 16 feedback/16 score/48 final
   --skill-split-seed <seed> required for feedback, score, and final; absent for pilot
   --skill-candidate <path>  immutable candidate artifact required for score and final
   --skill-selection <path>  frozen score selection required for final use
