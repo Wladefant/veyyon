@@ -44,7 +44,7 @@ describe("history exact record lookup", () => {
 			expect(parts.join("")).toBe(whole);
 			// Sibling history must not be returned by a default-current-branch read.
 			expect((await readStoredHistoryEntry(file, { ...query!, entryId: "b" })).status).toBe("not_on_branch");
-			const sibling = await readStoredHistoryEntry(file, { ...query!, entryId: "b", leafId: "b" });
+			const sibling = await readStoredHistoryEntry(file, { ...query!, entryId: "b", leafId: "b", limit: 1000 });
 			expect(sibling.status).toBe("ok");
 			expect(sibling.fragment).toContain("sibling");
 		} finally {
