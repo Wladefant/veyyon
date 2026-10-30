@@ -423,8 +423,8 @@ Usage:
   evals --list --suite <id,id>                    list the tasks of each named suite
   evals --suite <id,id> --model <id>              run one or more suites
   evals --suite <id> --model <id> --skill-experiment <manifest> --skill-phase pilot (--tasks <id>|--limit 1|2)
-  evals skill revise --manifest <path> --tasks <100-task-json> --run <feedback-run.json> --split-seed <seed> --model <id> --output <candidate.json>
-  evals skill select --manifest <path> --tasks <100-task-json> --run <score-run.json> --split-seed <seed> --candidate <candidate.json> --output <selection.json>
+  evals skill revise --manifest <path> --tasks <cohort-json> --run <feedback-run.json> --split-seed <seed> --model <id> --output <candidate.json>
+  evals skill select --manifest <path> --tasks <cohort-json> --run <score-run.json> --split-seed <seed> --candidate <candidate.json> --output <selection.json>
   evals skill inspect --manifest <path> --run <run.json> [--candidate <candidate.json>]
   evals --suite <id> --model <id> --skill-experiment <manifest> --skill-phase final --skill-split-seed <seed> --skill-candidate <candidate> --skill-selection <selection> --skill-score-run <score-run>
 Axes:
