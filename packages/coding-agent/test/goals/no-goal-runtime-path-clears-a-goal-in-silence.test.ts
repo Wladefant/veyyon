@@ -69,7 +69,10 @@ const RUNTIME_PATHS: Record<string, Classified> = {
 	onAgentEnd: { fate: "keeps driving", invoke: session => session.goalRuntime.onAgentEnd() },
 	flushUsage: { fate: "keeps driving", invoke: session => session.goalRuntime.flushUsage("suppressed") },
 	buildActivePrompt: { fate: "keeps driving", invoke: session => session.goalRuntime.buildActivePrompt() },
-	buildContinuationPrompt: { fate: "keeps driving", invoke: session => session.goalRuntime.buildContinuationPrompt() },
+	buildContinuationPrompt: {
+		fate: "keeps driving",
+		invoke: session => session.goalRuntime.buildContinuationPrompt(0),
+	},
 	// Reached only through `AgentSession#abort`, which always names a reason; driven here through
 	// that caller so the sweep sees the pause a real interrupt produces.
 	onTaskAborted: { fate: "pauses", persists: "goal_paused", invoke: session => session.abort() },

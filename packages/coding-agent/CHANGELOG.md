@@ -116,6 +116,7 @@
 
 ### Fixed
 - An active goal keeps driving after a turn that ends in prose without a tool call, including the reply to the `/goal` objective, and stops with a warning only after 3 such turns in a row instead of stopping silently after one.
+- The goal continuation after a turn that ended without a tool call states that the turn did no work and directs the model to start an untried approach, so a model that answers with a status report returns to work.
 - Every process a session spawns (bash and PTY commands, eval kernels, `launch` processes, MCP and language servers, the managed browser) starts at nice 10 (`BELOW_NORMAL_PRIORITY_CLASS` on Windows), so a parallel build or media job no longer stalls the terminal and desktop.
 - The advisor no longer receives a configured secret written in the primary model's thinking; thinking blocks pass through the secret obfuscator like text and tool arguments.
 - A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.

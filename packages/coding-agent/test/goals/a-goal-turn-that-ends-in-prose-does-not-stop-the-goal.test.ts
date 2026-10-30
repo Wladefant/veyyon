@@ -1,22 +1,26 @@
 /**
  * WHY: a goal stopped mid-work. The model answered the `/goal` objective with "I'll do it." and no
  * tool call, the turn ended, and nothing else happened: the status line still read `Goal`, and no
- * continuation ever opened. The same stop followed any continuation turn that ended in prose.
+ * continuation ever opened. The same stop followed any continuation turn that ended in prose, such
+ * as a status report that the goal "remains active and incomplete".
  *
  * Goal mode read a settled turn without a tool call as the model having nothing left to do, and
  * latched the next continuation off. A visible user turn (the `/goal` objective is one) latched it
  * off the same way. Only the goal tool finishes a goal, so a turn that ends in prose is a turn that
  * did not finish, and the continuation it leaves behind is still owed.
  *
- * The class this closes: no settled turn, whoever opened it, stops a goal in silence. A run of
- * turns that only talk is BOUNDED and REPORTED instead, so a model that never calls a tool cannot
- * spin the goal forever, and a message from the operator restarts it.
+ * The class this closes: no settled turn, whoever opened it, stops a goal in silence. The
+ * continuation after a turn without a tool call states that the turn did no work, so a model that
+ * answered with a status report is steered back to it. A run of turns that only talk is BOUNDED
+ * and REPORTED, so a model that never calls a tool cannot spin the goal forever, and a message
+ * from the operator restarts it.
  *
  * What it does not catch: a goal paused through the abort path, a turn that never settles, and a
  * continuation the session declines to run after goal mode submitted it.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { MockResponse } from "@veyyon/ai/providers/mock";
+import type { Message } from "@veyyon/ai";
+import type { MockHandler, MockResponse } from "@veyyon/ai/providers/mock";
 import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createGoalSession, flushMicrotasks, type GoalSession, NOTE_TOOL } from "../helpers/goal-session";
@@ -28,6 +32,26 @@ const toolCall = (id: string): MockResponse => ({
 
 const IDLE_STAND_DOWN = "Goal mode stopped driving after 3 turns without a tool call. Send a message to resume it.";
 
+/** The continuation prompt's opening line, so a continuation is told apart from the other user-role context. */
+const CONTINUATION = "Continue work on the active goal.";
+
+function textOf(message: Message): string {
+	if (message.role !== "user" && message.role !== "developer") return "";
+	if (typeof message.content === "string") return message.content;
+	return message.content.map(block => (block.type === "text" ? block.text : "")).join("");
+}
+
+/**
+ * Answer with `response`, recording the continuation prompt the request carried. Read when the
+ * request is made: the context a provider receives is not a snapshot the test can read later.
+ */
+function recording(sent: Array<string | undefined>, response: MockResponse): MockHandler {
+	return context => {
+		sent.push(context.messages.map(textOf).findLast(text => text.includes(CONTINUATION)));
+		return response;
+	};
+}
+
 describe("a goal turn that ends in prose leaves the goal driving", () => {
 	let goal: GoalSession | undefined;
 
@@ -35,7 +59,7 @@ describe("a goal turn that ends in prose leaves the goal driving", () => {
 		initTheme();
 	});
 
-	const build = async (responses: MockResponse[], goalEnabled = true): Promise<GoalSession> => {
+	const build = async (responses: MockHandler[], goalEnabled = true): Promise<GoalSession> => {
 		goal = await createGoalSession(responses, { "goal.enabled": goalEnabled });
 		return goal;
 	};
@@ -103,6 +127,30 @@ describe("a goal turn that ends in prose leaves the goal driving", () => {
 		// The bound terminates: no fourth turn, and the operator is told why the goal went quiet.
 		expect(await g.awaitContinuation()).toBeUndefined();
 		expect(g.warnings).toEqual([IDLE_STAND_DOWN]);
+	});
+
+	it("tells the model its last turns did no work, and stops saying so once a turn does", async () => {
+		// The provider's view of each continuation: the first follows goal creation, the second and
+		// third follow prose-only turns, the fourth follows a turn that called a tool.
+		const sent: Array<string | undefined> = [];
+		const script = [prose("one"), prose("two"), toolCall("tc-1"), prose("worked"), prose("after")];
+		const g = await build(script.map(response => recording(sent, response)));
+		await createGoal(g);
+
+		for (let turn = 1; turn <= 4; turn += 1) {
+			await runContinuation(g, `continuation turn ${turn}`);
+		}
+
+		// Requests 0, 1, 2 and 4 open continuation turns; request 3 returns the tool's result.
+		expect(sent).toHaveLength(5);
+		const [first, second, third, , fourth] = sent.map(text => {
+			if (text === undefined) throw new Error("A request reached the provider with no continuation prompt");
+			return text;
+		});
+		expect(first).not.toContain("without a tool call");
+		expect(second).toContain("Your previous turn ended without a tool call");
+		expect(third).toContain("Your last 2 turns ended without a tool call");
+		expect(fourth).not.toContain("without a tool call");
 	});
 
 	it("counts only CONSECUTIVE idle turns, so a turn that calls a tool clears the tally", async () => {

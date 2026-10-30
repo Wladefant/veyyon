@@ -4,7 +4,7 @@ import { scheduler } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
+import { createMockModel, type MockHandler, type MockModel } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { submitInteractiveInput } from "@veyyon/coding-agent/main";
@@ -12,6 +12,7 @@ import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive
 import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
@@ -56,11 +57,12 @@ export interface GoalSession {
 
 /**
  * Build a {@link GoalSession}. `responses` is the provider script, one entry per model call, so a
- * `throw` followed by content is one killed attempt and its retry. `overrides` win over the
- * defaults, which turn off everything that would open a turn of its own.
+ * `throw` followed by content is one killed attempt and its retry; a function entry reads the
+ * request it answers. `overrides` win over the defaults, which turn off everything that would open
+ * a turn of its own.
  */
 export async function createGoalSession(
-	responses: MockResponse[],
+	responses: MockHandler[],
 	overrides: Record<string, unknown> = {},
 ): Promise<GoalSession> {
 	resetSettingsForTest();
@@ -97,6 +99,8 @@ export async function createGoalSession(
 	const mock = createMockModel({ responses });
 	const agent = new Agent({
 		getApiKey: () => "openai-test-key",
+		// Production conversion, so a hidden continuation reaches the provider as it does in a session.
+		convertToLlm,
 		initialState: { model, systemPrompt: ["Test"], tools: [noteTool], messages: [] },
 		streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
 	});

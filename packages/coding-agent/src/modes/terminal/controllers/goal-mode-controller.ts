@@ -574,7 +574,7 @@ export class GoalModeController {
 			this.#reportContinuationBlock(blocked, "arm");
 			return;
 		}
-		const prompt = this.#context.session.goalRuntime.buildContinuationPrompt();
+		const prompt = this.#context.session.goalRuntime.buildContinuationPrompt(this.#idleTurns);
 		if (!prompt) {
 			this.#reportContinuationBlock("no-prompt", "arm");
 			return;
