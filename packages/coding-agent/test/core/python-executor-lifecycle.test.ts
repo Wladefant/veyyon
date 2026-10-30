@@ -212,23 +212,42 @@ describe("executePython session kernels", () => {
 		expect(replacement.executeCalls).toEqual(["1 + 1"]);
 	});
 
-	/**
-	 * The restart cannot be conditional on the dead kernel ACKNOWLEDGING its shutdown. A
-	 * wedged process never confirms, and an executor that waits for confirmation before
-	 * replacing it strands the session on a kernel that will never run anything again.
-	 */
-	it("restarts a dead session even when the shutdown is never confirmed", async () => {
+	/** A stopped IPC reader does not prove that its OS process exited. Keep the old
+	 * runner owned, reject this cell, and allow a later confirmed shutdown to recover. */
+	it("refuses replacement until a dead session's shutdown is confirmed", async () => {
 		const dead = new FakeKernel(OK_RESULT, { alive: false, firstShutdownUnconfirmed: true });
 		const live = new FakeKernel(OK_RESULT);
 		const { starts } = startsWith(dead, live);
 
-		await executePython("1 + 1", { sessionId: "retry-dead-session", cwd: CWD });
-		await executePython("2 + 2", { sessionId: "retry-dead-session", cwd: CWD });
+		await expect(executePython("1 + 1", { sessionId: "retry-dead-session", cwd: CWD })).rejects.toThrow(
+			"shutdown was not confirmed",
+		);
+		expect(starts()).toBe(1);
+		expect(live.executeCalls).toEqual([]);
 
+		await executePython("2 + 2", { sessionId: "retry-dead-session", cwd: CWD });
 		expect(starts()).toBe(2);
-		expect(dead.shutdownCalls).toBe(1);
+		expect(dead.shutdownCalls).toBe(2);
 		expect(dead.executeCalls).toEqual([]);
-		expect(live.executeCalls).toEqual(["1 + 1", "2 + 2"]);
+		expect(live.executeCalls).toEqual(["2 + 2"]);
+	});
+
+	it("keeps an unconfirmed reset owned and blocks its replacement", async () => {
+		const old = new FakeKernel(OK_RESULT, { firstShutdownUnconfirmed: true });
+		const live = new FakeKernel(OK_RESULT);
+		const { starts } = startsWith(old, live);
+		await executePython("seed = 1", { sessionId: "unconfirmed-reset", cwd: CWD });
+
+		await expect(
+			executePython("seed = 2", { sessionId: "unconfirmed-reset", reset: true, cwd: CWD }),
+		).rejects.toThrow("shutdown was not confirmed");
+		expect(starts()).toBe(1);
+		expect(old.executeCalls).toEqual(["seed = 1"]);
+		expect(live.executeCalls).toEqual([]);
+
+		await executePython("seed = 3", { sessionId: "unconfirmed-reset", reset: true, cwd: CWD });
+		expect(starts()).toBe(2);
+		expect(live.executeCalls).toEqual(["seed = 3"]);
 	});
 
 	/**
