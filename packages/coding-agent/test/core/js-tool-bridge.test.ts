@@ -1,20 +1,35 @@
+/**
+ * WHY: A cell's bridge intent must not leak into SearchTool's strict schema, while real
+ * cross-type and unknown fields still fail validation. This closes search intent and
+ * argument-validation regressions; it does not cover other tool schemas or search modes.
+ */
 import { describe, expect, it, vi } from "bun:test";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
+import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+
+useIsolatedAgentDir();
+
 
 function createTool(
 	name: string,
 	execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<AgentToolResult>,
+	parameters: AgentTool["parameters"] = type({}),
 ): AgentTool {
 	return {
 		name,
 		label: name,
 		description: `${name} tool`,
-		parameters: type({}),
+		parameters,
 		concurrency: "parallel",
 		execute,
 	} as unknown as AgentTool;
@@ -33,7 +48,7 @@ function createSession(tools: AgentTool[]): ToolSession {
 }
 
 describe("callSessionTool", () => {
-	it("injects js intent and summarizes text results", async () => {
+	it("keeps normalized js intent out of tools that do not declare it", async () => {
 		const execute = vi.fn().mockResolvedValue({
 			content: [{ type: "text", text: "hello" }],
 		});
@@ -54,13 +69,54 @@ describe("callSessionTool", () => {
 		expect(result).toBe("hello");
 		expect(execute).toHaveBeenCalledWith(
 			expect.stringMatching(/^js-read-/),
-			{ path: "/tmp/demo.txt", [INTENT_FIELD]: "js prelude" },
+			{ path: "/tmp/demo.txt" },
 			undefined,
 			undefined,
 			undefined,
 		);
 		expect(statuses).toEqual([expect.objectContaining({ op: "read", path: "/tmp/demo.txt", chars: 5 })]);
 	});
+
+	it("passes a tool-owned intent field while keeping the bridge default out of execution", async () => {
+		const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+		const session = createSession([createTool("custom", execute, type({ i: "string", value: "string" }))]);
+
+		await callSessionTool("custom", { value: "x", [INTENT_FIELD]: "tool-owned" }, { session });
+
+		expect(execute).toHaveBeenCalledWith(
+			expect.stringMatching(/^js-custom-/),
+			{ value: "x", [INTENT_FIELD]: "tool-owned" },
+			undefined,
+			undefined,
+			undefined,
+		);
+	});
+
+	it("validates SearchTool arguments and runs valid structure searches", async () => {
+		using tempDir = TempDir.createSync("@js-tool-bridge-search-");
+		const fixture = path.join(tempDir.path(), "fixture.ts");
+		await writeFile(fixture, "function needle() { return 1; }\n");
+		const base = createSession([]);
+		const search = new SearchTool({ ...base, cwd: tempDir.path() } as ToolSession);
+		const session = { ...base, cwd: tempDir.path(), getToolByName: (name: string) => (name === "search" ? search : undefined) };
+
+		for (const intent of [undefined, "explicit search intent"]) {
+			const args = { type: "structure", input: "function needle() { $$$BODY }", ...(intent ? { [INTENT_FIELD]: intent } : {}) };
+			const result = await callSessionTool("search", args, { session });
+			expect(JSON.stringify(result)).toContain("needle");
+		}
+
+		const invalidFields = [
+			{ type: "files", input: "*.ts", skip: 1, message: 'Search type "files" does not accept: skip.' },
+			{ type: "text", input: "needle", hidden: true, message: 'Search type "text" does not accept: hidden.' },
+			{ type: "structure", input: "function needle() { $$$BODY }", case: false, message: 'Search type "structure" does not accept: case.' },
+			{ type: "structure", input: "function needle() { $$$BODY }", mystery: true, message: "Unexpected key" },
+		] as const;
+		for (const { message, ...args } of invalidFields) {
+			await expect(callSessionTool("search", args, { session })).rejects.toThrow(message);
+		}
+	});
+
 
 	it("returns structured tool results when details or images are present", async () => {
 		const session = createSession([
