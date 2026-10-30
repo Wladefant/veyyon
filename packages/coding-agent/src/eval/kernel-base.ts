@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Process } from "@veyyon/natives";
 import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
 import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
@@ -87,6 +89,9 @@ export interface KernelStartOptions {
 	interpreter?: string;
 	signal?: AbortSignal;
 	deadlineMs?: number;
+	/** Diagnostic ownership only; runtime sharing remains controlled by the session pool. */
+	sessionId?: string;
+	kernelOwnerId?: string;
 	/** Session CPU budget hook: the kernel subprocess joins the session's budget group. */
 	adoptPid?: (pid: number) => void;
 }
@@ -497,8 +502,17 @@ export async function launchKernelSubprocess<
 		cwd: options.cwd,
 		env: spawnEnv,
 	});
+	// Only this real spawn site opens an OS handle. Test process seams never
+	// turn an arbitrary numeric fixture PID into permission to kill a process.
+	kernel.setProcess(proc, process.platform === "win32" ? processHandle(proc.pid) : undefined);
 	options.adoptPid?.(proc.pid);
-	kernel.setProcess(proc);
+	logger.info("eval kernel subprocess started", {
+		language: languageName,
+		kernelId: kernel.id,
+		pid: proc.pid,
+		sessionId: options.sessionId,
+		ownerId: options.kernelOwnerId,
+	});
 
 	return await initializeKernelSubprocess(kernel, {
 		signal: options.signal,
@@ -580,23 +594,17 @@ export interface SessionKernel<TExecuteOptions extends KernelExecuteOptions = Ke
 	// No `id` here on purpose: `BaseKernel` has one, but no session code reads it, and a
 	// contract that demands members its consumers never touch pushes busywork into every
 	// implementation (including every fake) without checking anything.
+	readonly processId?: number;
 	isAlive(): boolean;
 	shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult>;
 }
 
 /**
- * Shut a kernel down while tearing a session down, in one place.
+ * Best-effort release after a failed startup or a per-call execution.
  *
- * Every teardown path reaches this: a session being replaced, a session evicted for idleness, a startup
- * that failed after the subprocess was already running, a shutdown of the whole executor. None of them can
- * usefully throw. The paths that replace a session go on to start the new one, and the startup-failure path
- * rethrows the error that made it give up, which is the error the operator needs rather than the shutdown
- * that followed it.
- *
- * Both ways it can go wrong are reported, because both leave a language runtime running. A throw means the
- * shutdown could not be attempted, and an unconfirmed result means the runner never acknowledged it and did
- * not exit within its grace period, so the subprocess outlives the session that owned it. Discarding either
- * one leaks a Python, Ruby or Julia process per session with nothing in the log to explain the memory.
+ * Preserve the original execution error and log shutdown failures. Retained
+ * sessions use the pool's strict shutdown fence instead: they cannot replace
+ * or forget a runner until shutdown confirms its exit.
  */
 export async function releaseKernel(
 	kernel: Pick<SessionKernel, "shutdown">,
@@ -634,6 +642,9 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#disposed = false;
 	#shutdownConfirmed = false;
 	#exitedPromise: Promise<number> | null = null;
+	#shutdownPromise: Promise<KernelShutdownResult> | null = null;
+	#ownedProcess: Process | null | undefined;
+	readonly #ownedTree = new Map<number, Process>();
 	#pending = new Map<string, PendingExecution>();
 	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
 
@@ -649,10 +660,12 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		};
 	}
 
-	setProcess(proc: Subprocess<"pipe", "pipe", "pipe">) {
+	setProcess(proc: Subprocess<"pipe", "pipe", "pipe">, ownedProcess?: Process | null) {
 		this.#proc = proc;
 		this.#stdin = proc.stdin;
 		this.#exitedPromise = proc.exited;
+		this.#ownedProcess = ownedProcess;
+		if (ownedProcess) this.#ownedTree.set(ownedProcess.pid, ownedProcess);
 		void this.#exitedPromise.then(code => {
 			this.#alive = false;
 			this.#abortPendingExecutions(`${this.#options.languageName} kernel exited with code ${code}`, {
@@ -662,6 +675,10 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 
 		this.#startReader(proc.stdout as ReadableStream<Uint8Array>);
 		this.#startStderrDrain(proc.stderr as ReadableStream<Uint8Array>);
+	}
+
+	get processId(): number | undefined {
+		return this.#proc?.pid;
 	}
 
 	isAlive(): boolean {
@@ -791,7 +808,17 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		}
 	}
 
-	async shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
+	shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
+		if (this.#shutdownPromise) return this.#shutdownPromise;
+		const shuttingDown = this.#shutdown(options);
+		this.#shutdownPromise = shuttingDown;
+		void shuttingDown.finally(() => {
+			if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
+		}).catch(() => {});
+		return shuttingDown;
+	}
+
+	async #shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
 		if (this.#shutdownConfirmed) return { confirmed: true };
 
 		this.#alive = false;
@@ -803,6 +830,19 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			this.#shutdownConfirmed = true;
 			this.#disposed = true;
 			return { confirmed: true };
+		}
+		let treeObserved = this.#ownedProcess !== null;
+		try {
+			// Retain stable child identities before requesting exit. A child may
+			// otherwise be reparented before a later walk can discover it.
+			for (const owned of this.#ownedTree.values()) {
+				for (const child of owned.children()) {
+					if (!this.#ownedTree.has(child.pid)) this.#ownedTree.set(child.pid, child);
+				}
+			}
+		} catch (error) {
+			treeObserved = false;
+			logger.warn("eval kernel tree could not be observed", { pid: proc.pid, error: errorMessage(error) });
 		}
 
 		// A runner blocked in user code may never drain stdin. Request graceful
@@ -829,6 +869,12 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		let result = await exited;
 		if (!result) {
 			try {
+				for (const owned of this.#ownedTree.values()) owned.killTree();
+			} catch (error) {
+				treeObserved = false;
+				logger.warn("eval kernel tree termination failed", { pid: proc.pid, error: errorMessage(error) });
+			}
+			try {
 				proc.kill("SIGTERM");
 			} catch {
 				/* ignore */
@@ -844,11 +890,23 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			result = await this.#waitForExitWithTimeout(timeoutMs);
 		}
 
-		// Confirmed whenever the process exited by any means; only a persistent
-		// timeout (still null after SIGKILL + grace) leaves this false.
-		const confirmed = !!result;
+		// A root exit is not evidence that its descendants finished terminating.
+		// The runner's Windows job remains the creation-time ownership guard.
+		let treeExited = false;
+		if (treeObserved) {
+			try {
+				const exits = await Promise.all(
+					[...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs })),
+				);
+				treeExited = exits.every(Boolean);
+			} catch (error) {
+				logger.warn("eval kernel tree exit was not confirmed", { pid: proc.pid, error: errorMessage(error) });
+			}
+		}
+		const confirmed = !!result && treeExited;
 		this.#shutdownConfirmed = confirmed;
 		this.#disposed = true;
+		logger.info("eval kernel subprocess shutdown", { pid: proc.pid, confirmed });
 		return { confirmed };
 	}
 
