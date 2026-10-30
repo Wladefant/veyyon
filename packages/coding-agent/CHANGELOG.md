@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
+
 ## [1.6.7] - 2026-10-29
 
 ### Fixed
@@ -13,9 +17,6 @@
 ### Changed
 
 - Release update checks, schema links, debug links and installer defaults now target the Veyyon fork.
-- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
-
-## [1.6.6] - 2026-10-28
 
 ### Fixed
 
