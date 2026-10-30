@@ -28,6 +28,7 @@ import {
 	type ShakeConfig,
 	type ShakeRegion,
 } from "@veyyon/agent-core/compaction";
+import { resolveCompactionBoundaryIndex } from "@veyyon/agent-core/compaction/entries";
 import {
 	DEFAULT_PRUNE_CONFIG,
 	pruneSupersededToolResults,
@@ -107,8 +108,10 @@ export class HistoryRewrites {
 	async pruneOverflow(): Promise<PruneOutcome | undefined> {
 		const host = this.#host;
 		const branchEntries = host.sessionStore.getBranch();
+		const keepBoundaryId = host.keepBoundaryId(branchEntries);
+		const staged = this.#stageToolResults(branchEntries, keepBoundaryId);
 		const result = pruneToolOutputs(
-			branchEntries,
+			staged,
 			host.withPlanProtection({
 				...DEFAULT_PRUNE_CONFIG,
 				pruneUseless: host.settings.getGroup("compaction").dropUseless,
@@ -116,14 +119,14 @@ export class HistoryRewrites {
 				// compaction summarized away. A preserved-thinking model binds each thinking block to
 				// the bytes before it, so a rewrite anywhere in the sent region also costs the
 				// reasoning chain behind it: the window is held to entries whose suffix is empty.
-				keepBoundaryId: host.keepBoundaryId(branchEntries),
+				keepBoundaryId,
 				cacheWarmSuffixTokens: host.model()?.thinking?.prefixBinding === true ? 0 : PRUNE_CACHE_WARM_SUFFIX_TOKENS,
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		await this.#commit(result.prunedEntries);
+		const referenceTokens = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-overflow");
 		host.syncTodos();
-		return result;
+		return { prunedCount: result.prunedCount, tokensSaved: Math.max(0, result.tokensSaved - referenceTokens) };
 	}
 
 	/**
@@ -291,6 +294,71 @@ export class HistoryRewrites {
 	}
 
 	/**
+	 * Pruning mutates message containers, so run its selector on copies. Leave the cold prefix
+	 * untouched: even reading a cooled entry's message would rehydrate historical payloads.
+	 */
+	#stageToolResults(branch: SessionEntry[], keepBoundaryId: string | undefined): SessionEntry[] {
+		const first = resolveCompactionBoundaryIndex(branch, keepBoundaryId);
+		return branch.map((entry, index) =>
+			index >= first && entry.type === "message" && entry.message.role === "toolResult"
+				? { ...entry, message: { ...entry.message } }
+				: entry,
+		);
+	}
+
+	/**
+	 * Save the selected original entries before publishing staged replacements. A concurrent append
+	 * or rewrite invalidates the selection; a rejected file rewrite restores the live originals.
+	 * The archive is intentionally retained after a failed publish, since it is valid evidence.
+	 */
+	async #archiveAndCommit(branch: SessionEntry[], updated: SessionEntry[], operation: string): Promise<number> {
+		const byId = new Map(branch.map(entry => [entry.id, entry]));
+		const changes = updated.map(replacement => {
+			const original = byId.get(replacement.id);
+			if (!original || original === replacement) throw new Error("History rewrite requires staged replacements");
+			return { original, replacement, previous: { ...original }, serialized: JSON.stringify(original) };
+		});
+		const archive = JSON.stringify({
+			version: 1,
+			operation,
+			branchLeafId: branch.at(-1)?.id ?? null,
+			entries: changes.map(change => change.original),
+		});
+		const artifactId = await this.#host.sessionStore.saveArtifact(archive, operation);
+		if (!artifactId) throw new Error("Cannot rewrite history: recovery artifact was not saved");
+		const currentBranch = this.#host.sessionStore.getBranch();
+		const currentEntries = new Set(currentBranch);
+		if (
+			currentBranch.at(-1) !== branch.at(-1) ||
+			changes.some(change => !currentEntries.has(change.original) || JSON.stringify(change.original) !== change.serialized)
+		) {
+			throw new Error("History changed while preserving original entries; retry the rewrite");
+		}
+		let referenceTokens = 0;
+		for (const { original, replacement } of changes) {
+			const reference = `\n[recover: artifact://${artifactId} (entry ${original.id})]`;
+			if (replacement.type === "message" && replacement.message.role === "toolResult") {
+				replacement.message.content = [...replacement.message.content, { type: "text", text: reference }];
+				referenceTokens += countTokens(reference);
+			}
+			Object.assign(original, replacement);
+		}
+		try {
+			await this.#host.sessionStore.rewriteEntries(changes.map(change => change.original));
+		} catch (error) {
+			for (const { original, previous, replacement } of changes) {
+				// Do not replace a newer message a concurrent owner installed during persistence.
+				if (original.type === "message" && replacement.type === "message" && original.message === replacement.message) {
+					Object.assign(original, previous);
+				}
+			}
+			throw error;
+		}
+		this.#refreshContext();
+		return referenceTokens;
+	}
+
+	/**
 	 * The epilogue of every in-place rewrite: persist the new shape, rebuild the agent's context from
 	 * it, reset the advisor runtimes, close the provider sessions that cache message identity, and
 	 * mark the context report.
@@ -303,6 +371,11 @@ export class HistoryRewrites {
 	async #commit(updated: Iterable<SessionEntry>): Promise<void> {
 		const host = this.#host;
 		await host.sessionStore.rewriteEntries(updated);
+		this.#refreshContext();
+	}
+
+	#refreshContext(): void {
+		const host = this.#host;
 		host.agent.replaceMessages(host.rebuiltMessages());
 		host.resetAdvisorRuntimes();
 		host.closeCodexSessions();
@@ -341,3 +414,4 @@ function shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: s
 		: `[${verb} ~${region.tokens} tokens]`;
 	return truncated ? `\n${marker}\n` : marker;
 }
+
