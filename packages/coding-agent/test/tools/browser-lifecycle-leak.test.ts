@@ -119,6 +119,8 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 	afterEach(async () => {
 		try {
 			await drainAllTabs();
+			expect(getTabsMapForTest().size).toBe(0);
+			expect(getBrowsersMapForTest().size).toBe(0);
 		} finally {
 			// The spies sit on `CmuxSocketClient.prototype`: left in place, every later suite in the
 			// process talks to these mocks instead of a socket.
