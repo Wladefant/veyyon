@@ -300,6 +300,44 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(2);
 	});
 
+	it.each([undefined, "", " ", "inherit", "  inherit  "])(
+		"validates effective inherited cwd %j before consuming the claim",
+		async cwd => {
+			// Keep the durable session outside the cwd so deleting the cwd cannot hide the checkpoint.
+			const parentCwd = dir.join("work");
+			await fs.mkdir(parentCwd);
+			const taskTool = await tool({ cwd: parentCwd });
+			const original = await taskTool.execute("Original", {
+				agent: "task", name: "Original", task: assignment,
+			} as TaskParams);
+			expect(original.isError).not.toBe(true);
+			const predecessor = executed[0].id;
+			await fs.rm(parentCwd, { recursive: true });
+			for (const state of ["missing", "file"]) {
+				if (state === "file") await fs.writeFile(parentCwd, "plain file");
+				const refused = await taskTool.execute("Invalid inherited cwd", {
+					agent: "task", name: "Invalid inherited cwd", task: assignment, cwd, successorOf: predecessor,
+				} as TaskParams);
+				expect(refused.isError).toBe(true);
+				expect(JSON.stringify(refused.content)).toContain(
+					state === "missing" ? "task cwd does not exist" : "task cwd is not a directory",
+				);
+				expect(executed).toHaveLength(1);
+				expect((await fs.readdir(dir.join("parent"))).filter(name => name.endsWith(".claim"))).toEqual([]);
+			}
+			await fs.rm(parentCwd);
+			await fs.mkdir(parentCwd);
+			const retry = await taskTool.execute("Restored inherited cwd", {
+				agent: "task", name: "Restored inherited cwd", task: assignment, cwd, successorOf: predecessor,
+			} as TaskParams);
+			expect(retry.isError).not.toBe(true);
+			expect(executed).toHaveLength(2);
+			expect(executed[1].cwd).toBe(parentCwd);
+			expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
+		},
+		2_000,
+	);
+
 	it("confines checkpoint lookup to the session directory without changing outside files", async () => {
 		await dispatch("Original");
 		const directory = dir.join("parent");

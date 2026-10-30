@@ -178,14 +178,14 @@ export function formatResultOutputFallback(result: Pick<SingleResult, "output" |
  */
 export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string): Promise<string> {
 	const trimmed = typeof raw === "string" ? raw.trim() : "";
-	if (!trimmed || trimmed === "inherit") {
-		return parentCwd;
-	}
+	const inherited = !trimmed || trimmed === "inherit";
 	// A relative cwd is resolved against the parent agent's live cwd rather than
 	// rejected: spawning an agent in `libs/scanner/rulec` from the parent should
 	// behave like a `cd` there. Absolute paths already point where they point.
 	// This adds no new reach an absolute path did not already allow.
-	const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
+	const resolved = inherited
+		? parentCwd
+		: path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
 	try {
 		const st = await fs.stat(resolved);
 		if (!st.isDirectory()) {
@@ -195,7 +195,9 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 		if (err instanceof Error && err.message.startsWith("task cwd")) throw err;
 		// Name the relative input and what it resolved against, so a wrong parent
 		// cwd is diagnosable instead of showing only the joined absolute path.
-		const context = path.isAbsolute(trimmed) ? "" : ` (resolved from relative "${trimmed}" against ${parentCwd})`;
+		const context = inherited || path.isAbsolute(trimmed)
+			? ""
+			: ` (resolved from relative "${trimmed}" against ${parentCwd})`;
 		throw new Error(`task cwd does not exist: ${resolved}${context}`);
 	}
 	if (!(await directoryExists(resolved))) {
