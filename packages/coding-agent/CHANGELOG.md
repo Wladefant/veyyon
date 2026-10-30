@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Image removal archives original image-bearing messages and custom messages before mutation, leaves entry recovery references, and restores live originals when persistence fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).

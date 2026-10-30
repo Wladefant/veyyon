@@ -177,10 +177,11 @@ export class HistoryRewrites {
 		const updated: SessionEntry[] = [];
 		for (const entry of branchEntries) {
 			if (entry.type === "message") {
-				const stripped = stripImagesFromMessage(entry.message);
+				const message = this.#stageImageMessage(entry.message);
+				const stripped = stripImagesFromMessage(message);
 				if (stripped > 0) {
 					removed += stripped;
-					updated.push(entry);
+					updated.push({ ...entry, message });
 				}
 				continue;
 			}
@@ -193,15 +194,25 @@ export class HistoryRewrites {
 				}
 				if (dropped > 0) {
 					if (kept.length === 0) kept.push({ type: "text", text: "[image removed]" });
-					entry.content = kept;
 					removed += dropped;
-					updated.push(entry);
+					updated.push({ ...entry, content: kept });
 				}
 			}
 		}
 		if (removed === 0) return { removed: 0 };
-		await this.#commit(updated);
+		await this.#archiveAndCommit(branchEntries, updated, "drop-images");
 		return { removed };
+	}
+
+	/** Copy exactly the containers the existing image stripper mutates. */
+	#stageImageMessage(message: AgentMessage): AgentMessage {
+		if (message.role === "fileMention") {
+			return { ...message, files: message.files.map(file => ({ ...file })) };
+		}
+		if (message.role === "toolResult" && message.details && typeof message.details === "object") {
+			return { ...message, details: Array.isArray(message.details) ? [...message.details] : { ...message.details } };
+		}
+		return { ...message };
 	}
 
 	/**
@@ -339,10 +350,7 @@ export class HistoryRewrites {
 		let referenceTokens = 0;
 		for (const { original, replacement } of changes) {
 			const reference = `\n[recover: artifact://${artifactId} (entry ${original.id})]`;
-			if (replacement.type === "message" && replacement.message.role === "toolResult") {
-				replacement.message.content = [...replacement.message.content, { type: "text", text: reference }];
-				referenceTokens += countTokens(reference);
-			}
+			referenceTokens += this.#appendRecoveryReference(original, replacement, reference);
 			Object.assign(original, replacement);
 		}
 		try {
@@ -353,11 +361,54 @@ export class HistoryRewrites {
 				if (original.type === "message" && replacement.type === "message" && original.message === replacement.message) {
 					Object.assign(original, previous);
 				}
+				if (original.type === "custom_message" && replacement.type === "custom_message" && original.content === replacement.content) {
+					Object.assign(original, previous);
+				}
 			}
 			throw error;
 		}
 		this.#refreshContext();
 		return referenceTokens;
+	}
+
+	#appendRecoveryReference(original: SessionEntry, replacement: SessionEntry, reference: string): number {
+		if (replacement.type === "custom_message") {
+			replacement.content = typeof replacement.content === "string"
+				? replacement.content + reference
+				: [...replacement.content, { type: "text", text: reference }];
+			return countTokens(reference);
+		}
+		if (replacement.type !== "message") return 0;
+		const message = replacement.message;
+		switch (message.role) {
+			case "toolResult":
+				message.content = [...message.content, { type: "text", text: reference }];
+				return countTokens(reference);
+			case "user":
+			case "developer":
+			case "custom":
+			case "hookMessage": {
+				const content = typeof message.content === "string"
+					? message.content + reference
+					: [...message.content, { type: "text" as const, text: reference }];
+				// These roles share this content shape; the cast mirrors stripImagesFromMessage.
+				(message as { content: typeof content }).content = content;
+				return countTokens(reference);
+			}
+			case "fileMention": {
+				if (original.type !== "message" || original.message.role !== "fileMention") return 0;
+				let references = 0;
+				for (let index = 0; index < message.files.length; index++) {
+					if (original.message.files[index]?.image) {
+						message.files[index].content += reference;
+						references++;
+					}
+				}
+				return references * countTokens(reference);
+			}
+			default:
+				return 0;
+		}
 	}
 
 	/**

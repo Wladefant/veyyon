@@ -606,3 +606,7 @@ These values are consumed at runtime by `AgentSession` and compaction/branch sum
 ### Stale-result recovery
 
 The per-turn stale-read and useless-result pass uses the same staged archive-before-commit path as threshold pruning. Its recovery envelope has operation `prune-stale`; each retained marker names the archive and original entry. A later read of a path does not make the earlier bytes disposable evidence. Archive or transcript failures keep the original result available, and reported savings include the recovery-reference cost.
+
+### Image recovery
+
+`dropImages` (including shake image mode) stages image removal from messages, tool-result details, file mentions and custom messages. It saves the exact original entries in a `drop-images` recovery envelope before publishing any removal. The retained text names the archive and entry; file mentions carry that reference in each affected file's text. Archive errors leave originals untouched. Failed transcript persistence restores both message and custom-message containers before returning the error. Repeating the pass after successful removal does not archive the placeholders again.
