@@ -39,6 +39,7 @@ export * from "./math";
 // imports `@veyyon/utils` for `errorMessage` or `logger` was instantiating a Mermaid parser, and
 // the test runner gives each file its own realm, so that cost is paid per file rather than once:
 // 664 test files import this barrel. Import it as `@veyyon/utils/mermaid-ascii` instead.
+export * from "./release-source";
 export * from "./mime";
 export * from "./owner-only-read";
 export * from "./path";

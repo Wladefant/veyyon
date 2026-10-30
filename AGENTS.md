@@ -686,7 +686,7 @@ Veyyon ships through exactly two channels:
 1. `curl -fsSL https://get.veyyon.dev | sh` — the installer and the auto-updater both talk to
    **veyyon.dev**, which serves the prebuilt self-contained binary and links a short `vey` command.
    veyyon.dev propagates automatically from
-   [GitHub Releases](https://github.com/santhreal/veyyon/releases).
+   [GitHub Releases](https://github.com/Wladefant/veyyon/releases).
 2. A git checkout the user clones (`git clone`, then `bun run setup` / `bun dev`). The installer never
    creates it.
 

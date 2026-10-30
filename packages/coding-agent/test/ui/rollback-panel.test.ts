@@ -178,7 +178,7 @@ describe("when the release list cannot be read", () => {
 		const h = harness({
 			listReleases: async () => {
 				throw new Error(
-					"Failed to fetch the release list from https://api.github.com/repos/santhreal/veyyon/releases: " +
+					"Failed to fetch the release list from https://api.github.com/repos/Wladefant/veyyon/releases: " +
 						"HTTP 403 Forbidden — GitHub is rate-limiting this address (the limit is per address and shared)",
 				);
 			},

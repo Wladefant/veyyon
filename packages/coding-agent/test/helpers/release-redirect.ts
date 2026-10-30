@@ -12,11 +12,11 @@
  */
 
 /** The endpoint the updater resolves the newest version from. */
-export const LATEST_RELEASE_URL = "https://github.com/santhreal/veyyon/releases/latest";
+export const LATEST_RELEASE_URL = "https://github.com/Wladefant/veyyon/releases/latest";
 
 /** Where a redirect for `tag` points. Exported so tests can assert on it. */
 export function releaseTagUrl(tag: string): string {
-	return `https://github.com/santhreal/veyyon/releases/tag/${tag}`;
+	return `https://github.com/Wladefant/veyyon/releases/tag/${tag}`;
 }
 
 /**

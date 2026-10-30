@@ -61,7 +61,7 @@ test("a copied native journal without sidecars never resumes as an ordinary chec
 });
 
 // WHY: a lazily created session has no file before its first persisted entry; the marker read raised ENOENT and blocked the
-// first prompt (#716). Gap: this drives the reader, not the whole prompt path; the admission test covers that path eagerly.
+// first prompt (#716). Gap: the admission test below covers the real prompt path and ordinary ownership acquisition.
 test("a session whose file does not exist yet has no ownership marker", async () => {
 	const root = await mkdtemp(join(tmpdir(), "session-ownership-lazy-"));
 	roots.push(root);

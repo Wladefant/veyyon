@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-10-28
+
+### Added
+
+- Added `RELEASE_REPOSITORY` as the shared source for the product release repository.
+
 ## [1.6.4] - 2026-10-28
 
 ### Fixed
