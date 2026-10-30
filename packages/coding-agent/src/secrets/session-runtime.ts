@@ -17,6 +17,8 @@ import { type JsonWithOptionalFields, mapJsonStrings } from "../json-transform";
 import { obfuscateProviderPayload } from "../session/agent-session-provider-request";
 import type { SecretRuntimeLease } from "../session/agent-session-types";
 import { secretProtectionUnavailableMessage } from "../session/factory-notices";
+import type { ProducerSecretOwner } from "./producer-owner";
+
 import { collectEnvSecrets, loadSecrets } from ".";
 import { buildExpansionRecord, SecretAuditLog, secretAuditPath } from "./audit";
 import { buildEnvSecretPattern, loadEnvSecretKeywords } from "./env-keywords";
@@ -318,6 +320,35 @@ export class SessionSecretRuntime {
 	obfuscateText(text: string): string {
 		return this.#lease.obfuscateText(text);
 	}
+	/**
+	 * Register one trusted private value for redaction without granting it an expansion
+	 * name or exposing it through the named secret inventory.
+	 */
+	registerPrivateSecret(value: string): ProducerSecretOwner {
+		const redactor = new SecretObfuscator([{ type: "plain", origin: "vault", content: value }]);
+		if (redactor.obfuscate(value) === value) {
+			throw new Error("Refusing a private secret value that cannot be safely redacted.");
+		}
+		redactor.retainRedactionsFrom(this.#redactionObfuscator ?? new SecretObfuscator([]));
+		const revision = ++this.#latestRequest;
+		const lease = this.#createLease({
+			revision,
+			cwd: this.#runtimeCwd,
+			expansionObfuscator: this.#obfuscator,
+			redactor,
+			vault: this.#vault,
+			vaultRevision: this.#vaultRevision,
+			auditLog: this.#auditLog,
+		});
+		this.#redactionObfuscator = redactor;
+		this.#lease = lease;
+		this.#session?.installSecretRuntime(lease);
+		return {
+			redact: lease.obfuscateText,
+			pendingPrefixLength: lease.pendingRedactionPrefixLength,
+		};
+	}
+
 
 	/**
 	 * Flush queued audit records. The log queues its appends so a tool call is never blocked
@@ -624,6 +655,7 @@ export class SessionSecretRuntime {
 			redactionObfuscator: redactor,
 			hasRedactions: redactor?.hasSecrets() ?? false,
 			obfuscateText: (text: string) => redactor?.obfuscate(text) ?? text,
+			pendingRedactionPrefixLength: (text: string) => redactor?.pendingRedactionPrefixLength(text) ?? 0,
 			obfuscateMessages: (messages: Message[]) => (redactor ? obfuscateMessages(redactor, messages) : messages),
 			obfuscateContext: (context: Context) => (redactor ? obfuscateProviderContext(redactor, context) : context),
 			obfuscatePayload: (payload: unknown) => obfuscateProviderPayload(payload, redactor),

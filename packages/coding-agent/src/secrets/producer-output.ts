@@ -1,4 +1,5 @@
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
+import { currentProducerSecretOwner } from "./producer-owner";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -10,12 +11,19 @@ const CREDENTIAL_KEY_PREFIX = /(?:^|\s+export\s+|[?.,{\"'\-])(?:[A-Za-z0-9]+[_-]
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
 	#pending = "";
+	#recordLength = 0;
 	#dropping = false;
 	#withholding = false;
 	readonly #redact: ((text: string) => string) | undefined;
+	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(redact?: (text: string) => string) {
-		this.#redact = redact;
+	constructor(
+		redact?: (text: string) => string,
+		pendingPrefixLength?: (text: string) => number,
+	) {
+		const owner = currentProducerSecretOwner();
+		this.#redact = redact ?? owner?.redact;
+		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
 
 	sanitize(text: string): string {
@@ -39,17 +47,44 @@ export class ProducerOutputGuard {
 		while (offset < chunk.length) {
 			const newline = chunk.indexOf("\n", offset);
 			const end = newline < 0 ? chunk.length : newline;
+			const separator = newline < 0 ? "" : "\n";
 			if (!this.#dropping) {
-				if (this.#pending.length + end - offset > MAX_RECORD_CHARS) {
+				const segmentLength = end - offset;
+				const next = this.#pending + chunk.slice(offset, end) + separator;
+				if (
+					this.#recordLength + segmentLength > MAX_RECORD_CHARS ||
+					next.length > MAX_RECORD_CHARS
+				) {
 					this.#pending = "";
 					this.#dropping = true;
 				} else {
-					this.#pending += chunk.slice(offset, end);
+					this.#pending = next;
+					this.#recordLength += segmentLength;
 				}
 			}
 			if (newline < 0) break;
-			const record = this.#dropping ? BLOCKED_OUTPUT_RECORD : this.sanitize(this.#pending);
-			output.push(record + "\n");
+			this.#recordLength = 0;
+			if (this.#dropping) {
+				this.#withholding = true;
+				this.#pending = "";
+				this.#dropping = false;
+				output.push(BLOCKED_OUTPUT_RECORD + "\n");
+				break;
+			}
+			let pendingPrefix = 0;
+			try {
+				pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+			} catch {
+				this.#withholding = true;
+				this.#pending = "";
+				break;
+			}
+			if (pendingPrefix > 0) {
+				offset = newline + 1;
+				continue;
+			}
+			const record = this.sanitize(this.#pending);
+			output.push(record === BLOCKED_OUTPUT_RECORD ? record + "\n" : record);
 			if (record === BLOCKED_OUTPUT_RECORD) {
 				this.#withholding = true;
 				this.#pending = "";
@@ -65,16 +100,30 @@ export class ProducerOutputGuard {
 
 	finish(): string {
 		if (this.#withholding) return "";
-		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) return "";
+		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) {
+			return "";
+		}
+		let pendingPrefix = 0;
+		if (!this.#dropping) {
+			try {
+				pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+			} catch {
+				this.#pending = "";
+				this.#withholding = true;
+				return "";
+			}
+		}
 		const text = this.#dropping ? BLOCKED_OUTPUT_RECORD : this.sanitize(this.#pending);
 		this.#pending = "";
+		this.#recordLength = 0;
 		this.#dropping = false;
-		if (text === BLOCKED_OUTPUT_RECORD) this.#withholding = true;
+		if (pendingPrefix > 0 || text === BLOCKED_OUTPUT_RECORD) this.#withholding = true;
 		return text;
 	}
 
 	reset(): void {
 		this.#pending = "";
+		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#withholding = false;
 	}

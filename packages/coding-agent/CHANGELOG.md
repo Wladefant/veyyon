@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Multiline registered secrets stay redacted or withheld across producer output chunks.
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

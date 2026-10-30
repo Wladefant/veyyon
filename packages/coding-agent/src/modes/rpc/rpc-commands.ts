@@ -32,6 +32,8 @@ import type {
 	RpcSessionState,
 } from "./rpc-types";
 
+import { getSessionSecretIntake, getSessionSecretIntakeContext } from "../../secrets/intake-session";
+import { parseSecretSubmission, type SecretRequestMetadata } from "../../secrets/intake-wire";
 export type RpcSessionChangeCommand = Extract<
 	RpcCommand,
 	{ type: "new_session" } | { type: "switch_session" } | { type: "branch" }
@@ -227,6 +229,42 @@ function requireAgentRegistry(host: RpcCommandHost): RpcAgentRegistry {
 	return host.agentRegistry;
 }
 
+async function secretRequestCommand(
+	command: RpcCommandOf<"secret_request">,
+	session: AgentSession,
+): Promise<{ request: SecretRequestMetadata }> {
+	if (!["get", "submit", "decline", "cancel"].includes(command.action)) {
+		throw new Error("Secret intake operation refused");
+	}
+	const allowed =
+		command.action === "submit"
+			? ["id", "type", "action", "requestId", "submission"]
+			: ["id", "type", "action", "requestId"];
+	if (Object.keys(command).some(key => !allowed.includes(key)) || !Object.hasOwn(command, "action")) {
+		throw new Error("Secret intake operation refused");
+	}
+	const broker = getSessionSecretIntake(session);
+	const context = getSessionSecretIntakeContext(session);
+	if (!broker || !context) throw new Error("Secret intake operation refused");
+	try {
+		switch (command.action) {
+			case "get":
+				return { request: broker.get(context, command.requestId).request };
+			case "decline":
+				return { request: broker.decline(context, command.requestId).request };
+			case "cancel":
+				return { request: broker.cancel(context, command.requestId).request };
+			case "submit": {
+				const submission = parseSecretSubmission(command.submission);
+				if (submission.requestId !== command.requestId) throw new Error("Secret intake operation refused");
+				return { request: (await broker.submit(context, submission)).request };
+			}
+		}
+	} catch {
+		throw new Error("Secret intake operation refused");
+	}
+}
+
 /** Start `startPrompt` without awaiting it: events stream, and `prompt_result` follows when it stays local. */
 function startReportedPrompt(
 	command: RpcCommandOf<"prompt">,
@@ -381,8 +419,6 @@ const RPC_COMMAND_HANDLERS: { readonly [T in RpcCommandType]: RpcCommandHandler<
 			.catch(e => host.output(rpcErrorResponse(command.id, "abort_and_prompt", e.message)));
 	},
 	new_session: changeSession,
-
-	// State
 	get_state: (_command, session): RpcSessionState => ({
 		model: session.model,
 		thinkingLevel: session.thinkingLevel,
@@ -406,7 +442,11 @@ const RPC_COMMAND_HANDLERS: { readonly [T in RpcCommandType]: RpcCommandHandler<
 			examples: tool.examples,
 		})),
 		contextUsage: session.getContextUsage(),
+		...(getSessionSecretIntake(session) && getSessionSecretIntakeContext(session)
+			? { secretIntake: { version: 1 as const, sealed: true as const } }
+			: {}),
 	}),
+	secret_request: secretRequestCommand,
 	get_available_commands: async (_command, _session, host) => ({ commands: await host.availableCommands() }),
 	set_todos: (command, session) => {
 		session.setTodoPhases(command.phases);

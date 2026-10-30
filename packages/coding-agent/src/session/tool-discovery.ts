@@ -104,7 +104,7 @@ export class SessionToolDiscovery {
 		const { tools, toolSession, extensionRunner } = this.#input;
 		if (tools.has(TOOL.search_tool_bm25)) return false;
 		const searchTool: Tool = new SearchToolBm25Tool(toolSession);
-		tools.set(searchTool.name, new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool);
+		tools.set(searchTool.name, new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool, toolSession), extensionRunner) as Tool);
 		return true;
 	}
 }

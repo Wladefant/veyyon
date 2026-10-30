@@ -50,6 +50,26 @@ describe("formatAsyncResultForFollowUp", () => {
 		const written = await readFile(artifactPath, "utf-8");
 		expect(written).toBe(largeText);
 	});
+	it("writes the same owner's sanitized result to an async artifact", async () => {
+		const tempDir = makeTempDir();
+		const artifactPath = path.join(tempDir, "async-sanitized.txt");
+		const canary = "synthetic-canary-A";
+		const result = `${canary} ${"x".repeat(ASYNC_INLINE_RESULT_MAX_CHARS + 500)}`;
+		const owner = { redact: (text: string) => text.replaceAll(canary, "[redacted]") };
+		const formatted = await formatAsyncResultForFollowUp(
+			result,
+			undefined,
+			{
+				allocateArtifactPath: async () => ({ path: artifactPath, id: "async-sanitized" }),
+			},
+			owner,
+		);
+
+		expect(formatted).not.toContain(canary);
+		const written = await readFile(artifactPath, "utf-8");
+		expect(written).toBe(result.replaceAll(canary, "[redacted]"));
+		expect(written).not.toContain(canary);
+	});
 
 	it("links directly to raw capture artifact when meta.truncation.artifactId exists", async () => {
 		const largeText = "y".repeat(ASYNC_INLINE_RESULT_MAX_CHARS + 500);

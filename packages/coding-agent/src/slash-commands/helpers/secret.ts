@@ -26,6 +26,8 @@ import {
 import { normaliseSecretName, resolveVaultLocations, SecretVault, type VaultLocations } from "../../secrets/vault";
 import type { AgentSession } from "../../session/agent-session";
 import { copyToClipboard } from "../../utils/clipboard";
+import { getSessionSecretIntake, getSessionSecretIntakeContext } from "../../secrets/intake-session";
+import { sealSecretSubmission } from "../../secrets/intake-crypto";
 
 /** What `/secret` needs from whichever surface invoked it. */
 export interface SecretCommandPort {
@@ -93,6 +95,7 @@ function locationsFor(port: SecretCommandPort): VaultLocations {
  * message.
  */
 export async function runSecretCommandForSurface(args: string, port: SecretCommandPort): Promise<SecretCommandOutcome> {
+	if (/^request(?:\s|$)/u.test(args.trimStart())) return runSecretIntakeRequest(args, port);
 	const surface = port.promptForValue === undefined ? "noninteractive" : "tui";
 	const request = parseSecretCommand(args, surface);
 	if (request.name !== undefined) request.name = normaliseSecretName(request.name);
@@ -298,6 +301,31 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 	}
 
 	return { message: result.message };
+}
+
+async function runSecretIntakeRequest(args: string, port: SecretCommandPort): Promise<SecretCommandOutcome> {
+	const match = /^request\s+([A-Za-z0-9_-]{43})$/u.exec(args.trim());
+	if (!match || !port.promptForValue) throw new Error("Secret intake request refused");
+	const broker = getSessionSecretIntake(port.session);
+	const context = getSessionSecretIntakeContext(port.session);
+	if (!broker || !context) throw new Error("Secret intake request refused");
+	let value: string | undefined;
+	try {
+		const { request } = broker.get(context, match[1]);
+		if (request.status !== "pending") throw new Error("Secret intake request refused");
+		value = await port.promptForValue();
+		if (value === undefined || value.length === 0) {
+			broker.cancel(context, request.requestId);
+			return { message: "Secret request cancelled.", cancelled: true };
+		}
+		const submission = await sealSecretSubmission(request, value);
+		value = "";
+		await broker.submit(context, submission);
+		return { message: "Secret request submitted." };
+	} catch {
+		value = "";
+		throw new Error("Secret intake request refused");
+	}
 }
 
 /**

@@ -1,8 +1,12 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import type { SecretIntakeResult } from "../../secrets/intake-broker";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
+import { getSessionSecretIntake, getSessionSecretIntakeContext, registerSessionSecretIntakeActor } from "../../secrets/intake-session";
+import { parseSecretSubmission } from "../../secrets/intake-wire";
+import type { TerminalSecretRequest } from "../../launch/terminal-control";
 
 export interface TerminalTurnProvenance {
 	hasOperatorMessage: boolean;
@@ -155,11 +159,73 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			await mode.session.abort();
 			return true;
 		},
+		async registerSecretIntake(registration) {
+			try {
+				return await registerSessionSecretIntakeActor(
+					mode.session,
+					registration.actorId,
+					registration.ownerSessionId,
+				);
+			} catch {
+				throw new Error("Secret intake registration refused");
+			}
+		},
+		secretIntakeContext() {
+			const broker = getSessionSecretIntake(mode.session);
+			const context = getSessionSecretIntakeContext(mode.session);
+			return broker && context ? context : undefined;
+		},
+		async secretRequest(request: TerminalSecretRequest) {
+			const broker = getSessionSecretIntake(mode.session);
+			const bound = getSessionSecretIntakeContext(mode.session);
+			if (
+				!broker ||
+				!bound ||
+				request.context.actorId !== bound.actorId ||
+				request.context.ownerSessionId !== bound.ownerSessionId ||
+				request.context.projectId !== bound.projectId ||
+				(request.action === "submit" && request.submission.requestId !== request.requestId)
+			) {
+				throw new Error("Secret intake request refused");
+			}
+			try {
+				switch (request.action) {
+					case "get":
+						return broker.get(bound, request.requestId).request;
+					case "decline":
+						return broker.decline(bound, request.requestId).request;
+					case "cancel":
+						return broker.cancel(bound, request.requestId).request;
+					case "submit":
+						return (await broker.submit(bound, parseSecretSubmission(request.submission))).request;
+				}
+			} catch {
+				throw new Error("Secret intake request refused");
+			}
+		},
 		subscribe(listener) {
 			let sessionId = mode.sessionManager.getSessionId();
 			let previous = history();
 			let seen = new Set(previous.map(entry => entry.entryId));
 			let active = mode.session.isStreaming;
+			const attachSecretEvents = (): (() => void) => {
+				const broker = getSessionSecretIntake(mode.session);
+				const context = getSessionSecretIntakeContext(mode.session);
+				if (!broker || !context) return () => {};
+				const publishSecretRequest = (result: SecretIntakeResult): void => {
+					const { request } = result;
+					if (request.ownerSessionId !== context.ownerSessionId || request.projectId !== context.projectId) return;
+					listener({
+						kind: request.status === "pending" ? "secret_request_created" : "secret_request_updated",
+						sessionId: mode.sessionManager.getSessionId(),
+						request,
+					});
+				};
+				const stop = broker.subscribe(publishSecretRequest);
+				for (const request of broker.listPending(context)) publishSecretRequest(request);
+				return stop;
+			};
+			let stopSecretEvents = attachSecretEvents();
 			if (active) {
 				listener({ kind: "streaming", sessionId, active: true });
 			}
@@ -173,6 +239,8 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 					previous = next;
 					seen = new Set(next.map(entry => entry.entryId));
 					active = mode.session.isStreaming;
+					stopSecretEvents();
+					stopSecretEvents = attachSecretEvents();
 					return;
 				}
 				if (next !== previous) {
@@ -187,7 +255,10 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 				}
 			}, 250);
 			timer.unref();
-			return () => clearInterval(timer);
+			return () => {
+				clearInterval(timer);
+				stopSecretEvents();
+			};
 		},
 	});
 }

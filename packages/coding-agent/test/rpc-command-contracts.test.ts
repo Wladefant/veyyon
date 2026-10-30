@@ -319,6 +319,7 @@ const RPC_COMMAND_TYPES = [
 	"set_subagent_subscription",
 	"get_subagents",
 	"get_subagent_messages",
+	"secret_request",
 	"set_model",
 	"cycle_model",
 	"get_available_models",
@@ -352,7 +353,7 @@ describe("RPC command catalog", () => {
 	test("catalog lists every RpcCommand discriminant used by the type union", () => {
 		// Structural lock: each name is a non-empty snake_case token; the count
 		// is the gate that forces an update when rpc-types grows or shrinks.
-		expect(RPC_COMMAND_TYPES.length).toBe(41);
+		expect(RPC_COMMAND_TYPES.length).toBe(42);
 		for (const name of RPC_COMMAND_TYPES) {
 			expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
 		}

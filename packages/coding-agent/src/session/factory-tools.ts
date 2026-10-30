@@ -351,7 +351,7 @@ export async function assembleToolRegistry(input: ToolRegistryInput): Promise<Se
 	for (const tool of input.builtinTools) addBuiltIn(tool);
 	if (!tools.has(TOOL.goal) && input.settings.get("goal.enabled")) {
 		const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, input.toolSession);
-		if (goalTool) addBuiltIn(wrapToolWithMetaNotice(goalTool));
+		if (goalTool) addBuiltIn(wrapToolWithMetaNotice(goalTool, input.toolSession));
 	}
 	for (const tool of input.extensionTools) {
 		tools.set(tool.name, tool);
@@ -370,7 +370,7 @@ export async function assembleToolRegistry(input: ToolRegistryInput): Promise<Se
 		builtInNames.delete(TOOL.resolve);
 	} else if (!tools.has(TOOL.resolve)) {
 		const resolveTool = await logger.time("createTools:resolve:session", HIDDEN_TOOLS.resolve, input.toolSession);
-		if (resolveTool) addBuiltIn(wrap(wrapToolWithMetaNotice(resolveTool)));
+		if (resolveTool) addBuiltIn(wrap(wrapToolWithMetaNotice(resolveTool, input.toolSession)));
 	}
 	return { tools, builtInNames };
 }
