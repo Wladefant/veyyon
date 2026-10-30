@@ -817,8 +817,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			isAutoSubmitBlocked: () => this.#isAutoSubmitBlocked(),
 			isPlanModeActive: () => this.planModeEnabled || this.planModePaused,
 			hasPendingSubmission: () => this.#pendingSubmittedInput !== undefined,
-			hasPendingVisibleUserSubmission: () =>
-				this.#pendingSubmittedInput !== undefined && !this.#pendingSubmittedInput.customType,
 			withProgress: (label, work) => this.#withGuidedGoalProgress(label, work),
 		});
 		this.#workingLoader = new WorkingLoaderController(this);
@@ -1700,9 +1698,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmittedInput = undefined;
 		this.clearOptimisticUserMessage();
 		this.#workingLoader.clearPendingMessage();
-		if (submission.customType === "goal-continuation") {
-			this.#goalMode.noteContinuationTurnSettled();
-		}
 		this.#workingLoader.stop(true);
 		if (!submission.customType) {
 			this.editor.pendingImages = submission.images ? [...submission.images] : [];
@@ -1729,9 +1724,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
 		if (wasPendingSubmission) {
 			this.#pendingSubmittedInput = undefined;
-		}
-		if (input.customType === "goal-continuation") {
-			this.#goalMode.noteContinuationTurnSettled();
 		}
 
 		const quiesced = !this.session.isStreaming && !this.streamingComponent;

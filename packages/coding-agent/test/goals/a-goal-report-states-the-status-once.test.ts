@@ -82,7 +82,6 @@ function unreached(member: string): () => never {
 const IDLE_HOST: GoalModeHost = {
 	isAutoSubmitBlocked: () => false,
 	hasPendingSubmission: () => false,
-	hasPendingVisibleUserSubmission: () => false,
 	isPlanModeActive: () => false,
 	withProgress: async (_label, work) => await work(),
 };

@@ -184,7 +184,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/git-metadata-reads-survive-eintr.test.ts": 1,
 	"packages/coding-agent/test/goals/a-goal-is-never-unset-in-silence.test.ts": 3,
 	"packages/coding-agent/test/goals/a-late-job-result-completes-its-interrupted-call.test.ts": 1,
-	"packages/coding-agent/test/goals/goal-mode-integration.test.ts": 19,
+	"packages/coding-agent/test/goals/goal-mode-integration.test.ts": 16,
 	"packages/coding-agent/test/goals/goal-tool.test.ts": 5,
 	"packages/coding-agent/test/goals/guided-goal.test.ts": 2,
 	"packages/coding-agent/test/gran-1-agent-durable-session.test.ts": 2,
