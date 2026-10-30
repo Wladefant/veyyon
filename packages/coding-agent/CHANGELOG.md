@@ -5,6 +5,15 @@
 ### Fixed
 
 - Multiline registered secrets stay redacted or withheld across producer output chunks.
+## [1.6.8] - 2026-10-30
+
+- Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
+
+## [1.6.7] - 2026-10-29
+
+### Fixed
+
+- Live provider context compaction now preserves provider-specific context.
 
 ## [1.6.6] - 2026-10-28
 
