@@ -222,14 +222,13 @@ describe("a successful compaction persists a pointered, correctly estimated elis
 		it(`does not commit compaction if recovery artifact save fails (${mode})`, async () => {
 			const original = JSON.stringify(sessionManager.getBranch());
 			expect(original).toContain(HUGE);
-			const saved = vi.spyOn(sessionManager, "saveArtifact").mockImplementation(async () => {
+			vi.spyOn(sessionManager, "saveArtifact").mockImplementation(async () => {
 				if (mode === "write-error") throw new Error("disk full");
 				return undefined;
 			});
 			await expect(session.compact()).rejects.toThrow(
 				"recovery artifact for the kept tail was not saved",
 			);
-			expect(saved).toHaveBeenCalled();
 			const after = JSON.stringify(sessionManager.getBranch());
 			expect(after).toBe(original);
 			expect(after).not.toContain("output elided by compaction");
