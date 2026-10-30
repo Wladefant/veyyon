@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { schemaDefinesProperty } from "@veyyon/agent-core/tool-normalization";
 import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
@@ -59,18 +60,10 @@ function normalizeArgs(args: unknown): unknown {
 	return record;
 }
 
-function toolDeclaresIntent(tool: AgentTool): boolean {
-	let schema: unknown = tool.parameters;
-	try {
-		schema = toolWireSchema(tool);
-	} catch {
-		// Fall back to the declared parameter shape when wire conversion is unavailable.
-	}
-	return isRecord(schema) && isRecord(schema.properties) && Object.hasOwn(schema.properties, INTENT_FIELD);
-}
-
 function executionArgsForTool(tool: AgentTool, args: unknown): unknown {
-	if (!isRecord(args) || toolDeclaresIntent(tool) || !Object.hasOwn(args, INTENT_FIELD)) return args;
+	if (!isRecord(args) || schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) || !Object.hasOwn(args, INTENT_FIELD)) {
+		return args;
+	}
 	const { [INTENT_FIELD]: _intent, ...executionArgs } = args;
 	return executionArgs;
 }
@@ -102,7 +95,7 @@ function validateEvalToolArguments(tool: AgentTool, name: string, toolCallId: st
 	}
 	// Intent belongs to the tool contract only when the tool's own schema declares it.
 	// Otherwise it is bridge metadata: keep it for status, but exclude it from validation.
-	const declaresIntent = toolDeclaresIntent(tool);
+	const declaresIntent = schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD);
 	const intent = args[INTENT_FIELD];
 	const { [INTENT_FIELD]: _intent, ...argsWithoutIntent } = args;
 	const schemaArgs = declaresIntent ? args : argsWithoutIntent;
