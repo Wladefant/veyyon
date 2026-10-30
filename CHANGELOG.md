@@ -207,6 +207,7 @@
 
 ### Fixed
 
+- Every process a session spawns (bash and PTY commands, eval kernels, `launch` processes, MCP and language servers, the managed browser) starts at nice 10 (`BELOW_NORMAL_PRIORITY_CLASS` on Windows), so a parallel build or media job no longer stalls the terminal and desktop.
 - The advisor no longer receives a configured secret written in the primary model's thinking; thinking blocks pass through the secret obfuscator like text and tool arguments.
 - A `jj` command ends after 5 minutes with exit code 124 and keeps at most 8 MiB of output, as `git` and `gh` do, and truncated `gh` output is labeled `gh` instead of `git`.
 - `veyyon plugin uninstall --json` prints a JSON record for a marketplace plugin instead of the human success line; `uninstall`, `enable` and `disable` now share one loop that reads `--json` on every install route.
@@ -318,6 +319,7 @@
 - Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
 - GitLab Duo namespace discovery stops at the first request that throws and reports that error, instead of trying every remaining candidate against the same unreachable host and concluding that `GITLAB_DUO_NAMESPACE_ID` should be set.
 - A session entry holding a value that loops back to one of its own ancestors, such as a tool result from a JS eval cell that displayed a cyclic object, reaches the session file with `"[Circular]"` at the loop instead of throwing `RangeError: Maximum call stack size exceeded` and leaving the entry out of the resumed session; the persistence pass over 400 entries takes 79 µs instead of 68 µs for the check.
+- An external command started by the shell or a PTY starts at nice 10 (`BELOW_NORMAL_PRIORITY_CLASS` on Windows) instead of at the host's own priority.
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 - `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
