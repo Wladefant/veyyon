@@ -1,7 +1,7 @@
 /**
  * WHY: A cell's bridge intent must not leak into SearchTool's strict schema, while real
- * cross-type and unknown fields still fail validation. This closes search intent and
- * argument-validation regressions; it does not cover other tool schemas or search modes.
+ * cross-type fields still fail validation. It also preserves a registered tool's own i.
+ * Unknown-key coercion belongs to the separate validation contract, not this regression.
  */
 import { describe, expect, it, vi } from "bun:test";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
@@ -14,11 +14,10 @@ import { type } from "arktype";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
+import { SEARCH_TYPES, SearchTool, type SearchType } from "@veyyon/coding-agent/tools/search/search";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir();
-
 
 function createTool(
 	name: string,
@@ -77,22 +76,27 @@ describe("callSessionTool", () => {
 		expect(statuses).toEqual([expect.objectContaining({ op: "read", path: "/tmp/demo.txt", chars: 5 })]);
 	});
 
-	it("passes a tool-owned intent field while keeping the bridge default out of execution", async () => {
-		const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-		const session = createSession([createTool("custom", execute, type({ i: "string", value: "string" }))]);
+	it("executes a registered tool with its schema-owned intent field", async () => {
+		const session = createSession([
+			createTool(
+				"custom",
+				async (_id, args) => {
+					if (!args || typeof args !== "object" || !("i" in args) || !("value" in args)) {
+						throw new Error("Missing declared tool arguments");
+					}
+					return { content: [{ type: "text", text: `${args.i}:${args.value}` }] };
+				},
+				type({ i: "'tool-owned'", value: "string" }),
+			),
+		]);
 
-		await callSessionTool("custom", { value: "x", [INTENT_FIELD]: "tool-owned" }, { session });
-
-		expect(execute).toHaveBeenCalledWith(
-			expect.stringMatching(/^js-custom-/),
-			{ value: "x", [INTENT_FIELD]: "tool-owned" },
-			undefined,
-			undefined,
-			undefined,
+		expect(await callSessionTool("custom", { value: "x", [INTENT_FIELD]: "tool-owned" }, { session })).toBe(
+			"tool-owned:x",
 		);
+		await expect(callSessionTool("custom", { value: "x", [INTENT_FIELD]: "invalid" }, { session })).rejects.toThrow();
 	});
 
-	it("validates SearchTool arguments and runs valid structure searches", async () => {
+	it("validates SearchTool arguments and runs every registered search type", async () => {
 		using tempDir = TempDir.createSync("@js-tool-bridge-search-");
 		const fixture = path.join(tempDir.path(), "fixture.ts");
 		await writeFile(fixture, "function needle() { return 1; }\n");
@@ -100,23 +104,32 @@ describe("callSessionTool", () => {
 		const search = new SearchTool({ ...base, cwd: tempDir.path() } as ToolSession);
 		const session = { ...base, cwd: tempDir.path(), getToolByName: (name: string) => (name === "search" ? search : undefined) };
 
+		const inputs: Record<SearchType, string> = {
+			files: "*.ts",
+			text: "needle",
+			structure: "function needle() { $$$BODY }",
+		};
 		for (const intent of [undefined, "explicit search intent"]) {
-			const args = { type: "structure", input: "function needle() { $$$BODY }", ...(intent ? { [INTENT_FIELD]: intent } : {}) };
-			const result = await callSessionTool("search", args, { session });
-			expect(JSON.stringify(result)).toContain("needle");
+			for (const searchType of SEARCH_TYPES) {
+				const args = {
+					type: searchType,
+					input: inputs[searchType],
+					...(intent ? { [INTENT_FIELD]: intent } : {}),
+				};
+				const result = await callSessionTool("search", args, { session });
+				expect(JSON.stringify(result)).toContain(searchType === "files" ? "fixture.ts" : "needle");
+			}
 		}
 
 		const invalidFields = [
 			{ type: "files", input: "*.ts", skip: 1, message: 'Search type "files" does not accept: skip.' },
 			{ type: "text", input: "needle", hidden: true, message: 'Search type "text" does not accept: hidden.' },
 			{ type: "structure", input: "function needle() { $$$BODY }", case: false, message: 'Search type "structure" does not accept: case.' },
-			{ type: "structure", input: "function needle() { $$$BODY }", mystery: true, message: "Unexpected key" },
 		] as const;
 		for (const { message, ...args } of invalidFields) {
 			await expect(callSessionTool("search", args, { session })).rejects.toThrow(message);
 		}
 	});
-
 
 	it("returns structured tool results when details or images are present", async () => {
 		const session = createSession([
