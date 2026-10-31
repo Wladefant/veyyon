@@ -2,6 +2,12 @@
 
 Refs [Veyyon #775](https://github.com/Wladefant/veyyon/issues/775), existing [PR #787](https://github.com/Wladefant/veyyon/pull/787), and [Superboard #1798](https://github.com/Wladefant/superboard/issues/1798).
 
+The requested path must be non-empty, contain no NUL, fit within 4096 UTF-8
+bytes, and survive UTF-8 encoding and decoding unchanged. Reject unpaired UTF-16
+surrogates before authenticated HTTP: Go's JSON decoder otherwise replaces them
+with U+FFFD and can read a different path. Valid Unicode, including emoji and a
+literal U+FFFD replacement character in a filename, remains unchanged.
+
 The optional `mainplane_worker_read_text` tool is a **text-only** view of an authenticated
 native Go worker's file read. It must check the source byte count and SHA-256 before
 decoding with fatal UTF-8. A byte stream with embedded `0x00` is binary for this
