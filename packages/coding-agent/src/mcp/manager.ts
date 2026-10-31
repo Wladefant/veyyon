@@ -59,6 +59,7 @@ import {
 	selectMcpOAuthRefreshMaterial,
 } from "./oauth-credentials";
 import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
+import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "./runtime-config";
 import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
 import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
@@ -257,6 +258,8 @@ export interface MCPLoadResult {
 
 /** Options for discovering and connecting to MCP servers */
 export interface MCPDiscoverOptions {
+	/** Operator-selected run-only servers, added after ordinary profile filters. */
+	runtimeConfig?: RuntimeMCPConfig;
 	/** Whether to filter out Exa MCP servers (default: true) */
 	filterExa?: boolean;
 	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
@@ -1234,7 +1237,12 @@ export class MCPManager {
 			options?.onStatus?.({ type: "failed", serverName: MCP_CONFIG_STATUS_LABEL, error: message });
 			throw error;
 		}
-		const { configs, exaApiKeys, sources, warnings } = loadedConfigs;
+		const { exaApiKeys, warnings } = loadedConfigs;
+		const { configs, sources } = mergeRuntimeMCPConfig(
+			loadedConfigs.configs,
+			loadedConfigs.sources,
+			options?.runtimeConfig,
+		);
 		const result = await this.connectServers(configs, sources, options?.onStatus);
 		result.exaApiKeys = exaApiKeys;
 		// AFTER `connectServers`, not before: its `connecting` event resets the

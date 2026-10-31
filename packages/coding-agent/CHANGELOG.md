@@ -55,6 +55,10 @@
 
 - Eval tool calls keep framework intent metadata out of execution arguments while preserving tool-declared intent fields ([Refs #753](https://github.com/Wladefant/veyyon/issues/753)).
 
+- Added `--mcp-config` to load explicit run-only MCP connectors in direct and ACP sessions without rewriting a profile; server-name collisions and connector setup failures stop activation ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Fixed run-only MCP config validation to accept shared server options across stdio, HTTP and SSE while rejecting unknown keys ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- ACP session creation, load, resume and fork now wait for run-only MCP tool discovery before the first provider turn ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

@@ -83,6 +83,9 @@ export default class Index extends Command {
 			description: "Load an extra config.yml-style overlay for this run (repeatable)",
 			multiple: true,
 		}),
+		"mcp-config": Flags.string({
+			description: "Add MCP servers from an absolute JSON path for this run, including ACP sessions",
+		}),
 		print: Flags.boolean({
 			char: "p",
 			description: "Non-interactive mode: process prompt and exit",

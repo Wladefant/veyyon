@@ -18,6 +18,7 @@ Common launch options:
 | `[PROMPT]` | Optional initial user prompt |
 | `-c, --continue` | Continue the previous session |
 | `--config <file>` | Load an extra config.yml-style overlay for this run (repeatable) |
+| `--mcp-config <absolute-file>` | Add explicit MCP servers for this run, including ACP sessions; never writes the active profile |
 | `--approval-mode <policy>` | When to ask before running commands |
 | `--profile <name>` | Use an isolated profile agent directory |
 | `--model <id>` | Interactive model (`provider/model`) |

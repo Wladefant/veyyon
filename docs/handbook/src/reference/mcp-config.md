@@ -1,5 +1,30 @@
 # MCP configuration in Veyyon
 
+## Run-only configuration
+
+Use `veyyon --mcp-config /absolute/path/pilot-mcp.json` to add MCP servers for
+one launch. The file uses the `mcpServers` format below, is limited to 1 MiB,
+and is validated before a session opens. This explicit file is not discovered
+from a repository and is never copied into the active profile.
+
+In direct mode, these servers supplement profile discovery. A duplicate name
+is an error. In ACP mode, profile discovery remains disabled, while explicitly
+supplied run-only servers accompany every session's client-supplied MCP list.
+Removing a client server does not remove a run-only server, and a client cannot
+replace a run-only server by reusing its name. An explicit connector connection
+failure prevents the new session from claiming successful setup.
+
+The file may contain `$schema` and `mcpServers`. Profile-level enable/disable
+lists are rejected here: set `enabled: false` on the run-only entry instead.
+Use absolute command/config paths for a connector that must work when an ACP
+client selects a different project directory. Environment and credential
+resolution use the existing MCP connection path; the file is not a separate
+credential store.
+
+```sh
+veyyon --profile work --mcp-config /absolute/path/pilot-mcp.json --mode acp
+```
+
 How to add, edit, and validate MCP servers for the Veyyon coding agent.
 
 Source of truth in code:

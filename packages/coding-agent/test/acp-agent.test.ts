@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { setImmediate } from "node:timers/promises";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,6 +28,8 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // from the command the way it did when the wording became "priority tier".
 import { PRIORITY_TIER_COMMAND_LABEL } from "@veyyon/coding-agent/config/service-tier";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
+import type { RuntimeMCPConfig } from "@veyyon/coding-agent/mcp/runtime-config";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
@@ -495,7 +498,10 @@ afterEach(async () => {
 });
 
 async function createHarness(
-	options: { elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse> } = {},
+	options: {
+		elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse>;
+		runtimeMCPConfig?: RuntimeMCPConfig;
+	} = {},
 ): Promise<AgentHarness> {
 	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "veyyon-acp-test-"));
 	cleanupRoots.push(root);
@@ -530,7 +536,7 @@ async function createHarness(
 		return session as unknown as AgentSession;
 	};
 
-	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession);
+	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession, options.runtimeMCPConfig);
 	if (options.elicitationHandler) {
 		// Drive `initialize` so the agent caches `clientCapabilities.elicitation.form`
 		// and `#requestAcpPlanApprovalChoice` actually goes through the elicitation.
@@ -561,6 +567,221 @@ async function waitForBootstrapGuard(): Promise<void> {
 }
 
 describe("ACP agent", () => {
+	it("keeps run-only MCP servers on client-list replacement and rejects shadowing before reconnecting", async () => {
+		const connected: string[][] = [];
+		const connect = spyOn(MCPManager.prototype, "connectServers").mockImplementation(async configs => {
+			connected.push(Object.keys(configs).sort());
+			return { tools: [], errors: new Map(), connectedServers: Object.keys(configs), exaApiKeys: [] };
+		});
+		const harness = await createHarness({
+			runtimeMCPConfig: {
+				path: "/pilot/mcp.json",
+				configs: { fleet: { type: "stdio", command: "pilot-connector" } },
+			},
+		});
+		try {
+			const created = await harness.agent.newSession({
+				cwd: harness.cwdA,
+				mcpServers: [{ name: "editor", command: "editor-connector", args: [], env: [] }],
+			});
+			expect(connected.at(-1)).toEqual(["editor", "fleet"]);
+			await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
+			expect(connected.at(-1)).toEqual(["fleet"]);
+			await expect(
+				harness.agent.loadSession({
+					sessionId: created.sessionId,
+					cwd: harness.cwdA,
+					mcpServers: [{ name: "fleet", command: "replacement", args: [], env: [] }],
+				}),
+			).rejects.toThrow("conflicts");
+			expect(connected).toHaveLength(2);
+			await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
+			expect(connected.at(-1)).toEqual(["fleet"]);
+		} finally {
+			harness.abortController.abort();
+			connect.mockRestore();
+		}
+	});
+
+	it("waits for delayed run-only stdio tools before first turns across ACP lifecycles", async () => {
+		const barrierRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "veyyon-acp-mcp-barrier-"));
+		cleanupRoots.push(barrierRoot);
+		const markerPath = path.join(barrierRoot, "initialize-seen");
+		const releasePath = path.join(barrierRoot, "release-initialize");
+		const serverScript = [
+			"const fs = require('node:fs');",
+			"const path = require('node:path');",
+			"let pending = '';",
+			"function answerInitialize(id) {",
+			"  process.stdout.write(JSON.stringify({",
+			"    jsonrpc: '2.0',",
+			"    id,",
+			"    result: {",
+			"      protocolVersion: '2025-03-26',",
+			"      capabilities: { tools: {} },",
+			"      serverInfo: { name: 'fixture', version: '1.0.0' },",
+			"    },",
+			"  }) + '\\n');",
+			"}",
+			"function waitForInitializeRelease(id) {",
+			"  const releasePath = process.env.VEYYON_TEST_MCP_INIT_RELEASE;",
+			"  const watcher = fs.watch(path.dirname(releasePath), (_event, filename) => {",
+			"    if (filename && filename.toString() === path.basename(releasePath) && fs.existsSync(releasePath)) {",
+			"      watcher.close();",
+			"      answerInitialize(id);",
+			"    }",
+			"  });",
+			"  if (fs.existsSync(releasePath)) {",
+			"    watcher.close();",
+			"    answerInitialize(id);",
+			"  }",
+			"}",
+			"process.stdin.setEncoding('utf8');",
+			"process.stdin.on('data', chunk => {",
+			"  pending += chunk;",
+			"  let end = pending.indexOf('\\n');",
+			"  while (end !== -1) {",
+			"    const message = JSON.parse(pending.slice(0, end));",
+			"    pending = pending.slice(end + 1);",
+			"    if (message.method === 'initialize') {",
+			"      fs.writeFileSync(process.env.VEYYON_TEST_MCP_INIT_MARKER, 'seen');",
+			"      waitForInitializeRelease(message.id);",
+			"    } else if (message.method === 'tools/list') {",
+			"      process.stdout.write(JSON.stringify({",
+			"        jsonrpc: '2.0',",
+			"        id: message.id,",
+			"        result: { tools: [{ name: 'probe', inputSchema: { type: 'object', properties: {} } }] },",
+			"      }) + '\\n');",
+			"    }",
+			"    end = pending.indexOf('\\n');",
+			"  }",
+			"});",
+			"process.stdin.on('end', () => process.exit(0));",
+		].join("\n");
+		const harness = await createHarness({
+			runtimeMCPConfig: {
+				path: "/pilot/mcp.json",
+				configs: {
+					fleet: {
+						type: "stdio",
+						command: process.execPath,
+						args: ["-e", serverScript],
+						env: {
+							VEYYON_TEST_MCP_INIT_MARKER: markerPath,
+							VEYYON_TEST_MCP_INIT_RELEASE: releasePath,
+						},
+					},
+				},
+			},
+		});
+		const toolNamesBySession = new WeakMap<FakeAgentSession, string[]>();
+		const namesFrom = (tools: unknown[]): string[] =>
+			tools.flatMap(tool =>
+				typeof tool === "object" && tool !== null && "name" in tool && typeof tool.name === "string"
+					? [tool.name]
+					: [],
+			);
+		const refreshTools = spyOn(FakeAgentSession.prototype, "refreshMCPTools").mockImplementation(
+			async function (this: FakeAgentSession, tools: unknown[]) {
+				toolNamesBySession.set(this, namesFrom(tools));
+			},
+		);
+		const firstTurnTools: string[][] = [];
+		const originalPrompt = FakeAgentSession.prototype.prompt;
+		const prompt = spyOn(FakeAgentSession.prototype, "prompt").mockImplementation(
+			async function (this: FakeAgentSession, text: string) {
+				firstTurnTools.push(toolNamesBySession.get(this) ?? []);
+				return await originalPrompt.call(this, text);
+			},
+		);
+		const sessionIds: string[] = [];
+		const withInitializationBarrier = async <T>(
+			operation: () => Promise<T>,
+			onComplete: (value: T) => void,
+		): Promise<T> => {
+			await fs.promises.rm(markerPath, { force: true });
+			await fs.promises.rm(releasePath, { force: true });
+			const markerSeen = Promise.withResolvers<void>();
+			const watcher = fs.watch(barrierRoot, { persistent: false }, (_event, filename) => {
+				if (filename?.toString() === path.basename(markerPath)) {
+					watcher.close();
+					markerSeen.resolve();
+				}
+			});
+			let completed = false;
+			const result = operation().then(value => {
+				completed = true;
+				onComplete(value);
+				return value;
+			});
+			try {
+				await markerSeen.promise;
+				vi.advanceTimersByTime(250);
+				await setImmediate();
+				expect(completed).toBe(false);
+				await fs.promises.writeFile(releasePath, "continue");
+				return await result;
+			} finally {
+				watcher.close();
+				if (!fs.existsSync(releasePath)) await fs.promises.writeFile(releasePath, "continue");
+				await result.then(
+					() => undefined,
+					() => undefined,
+				);
+			}
+		};
+		const runFirstTurn = async (sessionId: string): Promise<void> => {
+			const turn = firstTurnTools.length;
+			const response = await harness.agent.prompt({
+				sessionId,
+				prompt: [{ type: "text", text: "Use the available probe tool." }],
+			});
+			expectAcpStructure(zPromptResponse, response);
+			expect(firstTurnTools[turn]).toContain("mcp__fleet_probe");
+		};
+
+		vi.useFakeTimers();
+		try {
+			const created = await withInitializationBarrier(
+				() => harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] }),
+				value => sessionIds.push(value.sessionId),
+			);
+			await runFirstTurn(created.sessionId);
+
+			await withInitializationBarrier(
+				() => harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] }),
+				() => {},
+			);
+			await runFirstTurn(created.sessionId);
+
+			await withInitializationBarrier(
+				() => harness.agent.resumeSession({ sessionId: created.sessionId, cwd: harness.cwdA }),
+				() => {},
+			);
+			await runFirstTurn(created.sessionId);
+
+			const forked = await withInitializationBarrier(
+				() =>
+					harness.agent.unstable_forkSession({
+						sessionId: created.sessionId,
+						cwd: harness.cwdA,
+						mcpServers: [],
+					}),
+				value => sessionIds.push(value.sessionId),
+			);
+			await runFirstTurn(forked.sessionId);
+		} finally {
+			try {
+				await Promise.all(sessionIds.map(sessionId => harness.agent.closeSession({ sessionId })));
+			} finally {
+				refreshTools.mockRestore();
+				prompt.mockRestore();
+				harness.abortController.abort();
+				vi.useRealTimers();
+			}
+		}
+	}, 30_000);
+
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();
 		const first = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

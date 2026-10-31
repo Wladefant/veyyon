@@ -143,6 +143,11 @@
           "additionalProperties": false,
           "required": ["command"],
           "properties": {
+            "enabled": { "$ref": "#/$defs/serverBase/properties/enabled" },
+            "timeout": { "$ref": "#/$defs/serverBase/properties/timeout" },
+            "auth": { "$ref": "#/$defs/serverBase/properties/auth" },
+            "oauth": { "$ref": "#/$defs/serverBase/properties/oauth" },
+            "events": { "$ref": "#/$defs/serverBase/properties/events" },
             "type": {
               "type": "string",
               "enum": ["stdio"],
@@ -197,6 +202,11 @@
           "additionalProperties": false,
           "required": ["type", "url"],
           "properties": {
+            "enabled": { "$ref": "#/$defs/serverBase/properties/enabled" },
+            "timeout": { "$ref": "#/$defs/serverBase/properties/timeout" },
+            "auth": { "$ref": "#/$defs/serverBase/properties/auth" },
+            "oauth": { "$ref": "#/$defs/serverBase/properties/oauth" },
+            "events": { "$ref": "#/$defs/serverBase/properties/events" },
             "type": {
               "type": "string",
               "enum": ["http"],
@@ -228,6 +238,11 @@
           "additionalProperties": false,
           "required": ["type", "url"],
           "properties": {
+            "enabled": { "$ref": "#/$defs/serverBase/properties/enabled" },
+            "timeout": { "$ref": "#/$defs/serverBase/properties/timeout" },
+            "auth": { "$ref": "#/$defs/serverBase/properties/auth" },
+            "oauth": { "$ref": "#/$defs/serverBase/properties/oauth" },
+            "events": { "$ref": "#/$defs/serverBase/properties/events" },
             "type": {
               "type": "string",
               "enum": ["sse"],

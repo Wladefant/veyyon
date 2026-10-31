@@ -64,6 +64,8 @@ import { loadSlashCommands } from "../../extensibility/slash-commands";
 // handler and reaches hundreds of modules.
 import { listLocalPlanFileUrls } from "../../internal-urls/local-protocol";
 import { MCPManager } from "../../mcp/manager";
+import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
+import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
 import type { MCPServerConfig } from "../../mcp/types";
 import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
@@ -484,6 +486,7 @@ export class AcpAgent implements Agent {
 	#connection: AgentSideConnection;
 	#initialSession: AgentSession | undefined;
 	#createSession: CreateAcpSession;
+	#runtimeMCPConfig: RuntimeMCPConfig | undefined;
 	#sessions = new Map<string, ManagedSessionRecord>();
 	/** Sessions this connection moved to the background, by ACP session id, until reclaimed or ended. */
 	#backgrounded = new Map<string, BackgroundRecord>();
@@ -493,10 +496,16 @@ export class AcpAgent implements Agent {
 	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 	#blobs = new BlobStore(getBlobsDir());
 
-	constructor(connection: AgentSideConnection, createSession: CreateAcpSession, initialSession?: AgentSession) {
+	constructor(
+		connection: AgentSideConnection,
+		createSession: CreateAcpSession,
+		initialSession?: AgentSession,
+		runtimeMCPConfig?: RuntimeMCPConfig,
+	) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
+		this.#runtimeMCPConfig = runtimeMCPConfig;
 	}
 
 	setCancelCleanupTimeoutForTesting(timeoutMs: number): void {
@@ -2011,19 +2020,10 @@ export class AcpAgent implements Agent {
 	}
 
 	async #configureMcpServers(record: ManagedSessionRecord, servers: McpServer[]): Promise<void> {
-		if (record.mcpManager) {
-			await record.mcpManager.disconnectAll();
-		}
-		if (servers.length === 0) {
-			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([], { activateAll: true });
-			return;
-		}
-
-		const manager = new MCPManager(record.session.sessionManager.getCwd());
-		const configs: MCPConfigMap = {};
-		const sources: MCPSourceMap = {};
+		const configs: MCPConfigMap = Object.create(null);
+		const sources: MCPSourceMap = Object.create(null);
 		for (const server of servers) {
+			if (Object.hasOwn(configs, server.name)) throw new Error(`Duplicate ACP MCP server name: ${server.name}`);
 			configs[server.name] = this.#toMcpConfig(server);
 			sources[server.name] = {
 				provider: "acp",
@@ -2033,17 +2033,53 @@ export class AcpAgent implements Agent {
 			};
 		}
 
-		const result = await manager.connectServers(configs, sources);
-		if (result.errors.size > 0) {
-			throw new Error(
-				Array.from(result.errors.entries())
-					.map(([name, message]) => `${name}: ${message}`)
-					.join("; "),
-			);
+		const merged = mergeRuntimeMCPConfig(configs, sources, this.#runtimeMCPConfig);
+		if (Object.keys(merged.configs).length === 0) {
+			await record.mcpManager?.disconnectAll();
+			record.mcpManager = undefined;
+			await record.session.refreshMCPTools([], { activateAll: true });
+			return;
 		}
-
-		record.mcpManager = manager;
-		await record.session.refreshMCPTools(result.tools, { activateAll: true });
+		const manager = new MCPManager(record.session.sessionManager.getCwd());
+		try {
+			const startupStatuses = new Map<
+				string,
+				{ promise: Promise<McpConnectionStatusEvent>; resolve: (event: McpConnectionStatusEvent) => void }
+			>();
+			for (const name of Object.keys(merged.configs)) {
+				const status = Promise.withResolvers<McpConnectionStatusEvent>();
+				startupStatuses.set(name, { promise: status.promise, resolve: status.resolve });
+			}
+			const result = await manager.connectServers(merged.configs, merged.sources, event => {
+				if (event.type === "connected" || event.type === "failed") {
+					startupStatuses.get(event.serverName)?.resolve(event);
+				}
+			});
+			if (result.errors.size > 0) {
+				throw new Error(
+					Array.from(result.errors.entries())
+						.map(([name, message]) => `${name}: ${message}`)
+						.join("; "),
+				);
+			}
+			const connectedServers = new Set(result.connectedServers);
+			await Promise.all(
+				Array.from(startupStatuses.entries())
+					.filter(([name]) => !connectedServers.has(name))
+					.map(async ([name, status]) => {
+						const event = await status.promise;
+						if (event.type === "failed") {
+							throw new Error(`${name}: ${event.error}`);
+						}
+					}),
+			);
+			await record.mcpManager?.disconnectAll();
+			await record.session.refreshMCPTools(manager.getTools(), { activateAll: true });
+			record.mcpManager = manager;
+		} catch (error) {
+			await manager.disconnectAll();
+			throw error;
+		}
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {

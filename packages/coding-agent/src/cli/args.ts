@@ -40,6 +40,7 @@ export interface Args {
 	provider?: string;
 	model?: string;
 	config?: string[];
+	mcpConfig?: string;
 	plan?: string;
 	compactionModel?: string;
 	prewalk?: boolean;
