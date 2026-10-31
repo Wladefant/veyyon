@@ -25,6 +25,7 @@ import {
 	applyShakeRegions,
 	collectRedundantToolResultRegions,
 	collectShakeRegions,
+	estimateTokens,
 	type ShakeConfig,
 	type ShakeRegion,
 } from "@veyyon/agent-core/compaction";
@@ -34,10 +35,12 @@ import {
 	pruneSupersededToolResults,
 	pruneToolOutputs,
 	readToolSupersedeKey,
+	USELESS_NOTICE,
 } from "@veyyon/agent-core/compaction/pruning";
 import type { ProtectedToolMatcher } from "@veyyon/agent-core/compaction/tool-protection";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type { Model } from "@veyyon/ai";
+import { getOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import {
 	PRUNE_CACHE_WARM_SUFFIX_TOKENS,
 	PRUNE_IDLE_FLUSH_MS,
@@ -95,6 +98,8 @@ export interface HistoryRewritesHost {
 
 export class HistoryRewrites {
 	readonly #host: HistoryRewritesHost;
+	/** Do not keep writing recovery artifacts for unchanged results that cannot shrink the context. */
+	readonly #unprofitableRecoveryCandidates = new WeakMap<SessionEntry, string>();
 
 	constructor(host: HistoryRewritesHost) {
 		this.#host = host;
@@ -124,9 +129,10 @@ export class HistoryRewrites {
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		const referenceTokens = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-overflow");
+		const committed = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-overflow");
+		if (committed.changedCount === 0) return undefined;
 		host.syncTodos();
-		return { prunedCount: result.prunedCount, tokensSaved: Math.max(0, result.tokensSaved - referenceTokens) };
+		return { prunedCount: committed.changedCount, tokensSaved: Math.max(0, committed.tokensSaved) };
 	}
 
 	/**
@@ -161,9 +167,10 @@ export class HistoryRewrites {
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		const referenceTokens = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-stale");
+		const committed = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-stale");
+		if (committed.changedCount === 0) return undefined;
 		host.syncTodos();
-		return { prunedCount: result.prunedCount, tokensSaved: Math.max(0, result.tokensSaved - referenceTokens) };
+		return { prunedCount: committed.changedCount, tokensSaved: Math.max(0, committed.tokensSaved) };
 	}
 
 	/**
@@ -177,10 +184,12 @@ export class HistoryRewrites {
 		const updated: SessionEntry[] = [];
 		for (const entry of branchEntries) {
 			if (entry.type === "message") {
-				const stripped = stripImagesFromMessage(entry.message);
+				const message = this.#stageImageMessage(entry.message);
+				if (!message) continue;
+				const stripped = stripImagesFromMessage(message);
 				if (stripped > 0) {
 					removed += stripped;
-					updated.push(entry);
+					updated.push({ ...entry, message });
 				}
 				continue;
 			}
@@ -193,15 +202,54 @@ export class HistoryRewrites {
 				}
 				if (dropped > 0) {
 					if (kept.length === 0) kept.push({ type: "text", text: "[image removed]" });
-					entry.content = kept;
 					removed += dropped;
-					updated.push(entry);
+					updated.push({ ...entry, content: kept });
 				}
 			}
 		}
 		if (removed === 0) return { removed: 0 };
-		await this.#commit(updated);
+		await this.#archiveAndCommit(branchEntries, updated, "drop-images");
 		return { removed };
+	}
+
+	/** Copy exactly the containers the existing image stripper mutates. */
+	#stageImageMessage(message: AgentMessage): AgentMessage | undefined {
+		switch (message.role) {
+			case "user":
+			case "developer":
+			case "custom":
+			case "hookMessage": {
+				if (typeof message.content === "string" || !message.content.some(part => part.type === "image")) {
+					return undefined;
+				}
+				if (
+					(message.role === "user" || message.role === "developer") &&
+					getOpenAIResponsesHistoryPayload(message.providerPayload, message.providerPayload?.provider ?? "")
+				) {
+					throw new Error("Cannot remove images: native OpenAI Responses history cannot be rewritten safely");
+				}
+				return { ...message };
+			}
+			case "toolResult": {
+				const details = message.details as { images?: unknown } | null | undefined;
+				const hasDetailImages = Array.isArray(details?.images) && details.images.some(
+					(part: unknown) => !!part && typeof part === "object" && "type" in part && part.type === "image",
+				);
+				if (!hasDetailImages && !message.content.some(part => part.type === "image")) return undefined;
+				if (hasDetailImages && message.details && typeof message.details === "object") {
+					return {
+						...message,
+						details: Array.isArray(message.details) ? [...message.details] : { ...message.details },
+					};
+				}
+				return { ...message };
+			}
+			case "fileMention":
+				if (!message.files.some(file => file.image)) return undefined;
+				return { ...message, files: message.files.map(file => file.image ? { ...file } : file) };
+			default:
+				return undefined;
+		}
 	}
 
 	/**
@@ -273,6 +321,12 @@ export class HistoryRewrites {
 	 */
 	async offloadAndApply(regions: ShakeRegion[]): Promise<ElisionOutcome> {
 		const artifactId = await this.#saveArtifact(regions);
+		// Never mutate or persist elided messages without an addressable copy of
+		// their exact originals. Keeping the bytes in context is preferable to an
+		// apparently successful reduction that cannot be recovered after restart.
+		if (!artifactId) {
+			throw new Error("Cannot elide session history: recovery artifact was not saved");
+		}
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;
 		let originalTokens = 0;
@@ -313,13 +367,26 @@ export class HistoryRewrites {
 	 * or rewrite invalidates the selection; a rejected file rewrite restores the live originals.
 	 * The archive is intentionally retained after a failed publish, since it is valid evidence.
 	 */
-	async #archiveAndCommit(branch: SessionEntry[], updated: SessionEntry[], operation: string): Promise<number> {
+	async #archiveAndCommit(
+		branch: SessionEntry[],
+		updated: SessionEntry[],
+		operation: string,
+	): Promise<{ changedCount: number; tokensSaved: number }> {
 		const byId = new Map(branch.map(entry => [entry.id, entry]));
 		const changes = updated.map(replacement => {
 			const original = byId.get(replacement.id);
 			if (!original || original === replacement) throw new Error("History rewrite requires staged replacements");
-			return { original, replacement, previous: { ...original }, serialized: JSON.stringify(original) };
-		});
+			return {
+				original,
+				replacement,
+				previous: { ...original },
+				serialized: JSON.stringify(original),
+				appliedSerialized: "",
+			};
+		}).filter(change => this.#unprofitableRecoveryCandidates.get(change.original) !== change.serialized);
+		// The selector may reselect an unchanged, unprofitable useless result on every turn.
+		// Refuse it before allocating another artifact; a changed entry is reconsidered.
+		if (changes.length === 0) return { changedCount: 0, tokensSaved: 0 };
 		const archive = JSON.stringify({
 			version: 1,
 			operation,
@@ -336,28 +403,87 @@ export class HistoryRewrites {
 		) {
 			throw new Error("History changed while preserving original entries; retry the rewrite");
 		}
-		let referenceTokens = 0;
-		for (const { original, replacement } of changes) {
+		let tokensSaved = 0;
+		const committed = changes.filter(({ original, replacement, serialized }) => {
+			const notice = replacement.type === "message" && replacement.message.role === "toolResult"
+				? replacement.message.content[0]
+				: undefined;
+			const useless = operation !== "drop-images" && notice?.type === "text" && notice.text === USELESS_NOTICE;
 			const reference = `\n[recover: artifact://${artifactId} (entry ${original.id})]`;
-			if (replacement.type === "message" && replacement.message.role === "toolResult") {
-				replacement.message.content = [...replacement.message.content, { type: "text", text: reference }];
-				referenceTokens += countTokens(reference);
+			this.#appendRecoveryReference(original, replacement, reference);
+			if (operation !== "drop-images" && original.type === "message" && replacement.type === "message") {
+				const savings = estimateTokens(original.message) - estimateTokens(replacement.message);
+				// A useless result has no correctness reason to grow the prompt. Price its complete
+				// referenced replacement, not just the notice used by the upstream selector.
+				if (useless && savings <= 0) {
+					this.#unprofitableRecoveryCandidates.set(original, serialized);
+					return false;
+				}
+				tokensSaved += savings;
 			}
+			return true;
+		});
+		if (committed.length === 0) return { changedCount: 0, tokensSaved: 0 };
+		for (const change of committed) {
+			const { original, replacement } = change;
 			Object.assign(original, replacement);
+			change.appliedSerialized = JSON.stringify(original);
 		}
 		try {
-			await this.#host.sessionStore.rewriteEntries(changes.map(change => change.original));
+			await this.#host.sessionStore.rewriteEntries(committed.map(change => change.original));
 		} catch (error) {
-			for (const { original, previous, replacement } of changes) {
-				// Do not replace a newer message a concurrent owner installed during persistence.
+			for (const { original, previous, replacement, appliedSerialized } of committed) {
+				// Never roll back a record another owner changed during persistence.
+				if (JSON.stringify(original) !== appliedSerialized) continue;
 				if (original.type === "message" && replacement.type === "message" && original.message === replacement.message) {
+					Object.assign(original, previous);
+				}
+				if (original.type === "custom_message" && replacement.type === "custom_message" && original.content === replacement.content) {
 					Object.assign(original, previous);
 				}
 			}
 			throw error;
 		}
 		this.#refreshContext();
-		return referenceTokens;
+		return { changedCount: committed.length, tokensSaved };
+	}
+
+	#appendRecoveryReference(original: SessionEntry, replacement: SessionEntry, reference: string): void {
+		if (replacement.type === "custom_message") {
+			replacement.content = typeof replacement.content === "string"
+				? replacement.content + reference
+				: [...replacement.content, { type: "text", text: reference }];
+			return;
+		}
+		if (replacement.type !== "message") return;
+		const message = replacement.message;
+		switch (message.role) {
+			case "toolResult":
+				message.content = [...message.content, { type: "text", text: reference }];
+				return;
+			case "user":
+			case "developer":
+			case "custom":
+			case "hookMessage": {
+				const content = typeof message.content === "string"
+					? message.content + reference
+					: [...message.content, { type: "text" as const, text: reference }];
+				// These roles share this content shape; the cast mirrors stripImagesFromMessage.
+				(message as { content: typeof content }).content = content;
+				return;
+			}
+			case "fileMention": {
+				if (original.type !== "message" || original.message.role !== "fileMention") return;
+				for (let index = 0; index < message.files.length; index++) {
+					if (original.message.files[index]?.image) {
+						message.files[index].content += reference;
+					}
+				}
+				return;
+			}
+			default:
+				return;
+		}
 	}
 
 	/**
@@ -387,7 +513,7 @@ export class HistoryRewrites {
 	/**
 	 * Concatenate the regions' original contents into one session artifact, readable as
 	 * `artifact://<id>`. `undefined` when the session is not persisted or the write fails; the
-	 * placeholders then link nothing.
+	 * callers must refuse to replace the originals when no artifact id is returned.
 	 */
 	async #saveArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
 		const parts: string[] = [];

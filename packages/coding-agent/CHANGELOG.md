@@ -1,8 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+- Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ### Fixed
+
+- Image removal archives original image records, leaves recovery references, and restores only unchanged live records when persistence fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal leaves cold assistant payloads unloaded when they contain no supported images ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal refuses user and developer image records with preserved native OpenAI Responses history ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Useless-result pruning retains entries unless their complete recovery placeholders reduce context tokens ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 

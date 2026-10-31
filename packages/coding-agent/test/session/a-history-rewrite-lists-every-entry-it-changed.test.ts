@@ -249,7 +249,7 @@ describe("a history rewrite lists every entry it changed", () => {
 			expectEveryListedRewriteWhole(1);
 			const reloaded = await reload();
 			expect(JSON.stringify(reloaded.getEntries())).not.toContain(PNG.data);
-			expect(toolResultText(reloaded.getEntries(), screenshotCall)).toBe("captured");
+			expect(toolResultText(reloaded.getEntries(), screenshotCall)).toMatch(/^captured\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
 		});
 	}
 
@@ -318,8 +318,12 @@ describe("a history rewrite lists every entry it changed", () => {
 
 		expectEveryListedRewriteWhole(1);
 		const reloaded = (await reload()).getEntries();
-		expect(toolResultText(reloaded, staleRead)).toBe(compactionModule.SUPERSEDED_NOTICE);
-		expect(toolResultText(reloaded, uselessSearch)).toBe(compactionModule.USELESS_NOTICE);
+		const staleText = toolResultText(reloaded, staleRead);
+		expect(staleText.startsWith(`${compactionModule.SUPERSEDED_NOTICE}\n[recover: artifact://`)).toBe(true);
+		expect(staleText).toMatch(/\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
+		const uselessText = toolResultText(reloaded, uselessSearch);
+		expect(uselessText.startsWith(`${compactionModule.USELESS_NOTICE}\n[recover: artifact://`)).toBe(true);
+		expect(uselessText).toMatch(/\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
 		expect(toolResultText(reloaded, freshRead)).toBe("FRESH\n".repeat(200));
 	});
 
