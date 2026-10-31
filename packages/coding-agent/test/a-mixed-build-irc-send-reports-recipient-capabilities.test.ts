@@ -14,7 +14,7 @@ import {
 	getLoadedBuildIdentity,
 	parseBuildIdentity,
 } from "../src/launch/build-info";
-import { claimSessionNotices, sendSessionNotice } from "../src/launch/session-notices";
+import { claimSessionNotices, listLiveSessionOwners, sendSessionNotice } from "../src/launch/session-notices";
 import { serveTerminalControl } from "../src/launch/terminal-control";
 import type { ToolSession } from "../src/tools";
 import { IrcTool } from "../src/tools/agent/irc";
@@ -57,6 +57,7 @@ function makeTool(readInstalled: () => BuildIdentity = () => installedBuild): Ir
 	const runtime = {
 		sendSessionNotice: (args: Parameters<typeof sendSessionNotice>[0]) => sendSessionNotice({ ...args, root }),
 		readInstalledBuildIdentity: async () => readInstalled(),
+		listLiveSessionOwners: () => listLiveSessionOwners(root),
 	};
 	return new IrcTool(session, runtime);
 }
@@ -71,6 +72,31 @@ function writeLiveOwner(sessionId: string, version: 1, metadata: Record<string, 
 }
 
 describe("mixed-build session notices", () => {
+	it("lists another live project session and sends only to its project alias", async () => {
+		writeLiveOwner(targetSessionId, 1, {
+			cwd: path.join(root, "polysimulator"),
+			capabilities: ["session-notices"],
+		});
+		writeLiveOwner("unrelated-session", 1, {
+			cwd: path.join(root, "other"),
+			capabilities: ["session-notices"],
+		});
+		const tool = makeTool();
+		const roster = await tool.execute("list-project", { op: "list" });
+		const rosterText = roster.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		expect(rosterText).toContain(`session:${targetSessionId} [live; project polysimulator`);
+		expect(roster.details?.sessionPeers?.map(owner => owner.sessionId).sort()).toEqual(["unrelated-session", targetSessionId].sort());
+		const sent = await tool.execute("send-project", {
+			op: "send",
+			to: "session:project=polysimulator",
+			message: "Check OVH runner",
+		});
+		expect(sent.isError).not.toBe(true);
+		expect(sent.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("project polysimulator") });
+		expect(claimSessionNotices(targetSessionId, root).map(notice => notice.body)).toEqual(["Check OVH runner"]);
+		expect(claimSessionNotices("unrelated-session", root)).toEqual([]);
+	});
+
 	it("records the loaded build and notice capability, then delivers through the supported production path", async () => {
 		const close = await serveTerminalControl(
 			{
