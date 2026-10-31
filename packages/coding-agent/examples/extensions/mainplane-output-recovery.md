@@ -19,3 +19,8 @@ This is the native bounded output tail. A larger worker spill remains named by
 full_output_path and must be read separately. Corruption, unavailable artifacts,
 foreign sessions and unfinished operations are explicit errors, not reasons to
 rerun an uncertain side effect. No real command/output was used in the tests.
+
+This surface remains experimental and disabled by default with the extension.
+Its registered-tool demo, seeded settings differential and exact-parity bench
+are still missing; see the [shared proof backlog](mainplane-worker-bridge.md#experimental-status-and-missing-proof)
+and [#797](https://github.com/Wladefant/veyyon/issues/797).

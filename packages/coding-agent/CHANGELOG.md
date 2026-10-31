@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added experimental native Mainplane tools for fleet discovery, worker operations, current-session receipts and cancellation, background jobs, and output recovery, disabled by default; demo, settings differential, and bench proof remain open ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
 ### Fixed
 
 - Preserved a UTF-8 BOM in recovered output pages instead of dropping the leading marker ([Refs #797](https://github.com/Wladefant/veyyon/issues/797)).

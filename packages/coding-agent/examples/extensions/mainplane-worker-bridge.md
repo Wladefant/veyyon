@@ -26,3 +26,28 @@ The transport helper is shared by the actual Run/Read/Write callers. No legacy
 aliases remain. Timeouts, byte ceilings, redirect refusal and sanitized errors
 apply to all calls. Real host permissions, worker processes, central broker refresh
 and T3 ACP propagation still require separate qualification. Remote CI is required.
+
+## Experimental status and missing proof
+
+This extension is experimental and disabled by default. Explicitly loading
+`mainplane-worker-bridge.ts` is the opt-in; leaving it unloaded exposes none of
+these Mainplane tools. It adds no settings group or dependent settings knobs.
+
+The feature-proof bar in `AGENTS.md` is not yet met. Committed end-to-end demos
+under `proof/scenes/` driving the registered tools with the extension off and on,
+a seeded settings differential in the PR body, and a committed exact-parity bench
+are still missing. Manual extension loading does not supply the settings differential.
+Injected-transport tests and remote CI do not replace these proofs. Keep this
+source integration experimental and disabled by default; it is not a completed feature.
+
+The existing open issues below carry the missing-proof backlog. Every row still
+needs its registered-tool demo, seeded off/on settings differential, and bench
+with the same corpus, inputs and seed. No completed proof is claimed here.
+
+| Experimental surface | Open missing-proof backlog |
+| --- | --- |
+| Run/Read/Write and current-session receipts | [#775](https://github.com/Wladefant/veyyon/issues/775) |
+| Current-session cancellation | [#794](https://github.com/Wladefant/veyyon/issues/794) |
+| Prior-output recovery | [#797](https://github.com/Wladefant/veyyon/issues/797) |
+| Fleet discovery | [#803](https://github.com/Wladefant/veyyon/issues/803) |
+| Background jobs and status | [#799](https://github.com/Wladefant/veyyon/issues/799) |

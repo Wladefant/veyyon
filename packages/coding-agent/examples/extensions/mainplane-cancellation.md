@@ -18,3 +18,8 @@ Inspect its receipt rather than retry with a new key after an uncertain outcome.
 Focused remote CI includes the registered-tool tests and all existing Mainplane
 adapter suites. No real process was stopped during authoring, and actual OS
 process-tree behavior remains part of the host pilot.
+
+This surface remains experimental and disabled by default with the extension.
+Its registered-tool demo, seeded settings differential and exact-parity bench
+are still missing; see the [shared proof backlog](mainplane-worker-bridge.md#experimental-status-and-missing-proof)
+and [#794](https://github.com/Wladefant/veyyon/issues/794).
