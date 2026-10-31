@@ -43,6 +43,8 @@ The broker is the only writer of OAuth refresh tokens. Clients (including the ga
 
 **Refresh-response identity boundary.** A remote store must accept the refresh response only if its credential row ID and provider equal the credential it requested, the payload is OAuth, and its refresh slot is the broker redaction sentinel. A mismatched row or a non-redacted refresh field is a broker protocol failure: no returned access token may be handed to a model and no local snapshot entry may be replaced. The broker remains the only refresh-token owner. This validation is independent of server correctness and must be covered with synthetic mismatched-ID, mismatched-provider, leaked-refresh and matching-response cases; it does not grant a remote host vault access.
 
+**Refresh request and revocation fence.** Before invoking the broker refresh endpoint, the remote store requires the requested ID to exist in its current redacted snapshot as an OAuth grant for the requested provider; unknown IDs, wrong providers, API keys and unexpected refresh values refuse locally rather than causing a different server-side refresh. After awaiting the broker reply, the store verifies the selected row remains eligible: a row revoked mid-flight must neither return a stale access token nor reappear in the local snapshot. The broker remains the sole refresh authority; no worker obtains refresh ownership.
+
 ## auth-broker
 
 ### CLI
