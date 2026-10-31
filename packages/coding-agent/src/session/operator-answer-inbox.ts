@@ -130,14 +130,14 @@ export class OperatorAnswerInbox {
 				if (consumed.has(answer.questionId)) continue;
 				if (this.#journal() !== journal) return;
 				const key = `${answer.sessionId}:${answer.questionId}`;
-				// Reconnect/repeated recovery can see an unconsumed journal entry whose answer is already queued.
-				// Only the user-message entry commits consumption; a cleared queue remains retryable.
-				if (this.#isQueued(answer.questionId)) {
-					this.#queued.add(key);
-					continue;
-				}
-				this.#queued.delete(key);
 				try {
+					// Reconnect/repeated recovery can see an unconsumed entry whose answer is already queued.
+					// Only a user-message entry commits consumption; a cleared queue remains retryable.
+					if (this.#isQueued(answer.questionId)) {
+						this.#queued.add(key);
+						continue;
+					}
+					this.#queued.delete(key);
 					await this.#queue(answer);
 				} catch (error) {
 					logger.warn("Operator answer recovery could not inject a pending answer", {
