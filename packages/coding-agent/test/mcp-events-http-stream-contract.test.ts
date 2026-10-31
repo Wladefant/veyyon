@@ -235,18 +235,24 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		}
 	});
 
-	it("preserves code and data from an initial JSON-RPC error response", async () => {
+	it("preserves code and data from JSON-RPC error responses", async () => {
 		server = Bun.serve({
 			port: 0,
 			async fetch(request) {
 				const body = await request.json();
 				if (!body || typeof body !== "object" || !("id" in body))
 					return new Response("Invalid request", { status: 400 });
-				return Response.json({
+				const errorResponse = {
 					jsonrpc: "2.0",
 					id: body.id,
 					error: { code: -32041, message: "subscription denied", data: { reason: "disabled" } },
-				});
+				};
+				if ("method" in body && body.method === "events/stream-sse") {
+					return new Response(`data: ${JSON.stringify(errorResponse)}\n\n`, {
+						headers: { "Content-Type": "text/event-stream" },
+					});
+				}
+				return Response.json(errorResponse);
 			},
 		});
 		const transport = new HttpTransport({ type: "http", url: `http://127.0.0.1:${server.port}/mcp`, timeout: 1_000 });
@@ -254,6 +260,12 @@ describe("MCP Streamable HTTP streamRequest contract", () => {
 		const stream = transport.streamRequest("events/stream", {}, () => {});
 		try {
 			await expect(stream.done).rejects.toMatchObject({ code: -32041, data: { reason: "disabled" } });
+			const sseStream = transport.streamRequest("events/stream-sse", {}, () => {});
+			try {
+				await expect(sseStream.done).rejects.toMatchObject({ code: -32041, data: { reason: "disabled" } });
+			} finally {
+				sseStream.cancel();
+			}
 		} finally {
 			stream.cancel();
 			await transport.close();
@@ -273,7 +285,20 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 		["scalar JSON", "17"],
 		[
 			"invalid batch member",
-			`[null,${JSON.stringify({ jsonrpc: "2.0", method: "notifications/events/event", params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "after-invalid-member" } })}]`,
+			JSON.stringify([
+				null,
+				{ jsonrpc: "2.0", id: "__stream_id__", error: { code: "invalid", message: "bad error" } },
+				{
+					jsonrpc: "1.0",
+					method: "notifications/events/event",
+					params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "invalid-version" },
+				},
+				{
+					jsonrpc: "2.0",
+					method: "notifications/events/event",
+					params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "after-invalid-member" },
+				},
+			]),
 		],
 	])("skips %s frames and continues delivering later valid notifications", async (name, invalidFrame) => {
 		server = Bun.serve({

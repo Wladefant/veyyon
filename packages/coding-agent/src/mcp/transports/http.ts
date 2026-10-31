@@ -89,6 +89,24 @@ export function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
 	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
 	return Math.max(1, boundedTimeout);
 }
+
+/** Narrow untrusted stream frames before routing their notification or response fields. */
+function isStreamMessage(value: unknown): value is JsonRpcMessage {
+	if (!isRecord(value) || value.jsonrpc !== "2.0") return false;
+	if ("method" in value) {
+		if (typeof value.method !== "string" || (value.params !== undefined && !isRecord(value.params))) return false;
+		return !("id" in value) || typeof value.id === "string" || typeof value.id === "number";
+	}
+	if (value.id !== null && typeof value.id !== "string" && typeof value.id !== "number") return false;
+	if ("error" in value) {
+		return (
+			isRecord(value.error) &&
+			typeof value.error.code === "number" &&
+			typeof value.error.message === "string"
+		);
+	}
+	return "result" in value;
+}
 /**
  * HTTP transport for MCP servers.
  * Uses POST for requests, supports SSE responses.
@@ -329,11 +347,11 @@ export class HttpTransport implements MCPTransport {
 					}
 					const messages = Array.isArray(raw) ? raw : [raw];
 					for (const value of messages) {
-						if (!isRecord(value)) {
+						if (!isStreamMessage(value)) {
 							logger.warn("Skipping invalid MCP event stream message", { url: this.config.url });
 							continue;
 						}
-						const message = value as JsonRpcMessage;
+						const message = value;
 						if ("id" in message && message.id === id && ("result" in message || "error" in message)) {
 							if (message.error) {
 								throw Object.assign(new Error(`MCP error ${message.error.code}: ${message.error.message}`), {
