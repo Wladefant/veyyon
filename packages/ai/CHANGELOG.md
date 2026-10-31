@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Remote auth-broker clients refuse unbound OAuth refresh requests before delegation and discard late replies for revoked rows while preserving the broker's sole refresh authority ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 - Required auth-gateway completion fixtures to cover the production route type without changing runtime behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Corrected Anthropic cache-control and request-ID types without changing request behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Removed unused upstream Codex transport copies and their stale test; the provider keeps its production transport in `openai-codex-responses.ts` ([#712](https://github.com/Wladefant/veyyon/issues/712)).

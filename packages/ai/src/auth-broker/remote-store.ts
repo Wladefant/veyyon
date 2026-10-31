@@ -151,6 +151,23 @@ function assertBrokerOAuthRefresh(
 	}
 }
 
+/**
+ * Refuse an unrelated grant before broker-side refresh and a revoked grant after reply.
+ * The broker alone rotates refresh credentials; this is a client identity fence.
+ */
+function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: number, provider?: string): SnapshotEntry {
+	const current = snapshot.credentials.find(candidate => candidate.id === credentialId);
+	if (
+		!current ||
+		(provider !== undefined && current.provider !== provider) ||
+		current.credential.type !== "oauth" ||
+		current.credential.refresh !== REMOTE_REFRESH_SENTINEL
+	) {
+		throw new AIError.AuthBrokerError(`Broker refresh refused unknown or mismatched OAuth credential id=${credentialId}`);
+	}
+	return current;
+}
+
 function emptySnapshot(): SnapshotResponse {
 	return {
 		generation: 0,
@@ -625,12 +642,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
-		const current = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
-		if (!current) {
-			throw new AIError.AuthBrokerError(`Broker suspect refresh requested unknown credential id=${credentialId}`);
-		}
+		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId);
 		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
 		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
+		requireLocalOAuthRefresh(this.#snapshot, credentialId, current.provider);
 		this.#applyCredentialEntry(entry);
 		this.#maybeRefreshSnapshot("suspect credential refresh");
 	}
@@ -897,8 +912,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		_credential: OAuthCredential,
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
+		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
 		const { entry } = await this.#client.refreshCredential(credentialId, signal);
-		assertBrokerOAuthRefresh(entry, credentialId, provider);
+		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
+		requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
 		if (!this.#streamingActive) {
 			await this.refreshSnapshot().catch(error => {
 				this.#reportStaleSnapshot("refresh-after-credential-refresh", error, { credentialId });
