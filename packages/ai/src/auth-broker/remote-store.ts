@@ -735,25 +735,24 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		credentials: AuthCredential[],
 	): Promise<StoredAuthCredential[]> {
 		const existing = this.listAuthCredentials(provider);
-		for (const entry of existing) {
-			try {
+		let changed = false;
+		try {
+			for (const entry of existing) {
+				// Abort replacement if the broker cannot disable an old grant.
+				// Only broker-confirmed removes may disappear from the local view.
 				await this.#client.disableCredential(entry.id, "replaced by newer credential");
-			} catch (error) {
-				logger.warn("auth-broker disable during replace failed", {
-					provider,
-					id: entry.id,
-					error: String(error),
-				});
+				this.#removeCredentialById(entry.id);
+				changed = true;
 			}
+			// Every old grant was disabled before a replacement can be uploaded.
+			for (const credential of credentials) {
+				const { entries } = await this.#client.uploadCredential(provider, credential);
+				this.#applyProviderEntries(provider, entries);
+				changed = true;
+			}
+		} finally {
+			if (changed) this.#maybeRefreshSnapshot("replace");
 		}
-		// Snapshot reflects the disables before we add the new rows so a concurrent
-		// reader cannot momentarily see old + new together for the same provider.
-		this.#removeProviderEntries(provider);
-		for (const credential of credentials) {
-			const { entries } = await this.#client.uploadCredential(provider, credential);
-			this.#applyProviderEntries(provider, entries);
-		}
-		this.#maybeRefreshSnapshot("replace");
 		return this.listAuthCredentials(provider);
 	}
 
@@ -764,19 +763,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 */
 	async deleteAuthCredentialsRemote(provider: string, disabledCause: string): Promise<void> {
 		const existing = this.listAuthCredentials(provider);
-		for (const entry of existing) {
-			try {
+		let disabledAny = false;
+		try {
+			for (const entry of existing) {
 				await this.#client.disableCredential(entry.id, disabledCause);
-			} catch (error) {
-				logger.warn("auth-broker disable during delete failed", {
-					provider,
-					id: entry.id,
-					error: String(error),
-				});
+				this.#removeCredentialById(entry.id);
+				disabledAny = true;
 			}
+		} finally {
+			// Reconcile confirmed partial disables even when a later broker call failed.
+			if (disabledAny) this.#maybeRefreshSnapshot("delete");
 		}
-		this.#removeProviderEntries(provider);
-		this.#maybeRefreshSnapshot("delete");
 	}
 
 	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[]): void {
@@ -805,13 +802,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = incoming;
 		this.#snapshot = { ...this.#snapshot, credentials };
-		this.#appliedSnapshotRevision += 1;
-	}
-
-	#removeProviderEntries(provider: string): void {
-		const next = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
-		if (next.length === this.#snapshot.credentials.length) return;
-		this.#snapshot = { ...this.#snapshot, credentials: next };
 		this.#appliedSnapshotRevision += 1;
 	}
 
