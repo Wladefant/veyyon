@@ -2644,7 +2644,7 @@ function openCodeModelManagerOptions(
 					api: "openai-completions",
 					provider: providerId,
 					baseUrl: discoveryBaseUrl,
-					apiKey: openCodeDiscoveryApiKey(providerId, apiKey),
+					apiKey,
 					// The gateway flags traffic with no client user agent, and discovery
 					// reads it with the same key as a completion request. Discovery runs
 					// outside any conversation, so the session header carries the stable

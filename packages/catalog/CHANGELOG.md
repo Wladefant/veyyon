@@ -6,6 +6,11 @@
 
 - OpenCode Go no longer routes Console credential envelopes; API keys continue to use the configured gateway.
 
+### Fixed
+
+- OpenCode Go model discovery uses the API key directly after Console credential-envelope discovery support was removed.
+- OpenCode Go model discovery reads its configured API key without throwing an undefined-identifier error.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
