@@ -96,7 +96,7 @@ describe("callSessionTool", () => {
 		await expect(callSessionTool("custom", { value: "x", [INTENT_FIELD]: "invalid" }, { session })).rejects.toThrow();
 	});
 
-	it("validates SearchTool arguments and runs every registered search type", async () => {
+	it("runs every registered SearchTool search type", async () => {
 		using tempDir = TempDir.createSync("@js-tool-bridge-search-");
 		const fixture = path.join(tempDir.path(), "fixture.ts");
 		await writeFile(fixture, "function needle() { return 1; }\n");
@@ -123,10 +123,22 @@ describe("callSessionTool", () => {
 			}
 		}
 
+	});
+
+	it("rejects SearchTool arguments with fields from another search type", async () => {
+		const session = createSession([]);
+		const registeredSearch: AnyAgentTool = new SearchTool(session);
+		session.getToolByName = name => (name === "search" ? registeredSearch : undefined);
+
 		const invalidFields = [
 			{ type: "files", input: "*.ts", skip: 1, message: 'Search type "files" does not accept: skip.' },
 			{ type: "text", input: "needle", hidden: true, message: 'Search type "text" does not accept: hidden.' },
-			{ type: "structure", input: "function needle() { $$$BODY }", case: false, message: 'Search type "structure" does not accept: case.' },
+			{
+				type: "structure",
+				input: "function needle() { $$$BODY }",
+				case: false,
+				message: 'Search type "structure" does not accept: case.',
+			},
 		] as const;
 		for (const { message, ...args } of invalidFields) {
 			await expect(callSessionTool("search", args, { session })).rejects.toThrow(message);
