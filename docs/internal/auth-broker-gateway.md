@@ -45,6 +45,8 @@ The broker is the only writer of OAuth refresh tokens. Clients (including the ga
 
 **Refresh request and revocation fence.** Before invoking the broker refresh endpoint, the remote store requires the requested ID to exist in its current redacted snapshot as an OAuth grant for the requested provider; unknown IDs, wrong providers, API keys and unexpected refresh values refuse locally rather than causing a different server-side refresh. After awaiting the broker reply, the store verifies the selected row remains eligible: a row revoked mid-flight must neither return a stale access token nor reappear in the local snapshot. The broker remains the sole refresh authority; no worker obtains refresh ownership.
 
+**Post-refresh snapshot reconciliation.** A refresh may await a non-streaming full-snapshot pull after the broker's reply. Validate the selected OAuth row again after that await: a row removed by the new snapshot must not release its earlier access token. If the selected row's access changed to a different value from both the pre-request view and this reply, the reply has been superseded and must not overwrite the newly observed access. A failed snapshot pull still reports a stale view, rather than transferring refresh ownership or treating an unobserved revocation as fact.
+
 ## auth-broker
 
 ### CLI
