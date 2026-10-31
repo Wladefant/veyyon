@@ -1,6 +1,6 @@
 # Veyyon Coding Agent Installer for Windows
 # Usage: irm https://veyyon.dev/install.ps1 | iex
-#   or:  irm https://raw.githubusercontent.com/santhreal/veyyon/main/scripts/install.ps1 | iex
+#   or:  irm https://raw.githubusercontent.com/Wladefant/veyyon/main/scripts/install.ps1 | iex
 #
 # This installs the prebuilt self-contained binary (veyyon-windows-x64.exe):
 # one download, no toolchain, nothing from a package registry, and nothing
@@ -28,7 +28,7 @@ param(
     [switch]$Local,
     [string]$Ref,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
-    [string]$Repository = "santhreal/veyyon",
+    [string]$Repository = "Wladefant/veyyon",
     [switch]$NoVerify,
     [switch]$Force,
     [switch]$Uninstall,

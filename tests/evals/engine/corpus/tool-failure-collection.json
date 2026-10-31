@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "status": "corpus collection, not an eval result",
+  "sourceDay": "2026-10-27",
+  "sourceSchemaVersion": 1,
+  "sourceRecords": 59,
+  "sourceTranscripts": 16,
+  "producerCoverageComplete": false,
+  "producerCoverageReasons": ["dir_cap"],
+  "verifiedCases": 34,
+  "recordDispositions": {
+    "selected": 34,
+    "duplicate": 4,
+    "no-provable-outcome": 19,
+    "compacted-payload-unavailable": 2,
+    "false-positive": 0,
+    "missing-transcript": 0
+  },
+  "categories": {
+    "failure-recovery": 34,
+    "wrong-tool-success": 0,
+    "guard": 0,
+    "ordinary-work": 0
+  },
+  "partitioned": false,
+  "splitSeed": null,
+  "limitations": [
+    "The producer stopped at a directory cap, so its source coverage is incomplete.",
+    "Only the 59 indexed records and their 16 referenced transcripts were audited.",
+    "No wrong-tool success, guard, or independent ordinary-work control met the verification threshold.",
+    "Four indexed records repeat a selected normalized failure and recovery shape.",
+    "Nineteen records lack a provable same-target outcome; two more have unavailable compacted recovery payloads.",
+    "Neutral minimized cases preserve selector and path dialect shapes but omit original source content and full tool registries.",
+    "The collection has fewer than 100 cases and no frozen hash, seed, partitions, model score, or evaluation result.",
+    "Check results belong in the pull request's verification receipts, not in this collection report."
+  ]
+}

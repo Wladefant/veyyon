@@ -3,13 +3,17 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { createRequire } from "node:module";
+import type * as AtomicWrite from "./atomic-write";
 import { exponentialBackoffDelay } from "./backoff";
+import type * as FileLock from "./file-lock";
 import { isEnoent } from "./fs-error";
+import type * as Logger from "./logger";
 import { errorMessage } from "./type-guards";
 import { getDbBusyTimeoutMs } from "./worker-host";
 
-const require = createRequire(import.meta.url);
+// `./logger`, `./file-lock` and `./atomic-write` load on first use to keep them off the boot path. The bare
+// `require` is the one Bun's bundler rewrites into an in-bundle lazy init; a `createRequire(import.meta.url)`
+// require is resolved at run time against the bundle root and cannot find the module in a compiled binary.
 /**
  * True when a queryable object named `table` exists in the database, whether it
  * is a regular table, a virtual table (FTS5/vec register in `sqlite_master`
@@ -226,7 +230,7 @@ function closePeerCorruptHandles(dbPath: string, own: Database | undefined): voi
 		try {
 			peer.close();
 		} catch (error) {
-			const logger = require("./logger") as typeof import("./logger");
+			const logger = require("./logger") as typeof Logger;
 			logger.warn("Failed to close a peer's corrupt SQLite handle before quarantine", {
 				path: dbPath,
 				error: errorMessage(error),
@@ -348,7 +352,7 @@ function openStoreUnderRecoveryLock(dbPath: string, databaseOptions?: DatabaseCo
 		throw error;
 	}
 	fs.unlinkSync(probe);
-	const { withFileLockSync } = require("./file-lock") as typeof import("./file-lock");
+	const { withFileLockSync } = require("./file-lock") as typeof FileLock;
 	return withFileLockSync(`${stem}.recovery`, () => {
 		assertNoPendingQuarantine(dbPath);
 		return new Database(dbPath, databaseOptions);
@@ -364,7 +368,7 @@ function assertNoPendingQuarantine(dbPath: string): void {
 }
 
 function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined): string {
-	const { atomicWriteFileSync } = require("./atomic-write") as typeof import("./atomic-write");
+	const { atomicWriteFileSync } = require("./atomic-write") as typeof AtomicWrite;
 	const stem = recoveryFileStem(dbPath);
 	const sourcePath = canonicalSqlitePath(dbPath);
 	const backupDirectory = `${stem}.corrupt-${Date.now()}-${crypto.randomUUID()}`;
@@ -481,7 +485,7 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 	let backupPath: string | null;
 	try {
 		try {
-			const { withFileLockSync } = require("./file-lock") as typeof import("./file-lock");
+			const { withFileLockSync } = require("./file-lock") as typeof FileLock;
 			backupPath = withFileLockSync(`${recoveryFileStem(dbPath)}.recovery`, () => {
 				const currentIdentity = sqliteFileIdentity(dbPath);
 				if (failure.identity === undefined || currentIdentity === undefined) {
@@ -508,7 +512,7 @@ function recoverCorruptDatabase(dbPath: string, error: unknown, options: SqliteO
 		throw annotated;
 	}
 	if (backupPath === null) return;
-	const logger = require("./logger") as typeof import("./logger");
+	const logger = require("./logger") as typeof Logger;
 	logger.warn("SQLite database corrupt; preserved damaged store before recreating it", {
 		path: dbPath,
 		backupPath,

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Added
 
 - `PtySession.process` exposes the spawned child's stable process handle after a run starts.
@@ -21,6 +23,12 @@
 ### Added
 
 - `readCommitMemory()` returns the Windows system commit charge and limit and the calling process's private commit bytes in-process, and `undefined` on other platforms ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind whatever the line's length, ending at the block that brings the report to `rules.outputBytes`; a line under `rules.minLineBytes` that moves nothing is copied whole.
+- `skimSessionFile` reports a compaction with every value copied except the large members `rules.compactionMovedKeys` names and the large members of its server-side window record (`preserveData.remoteCompaction`), unless `rules.wholeEntryTypes` names `compaction`.
+- `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
+- `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
+- `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
+- `releaseFreeHeapPages()` returns the free pages of every glibc malloc arena to the kernel with `malloc_trim(0)` and reports whether any were released; four text searches over a 200,000-match tree leave 266 MiB resident in the worker threads' arenas, and the call drops that to 54 MiB in 11 ms, while on other platforms it returns false.
 
 ### Fixed
 
@@ -30,39 +38,11 @@
 - On Windows, embedded `fd` and `find` print and match forward-slash paths while filesystem actions still use the original paths ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Shell and PTY command output on Windows falls back from UTF-8 to the system ANSI code page (for example GBK on Chinese locales) instead of emitting replacement characters ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 6d628ff863415f75004f992733f33daeb29b6a2b).
 - On Windows, the parallel directory walk opens directories past `MAX_PATH` through the extended-length path form instead of reading them as empty, and it reports a directory it cannot open for any reason other than "gone" or "permission denied" as a walk error instead of dropping it ([#448](https://github.com/Wladefant/veyyon/issues/448)). A directory that fails to open with an error other than not-found, not-a-directory or permission-denied now fails the parallel walk instead of being silently skipped, matching the serial walk.
-
 - Fixed the edit tool's block-range detection across comment-only lines and trailing comments in indentation-based and end-delimited languages ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-
 - On Windows, the embedded `tail` builtin no longer exits the host process when its output pipe is closed (a timed-out or cancelled `cmd | tail -N` pipeline), which silently killed Veyyon and every lane ([#73](https://github.com/Wladefant/veyyon/issues/73)). A workspace `clippy.toml` now rejects `std::process::exit`, `std::process::abort` and their `libc` equivalents in every crate, including the out-of-workspace shell crates `brush-core` and `brush-builtins` through `check:rs` and `lint:rs`, so no builtin can reintroduce it.
 - The launch-time prune of old addon caches routes non-removable directories through `attachNativeNoticeSink` instead of stderr.
 - On Unix, the embedded shell's `kill` refuses any real signal that would reach the host process, one of its threads, an ancestor, or a process group holding one of them (signal 0 still probes), and cancelling a command no longer SIGKILLs a PID that is no longer its child ([#106](https://github.com/Wladefant/veyyon/issues/106)).
 - On Unix, the embedded shell's `suspend` fails with the same refusal instead of stopping the host process ([#106](https://github.com/Wladefant/veyyon/issues/106)).
-
-### Changed
-
-- Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
-
-- Merged upstream v1.5.0.
-### Breaking Changes
-
-- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
-- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
-
-### Added
-
-- `skimSessionFile(fd, start, rules)` reads a session JSONL file on the thread pool and reports each line as the record a load keeps for a cold entry, with each moved value replaced by an empty value of its kind whatever the line's length, ending at the block that brings the report to `rules.outputBytes`; a line under `rules.minLineBytes` that moves nothing is copied whole.
-- `skimSessionFile` reports a compaction with every value copied except the large members `rules.compactionMovedKeys` names and the large members of its server-side window record (`preserveData.remoteCompaction`), unless `rules.wholeEntryTypes` names `compaction`.
-
-### Changed
-
-- Loading the addon fixes glibc's mmap threshold at 1 MiB unless `MALLOC_MMAP_THRESHOLD_` or `glibc.malloc.mmap_threshold` sets one, so a freed block of 1 MiB or more returns to the kernel at once and resuming a 148 MB session peaks at 250 MB resident instead of 271 MB and settles at 178 MB instead of 185 MB.
-- `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
-- `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
-- `fuzzyFind`, `glob` and AST file discovery share one walk per root and walk options while it runs instead of each starting its own, so the three lookups `@` completion issues while `@zqx` is typed over a 612,000-entry tree peak at 86 MB instead of 254 MB and finish in 500 ms instead of 630 ms.
-- `grep` given `timeoutMs` returns the matches it found when the limit passes, with `timedOut` set on its result, instead of failing with "Aborted: Timeout".
-
-### Fixed
-
 - A compiled binary reuses the addon it extracted into `natives/<version>/` only when the `.stamp` file beside it records that build's `sha256` and the file's inode and modification time, so a rebuild of the same version whose addon has the same size loads its own addon instead of the previous build's, and a same-size damaged file there is extracted again instead of failing every launch with "Failed to load veyyon_natives native addon".
 - `gen:native` writes the embedded addon archives and metadata module through `node:fs`, so it waits for a lease on an archive to break instead of failing with `EAGAIN` when an NFS client that built the addon still holds the file.
 - `astGrep` and `astEdit` parse a PHP file under the full PHP grammar, so a file that closes `?>` and continues as HTML is searched and rewritten instead of reported as a parse error and skipped; `astMatch` still reads its source as PHP code without an opening tag.
@@ -73,23 +53,26 @@
 - A walk that began before `invalidateFsScanCache()` is neither cached nor shared after it, so a file written while a tree was being walked appears in the next lookup instead of after the TTL.
 - Block-boundary lookups and code summaries parse a PHP file that leaves PHP for HTML with `?>` instead of failing it as a syntax error, which cuts a 191KB plugin source from 767ms to 18ms and gives such a file tree-sitter block context and a structural summary.
 
-## [1.5.6] - 2026-10-13
-
-### Added
-
-- `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
-- `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
-- `releaseEmbeddedModulePages()` unmaps the clean resident pages of the running executable's `.bun` section on Linux and returns the bytes released; a later read faults the same bytes back in from the page cache, and on other platforms the call returns 0.
-- `releaseFreeHeapPages()` returns the free pages of every glibc malloc arena to the kernel with `malloc_trim(0)` and reports whether any were released; four text searches over a 200,000-match tree leave 266 MiB resident in the worker threads' arenas, and the call drops that to 54 MiB in 11 ms, while on other platforms it returns false.
-
 ### Changed
 
+- Workspace startup scans skip excluded build directories and retain a bounded set of entries and directory rules ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Merged upstream v1.5.0.
+- Loading the addon fixes glibc's mmap threshold at 1 MiB unless `MALLOC_MMAP_THRESHOLD_` or `glibc.malloc.mmap_threshold` sets one, so a freed block of 1 MiB or more returns to the kernel at once and resuming a 148 MB session peaks at 250 MB resident instead of 271 MB and settles at 178 MB instead of 185 MB.
+- `fuzzyFind` reads the scan cache in place and copies a path only while it ranks among the best `maxResults`, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 1.4 s for an empty query and in 67 ms instead of 104 ms for `zq`, and peaks at 85 MB instead of 380 MB.
+- `fuzzyFind` scores a name without copying it and rejects an ASCII name that lacks the query's characters in one byte scan, so a cached lookup over a 612,000-entry tree answers in 17 ms instead of 68 ms for `zq` and in 31 ms instead of 190 ms for `lib/zq`.
+- `fuzzyFind`, `glob` and AST file discovery share one walk per root and walk options while it runs instead of each starting its own, so the three lookups `@` completion issues while `@zqx` is typed over a 612,000-entry tree peak at 86 MB instead of 254 MB and finish in 500 ms instead of 630 ms.
+- `grep` given `timeoutMs` returns the matches it found when the limit passes, with `timedOut` set on its result, instead of failing with "Aborted: Timeout".
 - `highlightCode` and `CodeHighlighter` match grammar patterns with Oniguruma instead of fancy-regex, which cuts the highlighting time of a resumed session's transcript by 59% with the same colours, and every Oniguruma match and search in the addon, including the `find` builtin's `-name` and `-regex`, stops after 1,000,000 retries instead of Oniguruma's defaults of 10,000,000 per match and no limit per search.
 - The first `highlightCode`, `CodeHighlighter`, `supportsLanguage` or `getSupportedLanguages` call in a process deserializes a syntax set the addon's build script linked instead of linking 78 syntaxes at run time, which cuts that call from 81 ms to under 1 ms.
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
 - `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth` and `extractSegments` return a result whose characters all fit in Latin-1 as a one-byte string instead of a two-byte one, which moves 2.9M characters of a rendered 13,470-entry transcript to one byte each and cuts the heap the render holds from 47.1 MiB to 44.4 MiB.
 - The addon runs its async exports on a Tokio runtime of at most four scheduler workers on every platform instead of napi-rs's default of one per CPU, which cuts an idle `vey` on a 32-thread host from 54 threads to 26 and the anonymous memory the addon's load and first async call add from 3.6 MiB to 3.1 MiB.
 - The first launch of a version inflates the embedded addon archive into one buffer sized from the addon metadata instead of 16 KiB chunks joined by a copy, which cuts that launch on linux-x64 from 575 ms to 485 ms to a ready status line and its peak resident memory from 449 MiB to 305 MiB (median of seven).
+
+### Breaking Changes
+
+- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
+- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
 
 ## [1.5.5] - 2026-09-25
 

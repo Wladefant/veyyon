@@ -664,6 +664,10 @@ export const TOOLS_SETTINGS = {
 	},
 
 	// Tool Discovery
+	"tools.maxDiscoveredTools": {
+		type: "number",
+		default: 40,
+	},
 	"tools.discoveryMode": {
 		type: "enum",
 		values: ["auto", "off", "mcp-only", "all"] as const,

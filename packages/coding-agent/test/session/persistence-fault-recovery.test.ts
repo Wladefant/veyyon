@@ -152,9 +152,25 @@ class FlakyFileStorage extends FileSessionStorage {
 	atomicWrites = 0;
 	syncWrites = 0;
 
-	writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
+	#beforeAtomicWrite: (() => Promise<void>) | undefined;
+
+	/** Control I/O completion without timers so a row can distinguish a retry from a flush. */
+	holdNextAtomicWrite(): { started: Promise<void>; release: () => void } {
+		const started = Promise.withResolvers<void>();
+		const completion = Promise.withResolvers<void>();
+		this.#beforeAtomicWrite = () => {
+			started.resolve();
+			return completion.promise;
+		};
+		return { started: started.promise, release: () => completion.resolve() };
+	}
+
+	async writeTextAtomic(path: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
 		this.atomicWrites += 1;
-		if (this.failure) return Promise.reject(this.#fault());
+		const beforeWrite = this.#beforeAtomicWrite;
+		this.#beforeAtomicWrite = undefined;
+		if (beforeWrite) await beforeWrite();
+		if (this.failure) throw this.#fault();
 		return super.writeTextAtomic(path, content, options);
 	}
 
@@ -477,6 +493,7 @@ describe("a persistence fault does not end the transcript", () => {
 		await manager.flush().catch(() => undefined);
 		const atomicBefore = storage.atomicWrites;
 		const syncBefore = storage.syncWrites;
+		const pendingWrite = storage.holdNextAtomicWrite();
 
 		for (let i = 0; i < 20; i++) manager.appendMessage({ role: "user", content: `burst-${i}`, timestamp: 101 + i });
 		// Every append returned without writing the transcript: no whole-file publish ran
@@ -484,9 +501,17 @@ describe("a persistence fault does not end the transcript", () => {
 		expect(storage.syncWrites).toBe(syncBefore);
 		expect(storage.atomicWrites).toBe(atomicBefore);
 
-		await manager.flush().catch(() => undefined);
-		// The first append started the retry and the other nineteen joined it.
+		// Wait for the retry itself, not flush(): a durability request can queue its
+		// own publish while the retry is pending. The old exact-one assertion counted
+		// both operations and failed with two writes on the runner.
+		await pendingWrite.started;
 		expect(storage.atomicWrites - atomicBefore).toBe(1);
+		const flushing = manager.flush().catch(() => undefined);
+		pendingWrite.release();
+		await flushing;
+		// With the retry held at the I/O boundary, flush deterministically sees the
+		// dirty file and takes one additional attempt. Neither count grows with the burst.
+		expect(storage.atomicWrites - atomicBefore).toBe(2);
 		expect(storage.syncWrites).toBe(syncBefore);
 
 		// The burst is not lost to the bound: the next healthy attempt writes all of it.

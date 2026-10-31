@@ -4,11 +4,15 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-28
+
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
+- Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
 
 ## [1.5.6] - 2026-10-10
+
 ### Added
 
 - `@veyyon/hashline` exports `unquotePath`, which strips one matching pair of surrounding quotes from a path; the section-header parser uses it instead of a private copy.
@@ -23,15 +27,12 @@
 - `Patcher` records the version an edit wrote with every line displayed when the store holds neither the pre-edit text nor the tagged read, and carries the tagged read's displayed and clipped lines that an outside change left in place when it recovers an edit onto a changed file, so a later partial read under the new tag no longer narrows that version to the read's range.
 - `Patcher` merges the displayed and clipped lines of every other retained version of a path that the change between the two left at the same line, enumerated through the new `SnapshotStore.versions` and paired by a `LineMap` under its new `diffBudget` bound, before refusing an anchor, so an edit under the tag of a partial read of a file changed since an earlier read is no longer rejected on a line that read displayed.
 
-## [1.5.6] - 2026-10-13
-
 ### Changed
 
 - The edit prompt states the same line, block, and Markdown-section boundaries in fewer words and removes redundant examples.
 - Bare `- ` bullet body rows are now auto-accepted as literal content with a warning when the hunk is unambiguously a Markdown bullet list (every `-` row bullet-shaped and no unified-diff `+new` counterpart rows) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 03e6564c05626854890e9067b5ffeae2c952718e).
 - Two class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - Patch recovery evaluates the `diff` package when it first maps an edit from a stale snapshot onto the current file instead of when the module loads; behavior is unchanged.
-- Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
 - File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 
 ## [1.5.0] - 2026-09-18
@@ -498,4 +499,3 @@ All notable changes to this package will be documented in this file.
 - Fixed repeated patch application mutating cached `after_anchor` edits between target snapshots
 - Fixed multi-section patching to preflight write policies and reject duplicate canonical targets before any section is committed
 - Fixed mixed line-ending restoration to preserve the first newline style instead of rewriting ties to LF
-

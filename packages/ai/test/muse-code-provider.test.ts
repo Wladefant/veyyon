@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import { AuthStorage } from "../src/auth-storage";
+import { SqliteAuthCredentialStore } from "../src/auth-storage-sqlite";
 import { getProviderDefinition } from "../src/registry/registry";
 
 const encodedMuseCredential = JSON.stringify({

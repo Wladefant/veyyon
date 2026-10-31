@@ -18,7 +18,7 @@
  */
 
 import * as path from "node:path";
-import type { AgentTool } from "@veyyon/agent-core";
+import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import { countToolsForAutoDiscovery, type EffectiveToolDiscoveryMode } from "../../discovery/mode";
 import {
 	buildDiscoverableToolSearchIndex,
@@ -38,6 +38,10 @@ export interface ToolDiscoveryHost {
 	activeToolNames(): string[];
 	/** `tools.discoveryMode` resolved for a registry of `toolCount` tools. */
 	discoveryModeFor(toolCount: number): EffectiveToolDiscoveryMode;
+	/** The maximum number of discovered tools allowed to remain active at once before LRU eviction. */
+	maxDiscoveredTools?(): number;
+	/** Recent session messages, used to derive tool recency for LRU eviction. */
+	sessionMessages?(): readonly AgentMessage[];
 }
 
 /** The session configuration discovery starts from. */
@@ -52,12 +56,53 @@ export interface ToolDiscoveryConfig {
 	defaultSelectedMCPServerNames?: Iterable<string>;
 	/** MCP tools a fresh session selects. */
 	defaultSelectedMCPToolNames?: Iterable<string>;
+	/** Maximum number of search-activated tools before LRU eviction (default 40). */
+	maxDiscoveredTools?: number;
+	/** Tool names that are protected from eviction or pruning. */
+	protectedToolNames?: Iterable<string>;
 }
 
-/** An MCP activation: the names it activated and the full active list that carries them. */
-export interface MCPActivation {
-	activated: string[];
-	nextActive: string[];
+/** A discovery activation plan with LRU eviction when exceeding maxDiscoveredTools. */
+export interface DiscoveryActivationPlan {
+	readonly activated: string[];
+	readonly evicted: string[];
+	readonly nextActive: string[];
+	readonly changed: boolean;
+}
+
+/** A discovery compaction pruning plan that drops unused search-activated tools. */
+export interface DiscoveryPrunePlan {
+	readonly dropped: string[];
+	readonly nextActive: string[];
+	readonly changed: boolean;
+}
+
+/**
+ * Extract the last message index for each tool call found in `messages`.
+ * Inspects assistant tool calls and toolResult messages.
+ */
+export function extractToolLastCallIndices(messages: readonly AgentMessage[]): Map<string, number> {
+	const lastCalls = new Map<string, number>();
+	for (let i = 0; i < messages.length; i++) {
+		const message = messages[i];
+		if (!message) continue;
+		if (message.role === "assistant" && Array.isArray(message.content)) {
+			for (const block of message.content) {
+				if (block && typeof block === "object" && "type" in block && block.type === "toolCall" && "name" in block) {
+					const name = block.name;
+					if (typeof name === "string" && name.length > 0) {
+						lastCalls.set(name, i);
+					}
+				}
+			}
+		} else if (message.role === "toolResult" && "toolName" in message) {
+			const toolName = message.toolName;
+			if (typeof toolName === "string" && toolName.length > 0) {
+				lastCalls.set(toolName, i);
+			}
+		}
+	}
+	return lastCalls;
 }
 
 /** Whether two tool-name lists hold the same names in the same order. */
@@ -74,21 +119,73 @@ export class ToolDiscovery {
 	readonly #builtIn: Set<string>;
 	readonly #defaultMCPServers: ReadonlySet<string>;
 	readonly #defaultMCPTools: ReadonlySet<string>;
+	readonly #protected: Set<string>;
+	readonly #configMaxDiscovered?: number;
 	/** The configured default MCP selection each session file was opened with, by resolved path. */
 	readonly #sessionDefaults = new Map<string, string[]>();
+	readonly #searchActivated = new Map<string, number>();
+	#activationSeq = 0;
 	#searchIndex: DiscoverableToolSearchIndex | null = null;
+	/** Restored selections over the cap that must leave the already-loaded agent schemas. */
+	readonly restoredCapDrops: ReadonlySet<string>;
 
 	constructor(host: ToolDiscoveryHost, config: ToolDiscoveryConfig) {
 		this.#host = host;
 		this.#mcpEnabled = config.mcpDiscoveryEnabled ?? false;
 		this.#builtIn = new Set(config.builtInToolNames ?? []);
-		this.#selectedMCP = new Set(config.initialSelectedMCPToolNames ?? []);
 		this.#defaultMCPServers = new Set(config.defaultSelectedMCPServerNames ?? []);
 		this.#defaultMCPTools = new Set(config.defaultSelectedMCPToolNames ?? []);
+		this.#protected = new Set(config.protectedToolNames ?? []);
+		this.#configMaxDiscovered = config.maxDiscoveredTools;
+
 		this.reindexMCPTools();
+
+		const initialSelected = Array.from(config.initialSelectedMCPToolNames ?? []);
+		this.#selectedMCP = new Set(this.selectableMCP(initialSelected.filter(isMCPToolName)));
+
+		for (const name of initialSelected) {
+			if (!isMCPToolName(name) && this.#host.registry.has(name)) {
+				this.#selectedLocal.add(name);
+			}
+		}
+
+		// Restore the combined selection in its persisted activation order, using retained
+		// call recency when available. This lets a reduced cap retain the most recently used tools.
+		const restoredCallIndices = extractToolLastCallIndices(this.#host.sessionMessages?.() ?? []);
+		const searchCandidates = initialSelected.filter(name => {
+			if (this.isInherentlyProtected(name)) return false;
+			return this.#selectedMCP.has(name) || this.#selectedLocal.has(name);
+		});
+		searchCandidates.sort((a, b) => {
+			const callA = restoredCallIndices.get(a);
+			const callB = restoredCallIndices.get(b);
+			if (callA !== undefined && callB !== undefined && callA !== callB) return callA - callB;
+			if (callA !== undefined && callB === undefined) return 1;
+			if (callA === undefined && callB !== undefined) return -1;
+			return initialSelected.indexOf(a) - initialSelected.indexOf(b);
+		});
+
+		// Bound restored search-activated selections to maxDiscoveredTools, keeping the most recent.
+		const cap = this.maxDiscoveredTools;
+		const keptSearch =
+			searchCandidates.length > cap ? searchCandidates.slice(searchCandidates.length - cap) : searchCandidates;
+		const droppedSearch =
+			searchCandidates.length > cap ? new Set(searchCandidates.slice(0, searchCandidates.length - cap)) : null;
+		this.restoredCapDrops = droppedSearch ?? new Set();
+
+		if (droppedSearch) {
+			for (const name of droppedSearch) {
+				this.#selectedMCP.delete(name);
+				this.#selectedLocal.delete(name);
+			}
+		}
+
+		for (const name of keptSearch) {
+			this.#searchActivated.set(name, ++this.#activationSeq);
+		}
+
 		this.pruneSelectedMCP();
 	}
-
 	/** Whether MCP tools are found through discovery. */
 	get mcpEnabled(): boolean {
 		return this.#mcpEnabled;
@@ -178,12 +275,11 @@ export class ToolDiscovery {
 	}
 
 	/**
-	 * The MCP selection to persist after an activation, or `undefined` when discovery is off or the
-	 * selection equals `previous`.
+	 * The combined selected-tool order to persist, or `undefined` when it equals `previous`.
 	 */
 	selectedMCPChangedFrom(previous: readonly string[]): string[] | undefined {
 		if (!this.#mcpEnabled) return undefined;
-		const next = this.selectedMCP();
+		const next = this.selectedDiscovered();
 		return sameToolNames(previous, next) ? undefined : next;
 	}
 
@@ -193,45 +289,255 @@ export class ToolDiscovery {
 		return this.#host.activeToolNames().filter(name => !isMCPToolName(name) && registry.has(name));
 	}
 
-	/**
-	 * What activating the discoverable MCP tools among `toolNames` activates, or `undefined` when it
-	 * activates none. The selection itself follows the active list once the session applies it.
-	 */
-	planMCPActivation(toolNames: readonly string[]): MCPActivation | undefined {
-		const registry = this.#host.registry;
-		const nextSelected = new Set(this.#selectedMCP);
-		const activated = new Set<string>();
-		for (const name of toolNames) {
-			if (!isMCPToolName(name) || !this.#mcpTools.has(name) || !registry.has(name)) continue;
-			nextSelected.add(name);
-			activated.add(name);
+	/** The maximum number of search-activated tools allowed before LRU eviction. */
+	get maxDiscoveredTools(): number {
+		const hostCap = this.#host.maxDiscoveredTools?.();
+		if (typeof hostCap === "number" && Number.isFinite(hostCap) && hostCap > 0) {
+			return hostCap;
 		}
-		if (activated.size === 0) return undefined;
+		if (
+			typeof this.#configMaxDiscovered === "number" &&
+			Number.isFinite(this.#configMaxDiscovered) &&
+			this.#configMaxDiscovered > 0
+		) {
+			return this.#configMaxDiscovered;
+		}
+		return 40;
+	}
+
+	/** Whether `name` is inherently protected by defaults or configuration. */
+	isInherentlyProtected(name: string): boolean {
+		if (this.#protected.has(name)) return true;
+		if (this.#defaultMCPTools.has(name)) return true;
+		if (this.configuredDefaultMCP().includes(name)) return true;
+		const tool = this.#host.registry.get(name);
+		if (this.#builtIn.has(name) && tool?.loadMode !== "discoverable") return true;
+		return false;
+	}
+
+	/** Whether `name` is a protected default tool that must never evict. */
+	isProtected(name: string): boolean {
+		if (this.isInherentlyProtected(name)) return true;
+		if (this.#searchActivated.has(name)) return false;
+		return this.#host.activeToolNames().includes(name);
+	}
+
+	/** The currently active tools that were activated through search (and thus eligible for cap eviction or compaction pruning). */
+	searchActivatedTools(): string[] {
+		const active = new Set(this.#host.activeToolNames());
+		return Array.from(this.#searchActivated.keys()).filter(name => active.has(name));
+	}
+
+	/**
+	 * Plan the activation of discoverable tools (both MCP and local), enforcing the activation cap
+	 * and evicting LRU search tools by last tool call else activation order.
+	 */
+	planActivation(
+		toolNames: readonly string[],
+		options?: { messages?: readonly AgentMessage[] },
+	): DiscoveryActivationPlan {
+		const registry = this.#host.registry;
+		const active = new Set(this.#host.activeToolNames());
+		const toActivate: string[] = [];
+		const seen = new Set<string>();
+
+		for (const name of toolNames) {
+			if (seen.has(name) || !registry.has(name) || active.has(name)) continue;
+			if (isMCPToolName(name) && !this.#mcpTools.has(name)) continue;
+			seen.add(name);
+			toActivate.push(name);
+		}
+
+		if (toActivate.length === 0) {
+			return {
+				activated: [],
+				evicted: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
+		}
+
+		const messages = options?.messages ?? this.#host.sessionMessages?.() ?? [];
+		const lastCalls = extractToolLastCallIndices(messages);
+		const currentSearchActive = this.searchActivatedTools();
+		const cap = this.maxDiscoveredTools;
+
+		// Sort existing search-activated tools by LRU eviction priority (first to evict at index 0)
+		const existingLRU = [...currentSearchActive].sort((a, b) => {
+			const hasA = lastCalls.has(a);
+			const hasB = lastCalls.has(b);
+			if (!hasA && !hasB) {
+				return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+			}
+			if (!hasA && hasB) return -1;
+			if (hasA && !hasB) return 1;
+			const callA = lastCalls.get(a)!;
+			const callB = lastCalls.get(b)!;
+			if (callA !== callB) return callA - callB;
+			return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+		});
+
+		// Track incoming order for deterministic tie-breaking among incoming tools
+		const incomingOrder = new Map(toActivate.map((name, idx) => [name, idx]));
+		const compareIncoming = (a: string, b: string): number => {
+			const hasA = lastCalls.has(a);
+			const hasB = lastCalls.has(b);
+			if (!hasA && !hasB) {
+				return (incomingOrder.get(a) ?? 0) - (incomingOrder.get(b) ?? 0);
+			}
+			if (!hasA && hasB) return -1;
+			if (hasA && !hasB) return 1;
+			const callA = lastCalls.get(a)!;
+			const callB = lastCalls.get(b)!;
+			if (callA !== callB) return callA - callB;
+			return (incomingOrder.get(a) ?? 0) - (incomingOrder.get(b) ?? 0);
+		};
+
+		const remainingExisting = [...existingLRU];
+		const activeIncoming: string[] = [];
+		const evictedExisting: string[] = [];
+		const finalProtected: string[] = [];
+
+		for (const candidate of toActivate) {
+			if (this.isInherentlyProtected(candidate)) {
+				finalProtected.push(candidate);
+				continue;
+			}
+
+			const currentActiveCount = remainingExisting.length + activeIncoming.length;
+			if (currentActiveCount < cap) {
+				activeIncoming.push(candidate);
+			} else if (remainingExisting.length > 0) {
+				// Evict LRU from existing search activated first
+				const evicted = remainingExisting.shift()!;
+				evictedExisting.push(evicted);
+				activeIncoming.push(candidate);
+			} else {
+				// Evict oldest never-called within incoming batch as needed
+				const pool = [...activeIncoming, candidate];
+				pool.sort(compareIncoming);
+				const toEvict = pool[0];
+				if (toEvict === candidate) {
+					continue;
+				}
+				const evictIdx = activeIncoming.indexOf(toEvict);
+				if (evictIdx !== -1) {
+					activeIncoming.splice(evictIdx, 1);
+				}
+				activeIncoming.push(candidate);
+			}
+		}
+
+		const activated = [...finalProtected, ...activeIncoming];
+		if (activated.length === 0 && evictedExisting.length === 0) {
+			return {
+				activated: [],
+				evicted: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
+		}
+
+		const evictedSet = new Set(evictedExisting);
+		const nextActive = this.#host
+			.activeToolNames()
+			.filter(name => !evictedSet.has(name))
+			.concat(activated);
+
 		return {
-			activated: Array.from(activated),
-			nextActive: this.activeNonMCP().concat(this.selectableMCP(nextSelected)),
+			activated,
+			evicted: evictedExisting,
+			nextActive,
+			changed: true,
+		};
+	}
+
+	applyActivation(plan: DiscoveryActivationPlan): void {
+		if (!plan.changed) return;
+		for (const name of plan.evicted) {
+			this.#searchActivated.delete(name);
+			this.#selectedLocal.delete(name);
+			this.#selectedMCP.delete(name);
+		}
+		for (const name of plan.activated) {
+			if (!this.isInherentlyProtected(name)) {
+				this.#searchActivated.set(name, ++this.#activationSeq);
+			}
+			if (isMCPToolName(name)) {
+				this.#selectedMCP.add(name);
+			} else {
+				this.#selectedLocal.add(name);
+			}
+		}
+		this.invalidate();
+	}
+
+	/** Enforce a reduced cap without waiting for the next discovery search. */
+	planCapReduction(): DiscoveryPrunePlan {
+		const active = this.searchActivatedTools();
+		const excess = active.length - this.maxDiscoveredTools;
+		if (excess <= 0) {
+			return { dropped: [], nextActive: this.#host.activeToolNames(), changed: false };
+		}
+		const calls = extractToolLastCallIndices(this.#host.sessionMessages?.() ?? []);
+		active.sort((a, b) => {
+			const lastA = calls.get(a);
+			const lastB = calls.get(b);
+			if (lastA === undefined && lastB !== undefined) return -1;
+			if (lastA !== undefined && lastB === undefined) return 1;
+			if (lastA !== undefined && lastB !== undefined && lastA !== lastB) return lastA - lastB;
+			return (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0);
+		});
+		const dropped = active.slice(0, excess);
+		const droppedSet = new Set(dropped);
+		return {
+			dropped,
+			nextActive: this.#host.activeToolNames().filter(name => !droppedSet.has(name)),
+			changed: true,
 		};
 	}
 
 	/**
-	 * Select the registered, inactive local tools among `toolNames` and return them, in order. The
-	 * session activates them.
+	 * Plan pruning of search-activated tools after compaction: drops any search-activated tool
+	 * not called in the retained `messages`. Protected and default tools are never pruned.
 	 */
-	selectLocal(toolNames: readonly string[]): string[] {
-		const registry = this.#host.registry;
-		const active = new Set(this.#host.activeToolNames());
-		const selected: string[] = [];
-		for (const name of toolNames) {
-			if (!registry.has(name) || active.has(name)) continue;
-			selected.push(name);
-			this.#selectedLocal.add(name);
+	planCompactionPrune(messages: readonly AgentMessage[]): DiscoveryPrunePlan {
+		const called = new Set(extractToolLastCallIndices(messages).keys());
+		const currentSearchActive = this.searchActivatedTools();
+		const toDrop = currentSearchActive.filter(name => !called.has(name));
+
+		if (toDrop.length === 0) {
+			return {
+				dropped: [],
+				nextActive: this.#host.activeToolNames(),
+				changed: false,
+			};
 		}
-		return selected;
+
+		const dropSet = new Set(toDrop);
+		const nextActive = this.#host.activeToolNames().filter(name => !dropSet.has(name));
+
+		return {
+			dropped: toDrop,
+			nextActive,
+			changed: true,
+		};
+	}
+
+	applyPrune(plan: DiscoveryPrunePlan): void {
+		if (!plan.changed) return;
+		for (const name of plan.dropped) {
+			this.#searchActivated.delete(name);
+			this.#selectedLocal.delete(name);
+			this.#selectedMCP.delete(name);
+		}
+		this.invalidate();
 	}
 
 	/** Remove `name` from the local selection, after its registry entry went away. */
 	deselect(name: string): void {
 		this.#selectedLocal.delete(name);
+		this.#searchActivated.delete(name);
 	}
 
 	/**
@@ -253,10 +559,15 @@ export class ToolDiscovery {
 		for (const name of this.#selectedLocal) {
 			if (!active.has(name) || isMCPToolName(name) || !registry.has(name)) this.#selectedLocal.delete(name);
 		}
+		for (const name of this.#searchActivated.keys()) {
+			if (!active.has(name)) {
+				this.#searchActivated.delete(name);
+			}
+		}
 		this.invalidate();
 	}
 
-	/** The selected tools: the MCP selection and the local selection that is still active. */
+	/** The selected tools in activation order: MCP and active local selections share one order. */
 	selectedDiscovered(): string[] {
 		const active = new Set(this.#host.activeToolNames());
 		const registry = this.#host.registry;
@@ -264,7 +575,11 @@ export class ToolDiscovery {
 		for (const name of this.#selectedLocal) {
 			if (active.has(name) && registry.has(name) && !isMCPToolName(name)) selected.add(name);
 		}
-		return Array.from(selected);
+		// Default and protected tools never enter #searchActivated; they precede every search-activated
+		// tool, matching the order the selection was persisted in. Array.sort is stable.
+		return Array.from(selected).sort(
+			(a, b) => (this.#searchActivated.get(a) ?? 0) - (this.#searchActivated.get(b) ?? 0),
+		);
 	}
 
 	/** Whether the registry entry for `name` came from a built-in factory. */

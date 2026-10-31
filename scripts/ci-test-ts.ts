@@ -383,6 +383,7 @@ export const workspaceTestPackages = [
 // silently ignores unmatched filters when at least one other filter matches, so a
 // typo'd path in this array is invisible rather than fatal. Check the file exists.)
 export const repoScriptTests = [
+	"scripts/ovh-process-group.test.ts",
 	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 	"scripts/settings-doc-coherence.test.ts",
@@ -593,6 +594,11 @@ export const repoScriptTests = [
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	// Shared tool budget and admission for the cloud worker. No package bucket
+	// reaches cloud/, so these three suites run only through this list.
+	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
+	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
+	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
 ];
 
 /**

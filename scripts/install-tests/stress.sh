@@ -402,7 +402,7 @@ case_ref_without_v() {
 	local tag
 	# Whichever release is newest, minus its `v`, so this does not rot when a new
 	# version ships.
-	tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/santhreal/veyyon/releases/latest 2>/dev/null)
+	tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/Wladefant/veyyon/releases/latest 2>/dev/null)
 	tag="${tag##*/releases/tag/}"
 	case "$tag" in v*) ;; *) echo "SKIP: could not read the latest tag from GitHub"; return 0 ;; esac
 	local bare="${tag#v}"

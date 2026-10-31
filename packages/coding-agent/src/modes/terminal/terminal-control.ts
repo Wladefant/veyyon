@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
+import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
 
@@ -67,7 +68,7 @@ type TerminalTranscriptText = {
 };
 
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
-export function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
+export async function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
 	let revision = "";
 	let entries: TerminalTranscriptText[] = [];
 	// Cursor into the journal: how many entries were converted and the id of the last one. A leaf
@@ -105,6 +106,24 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 		if (appended.length || !intact) entries = entries.concat(appended);
 		return entries;
 	};
+	const answers = new OperatorAnswerInbox(
+		() => mode.sessionManager,
+		async (text, behavior) => {
+			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
+			if (mode.session.isStreaming && behavior === "followUp") {
+				await mode.session.followUp(text);
+				return "queued";
+			}
+			// Steer also drains an idle session. Recovery must not depend on a REPL input callback.
+			await mode.session.steer(text);
+			return mode.session.isStreaming ? "steered" : "queued";
+		},
+		questionId => {
+			const queued = mode.session.getQueuedMessages();
+			return [...queued.steering, ...queued.followUp].some(text => operatorAnswerQuestionId(text) === questionId);
+		},
+	);
+	await answers.recover();
 	return serveTerminalControl({
 		identity: () => ({
 			sessionId: mode.sessionManager.getSessionId(),
@@ -114,6 +133,8 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 		history,
 		async deliver(text, behavior) {
 			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
+			const answer = await answers.accept(text, behavior);
+			if (answer !== undefined) return answer;
 			if (mode.session.isStreaming) {
 				if (behavior === "followUp") {
 					await mode.session.followUp(text);
@@ -139,6 +160,9 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 			let previous = history();
 			let seen = new Set(previous.map(entry => entry.entryId));
 			let active = mode.session.isStreaming;
+			if (active) {
+				listener({ kind: "streaming", sessionId, active: true });
+			}
 			// Observe persisted owner entries, never JSONL or uncommitted provider deltas.
 			// An unchanged journal costs only two identity reads, not a transcript copy or expansion.
 			const timer = setInterval(() => {

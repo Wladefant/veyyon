@@ -5,7 +5,14 @@ import * as AIError from "@veyyon/ai/error";
 import { isProviderRetryableError } from "@veyyon/ai/error";
 import { createMockModel, type MockContent, registerMockApi } from "@veyyon/ai/providers/mock";
 import { complete, completeSimple, stream, streamSimple } from "@veyyon/ai/stream";
-import type { Api, AssistantMessage, AssistantMessageEvent, CacheRequestRecord, Context, Model } from "@veyyon/ai/types";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEvent,
+	CacheRequestRecord,
+	Context,
+	Model,
+} from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import {
 	GEMINI_HEADER_RUNAWAY_THRESHOLD,
@@ -845,6 +852,7 @@ describe("thinking-loop cook fallback (result path)", () => {
 		try {
 			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
 			const record1: CacheRequestRecord = {
+				requestedTtl: "5m",
 				requestStartedAt: 1000,
 				model: "gemini-3.5-flash",
 				prefixHash: "hash1",
@@ -854,6 +862,7 @@ describe("thinking-loop cook fallback (result path)", () => {
 			const record2: CacheRequestRecord = {
 				requestStartedAt: 2000,
 				model: "gemini-3.5-flash",
+				requestedTtl: "5m",
 				prefixHash: "hash2",
 				cacheRead: 30,
 				cacheWrite: 40,

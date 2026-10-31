@@ -139,6 +139,22 @@ describe("a spawned agent's prompt carries the operator's AGENTS.md scopes", () 
 		AgentRegistry.resetGlobalForTests();
 	});
 
+	// Exercise the real task spawn boundary, not a template with manually supplied identity.
+	it("names the delegating parent beside the child's assignment", async () => {
+		const options = await spawnAndCapture(
+			createParentSession({ getAgentId: () => "A.B" }),
+			"tc-parent-identity",
+			"Child",
+		);
+		expect(options?.task).toContain("Your parent is A.B.");
+		expect(options?.task).toContain("Your parent delegated the assignment below to you");
+		expect(options?.task).toContain("Work here.");
+		expect(options?.task).toContain("Delegation does not establish exclusive write ownership");
+		expect(options?.task).toContain("If your parent or another lane has overlapping edits");
+		expect(options?.task).toContain("Do not stop merely because your parent is running");
+		expect(options?.task).not.toContain("not a duplicate owner of your slice");
+	});
+
 	/**
 	 * THE headline case. The subject is the rendered prompt, not the options bag,
 	 * because the whole section is gated on `contextFiles.length` inside the

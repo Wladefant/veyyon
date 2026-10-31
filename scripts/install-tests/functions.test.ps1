@@ -1776,20 +1776,22 @@ function Set-FakeRedirect {
     $Script:FakeLocation = $Location
     function Global:Get-RedirectLocation {
         param([string]$Url)
+        $Script:RequestedUrl = $Url
         return $Script:FakeLocation
     }
 }
-Set-FakeRedirect "https://github.com/santhreal/veyyon/releases/tag/v1.2.3"
-Check "the tag is taken from the redirect target" (Get-TagFromRedirect "x") "v1.2.3"
-Set-FakeRedirect "https://github.com/santhreal/veyyon/releases/tag/v0.0.1-rc1"
+Set-FakeRedirect "https://github.com/Wladefant/veyyon/releases/tag/v1.2.3"
+Check "the tag is taken from the redirect target" (Get-TagFromRedirect "https://github.com/$Repo/releases/latest") "v1.2.3"
+Check "the default release request targets the Veyyon fork" $Script:RequestedUrl "https://github.com/Wladefant/veyyon/releases/latest"
+Set-FakeRedirect "https://github.com/Wladefant/veyyon/releases/tag/v0.0.1-rc1"
 Check "a prerelease-shaped tag survives intact" (Get-TagFromRedirect "x") "v0.0.1-rc1"
 # A redirect that did not land on a tag page means GitHub answered with something
 # other than a release: an interstitial, a moved repo, a captive portal. Taking
 # the last path segment anyway is how an installer ends up trying to download a
 # binary for the version "latest".
-Set-FakeRedirect "https://github.com/santhreal/veyyon/releases"
+Set-FakeRedirect "https://github.com/Wladefant/veyyon/releases"
 Check "a redirect that is not a tag page yields nothing" ($null -eq (Get-TagFromRedirect "x")) "True"
-Set-FakeRedirect "https://github.com/login?return_to=%2Fsanthreal%2Fveyyon"
+Set-FakeRedirect "https://github.com/login?return_to=%2FWladefant%2Fveyyon"
 Check "a login interstitial yields nothing" ($null -eq (Get-TagFromRedirect "x")) "True"
 Set-FakeRedirect "http://wifi.example.net/portal"
 Check "a captive portal's landing page yields nothing" ($null -eq (Get-TagFromRedirect "x")) "True"
@@ -1798,7 +1800,7 @@ Check "no Location header at all yields nothing" ($null -eq (Get-TagFromRedirect
 # A tag page is not the same as a tag: `/releases/tag/` with nothing after it is
 # not a version, and installing "" would build a download URL with an empty path
 # segment that 404s much later, with a message about a missing asset.
-Set-FakeRedirect "https://github.com/santhreal/veyyon/releases/tag/"
+Set-FakeRedirect "https://github.com/Wladefant/veyyon/releases/tag/"
 Check "a tag page with no tag on it yields nothing" ($null -eq (Get-TagFromRedirect "x")) "True"
 # The transport reports an unreachable host and an error status the same way, as
 # no redirect, so both reach the caller as "could not resolve a release" rather

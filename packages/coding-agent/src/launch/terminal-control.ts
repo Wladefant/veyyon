@@ -1,9 +1,11 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
+import { TerminalReceipts } from "./terminal-receipts";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -40,17 +42,66 @@ const MAX_REMEMBERED_DELIVERIES = 256;
 const MAX_PENDING_DELIVERIES = 64;
 const NOT_READY_RETRIES = 20;
 const NOT_READY_RETRY_MS = 100;
+/** A history replay waits while the socket holds more than this unsent, so one slow reader never reaches the 1 MiB send limit. */
+const REPLAY_HIGH_WATER_BYTES = 256 * 1024;
+const REPLAY_DRAIN_POLL_MS = 5;
+/** A reader that drains nothing for this long is dropped rather than held open. */
+const REPLAY_STALL_TIMEOUT_MS = 30_000;
+const HISTORY_FRAME_MAX_BYTES = 512 * 1024;
+const HISTORY_FRAME_MAX_ENTRIES = 100;
 
 /**
  * The terminal has no input slot free right now, for example because the previous message reserved it
  * and its turn has not started streaming. A delivery on the chain retries this briefly.
  */
 export class TerminalNotReadyError extends Error {}
+class TerminalSessionChangedError extends Error {}
 
 type DeliveryState =
 	| { state: "pending" }
 	| { state: "delivered"; outcome: string }
 	| { state: "failed"; error: string };
+
+interface StreamingSnapshotEvent {
+	kind: "streaming";
+	sessionId: string;
+	active: boolean;
+}
+
+interface HistoryEntry {
+	entryId: string;
+	text: string;
+}
+
+interface AppendedEvent {
+	kind: "appended";
+	sessionId: string;
+	entries: HistoryEntry[];
+}
+
+function isAppendedEvent(event: unknown): event is AppendedEvent {
+	return (
+		typeof event === "object" &&
+		event !== null &&
+		"kind" in event &&
+		event.kind === "appended" &&
+		"entries" in event &&
+		Array.isArray(event.entries)
+	);
+}
+
+function isStreamingSnapshotEvent(event: unknown): event is StreamingSnapshotEvent {
+	return (
+		typeof event === "object" &&
+		event !== null &&
+		"kind" in event &&
+		event.kind === "streaming" &&
+		"sessionId" in event &&
+		typeof event.sessionId === "string" &&
+		"active" in event &&
+		typeof event.active === "boolean"
+	);
+}
 
 /** Return the platform-specific endpoint used by terminal-control servers. */
 export function terminalControlEndpoint(directory: string, nonce: string, platform = process.platform): string {
@@ -100,6 +151,7 @@ export async function serveTerminalControl(
 		clearInterval(refresh);
 		refresh = undefined;
 	};
+	let currentStreamingEvent: StreamingSnapshotEvent | undefined;
 	const startEvents = (): void => {
 		if (unsubscribe || closed) return;
 		unsubscribe = target.subscribe(event => {
@@ -107,12 +159,16 @@ export async function serveTerminalControl(
 				for (const socket of sockets) socket.destroy();
 				return;
 			}
-			for (const socket of subscribers) send(socket, { event });
+			if (isStreamingSnapshotEvent(event)) {
+				currentStreamingEvent = event;
+			}
+			for (const socket of subscribers) forward(socket, event);
 		});
 	};
 	const stopEvents = (): void => {
 		unsubscribe?.();
 		unsubscribe = undefined;
+		currentStreamingEvent = undefined;
 	};
 	const send = (socket: TerminalSocket, frame: unknown): void => {
 		if (socket.destroyed) return;
@@ -122,20 +178,118 @@ export async function serveTerminalControl(
 		}
 		socket.write(`${JSON.stringify(frame)}\n`);
 	};
-	// Acked deliveries, by the daemon's message id. The table lets a retry after a lost connection
-	// find the earlier request instead of enqueueing the message twice. Insertion order = age.
-	// Only settled records are evicted, so a pending id is never forgotten and re-enqueued.
+	// Watcher, live and replay sends share one bounded receipt ledger per socket.
+	const receipts = new WeakMap<TerminalSocket, TerminalReceipts>();
+	const receiptFor = (socket: TerminalSocket): TerminalReceipts => {
+		let receipt = receipts.get(socket);
+		if (!receipt) {
+			receipt = new TerminalReceipts();
+			receipts.set(socket, receipt);
+		}
+		return receipt;
+	};
+	const forward = (socket: TerminalSocket, event: unknown): void => {
+		if (!isAppendedEvent(event)) {
+			send(socket, { event });
+			return;
+		}
+		const receipt = receiptFor(socket);
+		receipt.retainHistory(target.history().map(entry => entry.entryId));
+		const entries = event.entries.filter(entry => !receipt.history.has(entry.entryId));
+		if (!entries.length) return;
+		for (const entry of entries) receipt.holdHistory(entry.entryId);
+		send(socket, { event: { ...event, entries } });
+	};
+	// Waits on the bytes the socket still holds, because the Windows pipe socket never reports a full buffer.
+	const waitForWritable = async (socket: TerminalSocket): Promise<void> => {
+		const deadline = Date.now() + REPLAY_STALL_TIMEOUT_MS;
+		while (!socket.destroyed && socket.writableLength > REPLAY_HIGH_WATER_BYTES) {
+			if (Date.now() > deadline) {
+				socket.destroy();
+				return;
+			}
+			await sleep(REPLAY_DRAIN_POLL_MS);
+		}
+	};
+	const chunkHistory = (entries: HistoryEntry[]): HistoryEntry[][] => {
+		const chunks: HistoryEntry[][] = [];
+		let chunk: HistoryEntry[] = [];
+		let chunkBytes = 0;
+		for (const entry of entries) {
+			const bytes = Buffer.byteLength(JSON.stringify(entry));
+			if (bytes > HISTORY_FRAME_MAX_BYTES) {
+				throw new Error(`History entry ${entry.entryId} exceeds ${HISTORY_FRAME_MAX_BYTES} byte frame limit`);
+			}
+			if (
+				chunk.length &&
+				(chunk.length >= HISTORY_FRAME_MAX_ENTRIES || chunkBytes + bytes > HISTORY_FRAME_MAX_BYTES)
+			) {
+				chunks.push(chunk);
+				chunk = [];
+				chunkBytes = 0;
+			}
+			chunk.push(entry);
+			chunkBytes += bytes;
+		}
+		if (chunk.length) chunks.push(chunk);
+		return chunks;
+	};
+	// Acked deliveries, by the daemon's message id, scoped to the session that accepted them. The table
+	// lets a retry after a lost connection find the earlier request instead of enqueueing the message
+	// twice. Insertion order = age. Only settled records are evicted, so a pending id is never forgotten
+	// and re-enqueued.
 	//
 	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
 	// A crash or close in that window loses it, although the daemon already holds the ack. The window
 	// is the time the terminal needs to reach the message on the chain.
-	const deliveries = new Map<string, { status: DeliveryState; watchers: Set<TerminalSocket> }>();
+	const deliveryKey = (sessionId: string, messageId: string): string => `${sessionId}\0${messageId}`;
+	const deliveries = new Map<
+		string,
+		{
+			sessionId: string;
+			messageId: string;
+			status: DeliveryState;
+			watchers: Set<TerminalSocket>;
+			promise?: Promise<string>;
+		}
+	>();
+	const evictOldDeliveries = (): void => {
+		for (const [oldestId, oldest] of deliveries) {
+			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
+			if (oldest.status.state !== "pending") deliveries.delete(oldestId);
+		}
+	};
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
-	const announceDelivery = (messageId: string, watchers: Iterable<TerminalSocket>, status: DeliveryState): void => {
-		for (const socket of watchers) {
-			send(socket, { event: { kind: "delivery", sessionId: publishedSessionId, messageId, ...status } });
+	const sendDelivery = (
+		socket: TerminalSocket,
+		record: { sessionId: string; messageId: string; status: DeliveryState },
+	): void => {
+		if (
+			socket.destroyed ||
+			!receiptFor(socket).holdDelivery(deliveryKey(record.sessionId, record.messageId), record.status)
+		)
+			return;
+		send(socket, {
+			event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status },
+		});
+	};
+	const announceDelivery = (record: {
+		sessionId: string;
+		messageId: string;
+		status: DeliveryState;
+		watchers: Set<TerminalSocket>;
+	}): void => {
+		for (const socket of record.watchers) {
+			sendDelivery(socket, record);
+		}
+		if (record.sessionId === publishedSessionId) {
+			for (const socket of subscribers) {
+				if (!record.watchers.has(socket)) {
+					sendDelivery(socket, record);
+				}
+			}
 		}
 	};
 	const runDelivery = (sessionId: string, text: string, mode: "auto" | "steer" | "followUp"): Promise<string> => {
@@ -147,7 +301,7 @@ export async function serveTerminalControl(
 			for (let attempt = 0; ; attempt++) {
 				// The session may have changed since the message was accepted. Never deliver it to another one.
 				if (closed || sessionId !== target.identity().sessionId) {
-					throw new Error("Terminal session detached or changed; message not delivered");
+					throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
 				}
 				try {
 					return await target.deliver(text, mode);
@@ -173,32 +327,52 @@ export async function serveTerminalControl(
 		messageId: string,
 		text: string,
 		mode: "auto" | "steer" | "followUp",
-	): { accepted: true; messageId: string; state: DeliveryState["state"] } => {
-		const known = deliveries.get(messageId);
+	): { accepted: true; messageId: string; state: DeliveryState["state"]; outcome?: string; error?: string } => {
+		const key = deliveryKey(sessionId, messageId);
+		const known = deliveries.get(key);
 		if (known) {
-			if (known.status.state === "pending") known.watchers.add(socket);
-			return { accepted: true, messageId, state: known.status.state };
+			if (known.status.state === "pending") {
+				known.watchers.add(socket);
+				return { accepted: true, messageId, state: "pending" };
+			}
+			sendDelivery(socket, known);
+			return {
+				accepted: true,
+				messageId,
+				state: known.status.state,
+				...(known.status.state === "delivered" ? { outcome: known.status.outcome } : { error: known.status.error }),
+			};
 		}
-		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
+		if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
 			throw new Error("Terminal busy: too many deliveries pending; retry later");
-		}
-		const record = { status: { state: "pending" } as DeliveryState, watchers: new Set([socket]) };
-		deliveries.set(messageId, record);
-		for (const [oldestId, oldest] of deliveries) {
-			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
-			if (oldest.status.state !== "pending") deliveries.delete(oldestId);
-		}
-		void runDelivery(sessionId, text, mode).then(
-			outcome => {
-				record.status = { state: "delivered", outcome };
-			},
-			error => {
-				record.status = { state: "failed", error: String(error) };
-			},
-		).then(() => {
-			announceDelivery(messageId, record.watchers, record.status);
-			record.watchers.clear();
-		});
+		const deliveryPromise = runDelivery(sessionId, text, mode);
+		const record = {
+			sessionId,
+			messageId,
+			status: { state: "pending" } as DeliveryState,
+			watchers: new Set([socket]),
+			promise: deliveryPromise,
+		};
+		deliveries.set(key, record);
+		evictOldDeliveries();
+		let retryable = false;
+		void deliveryPromise
+			.then(
+				outcome => {
+					record.status = { state: "delivered", outcome };
+				},
+				error => {
+					record.status = { state: "failed", error: String(error) };
+					if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
+						retryable = true;
+					}
+				},
+			)
+			.then(() => {
+				announceDelivery(record);
+				record.watchers.clear();
+				if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
+			});
 		return { accepted: true, messageId, state: "pending" };
 	};
 	const server = await createTerminalControlTransport(endpoint, socket => {
@@ -213,6 +387,10 @@ export async function serveTerminalControl(
 			clearTimeout(authDeadline);
 			sockets.delete(socket);
 			subscribers.delete(socket);
+			receipts.delete(socket);
+			for (const record of deliveries.values()) {
+				record.watchers.delete(socket);
+			}
 			if (!sockets.size) disarmRefresh();
 			if (!subscribers.size) stopEvents();
 		});
@@ -246,18 +424,87 @@ export async function serveTerminalControl(
 						}
 						let result: unknown;
 						switch (request.op) {
-							case "subscribe":
+							case "subscribe": {
+								const fullHistory = target.history();
+								const cursorIndex =
+									typeof request.cursor === "string" && request.cursor
+										? fullHistory.findIndex(entry => entry.entryId === request.cursor)
+										: -1;
+								if (typeof request.cursor === "string" && request.cursor && cursorIndex < 0) {
+									throw new Error("Unknown history cursor; reconnect without a cursor to reset history");
+								}
+								const receipt = receiptFor(socket);
+								receipt.retainHistory(fullHistory.map(entry => entry.entryId));
+								for (const entry of fullHistory.slice(-HISTORY_FRAME_ENTRIES))
+									receipt.holdHistory(entry.entryId);
+								let pending =
+									cursorIndex >= 0
+										? fullHistory.slice(cursorIndex + 1)
+										: fullHistory.slice(-HISTORY_FRAME_ENTRIES);
+								let replayCursor = fullHistory.at(-1)?.entryId;
+								// The socket joins the live feed only after replay, in the same tick as the last journal read, so
+								// a slow reader cannot be left with a failed subscribe that still streams, nor miss an entry that
+								// arrived while it drained.
+								for (let pass = 0; ; pass++) {
+									const chunks = chunkHistory(pending);
+									if (pass === 0 && !chunks.length) chunks.push([]);
+									if (!chunks.length) break;
+									for (const chunk of chunks) {
+										await waitForWritable(socket);
+										if (socket.destroyed) return;
+										send(socket, {
+											event: { kind: "history", sessionId: publishedSessionId, entries: chunk },
+										});
+									}
+									const latest = target.history();
+									const replayIndex =
+										replayCursor === undefined
+											? -1
+											: latest.findIndex(entry => entry.entryId === replayCursor);
+									// The receipt window bounds deduplication memory, not unread arrivals during a drain.
+									pending =
+										replayCursor === undefined
+											? latest
+											: replayIndex >= 0
+												? latest.slice(replayIndex + 1)
+												: latest
+														.slice(-HISTORY_FRAME_ENTRIES)
+														.filter(entry => !receipt.history.has(entry.entryId));
+									replayCursor = latest.at(-1)?.entryId;
+									receipt.retainHistory(latest.map(entry => entry.entryId));
+									for (const entry of pending) receipt.holdHistory(entry.entryId);
+								}
+								if (socket.destroyed) return;
+								if (
+									closed ||
+									request.sessionId !== publishedSessionId ||
+									request.sessionId !== target.identity().sessionId
+								) {
+									throw new Error("Terminal session detached or changed; rediscover its owner");
+								}
 								subscribers.add(socket);
+								const isNewListener = !unsubscribe;
 								startEvents();
-								send(socket, {
-									event: {
-										kind: "history",
-										sessionId: publishedSessionId,
-										entries: target.history().slice(-HISTORY_FRAME_ENTRIES),
-									},
-								});
+								if (
+									!isNewListener &&
+									currentStreamingEvent?.active &&
+									currentStreamingEvent.sessionId === publishedSessionId
+								) {
+									send(socket, { event: currentStreamingEvent });
+								}
+								for (const record of deliveries.values()) {
+									if (record.sessionId !== request.sessionId) continue;
+									if (record.status.state === "pending") {
+										record.watchers.add(socket);
+									} else {
+										await waitForWritable(socket);
+										if (socket.destroyed) return;
+										sendDelivery(socket, record);
+									}
+								}
 								result = true;
 								break;
+							}
 							case "deliver":
 								if (
 									typeof request.text !== "string" ||
@@ -273,13 +520,73 @@ export async function serveTerminalControl(
 										request.messageId.length > 128
 									)
 										throw new Error("Invalid delivery");
-									result = acceptDelivery(socket, request.sessionId, request.messageId, request.text, request.mode);
+									result = acceptDelivery(
+										socket,
+										request.sessionId,
+										request.messageId,
+										request.text,
+										request.mode,
+									);
+									break;
+								}
+								if (typeof request.messageId === "string" && request.messageId) {
+									if (request.messageId.length > 128) throw new Error("Invalid delivery");
+									const key = deliveryKey(request.sessionId, request.messageId);
+									const known = deliveries.get(key);
+									if (known) {
+										if (known.status.state === "delivered") {
+											result = known.status.outcome;
+											break;
+										}
+										if (known.status.state === "failed") throw new Error(known.status.error);
+										if (known.promise) {
+											result = await known.promise;
+											break;
+										}
+									}
+									if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
+										throw new Error("Terminal busy: too many deliveries pending; retry later");
+									const deliveryPromise = runDelivery(request.sessionId, request.text, request.mode);
+									const record = {
+										sessionId: request.sessionId,
+										messageId: request.messageId,
+										status: { state: "pending" } as DeliveryState,
+										watchers: new Set<TerminalSocket>(),
+										promise: deliveryPromise,
+									};
+									deliveries.set(key, record);
+									evictOldDeliveries();
+									let retryable = false;
+									void deliveryPromise
+										.then(
+											outcome => {
+												record.status = { state: "delivered", outcome };
+											},
+											error => {
+												record.status = { state: "failed", error: String(error) };
+												if (
+													error instanceof TerminalNotReadyError ||
+													error instanceof TerminalSessionChangedError
+												) {
+													retryable = true;
+												}
+											},
+										)
+										.then(() => {
+											announceDelivery(record);
+											record.watchers.clear();
+											if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
+										});
+									result = await deliveryPromise;
 									break;
 								}
 								result = await runDelivery(request.sessionId, request.text, request.mode);
 								break;
 							case "deliveryStatus": {
-								const known = typeof request.messageId === "string" ? deliveries.get(request.messageId) : undefined;
+								const known =
+									typeof request.messageId === "string"
+										? deliveries.get(deliveryKey(request.sessionId, request.messageId))
+										: undefined;
 								result = known ? known.status : { state: "unknown" };
 								break;
 							}
@@ -292,6 +599,7 @@ export async function serveTerminalControl(
 									if (peer !== socket) peer.destroy();
 								}
 								subscribers.clear();
+								receipts.delete(socket);
 								stopEvents();
 								for (const delivery of deliveries.values()) delivery.watchers.clear();
 								result = { rotated: true };
@@ -313,17 +621,23 @@ export async function serveTerminalControl(
 			}
 		});
 	});
-	const writeOwner = options.writeOwner ?? (async (destination: string, record: TerminalOwner): Promise<void> => {
-		await atomicWriteFileWith(destination, async temporary => {
-			await applyOwnerOnlyWindowsAcl(temporary);
-			await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
-		}, {
-			mode: 0o600,
-			// This credential dies with the process. No fallible flush may follow its atomic replacement.
-			fsync: false,
-			requireAtomicReplace: true,
+	const writeOwner =
+		options.writeOwner ??
+		(async (destination: string, record: TerminalOwner): Promise<void> => {
+			await atomicWriteFileWith(
+				destination,
+				async temporary => {
+					await applyOwnerOnlyWindowsAcl(temporary);
+					await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+				},
+				{
+					mode: 0o600,
+					// This credential dies with the process. No fallible flush may follow its atomic replacement.
+					fsync: false,
+					requireAtomicReplace: true,
+				},
+			);
 		});
-	});
 	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
 		const run = publication.then(async () => {
 			if (closed) throw new Error("Terminal control is closed");
@@ -349,7 +663,15 @@ export async function serveTerminalControl(
 				throw new Error("Terminal control is closed");
 			}
 			token = credential;
+			const previousSessionId = publishedSessionId;
 			publishedSessionId = identity.sessionId;
+			if (previousSessionId !== identity.sessionId) {
+				currentStreamingEvent = undefined;
+				for (const [key, delivery] of deliveries) {
+					if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending")
+						deliveries.delete(key);
+				}
+			}
 		});
 		publication = run.catch(() => {});
 		return run;

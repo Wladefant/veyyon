@@ -4,30 +4,18 @@
 
 ### Added
 
+- The web plugin exports a bounded public-fetch handler that validates destinations and takes caller identity only from the host authorize function ([Refs #629](https://github.com/Wladefant/veyyon/issues/629)).
+
+## [1.6.0] - 2026-10-28
+
+### Added
+
 - The DeepSeek Fetch client reads one page through `https://api.deepseek.com/v1/tools/fetch` and returns its title and Markdown body, using the DeepSeek API key the coding agent already stores.
 - The public search handler `createPublicSearchHandler` runs `POST` `{query}` through Brave Web Search for each identity its injected `authorize` dependency admits, requires the host's server-side auth, admission and Brave key dependencies, and is not mounted on a route yet; its in-memory per-user cap (5 a rolling minute, 500 a UTC month, 2,500,000 microusd a UTC month) resets on restart and is kept per instance.
 
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
-
-### Fixed
-
-- The web plugin exports `createPublicFetchHandler`, a Worker-compatible HTTP handler for public fetch. It takes the caller's identity only from an injected `authorize` function, refuses other methods and malformed URLs before any upstream call, and returns fixed error messages.
-
-## [1.5.6] - 2026-10-10
-### Removed
-
-- Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
-- Removed the `formatNumber` and `htmlToBasicMarkdown` re-exports from `scrapers/types`; import them from `@veyyon/utils/format` and `@veyyon/utils/html-markdown`.
-
-## [1.5.6] - 2026-10-13
-
-### Changed
-
-- Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
-- Firecrawl endpoint normalization strips trailing slashes through the shared `trimTrailingSlashes` helper; no behavior change.
-- The marketplace repository-link reader, key-value renderer and package-registry handler test missing values with optional chains; behavior is unchanged.
 - The page loader, the declarative and academic-paper engines, and the GitHub, Bluesky, YouTube, Twitter and Sourcegraph handlers are split into one function per step; behavior is unchanged.
 - The bioRxiv, Crossref, ORCID, PubMed, RFC and Semantic Scholar handlers are split into one function per step; behavior is unchanged.
 - The Reddit, Lobsters, Lemmy, Discourse, dev.to and Stack Exchange handlers are split into one function per step; behavior is unchanged.
@@ -57,6 +45,19 @@
 - The Read the Docs handler reports a converted page as `text/markdown`, instead of `text/html`, or `text/plain` after a failed raw-source fetch.
 - The Open Library handler looks up a 13-digit ISBN by all 13 digits, instead of its first 10, and accepts an ISBN-10 whose check digit is `X`.
 - The Wikidata handler renders a merged item as the item it redirects to, with a `Redirected from` line, instead of falling back to a generic fetch.
+
+## [1.5.6] - 2026-10-10
+
+### Removed
+
+- Removed the `stackoverflowDeclaration` alias; import `stackOverflowDeclaration`.
+- Removed the `formatNumber` and `htmlToBasicMarkdown` re-exports from `scrapers/types`; import them from `@veyyon/utils/format` and `@veyyon/utils/html-markdown`.
+
+### Changed
+
+- Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
+- Firecrawl endpoint normalization strips trailing slashes through the shared `trimTrailingSlashes` helper; no behavior change.
+- The marketplace repository-link reader, key-value renderer and package-registry handler test missing values with optional chains; behavior is unchanged.
 
 ## [1.5.4] - 2026-09-24
 

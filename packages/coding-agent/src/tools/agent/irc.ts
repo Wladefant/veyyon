@@ -14,16 +14,12 @@ import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
 import {
-	DEFAULT_DELIVERY_TTL_MS,
-	sendSessionNotice,
-	SessionNoticeCapabilityError,
-} from "../../launch/session-notices";
-import {
+	type BuildIdentity,
 	formatBuildIdentity,
 	getLoadedBuildIdentity,
 	readInstalledBuildIdentity,
-	type BuildIdentity,
 } from "../../launch/build-info";
+import { DEFAULT_DELIVERY_TTL_MS, SessionNoticeCapabilityError, sendSessionNotice } from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -66,6 +62,7 @@ interface IrcPeerInfo {
 	kind: string;
 	status: string;
 	parentId?: string;
+	ancestor?: boolean;
 	unread: number;
 	lastActivity: number;
 	activity?: string;
@@ -205,7 +202,11 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		} catch (error) {
 			if (error instanceof SessionNoticeCapabilityError) {
 				const installed = await this.noticeRuntime.readInstalledBuildIdentity();
-				return errorResult(formatSessionNoticeCapabilityError(error, installed), { op: "send", from: senderId, to });
+				return errorResult(formatSessionNoticeCapabilityError(error, installed), {
+					op: "send",
+					from: senderId,
+					to,
+				});
 			}
 			return errorResult(errorMessage(error), { op: "send", from: senderId, to });
 		}
@@ -452,7 +453,10 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	}
 }
 
-function formatSessionNoticeCapabilityError(error: SessionNoticeCapabilityError, installed: BuildIdentity | null): string {
+function formatSessionNoticeCapabilityError(
+	error: SessionNoticeCapabilityError,
+	installed: BuildIdentity | null,
+): string {
 	const { recipient, support } = error;
 	const loadedReceiver =
 		recipient.loadedVersion || recipient.loadedBuildSha
@@ -485,12 +489,19 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 	// pair of filters that restated the caller, advisor and scope rules a
 	// second time; two spellings of one rule is how the drift starts. Parked
 	// peers are listed because messaging one revives it, which is supported.
+	const ancestors = new Set<string>();
+	let parentId = registry.get(senderId)?.parentId;
+	while (parentId && parentId !== senderId && !ancestors.has(parentId)) {
+		ancestors.add(parentId);
+		parentId = registry.get(parentId)?.parentId;
+	}
 	const peers = registry.listAddressableBy(senderId).map(ref => ({
 		id: ref.id,
 		displayName: ref.displayName,
 		kind: ref.kind,
 		status: ref.status,
 		parentId: ref.parentId,
+		ancestor: ancestors.has(ref.id),
 		unread: bus.unreadCount(ref.id),
 		lastActivity: ref.lastActivity,
 		activity: ref.activity,
@@ -499,15 +510,28 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 	if (peers.length === 0) {
 		lines.push("No other agents.");
 	} else {
-		lines.push(`${peers.length} peer(s):`);
-		for (const peer of peers) {
-			const extras = [
-				peer.activity || undefined,
-				peer.unread > 0 ? `unread ${peer.unread}` : undefined,
-				peer.parentId ? `parent ${peer.parentId}` : undefined,
-				`active ${formatDuration(Date.now() - peer.lastActivity)} ago`,
-			].filter(Boolean);
-			lines.push(`- ${peer.id} [${peer.displayName} · ${peer.kind} · ${peer.status}] — ${extras.join(", ")}`);
+		const ancestorPeers = peers.filter(peer => peer.ancestor);
+		const otherPeers = peers.filter(peer => !peer.ancestor);
+		for (const [heading, group] of [
+			["Your ancestors (delegation context; verify write ownership):", ancestorPeers],
+			["Other lanes:", otherPeers],
+		] as const) {
+			if (group.length === 0) continue;
+			lines.push(heading);
+			if (group === ancestorPeers) {
+				lines.push(
+					"An ancestor may still have uncommitted edits. Confirm the assigned writer and paths before overlapping writes.",
+				);
+			}
+			for (const peer of group) {
+				const extras = [
+					peer.activity || undefined,
+					peer.unread > 0 ? `unread ${peer.unread}` : undefined,
+					peer.parentId ? `parent ${peer.parentId}` : undefined,
+					`active ${formatDuration(Date.now() - peer.lastActivity)} ago`,
+				].filter(Boolean);
+				lines.push(`- ${peer.id} [${peer.displayName} · ${peer.kind} · ${peer.status}] — ${extras.join(", ")}`);
+			}
 		}
 		if (peers.some(peer => peer.status === "parked")) {
 			lines.push("");
