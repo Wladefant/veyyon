@@ -1294,6 +1294,32 @@ describe("ACP agent", () => {
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
+	it("loads a stored session by ID when the client cwd has changed", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const loaded = await harness.agent.loadSession({
+			sessionId: stored.sessionId,
+			cwd: harness.cwdB,
+			mcpServers: [],
+		});
+
+		expectAcpStructure(zLoadSessionResponse, loaded);
+		expect(harness.sessions.at(-1)!.sessionManager.getCwd()).toBe(harness.cwdA);
+		expect(
+			harness.updates.some(
+				update =>
+					update.sessionId === stored.sessionId &&
+					update.update.sessionUpdate === "user_message_chunk",
+			),
+		).toBe(true);
+
+		harness.abortController.abort();
+	});
 
 	it("resumes a stored session without replaying it, and refuses a missing id or a foreign cwd", async () => {
 		const harness = await createHarness();
