@@ -328,6 +328,8 @@ export interface InteractiveModeContext {
 	updatePendingMessagesDisplay(): void;
 	/** Recompute the composer's contextual shortcut chips from current draft/busy/queue state and repaint. */
 	refreshComposerShortcuts(): void;
+	/** The composer's draft changed: goal mode re-arms a continuation the draft was holding once it is empty. */
+	noteComposerChanged(): void;
 	/**
 	 * The first real keystroke: remove the startup welcome card, and take the at-rest reading the
 	 * launch held once the frame that draws the edit is committed. Idempotent.

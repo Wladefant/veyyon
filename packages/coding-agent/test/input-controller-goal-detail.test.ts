@@ -91,6 +91,7 @@ function createContext(opts: { goalModeEnabled?: boolean; goalModePaused?: boole
 		// the composer refresh and the welcome dismissal whenever either was
 		// missing. The calls are unconditional now, so the stub supplies them.
 		refreshComposerShortcuts: vi.fn(),
+		noteComposerChanged: vi.fn(),
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
 

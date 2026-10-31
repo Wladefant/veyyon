@@ -2445,6 +2445,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#refreshComposerShortcuts();
 	}
 
+	noteComposerChanged(): void {
+		this.#goalMode.noteComposerChanged();
+	}
+
 	/** Remove the startup welcome card (and its spacers) — the first real
 	 *  keystroke ends the hero moment. Idempotent; the bottom anchor stays so
 	 *  the composer does not jump until a conversation turn scrolls in. The

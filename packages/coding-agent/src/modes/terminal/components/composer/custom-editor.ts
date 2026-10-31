@@ -453,16 +453,17 @@ export class CustomEditor extends Editor {
 	}
 
 	/** Clear the composer draft: optionally commit `historyText` to history, then
-	 *  reset the editor text and all pending draft-image state. The shared tail of
-	 *  every "message submitted" path; pass no argument for a plain discard. */
+	 *  reset all pending draft-image state and the editor text. The shared tail of
+	 *  every "message submitted" path; pass no argument for a plain discard. The
+	 *  text is cleared last, so its change notice reads an empty composer. */
 	clearDraft(historyText?: string): void {
 		if (historyText !== undefined) this.addToHistory(historyText);
 		if (this.#isNewerDraft()) return;
-		this.setText("");
 		this.imageLinks = undefined;
 		this.pendingImages = [];
 		this.pendingImageLinks = [];
 		this.#attachments = EMPTY_ATTACHMENTS;
+		this.setText("");
 	}
 
 	/** Attachments currently staged on the editor (combining explicit attachments and pending images). */

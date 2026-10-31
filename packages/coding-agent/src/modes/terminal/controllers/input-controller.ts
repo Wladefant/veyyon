@@ -93,6 +93,7 @@ export type InputControllerContext = TuiSlashCommandHostContext &
 		| "lastSigintTime"
 		| "loadingAnimation"
 		| "locallySubmittedUserSignatures"
+		| "noteComposerChanged"
 		| "onInputCallback"
 		| "openGoalDetail"
 		| "pauseLoop"
@@ -290,6 +291,7 @@ export class InputController {
 				this.ctx.updateEditorBorderColor();
 			}
 			this.ctx.refreshComposerShortcuts();
+			this.ctx.noteComposerChanged();
 			// The first real keystroke ends the hero moment (UI-10).
 			if (text.length > 0) this.ctx.dismissWelcome();
 		};

@@ -190,6 +190,8 @@ export class GoalModeController {
 	/** Goal mode stood down after a bounded run of failed or idle turns, and said so. */
 	#stoppedDriving = false;
 	#continuationBusyUntil: number | undefined;
+	/** The pending continuation was held only by a draft or images in the composer. */
+	#heldForComposer = false;
 	#unsubscribe?: () => void;
 
 	constructor(context: GoalModeControllerContext, host: GoalModeHost) {
@@ -216,6 +218,15 @@ export class GoalModeController {
 
 	/** A queued visible user turn was cancelled, so the goal may drive again. */
 	noteVisibleUserTurnCancelled(): void {
+		this.scheduleContinuation();
+	}
+
+	/**
+	 * The composer's draft changed. A continuation held because the composer had a draft is armed
+	 * again once the composer is empty, so a draft deleted without being sent does not strand the goal.
+	 */
+	noteComposerChanged(): void {
+		if (!this.#heldForComposer || this.#composerHold()) return;
 		this.scheduleContinuation();
 	}
 
@@ -551,14 +562,21 @@ export class GoalModeController {
 		// tick is still settling, which is what the delay is for.
 		if (phase === "fire" && this.#host.isAutoSubmitBlocked()) return "busy";
 		if (this.#host.hasPendingSubmission()) return "submission-pending";
-		if (this.#context.editor.getText().trim().length > 0) return "draft-in-composer";
-		if ((this.#context.editor.pendingImages?.length ?? 0) > 0) return "images-attached";
+		const composerHold = this.#composerHold();
+		if (composerHold) return composerHold;
 		const state = this.#context.session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return "goal-not-active";
 		return undefined;
 	}
 
-	#reportContinuationBlock(reason: GoalContinuationBlock, phase: "arm" | "fire"): void {
+	#composerHold(): "draft-in-composer" | "images-attached" | undefined {
+		if (this.#context.editor.getText().trim().length > 0) return "draft-in-composer";
+		if ((this.#context.editor.pendingImages?.length ?? 0) > 0) return "images-attached";
+		return undefined;
+	}
+
+	#holdContinuation(reason: GoalContinuationBlock, phase: "arm" | "fire"): void {
+		this.#heldForComposer = reason === "draft-in-composer" || reason === "images-attached";
 		if (GOAL_CONTINUATION_QUIET_BLOCKS.has(reason)) return;
 		logger.debug("Goal mode is not opening a continuation turn", {
 			reason,
@@ -571,12 +589,12 @@ export class GoalModeController {
 		this.#cancelContinuation();
 		const blocked = this.#continuationBlock("arm");
 		if (blocked) {
-			this.#reportContinuationBlock(blocked, "arm");
+			this.#holdContinuation(blocked, "arm");
 			return;
 		}
 		const prompt = this.#context.session.goalRuntime.buildContinuationPrompt(this.#idleTurns);
 		if (!prompt) {
-			this.#reportContinuationBlock("no-prompt", "arm");
+			this.#holdContinuation("no-prompt", "arm");
 			return;
 		}
 		this.#continuationTimer = setTimeout(() => {
@@ -589,7 +607,7 @@ export class GoalModeController {
 					return;
 				}
 				this.#continuationBusyUntil = undefined;
-				this.#reportContinuationBlock("busy", "fire");
+				this.#holdContinuation("busy", "fire");
 				this.#context.showWarning(
 					"Goal mode stopped waiting for the session to go idle. Send a message to resume it.",
 				);
@@ -597,7 +615,7 @@ export class GoalModeController {
 			}
 			this.#continuationBusyUntil = undefined;
 			if (blockedNow) {
-				this.#reportContinuationBlock(blockedNow, "fire");
+				this.#holdContinuation(blockedNow, "fire");
 				return;
 			}
 			const submit = this.#context.onInputCallback;
@@ -613,6 +631,7 @@ export class GoalModeController {
 	}
 
 	#cancelContinuation(): void {
+		this.#heldForComposer = false;
 		if (this.#continuationTimer) {
 			clearTimeout(this.#continuationTimer);
 			this.#continuationTimer = undefined;
