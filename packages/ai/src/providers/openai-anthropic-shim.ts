@@ -79,7 +79,7 @@ export function streamOpenAIAnthropicShim(
 								efforts: model.thinking.efforts,
 								requiresEffort: model.thinking.requiresEffort,
 							}
-						: { noEffortControl: true },
+						: { noEffortControl: true, requiresEffort: model.reasoningOptions?.requiresEffort },
 					input: model.input,
 					cost: model.cost,
 				} as ModelSpec<"anthropic-messages">);

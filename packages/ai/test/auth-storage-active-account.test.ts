@@ -8,7 +8,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries } from "../../utils/src/temp";
-import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import { AuthStorage } from "../src/auth-storage";
+import { SqliteAuthCredentialStore } from "../src/auth-storage-sqlite";
 import type { UsageProvider, UsageReport } from "../src/usage";
 
 const PROVIDER = "google-antigravity";
@@ -85,7 +86,7 @@ describe("AuthStorage active account and usage cache invalidation", () => {
 		await storage.fetchUsageReports({ baseUrlResolver });
 		expect(fetchCount).toBe(1);
 
-		await storage.invalidateUsageCache(PROVIDER, undefined, baseUrlResolver);
+		await storage.invalidateUsageCache(PROVIDER);
 		await storage.fetchUsageReports({ baseUrlResolver });
 		expect(fetchCount).toBe(2);
 	});
@@ -98,7 +99,7 @@ describe("AuthStorage active account and usage cache invalidation", () => {
 		await storage.fetchUsageReports({ baseUrlResolver });
 		expect(fetchCount).toBe(1);
 
-		await storage.invalidateUsageCache(undefined, undefined, baseUrlResolver);
+		await storage.invalidateUsageCache();
 		await storage.fetchUsageReports({ baseUrlResolver });
 		expect(fetchCount).toBe(2);
 	});

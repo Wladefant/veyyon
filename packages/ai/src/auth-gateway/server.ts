@@ -63,17 +63,21 @@ import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 /** A completion route: serves one `POST` path from request body to answer. */
 type CompletionHandler = (bootOpts: AuthGatewayBootOptions, req: Request, peer: string) => Promise<Response>;
 
-const COMPLETION_ROUTES: Record<string, CompletionHandler> = {
+const COMPLETION_ROUTES = {
 	"/v1/chat/completions": (bootOpts, req, peer) => serveFormatRequest(openaiChat, "openai-chat", bootOpts, req, peer),
 	"/v1/messages": (bootOpts, req, peer) =>
 		serveFormatRequest(anthropicMessages, "anthropic-messages", bootOpts, req, peer),
 	"/v1/responses": (bootOpts, req, peer) =>
 		serveFormatRequest(openaiResponses, "openai-responses", bootOpts, req, peer),
 	"/v1/pi/stream": servePiNativeRequest,
-};
+} satisfies Record<string, CompletionHandler>;
+
+export type AuthGatewayCompletionPath = keyof typeof COMPLETION_ROUTES;
 
 /** Every path a completion route answers `POST` on. */
-export const AUTH_GATEWAY_COMPLETION_PATHS: readonly string[] = Object.keys(COMPLETION_ROUTES);
+export const AUTH_GATEWAY_COMPLETION_PATHS: readonly AuthGatewayCompletionPath[] = Object.keys(
+	COMPLETION_ROUTES,
+) as AuthGatewayCompletionPath[];
 
 // (passthrough fast-path removed — it bypassed pi-ai provider logic, in
 // particular the Anthropic Claude-Code OAuth system-prompt prefix injection.
@@ -723,7 +727,7 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 				}
 
 				// All completion routes, including pi-native, use the shared exchange.
-				const completion = COMPLETION_ROUTES[pathname];
+				const completion = COMPLETION_ROUTES[pathname as AuthGatewayCompletionPath];
 				if (completion && req.method === "POST") {
 					return redactResponse(withCors(await completion(requestOpts, req, peer), req), secrets);
 				}

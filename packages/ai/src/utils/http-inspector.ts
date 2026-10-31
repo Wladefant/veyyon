@@ -3,7 +3,12 @@ import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
-import { type ProviderErrorBody, providerErrorEnvelopeMessage, readProviderErrorBody } from "../error/error-body";
+import {
+	MAX_PROVIDER_ERROR_BODY_BYTES,
+	type ProviderErrorBody,
+	providerErrorEnvelopeMessage,
+	readProviderErrorBody,
+} from "../error/error-body";
 import * as AIError from "../error/flags";
 import { ProviderResponseError } from "../error/provider";
 import { redactDiagnosticHeaders } from "./request-debug.js";
@@ -83,8 +88,9 @@ const MAX_QUOTED_TITLE_CHARS = 120;
  * `body` as an event stream, or a stream that fails with what the body is instead.
  *
  * A body labelled `text/event-stream` is returned as it is. Any other body is read on its first pull
- * up to its first non-blank byte. An event stream never opens with `<`, `{` or `[`, so a body that
- * does is an HTML page or a JSON document, which the endpoint returns on every attempt: decoded as
+ * up to its first non-blank byte, within the provider error-body byte ceiling. A prefix that exhausts
+ * that ceiling is cancelled and rejected rather than buffered indefinitely. An event stream never
+ * opens with `<`, `{` or `[`. Such a body is HTML or JSON, returned on every attempt: decoded as
  * an event stream it held no events, the turn failed as a truncated stream, and the truncated stream
  * was retried until the retry budget ran out. Such a body fails the stream with what it is and where
  * it came from; a mislabelled event stream is replayed from the bytes already read. The check runs
@@ -110,6 +116,7 @@ export function eventStreamBody(
 				}
 				checked = true;
 				const held: Uint8Array[] = [];
+				let heldBytes = 0;
 				const decoder = new TextDecoder();
 				let lead = "";
 				let ended = false;
@@ -119,8 +126,18 @@ export function eventStreamBody(
 						ended = true;
 						break;
 					}
+					if (value.byteLength === 0) continue;
+					const room = MAX_PROVIDER_ERROR_BODY_BYTES - heldBytes;
+					lead = decoder.decode(value.subarray(0, room), { stream: true }).trimStart();
+					if (lead.length === 0 && value.byteLength >= room) {
+						await reader.cancel().catch(() => {});
+						throw new ProviderResponseError(
+							`${response.status} response has no event-stream content within the first ${MAX_PROVIDER_ERROR_BODY_BYTES} bytes. Check the provider's baseUrl.`,
+							{ kind: "envelope" },
+						);
+					}
 					held.push(value);
-					lead = decoder.decode(value, { stream: true }).trimStart();
+					heldBytes += value.byteLength;
 				}
 				if (NON_EVENT_STREAM_LEAD.test(lead)) {
 					const read = await readProviderErrorBody({

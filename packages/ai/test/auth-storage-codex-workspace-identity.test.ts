@@ -11,13 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	type AuthCredential,
-	type AuthCredentialStore,
-	AuthStorage,
-	SqliteAuthCredentialStore,
-	type StoredAuthCredential,
-} from "@veyyon/ai/auth-storage";
+import type { AuthCredential, AuthCredentialStore, StoredAuthCredential } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import type { UsageReport } from "@veyyon/ai/usage";
 import * as codexUsage from "@veyyon/ai/usage/openai-codex";
 
@@ -138,7 +134,9 @@ function makeStore(rows: StoredAuthCredential[]): AuthCredentialStore {
 			const entry = cache.get(key);
 			return entry && entry.expiresAtSec * 1000 > Date.now() ? entry.value : null;
 		},
-		setCache: (key, value, expiresAtSec) => cache.set(key, { value, expiresAtSec }),
+		setCache: (key, value, expiresAtSec) => {
+			cache.set(key, { value, expiresAtSec });
+		},
 		cleanExpiredCache() {},
 	};
 }

@@ -653,11 +653,8 @@ export class ModelRegistry {
 				patch.maxTokens = effectiveMaxTokens;
 			}
 		}
-		// The upstream Model input contract does not include video modalities.
-		// Keep the existing input value rather than misrepresenting a video model.
 		if (
 			input !== undefined &&
-			!input.includes("video") &&
 			override?.input === undefined &&
 			customModel?.input === undefined &&
 			(current.input.length !== input.length || current.input.some((value, index) => value !== input[index]))

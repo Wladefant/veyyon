@@ -1784,6 +1784,7 @@ function createAnthropicCacheRequestRecord(
 		system?: unknown;
 		tools?: unknown;
 		messages?: unknown[];
+		cache_control?: unknown;
 	};
 	try {
 		parsed = JSON.parse(finalBody);
@@ -1799,7 +1800,7 @@ function createAnthropicCacheRequestRecord(
 	const prefixHash = nodeCrypto.createHash("sha256").update(JSON.stringify(prefixData)).digest("hex");
 
 	const ttls: ("5m" | "1h")[] = [];
-	if (isRecord(parsed) && isRecord(parsed.cache_control)) {
+	if (isRecord(parsed.cache_control)) {
 		ttls.push(parsed.cache_control.ttl === "1h" ? "1h" : "5m");
 	}
 	if (Array.isArray(parsed.tools)) {
@@ -3224,7 +3225,7 @@ const streamAnthropicOnce = (
 							currentAttemptRecord.requestId = streamError.request_id;
 						} else if (
 							streamError.headers instanceof Headers ||
-							(isRecord(streamError.headers) && typeof (streamError.headers as Headers).get === "function")
+							(isRecord(streamError.headers) && typeof streamError.headers.get === "function")
 						) {
 							const id =
 								(streamError.headers as Headers).get("request-id") ??
@@ -4037,6 +4038,9 @@ function buildAnthropicThinkingParams(
 	options?: AnthropicOptions,
 ): { thinking?: MessageCreateParamsStreaming["thinking"]; outputConfigEffort?: AnthropicOutputEffort } {
 	if (!model.reasoning) return {};
+	// An always-thinking endpoint with no effort control reasons as shipped. Keep its forced-tool
+	// guard, but send neither an off switch nor an invented thinking budget.
+	if (model.compat.requiresThinkingEnabled && model.reasoningOptions?.noEffortControl === true) return {};
 	if (options?.thinkingEnabled || model.compat.requiresThinkingEnabled) {
 		const thinkingOptions = options ?? {};
 		const mode = model.thinking?.mode;
