@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
@@ -9,6 +8,7 @@ import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { ShakeMode } from "@veyyon/kernel/session/shake-types";
 import type { Component, Container, EditorTheme, Loader, OverlayOptions, Spacer, Text, TUI } from "@veyyon/tui";
+import type { TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { CollabGuestLink } from "../../collab/guest";
 import type { CollabHost } from "../../collab/host";
 import type { KeybindingsManager } from "../../config/keybindings";

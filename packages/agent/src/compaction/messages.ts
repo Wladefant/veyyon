@@ -9,10 +9,10 @@ import type {
 	UserMessage,
 	VideoContent,
 } from "@veyyon/ai";
+import { transferTelegramTrace } from "@veyyon/utils";
 import * as prompt from "@veyyon/utils/prompt";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentMessage } from "../types";
-import { transferTelegramTrace } from "@veyyon/utils";
 
 const COMPACTION_SUMMARY_TEMPLATE = AGENT_PROMPTS["compaction/compaction-summary-context"].text;
 const BRANCH_SUMMARY_TEMPLATE = AGENT_PROMPTS["compaction/branch-summary-context"].text;

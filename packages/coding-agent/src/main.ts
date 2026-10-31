@@ -5,7 +5,6 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { VERSION } from "@veyyon/utils";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,6 +37,7 @@ import {
 	postmortem,
 	setInteractiveHost,
 	setProjectDir,
+	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";

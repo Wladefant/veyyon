@@ -5,7 +5,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
 	applyOwnerOnlyWindowsAcl,
 	atomicWriteFileWith,
-	errorMessage,
 	getConfigRootDir,
 	logTelegramDeliveryTrace,
 	normalizeDeliveryOutcome,
@@ -13,10 +12,10 @@ import {
 	postmortem,
 	type TelegramDeliveryTraceData,
 } from "@veyyon/utils";
+import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
-import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -514,7 +513,9 @@ export async function serveTerminalControl(
 										throw new Error("Secret intake registration refused");
 									}
 									try {
-										const context = await target.registerSecretIntake(registration as TerminalSecretRegistration);
+										const context = await target.registerSecretIntake(
+											registration as TerminalSecretRegistration,
+										);
 										if (
 											context.actorId !== registration.actorId ||
 											context.ownerSessionId !== registration.ownerSessionId ||
@@ -666,7 +667,12 @@ export async function serveTerminalControl(
 											sessionId: request.sessionId,
 										});
 									}
-									const deliveryPromise = runDelivery(request.sessionId, request.text, request.mode, deliveryOptions);
+									const deliveryPromise = runDelivery(
+										request.sessionId,
+										request.text,
+										request.mode,
+										deliveryOptions,
+									);
 									const record = {
 										sessionId: request.sessionId,
 										messageId: request.messageId,
@@ -767,7 +773,17 @@ export async function serveTerminalControl(
 								if (!target.secretRequest) throw new Error("Secret intake request refused");
 								const allowed =
 									request.action === "submit"
-										? ["id", "version", "token", "sessionId", "op", "action", "requestId", "submission", "context"]
+										? [
+												"id",
+												"version",
+												"token",
+												"sessionId",
+												"op",
+												"action",
+												"requestId",
+												"submission",
+												"context",
+											]
 										: ["id", "version", "token", "sessionId", "op", "action", "requestId", "context"];
 								if (
 									Object.keys(request).some(key => !allowed.includes(key)) ||
@@ -776,7 +792,9 @@ export async function serveTerminalControl(
 									typeof request.context !== "object" ||
 									request.context === null ||
 									Object.keys(request.context).length !== 3 ||
-									Object.keys(request.context).some(key => !["actorId", "ownerSessionId", "projectId"].includes(key)) ||
+									Object.keys(request.context).some(
+										key => !["actorId", "ownerSessionId", "projectId"].includes(key),
+									) ||
 									typeof request.context.actorId !== "string" ||
 									typeof request.context.ownerSessionId !== "string" ||
 									typeof request.context.projectId !== "string" ||

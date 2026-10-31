@@ -32,14 +32,6 @@ export * from "./lines";
 export * as logger from "./logger";
 export * from "./loop-phase";
 export * from "./math";
-// NOT re-exported: `./mermaid-ascii`.
-//
-// The vendored diagram renderer is 35 modules, a third of everything this barrel reaches, and it
-// has exactly one consumer (`coding-agent/src/theme/mermaid-cache.ts`). Every file that
-// imports `@veyyon/utils` for `errorMessage` or `logger` was instantiating a Mermaid parser, and
-// the test runner gives each file its own realm, so that cost is paid per file rather than once:
-// 664 test files import this barrel. Import it as `@veyyon/utils/mermaid-ascii` instead.
-export * from "./release-source";
 export * from "./mime";
 export * from "./owner-only-read";
 export * from "./path";
@@ -55,6 +47,14 @@ export { ChildProcess, Exception, NonZeroExitError, ProcessAbortError } from "./
 export * from "./quarantine-file";
 export * from "./read-selector";
 export * from "./regex";
+// NOT re-exported: `./mermaid-ascii`.
+//
+// The vendored diagram renderer is 35 modules, a third of everything this barrel reaches, and it
+// has exactly one consumer (`coding-agent/src/theme/mermaid-cache.ts`). Every file that
+// imports `@veyyon/utils` for `errorMessage` or `logger` was instantiating a Mermaid parser, and
+// the test runner gives each file its own realm, so that cost is paid per file rather than once:
+// 664 test files import this barrel. Import it as `@veyyon/utils/mermaid-ascii` instead.
+export * from "./release-source";
 export * from "./ring";
 export * from "./runtime-install";
 export * from "./sanitize-text";

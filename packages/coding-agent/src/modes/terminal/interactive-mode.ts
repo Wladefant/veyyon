@@ -30,7 +30,14 @@ import {
 	TUI,
 } from "@veyyon/tui";
 import { isInsideTerminalMultiplexer } from "@veyyon/tui/terminal-capabilities";
-import { APP_NAME, errorMessage, getProjectDir, logger, postmortem, type TelegramDeliveryTraceData } from "@veyyon/utils";
+import {
+	APP_NAME,
+	errorMessage,
+	getProjectDir,
+	logger,
+	postmortem,
+	type TelegramDeliveryTraceData,
+} from "@veyyon/utils";
 import type { AutocompleteProvider, SlashCommand } from "@veyyon/utils/autocomplete";
 import { matchesKey } from "@veyyon/utils/keys";
 import type { MouseRoutable } from "@veyyon/utils/mouse";
@@ -1724,6 +1731,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cancelled: false,
 			started: false,
 		};
+		this.#pendingSubmittedInput = submission;
 		if (!submission.customType) {
 			this.#goalMode.noteVisibleUserTurnStarted();
 			this.#transcriptComposer.showOptimistic(submission);
@@ -1949,7 +1957,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#planMode.restorePaused();
 		}
 	}
-
 
 	showPlanReview(
 		planContent: string,
