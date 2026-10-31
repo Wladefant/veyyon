@@ -21,11 +21,17 @@ import type { TerminalOwner } from "./terminal-control";
  * {@link CLAIM_STALE_MS}; the recipient drops a repeat by id.
  */
 
+/** On-disk notice envelope version. Additive fields also require a new version and stale-copy rejection. */
+export const SESSION_NOTICE_VERSION = 2 as const;
+
 export interface SessionNotice {
-	version: 1;
+	version: typeof SESSION_NOTICE_VERSION;
 	id: string;
 	/** Session id of the sender, or a free label when the sender has no session. */
 	from: string;
+	/** Owner-only live sender metadata snapshotted at send time; unavailable for offline senders. */
+	fromProject?: string;
+	fromCwd?: string;
 	/** Session id of the recipient. */
 	to: string;
 	body: string;
@@ -39,6 +45,9 @@ export interface SessionNotice {
 export interface SessionNoticeReceipt {
 	to: string;
 	id: string;
+	/** Live recipient identity observed when the notice was queued. */
+	project?: string;
+	cwd?: string;
 	/** `live` when a terminal owner for the session is registered, else `offline`: delivered at its next turn. */
 	route: "live" | "offline";
 }
@@ -74,6 +83,9 @@ export const SESSION_NOTICE_CAPABILITY = "session-notices";
 
 export interface SessionNoticeOwner {
 	sessionId: string;
+	/** Project is the cwd's leaf name; it is not an asserted git repository identity. */
+	cwd?: string;
+	project?: string;
 	loadedVersion?: string;
 	loadedBuildSha?: string | null;
 	capabilities?: readonly string[];
@@ -112,12 +124,14 @@ export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId
 		if (owner.version !== 1 || typeof owner.sessionId !== "string" || !isValidSessionId(owner.sessionId)) continue;
 		if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) continue;
 		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
+		const cwd = typeof owner.cwd === "string" && path.isAbsolute(owner.cwd) ? path.normalize(owner.cwd) : undefined;
 		const capabilities =
 			Array.isArray(owner.capabilities) && owner.capabilities.every(capability => typeof capability === "string")
 				? owner.capabilities
 				: undefined;
 		owners.set(owner.sessionId, {
 			sessionId: owner.sessionId,
+			...(cwd ? { cwd, project: path.basename(cwd) } : {}),
 			...(typeof owner.loadedVersion === "string" ? { loadedVersion: owner.loadedVersion } : {}),
 			...(typeof owner.loadedBuildSha === "string" || owner.loadedBuildSha === null
 				? { loadedBuildSha: owner.loadedBuildSha }
@@ -203,10 +217,33 @@ export function sendSessionNotice(args: {
 	if (Buffer.byteLength(body) > MAX_NOTICE_BODY) throw new Error(`Notice body exceeds ${MAX_NOTICE_BODY} bytes`);
 	if (args.ttlMs !== undefined && !(args.ttlMs > 0)) throw new Error("Notice ttl must be positive");
 	const ttlMs = args.ttlMs === undefined ? undefined : Math.min(args.ttlMs, NOTICE_TTL_MS);
-	if (args.to !== "all" && args.to === args.from) throw new Error("Cannot send a notice to your own session");
 	const owners = new Map(listLiveSessionOwners(root).map(owner => [owner.sessionId, owner]));
 	const live = new Set(owners.keys());
-	const targets = args.to === "all" ? [...live].filter(id => id !== args.from) : [args.to];
+	// Never use a stale notice directory to resolve an alias, or turn a failed alias into a broadcast.
+	const targets = (() => {
+		if (args.to === "all") return [...live].filter(id => id !== args.from);
+		const byProject = args.to.startsWith("project=");
+		const byCwd = args.to.startsWith("cwd=");
+		if (!byProject && !byCwd) return [args.to];
+		const query = args.to.slice(byProject ? "project=".length : "cwd=".length).trim();
+		const kind = byProject ? "project" : "cwd";
+		if (!query) throw new Error(`Session ${kind} selector must not be empty`);
+		const normalizedCwd = byCwd ? path.normalize(query) : undefined;
+		const matches = [...owners.values()].filter(owner =>
+			byProject ? owner.project?.toLowerCase() === query.toLowerCase() : owner.cwd === normalizedCwd,
+		);
+		if (matches.length !== 1) {
+			const candidates = (matches.length ? matches : [...owners.values()]).map(
+				owner => `session:${owner.sessionId} (project ${owner.project ?? "unknown"}, cwd ${owner.cwd ?? "unknown"})`,
+			);
+			throw new Error(
+				`${matches.length ? "Ambiguous" : "Unknown"} session ${kind} ${JSON.stringify(query)}; ` +
+					`candidates: ${candidates.length ? candidates.join("; ") : "none live"}`,
+			);
+		}
+		return [matches[0]!.sessionId];
+	})();
+	if (targets.includes(args.from)) throw new Error("Cannot send a notice to your own session");
 	for (const to of targets) {
 		const owner = owners.get(to);
 		const directory = queueDir(root, to);
@@ -218,6 +255,7 @@ export function sendSessionNotice(args: {
 		}
 	}
 	const receipts: SessionNoticeReceipt[] = [];
+	const sender = owners.get(args.from);
 	for (const to of targets) {
 		const directory = queueDir(root, to);
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -225,8 +263,23 @@ export function sendSessionNotice(args: {
 		if (pendingNames(directory, now).length >= MAX_PENDING_PER_SESSION) {
 			throw new Error(`Session ${to} has ${MAX_PENDING_PER_SESSION} unread notices; not queuing more`);
 		}
-		const id = writeNotice(directory, { from: args.from, to, body, ts: now, ttlMs });
-		receipts.push({ to, id, route: live.has(to) ? "live" : "offline" });
+		const id = writeNotice(directory, {
+			from: args.from,
+			to,
+			body,
+			ts: now,
+			ttlMs,
+			...(sender?.project ? { fromProject: sender.project } : {}),
+			...(sender?.cwd ? { fromCwd: sender.cwd } : {}),
+		});
+		const recipient = owners.get(to);
+		receipts.push({
+			to,
+			id,
+			route: live.has(to) ? "live" : "offline",
+			...(recipient?.project ? { project: recipient.project } : {}),
+			...(recipient?.cwd ? { cwd: recipient.cwd } : {}),
+		});
 	}
 	return receipts;
 }
@@ -234,10 +287,19 @@ export function sendSessionNotice(args: {
 /** Write one notice file into a queue directory and return its id. */
 function writeNotice(
 	directory: string,
-	fields: { from: string; to: string; body: string; ts: number; ttlMs?: number; kind?: "status" },
+	fields: {
+		from: string;
+		to: string;
+		body: string;
+		ts: number;
+		ttlMs?: number;
+		kind?: "status";
+		fromProject?: string;
+		fromCwd?: string;
+	},
 ): string {
 	const id = `${fields.ts.toString().padStart(TIMESTAMP_DIGITS, "0")}-${(noticeSequence++).toString().padStart(6, "0")}-${crypto.randomUUID()}`;
-	const notice: SessionNotice = { version: 1, id, ...fields };
+	const notice: SessionNotice = { version: SESSION_NOTICE_VERSION, id, ...fields };
 	if (notice.ttlMs === undefined) delete notice.ttlMs;
 	if (notice.kind === undefined) delete notice.kind;
 	atomicWriteFileSync(path.join(directory, `${id}.json`), JSON.stringify(notice), { mode: 0o600 });
@@ -304,7 +366,7 @@ export function claimSessionNotices(sessionId: string, root = getConfigRootDir()
 		try {
 			const notice = JSON.parse(fs.readFileSync(file, "utf8")) as SessionNotice;
 			const valid =
-				notice.version === 1 &&
+				notice.version === SESSION_NOTICE_VERSION &&
 				typeof notice.id === "string" &&
 				typeof notice.from === "string" &&
 				typeof notice.body === "string" &&
@@ -422,6 +484,9 @@ export function formatNoticeMessage(notice: SessionNotice, deliveredAt: number):
 	const late = delay >= LATE_AFTER_MS ? `, ${formatLate(delay)}` : "";
 	return [
 		`[Notice from session \`${notice.from}\`]`,
+		...(notice.fromProject || notice.fromCwd
+			? [`Origin: project ${notice.fromProject ?? "unknown"}, cwd ${notice.fromCwd ?? "unknown"}`]
+			: []),
 		`Sent: ${formatTimes(notice.ts)}`,
 		`Delivered: ${formatTimes(deliveredAt)}${late}`,
 		"",

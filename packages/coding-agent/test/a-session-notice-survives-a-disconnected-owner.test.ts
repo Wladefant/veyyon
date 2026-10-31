@@ -26,6 +26,7 @@ import {
 	NOTICE_TTL_MS,
 	noticeState,
 	registerSessionNoticeQueue,
+	SESSION_NOTICE_VERSION,
 	type SessionNotice,
 	sendSessionNotice,
 } from "../src/launch/session-notices";
@@ -49,10 +50,10 @@ afterEach(async () => {
 });
 
 /** A live terminal owner for `sessionId`, registered the way a real one is. */
-async function liveOwner(sessionId: string): Promise<() => void> {
+async function liveOwner(sessionId: string, cwd = root): Promise<() => void> {
 	const close = await serveTerminalControl(
 		{
-			identity: () => ({ sessionId, cwd: root, sessionFile: path.join(root, `${sessionId}.jsonl`) }),
+			identity: () => ({ sessionId, cwd, sessionFile: path.join(root, `${sessionId}.jsonl`) }),
 			deliver: async () => "started",
 			abort: async () => false,
 			history: () => [],
@@ -121,6 +122,76 @@ describe("the notice queue", () => {
 		expect(takeAll("sender")).toEqual([]);
 	});
 
+	it("routes a project alias to exactly one live session and preserves sender metadata", async () => {
+		await liveOwner("sender", path.join(root, "shipnovo"));
+		await liveOwner("poly-main", path.join(root, "PolySimulator"));
+		await liveOwner("unrelated", path.join(root, "other"));
+		const [receipt] = sendSessionNotice({
+			from: "sender",
+			to: "project=polysimulator",
+			body: "OVH runner alert",
+			root,
+		});
+		expect(receipt).toMatchObject({
+			to: "poly-main",
+			route: "live",
+			project: "PolySimulator",
+			cwd: path.join(root, "PolySimulator"),
+		});
+		const delivered = takeAll("poly-main");
+		expect(delivered.map(notice => notice.body)).toEqual(["OVH runner alert"]);
+		expect(formatNoticeMessage(delivered[0]!, Date.now())).toContain(
+			`Origin: project shipnovo, cwd ${path.join(root, "shipnovo")}`,
+		);
+		expect(takeAll("unrelated")).toEqual([]);
+		expect(takeAll("sender")).toEqual([]);
+	});
+
+	it("fails closed on unknown, ambiguous and self-addressed project aliases", async () => {
+		await liveOwner("sender", path.join(root, "shipnovo"));
+		await liveOwner("poly-a", path.join(root, "polysimulator"));
+		await liveOwner("poly-b", path.join(root, "polysimulator"));
+		let ambiguousError = "";
+		try {
+			sendSessionNotice({ from: "sender", to: "project=polysimulator", body: "do not broadcast", root });
+		} catch (error) {
+			ambiguousError = String(error);
+		}
+		expect(ambiguousError).toContain("Ambiguous session project");
+		// Owner record directory enumeration is not a routing-order contract.
+		expect(ambiguousError).toContain("poly-a");
+		expect(ambiguousError).toContain("poly-b");
+		expect(() =>
+			sendSessionNotice({ from: "sender", to: "project=unknown-project", body: "do not broadcast", root }),
+		).toThrow(/Unknown session project.*candidates/);
+		expect(() => sendSessionNotice({ from: "sender", to: "project=shipnovo", body: "self", root })).toThrow(
+			"own session",
+		);
+		expect(takeAll("poly-a")).toEqual([]);
+		expect(takeAll("poly-b")).toEqual([]);
+		expect(takeAll("sender")).toEqual([]);
+	});
+
+	it("targets a registered exact cwd and annotates all live broadcast receipts", async () => {
+		await liveOwner("sender", path.join(root, "shipnovo"));
+		await liveOwner("poly", path.join(root, "polysimulator"));
+		await liveOwner("other", path.join(root, "other"));
+		const [one] = sendSessionNotice({
+			from: "sender",
+			to: `cwd=${path.join(root, "polysimulator")}`,
+			body: "only poly",
+			root,
+		});
+		expect(one?.to).toBe("poly");
+		expect(takeAll("poly").map(notice => notice.body)).toEqual(["only poly"]);
+		expect(takeAll("other")).toEqual([]);
+		const receipts = sendSessionNotice({ from: "sender", to: "all", body: "broadcast", root });
+		expect(receipts.map(receipt => [receipt.to, receipt.project]).sort()).toEqual([
+			["other", "other"],
+			["poly", "polysimulator"],
+		]);
+	});
+
 	it("keeps order and never hands one notice to two readers", () => {
 		registerSessionNoticeQueue("target", root);
 		const ids = ["a", "b", "c"].map(body => sendSessionNotice({ from: "s", to: "target", body, root })[0]!.id);
@@ -146,12 +217,44 @@ describe("the notice queue", () => {
 		expect(fs.existsSync(path.join(root, "run", "escape"))).toBe(false);
 	});
 
+	it("rejects stale version-one queued copies while delivering a current-version sibling", () => {
+		registerSessionNoticeQueue("target", root);
+		const [old] = sendSessionNotice({ from: "sender", to: "target", body: "stale copy", root });
+		const oldFile = path.join(queueDirectory("target"), `${old!.id}.json`);
+		const obsolete = JSON.parse(fs.readFileSync(oldFile, "utf8")) as Record<string, unknown>;
+		expect(obsolete.version).toBe(SESSION_NOTICE_VERSION);
+		obsolete.version = 1;
+		fs.writeFileSync(oldFile, JSON.stringify(obsolete));
+		const [fresh] = sendSessionNotice({ from: "sender", to: "target", body: "current copy", root });
+		const claimed = claimSessionNotices("target", root);
+		expect(claimed.map(notice => [notice.id, notice.body, notice.version])).toEqual([
+			[fresh!.id, "current copy", SESSION_NOTICE_VERSION],
+		]);
+		expect(fs.existsSync(oldFile)).toBe(false);
+		expect(noticeState("target", old!.id, root)).toBe("unknown");
+		ackSessionNotices("target", [fresh!.id], root);
+	});
+
+	it("rejects a stale version-one claimed copy on crash recovery", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "unacknowledged", root });
+		expect(claimSessionNotices("target", root)).toHaveLength(1);
+		const claimedFile = path.join(queueDirectory("target"), "claimed", `${receipt!.id}.json`);
+		const obsolete = JSON.parse(fs.readFileSync(claimedFile, "utf8")) as Record<string, unknown>;
+		obsolete.version = 1;
+		fs.writeFileSync(claimedFile, JSON.stringify(obsolete));
+		const aged = new Date(Date.now() - CLAIM_STALE_MS - 1000);
+		fs.utimesSync(claimedFile, aged, aged);
+		expect(claimSessionNotices("target", root)).toEqual([]);
+		expect(fs.existsSync(claimedFile)).toBe(false);
+	});
+
 	it("does not read a notice that names another session", () => {
 		const directory = queueDirectory("target");
 		fs.mkdirSync(directory, { recursive: true });
 		fs.writeFileSync(
 			path.join(directory, "x.json"),
-			JSON.stringify({ version: 1, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
+			JSON.stringify({ version: SESSION_NOTICE_VERSION, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
 		);
 		expect(claimSessionNotices("target", root)).toEqual([]);
 	});

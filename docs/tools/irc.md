@@ -1,6 +1,6 @@
 # irc
 
-> Send and receive messages between agents over a process-global mailbox bus.
+> Send and receive messages between agents over a process-global mailbox bus or durable notices between registered sessions on the same host.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/agent/irc.ts`
@@ -15,12 +15,18 @@
   - `packages/coding-agent/src/config/settings-domains/tools.ts`: `irc.timeoutMs`.
   - `packages/coding-agent/src/modes/terminal/controllers/event-controller.ts`: renders IRC events into chat UI.
 
+## Cross-session notices
+
+Use `irc({ op: "list" })` to see same-conversation agents **and** registered live sessions. For a session on the same host, send `{ op: "send", to: "session:project=polysimulator", message: "..." }` when the terminal owner publishes a workspace ending in `polysimulator`. The project label is the last component of its reported absolute cwd, case-insensitive for project matching; it is not verified Git project identity. For multiple worktrees or a differently named cwd, use the exact id from the roster or `session:cwd=<absolute path>`.
+
+Session aliases resolve against live owner-only terminal records, not offline queues. Unknown and multiple matches fail with named candidates and **never** fall back to `session:all`. Explicit `session:<id>` remains usable for a previously announced offline queue; `session:all` considers every other live owner and refuses the entire send if even one does not advertise notice support. Replies are not supported by session notices (`await` is invalid). Send receipts report each live recipient's project/cwd; notices include the sending session's project/cwd snapshot when its live record exists. Live-session metadata is absent for offline or legacy owners, rather than guessed. Project names are not unique: use a session ID whenever ambiguity exists. The live roster labels each entry `notices supported`, `notices unsupported` or `notices unverified` from the loaded owner capability list; an unsupported or unverified live owner cannot receive notices even when it appears in the roster. An installed binary version is not evidence that a live session supports notices.
+
 ## Inputs
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `op` | `"send" \| "wait" \| "inbox" \| "list"` | Yes | Operation. |
-| `to` | `string` | `send` | Recipient agent id, or `"all"` for broadcast. Whitespace trimmed; self-send rejected. |
+| `to` | `string` | `send` | Agent id, `"all"`, `"session:<id>"`, `"session:project=<cwd-leaf>"`, `"session:cwd=<absolute path>"` or `"session:all"`. Whitespace trimmed; self-send rejected. |
 | `message` | `string` | `send` | Message body. Empty-after-trim is rejected. |
 | `replyTo` | `string` | No | `send`: message id being answered. |
 | `await` | `boolean` | No | `send`: after delivery, block until the next message from that peer arrives (round-trip sugar). Invalid with `to: "all"`. |

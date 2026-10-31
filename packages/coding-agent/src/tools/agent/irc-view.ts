@@ -20,6 +20,7 @@ import type {
 	ViewStatus,
 	ViewTone,
 } from "@veyyon/view";
+import { SESSION_NOTICE_CAPABILITY } from "../../launch/session-notices";
 import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import {
 	Ellipsis,
@@ -50,6 +51,7 @@ const BODY_LINE_WIDTH = 100;
 const RECIPIENT_NOUN = { one: "recipient", many: "recipients" } as const;
 const MESSAGE_NOUN = { one: "message", many: "messages" } as const;
 const PEER_NOUN = { one: "peer", many: "peers" } as const;
+const SESSION_NOUN = { one: "session", many: "sessions" } as const;
 
 /** The order a roster reads in: who is working, then who is waiting, then who is parked. */
 const PEER_STATUS_ORDER: Record<string, number> = { running: 0, idle: 1, parked: 2 };
@@ -326,7 +328,8 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 				[{ text: replaceTabs(`Ancestors: ${details.identity.ancestorIds.join(", ") || "none verified"}`) }],
 			]
 		: [];
-	if (peers.length === 0) {
+	const sessionPeers = [...(details.sessionPeers ?? [])].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+	if (peers.length === 0 && sessionPeers.length === 0) {
 		return messageCard(
 			{ kind: "statusRow", status: "info", title: "IRC peers", meta: [[{ text: "no other agents" }]] },
 			"success",
@@ -338,30 +341,56 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 	const meta: ViewLine[] = [...counts].map(([status, count]) => [{ text: `${count} ${status}` }]);
 	const unreadTotal = peers.reduce((sum, peer) => sum + peer.unread, 0);
 	if (unreadTotal > 0) meta.push([{ text: `${unreadTotal} unread`, tone: "warning" }]);
+	if (sessionPeers.length > 0) meta.push([{ text: `${sessionPeers.length} live ${sessionPeers.length === 1 ? "session" : "sessions"}` }]);
 
-	const shown = shownItems(peers.length, expanded);
-	for (let i = 0; i < shown; i++) {
-		const peer = peers[i]!;
-		const relation = peer.id === details.identity?.parentId ? "direct parent" : peer.ancestor ? "ancestor" : "peer";
-		const kindText = `${relation} · ${peer.parentId ? `${peer.kind} of ${peer.parentId}` : peer.kind}`;
-		const line: ViewSpan[] = [
-			...peerStatusSpans(peer.status),
-			{ text: " " },
-			{ text: replaceTabs(peer.id), bold: true },
-			{ text: " " },
-			{ text: replaceTabs(peer.displayName), tone: "dim" },
-			{ text: " " },
-			{ text: kindText, tone: "dim" },
-		];
-		if (peer.activity) line.push({ text: " " }, { text: replaceTabs(peer.activity), tone: "dim" });
-		if (peer.unread > 0) line.push({ text: " " }, { text: `${peer.unread} unread`, tone: "warning" });
-		const age = messageAge(peer.lastActivity);
-		if (age) line.push({ text: " " }, { text: age, tone: "dim" });
-		lines.push(line);
+	const sections: ViewSection[] = lines.length > 0 ? [{ lines }] : [];
+	if (peers.length > 0) {
+		const shown = shownItems(peers.length, expanded);
+		const lines: ViewLine[] = [];
+		for (let i = 0; i < shown; i++) {
+			const peer = peers[i]!;
+			const relation = peer.id === details.identity?.parentId ? "direct parent" : peer.ancestor ? "ancestor" : "peer";
+			const kindText = `${relation} · ${peer.parentId ? `${peer.kind} of ${peer.parentId}` : peer.kind}`;
+			const line: ViewSpan[] = [
+				...peerStatusSpans(peer.status),
+				{ text: " " },
+				{ text: replaceTabs(peer.id), bold: true },
+				{ text: " " },
+				{ text: replaceTabs(peer.displayName), tone: "dim" },
+				{ text: " " },
+				{ text: kindText, tone: "dim" },
+			];
+			if (peer.activity) line.push({ text: " " }, { text: replaceTabs(peer.activity), tone: "dim" });
+			if (peer.unread > 0) line.push({ text: " " }, { text: `${peer.unread} unread`, tone: "warning" });
+			const age = messageAge(peer.lastActivity);
+			if (age) line.push({ text: " " }, { text: age, tone: "dim" });
+			lines.push(line);
+		}
+		sections.push({ lines, hidden: heldBack(peers.length - shown, PEER_NOUN) });
 	}
-	return messageCard({ kind: "statusRow", emblem: "tool.irc", title: "IRC peers", meta }, "success", [
-		{ lines, hidden: heldBack(peers.length - shown, PEER_NOUN) },
-	]);
+
+	if (sessionPeers.length > 0) {
+		// Render the structured cross-session roster, not only the in-process peers. Sanitize
+		// owner-provided paths so a path containing newlines cannot counterfeit another row.
+		const safeLabel = (value: string) => replaceTabs(value.replace(/[\r\n]+/g, " "));
+		const shown = shownItems(sessionPeers.length, expanded);
+		const lines: ViewLine[] = [];
+		for (let i = 0; i < shown; i++) {
+			const owner = sessionPeers[i]!;
+			const support = owner.capabilities === undefined
+				? "unverified"
+				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
+			lines.push([
+				{ text: `session:${safeLabel(owner.sessionId)}`, bold: true },
+				{ text: " live", tone: "success" },
+				{ text: ` · project ${safeLabel(owner.project ?? "unknown")}`, tone: "dim" },
+				{ text: ` · cwd ${safeLabel(owner.cwd ?? "unknown")}`, tone: "dim" },
+				{ text: ` · notices ${support}`, tone: support === "supported" ? "success" : "warning" },
+			]);
+		}
+		sections.push({ lines, hidden: heldBack(sessionPeers.length - shown, SESSION_NOUN) });
+	}
+	return messageCard({ kind: "statusRow", emblem: "tool.irc", title: "IRC peers", meta }, "success", sections);
 }
 
 function resultCard(result: IrcViewResult, args: IrcViewArgs | undefined, expanded: boolean): FramedBlockView {

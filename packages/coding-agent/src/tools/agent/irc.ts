@@ -19,7 +19,14 @@ import {
 	getLoadedBuildIdentity,
 	readInstalledBuildIdentity,
 } from "../../launch/build-info";
-import { DEFAULT_DELIVERY_TTL_MS, SessionNoticeCapabilityError, sendSessionNotice } from "../../launch/session-notices";
+import {
+	DEFAULT_DELIVERY_TTL_MS,
+	listLiveSessionOwners,
+	SESSION_NOTICE_CAPABILITY,
+	SessionNoticeCapabilityError,
+	sendSessionNotice,
+	type SessionNoticeOwner,
+} from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
@@ -31,17 +38,22 @@ const DEFAULT_IRC_TIMEOUT_MS = 120_000;
 type IrcNoticeRuntime = {
 	sendSessionNotice: typeof sendSessionNotice;
 	readInstalledBuildIdentity: typeof readInstalledBuildIdentity;
+	/** Optional to preserve injected legacy runtimes; production reads the live owner-only registry. */
+	listLiveSessionOwners?: () => SessionNoticeOwner[];
 };
 
 const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
 	sendSessionNotice,
 	readInstalledBuildIdentity,
+	listLiveSessionOwners,
 };
 
 const ircSchema = lazy(() =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
-		"to?": type("string").describe('send: recipient agent id, "all", "session:<id>" or "session:all"'),
+		"to?": type("string").describe(
+			'send: agent id, "all", "session:<id>", "session:project=<cwd-leaf>", "session:cwd=<absolute path>", or "session:all"',
+		),
 		"message?": type("string").describe("send: message body"),
 		"replyTo?": type("string").describe("send: message id being answered"),
 		"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
@@ -78,6 +90,8 @@ export interface IrcDetails {
 	inbox?: IrcMessage[];
 	peers?: IrcPeerInfo[];
 	identity?: { selfId: string; parentId?: string; ancestorIds: string[]; scope?: string };
+	/** Other live sessions on the same machine, distinct from same-conversation agent peers. */
+	sessionPeers?: SessionNoticeOwner[];
 }
 
 function formatIncoming(msg: IrcMessage): string {
@@ -156,7 +170,12 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 
 		switch (params.op) {
 			case "list":
-				return executeList(registry, senderId);
+				return executeList(
+					registry,
+					senderId,
+					this.noticeRuntime.listLiveSessionOwners?.() ?? [],
+					this.session.getSessionId?.() ?? undefined,
+				);
 			case "send":
 				return this.#executeSend(registry, senderId, params, signal);
 			case "wait":
@@ -191,7 +210,12 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 					: [
 							`Queued for ${receipts.length} session(s); each reads it at its next step or turn, with your name and the send time. ` +
 								`If it is not read within ${limit} min it expires: it is not injected and you get a "Not delivered" notice:`,
-							...receipts.map(receipt => `- session:${receipt.to}: queued (${receipt.route}), id ${receipt.id}`),
+							...receipts.map(receipt => {
+								const label = receipt.project
+									? ` (project ${receipt.project}, cwd ${receipt.cwd ?? "unknown"})`
+									: "";
+								return `- session:${receipt.to}${label}: queued (${receipt.route}), id ${receipt.id}`;
+							}),
 						];
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
@@ -477,7 +501,12 @@ function formatSessionNoticeCapabilityError(
 	].join("\n");
 }
 
-function executeList(registry: AgentRegistry, senderId: string): AgentToolResult<IrcDetails> {
+function executeList(
+	registry: AgentRegistry,
+	senderId: string,
+	liveSessions: SessionNoticeOwner[] = [],
+	currentSessionId?: string,
+): AgentToolResult<IrcDetails> {
 	const bus = IrcBus.global();
 	// ONE call, and the registry owns what it means. This is the roster the
 	// MODEL reads, and the ids it hands back are the ids the model then
@@ -541,9 +570,24 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 			lines.push("Parked agents are revived automatically when you message them.");
 		}
 	}
+	const sessionPeers = liveSessions
+		.filter(owner => owner.sessionId !== currentSessionId)
+		.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+	if (sessionPeers.length) {
+		lines.push("", "Other live sessions (notice capability shown; not in-process lanes):");
+		for (const owner of sessionPeers) {
+			// The roster must not advertise a legacy live owner as a supported notice destination.
+			const noticeSupport = owner.capabilities === undefined
+				? "unverified"
+				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
+			lines.push(
+				`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}; notices ${noticeSupport}]`,
+			);
+		}
+	}
 	return {
 		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "list", from: senderId, peers, identity },
+		details: { op: "list", from: senderId, peers, identity, sessionPeers },
 	};
 }
 
