@@ -1,7 +1,7 @@
 // WHY: Wire Telegram delivery tracing across socket acceptance, terminal control,
 // interactive mode submission, agent session message creation, and provider stream invocation.
 // Verify all 5 stages in order with allowlisted metadata, ordered shared key, and no prompt text.
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -23,8 +23,12 @@ import { AgentSession } from "../src/session/agent-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
-	for (const close of cleanup.splice(0).reverse()) {
-		await close();
+	try {
+		for (const close of cleanup.splice(0).reverse()) {
+			await close();
+		}
+	} finally {
+		mock.restore();
 	}
 });
 
