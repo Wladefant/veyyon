@@ -12,7 +12,8 @@ export interface WriteTextInput {
 
 export async function writeRemoteText(origin: string, token: string, input: WriteTextInput,
 	signal?: AbortSignal, transport: typeof fetch = fetch) {
-	if (!WORKER_ID.test(input.worker) || !input.path || Buffer.byteLength(input.path, "utf8") > 4096 || input.path.includes("\0")) {
+	if (!WORKER_ID.test(input.worker) || !input.path || Buffer.byteLength(input.path, "utf8") > 4096 ||
+		input.path.includes("\0") || Buffer.from(input.path, "utf8").toString("utf8") !== input.path) {
 		throw new MainplaneError("Invalid worker or remote path");
 	}
 	const data = Buffer.from(input.text, "utf8");
