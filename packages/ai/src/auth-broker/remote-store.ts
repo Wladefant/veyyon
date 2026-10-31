@@ -643,9 +643,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
 		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId);
+		const selectedAccess = current.credential.access;
 		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
 		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
-		requireLocalOAuthRefresh(this.#snapshot, credentialId, current.provider);
+		const reconciled = requireLocalOAuthRefresh(this.#snapshot, credentialId, current.provider);
+		if (reconciled.credential.access !== selectedAccess && reconciled.credential.access !== entry.credential.access) {
+			throw new AIError.AuthBrokerError(`Broker suspect refresh superseded by newer OAuth credential id=${credentialId}`);
+		}
 		this.#applyCredentialEntry(entry);
 		this.#maybeRefreshSnapshot("suspect credential refresh");
 	}
