@@ -9,17 +9,17 @@ import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { type as arkType } from "arktype";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { ModelRegistry } from "../src/config/model-registry";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import * as utils from "@veyyon/utils";
+import { type as arkType } from "arktype";
+import { ModelRegistry } from "../src/config/model-registry";
+import { Settings } from "../src/config/settings";
 import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
 import { submitInteractiveInput } from "../src/main";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 import type { SubmittedUserInput } from "../src/modes/terminal/types";
 import { AgentSession } from "../src/session/agent-session";
-import { Settings } from "../src/config/settings";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -126,6 +126,7 @@ describe("telegram delivery tracing end-to-end", () => {
 		const agent = new Agent({
 			initialState: { model: mock.model, systemPrompt: ["Test prompt"], tools: [], messages: [] },
 			streamFn: mock.stream,
+			sessionId: "fake-provider-session-id",
 		});
 
 		const session = new AgentSession({
@@ -133,6 +134,7 @@ describe("telegram delivery tracing end-to-end", () => {
 			sessionManager: store,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false }),
 			modelRegistry: registry,
+			providerSessionId: "fake-provider-session-id",
 		});
 
 		let pendingInputCallback: ((input: SubmittedUserInput) => void) | undefined;
@@ -256,6 +258,7 @@ describe("telegram delivery tracing end-to-end", () => {
 			expect(typeof record.context.monotonicMs).toBe("number");
 			expect(typeof record.context.processId).toBe("number");
 			expect(typeof record.context.bootId).toBe("string");
+			expect(record.context.sessionId).toBe(store.getSessionId());
 			// Verify NO prompt text or secrets leaked in any trace context!
 			const serialized = JSON.stringify(record.context);
 			expect(serialized).not.toContain(SECRET_PROMPT_TEXT);
@@ -353,6 +356,7 @@ describe("telegram delivery tracing end-to-end", () => {
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false }),
 			modelRegistry: registry,
 			toolRegistry: new Map([["probe", probeTool as never]]),
+			providerSessionId: "fake-provider-turn-session-id",
 		});
 
 		const mockMode = {
@@ -494,6 +498,9 @@ describe("telegram delivery tracing end-to-end", () => {
 		);
 		expect(steerConsumptionIdx).toBeGreaterThanOrEqual(0);
 		expect(followUpConsumptionIdx).toBeGreaterThan(steerConsumptionIdx);
+		for (const record of [...steerRecords, ...followUpRecords]) {
+			expect(record.context.sessionId).toBe(store.getSessionId());
+		}
 	});
 
 	it("withholds hostile thrown error text, user prompt, and secrets when target.deliver throws", async () => {
@@ -552,7 +559,21 @@ describe("telegram delivery tracing end-to-end", () => {
 
 		const replyFrame = await client.next(f => f.id === "req-hostile");
 		expect(replyFrame).toMatchObject({
-			ok: false,
+			ok: true,
+			result: {
+				accepted: true,
+				messageId: "msg-hostile-1",
+				state: "pending",
+			},
+		});
+
+		const deliveryEvent = await client.next<{
+			event: { kind: "delivery"; messageId: string; state: string; outcome: string };
+		}>(f => client.isDeliveryEvent(f, "msg-hostile-1"));
+		expect(deliveryEvent.event).toMatchObject({
+			kind: "delivery",
+			messageId: "msg-hostile-1",
+			state: "failed",
 		});
 
 		// Verify that logged trace for delivery_outcome exists and withholds prompt/secret/error
@@ -563,12 +584,12 @@ describe("telegram delivery tracing end-to-end", () => {
 		const outcomeRecord = outcomeRecords[0];
 		expect(outcomeRecord).toBeDefined();
 		if (!outcomeRecord) throw new Error("Expected outcomeRecord");
-		expect(outcomeRecord.context.outcome).toBe("failed");
-		expect(outcomeRecord.context.error).toBeUndefined();
-
 		const serialized = JSON.stringify(outcomeRecord.context);
 		expect(serialized).not.toContain(hostileToken);
 		expect(serialized).not.toContain(hostilePrompt);
 		expect(serialized).not.toContain(hostileError.message);
+		expect(outcomeRecord.context.error).toBeUndefined();
+		expect(outcomeRecord.context.outcome).toBe("failed");
+		expect(outcomeRecord.context.sessionId).toBe("sess-hostile");
 	});
 });

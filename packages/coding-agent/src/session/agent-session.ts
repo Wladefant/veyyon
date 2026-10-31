@@ -5263,7 +5263,7 @@ export class AgentSession {
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
 		if (options?.telegramTrace) {
-			attachTelegramTrace(message, options.telegramTrace);
+			attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
 		}
 
 		const preludeMessages: AgentMessage[] = [];
@@ -5754,7 +5754,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			};
 			if (options?.telegramTrace) {
-				attachTelegramTrace(message, options.telegramTrace);
+				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
 			}
 			this.agent.followUp(message);
 		} else {
@@ -5767,7 +5767,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			};
 			if (options?.telegramTrace) {
-				attachTelegramTrace(message, options.telegramTrace);
+				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
 			}
 			this.agent.steer(message);
 		}

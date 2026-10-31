@@ -38,11 +38,7 @@ export function parseTelegramTrace(value: unknown): TelegramDeliveryTraceData | 
 		return undefined;
 	}
 	const candidate = value as Record<string, unknown>;
-	if (
-		typeof candidate.updateId !== "number" ||
-		!Number.isSafeInteger(candidate.updateId) ||
-		candidate.updateId <= 0
-	) {
+	if (typeof candidate.updateId !== "number" || !Number.isSafeInteger(candidate.updateId) || candidate.updateId <= 0) {
 		return undefined;
 	}
 	if (
@@ -62,11 +58,7 @@ export function parseTelegramTrace(value: unknown): TelegramDeliveryTraceData | 
 
 	let topicId: number | undefined;
 	if (candidate.topicId !== undefined) {
-		if (
-			typeof candidate.topicId !== "number" ||
-			!Number.isSafeInteger(candidate.topicId) ||
-			candidate.topicId <= 0
-		) {
+		if (typeof candidate.topicId !== "number" || !Number.isSafeInteger(candidate.topicId) || candidate.topicId <= 0) {
 			return undefined;
 		}
 		topicId = candidate.topicId;
@@ -128,39 +120,54 @@ export function logTelegramDeliveryTrace(
 	logger.info("Telegram delivery trace", context);
 }
 
-const traceMap = new WeakMap<object, TelegramDeliveryTraceData>();
+export interface ConsumedTelegramTrace {
+	trace: TelegramDeliveryTraceData;
+	sessionId?: string;
+}
+
+interface TelegramTraceMetadata {
+	trace: TelegramDeliveryTraceData;
+	sessionId?: string;
+}
+
+const traceMap = new WeakMap<object, TelegramTraceMetadata>();
 const consumedSet = new WeakSet<object>();
 
-export function attachTelegramTrace(message: object, trace: TelegramDeliveryTraceData): void {
-	traceMap.set(message, trace);
+export function attachTelegramTrace(message: object, trace: TelegramDeliveryTraceData, sessionId?: string): void {
+	traceMap.set(message, { trace, sessionId });
 }
 
 export function getTelegramTrace(message: object): TelegramDeliveryTraceData | undefined {
-	return traceMap.get(message);
+	return traceMap.get(message)?.trace;
+}
+
+export function getTelegramTraceSessionId(message: object): string | undefined {
+	return traceMap.get(message)?.sessionId;
 }
 
 export function transferTelegramTrace(source: object, target: object): void {
-	const trace = traceMap.get(source);
-	if (trace) {
-		traceMap.set(target, trace);
+	const metadata = traceMap.get(source);
+	if (metadata) {
+		traceMap.set(target, metadata);
 		if (consumedSet.has(source)) {
 			consumedSet.add(target);
 		}
 	}
 }
 
-export function consumeTelegramTrace(message: object, sessionId?: string): TelegramDeliveryTraceData | undefined {
-	const trace = traceMap.get(message);
-	if (!trace) {
+export function consumeTelegramTrace(message: object, fallbackSessionId?: string): ConsumedTelegramTrace | undefined {
+	const metadata = traceMap.get(message);
+	if (!metadata) {
 		return undefined;
 	}
 	if (consumedSet.has(message)) {
 		return undefined;
 	}
 	consumedSet.add(message);
-	logTelegramDeliveryTrace(trace, {
+	const effectiveSessionId = metadata.sessionId ?? fallbackSessionId;
+	logTelegramDeliveryTrace(metadata.trace, {
 		stage: "turn_consumption",
-		sessionId,
+		sessionId: effectiveSessionId,
 	});
-	return trace;
+	return { trace: metadata.trace, sessionId: effectiveSessionId };
 }

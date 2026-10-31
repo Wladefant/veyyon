@@ -61,18 +61,18 @@ import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
 import {
+	type ConsumedTelegramTrace,
 	consumeTelegramTrace,
 	errorMessage,
 	estimateTokensFromText,
 	formatCount,
 	isAbortError,
 	isRecord,
-	logTelegramDeliveryTrace,
 	LoopRace,
 	logger,
+	logTelegramDeliveryTrace,
 	sanitizeText,
 	structuredCloneJSON,
-	type TelegramDeliveryTraceData,
 	transferTelegramTrace,
 } from "@veyyon/utils";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
@@ -787,7 +787,7 @@ interface LoopState {
 	hasMoreToolCalls: boolean;
 	/** Steering, asides and follow-ups injected before the next assistant response. */
 	pendingMessages: AgentMessage[];
-	activeTelegramTraces: TelegramDeliveryTraceData[];
+	activeTelegramTraces: ConsumedTelegramTrace[];
 	harmonyRetryAttempt: number;
 	harmonyTruncateResumeCount: number;
 	pausedTurnContinuations: number;
@@ -1512,10 +1512,10 @@ async function openTurnResponse(
 	state?: LoopState,
 ): Promise<AssistantMessageEventStream> {
 	if (state?.activeTelegramTraces && state.activeTelegramTraces.length > 0) {
-		for (const trace of state.activeTelegramTraces) {
-			logTelegramDeliveryTrace(trace, {
+		for (const entry of state.activeTelegramTraces) {
+			logTelegramDeliveryTrace(entry.trace, {
 				stage: "provider_call_start",
-				sessionId: run.config.sessionId,
+				sessionId: entry.sessionId ?? run.config.sessionId,
 			});
 		}
 		state.activeTelegramTraces = [];
