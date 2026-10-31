@@ -76,6 +76,7 @@ export const taskItemSchema = lazy(() =>
 		agent: "string = 'deep'",
 		task: "string",
 		"cwd?": "string",
+		"successorOf?": "string",
 		"+": "delete",
 	}),
 );
@@ -86,6 +87,7 @@ const taskItemSchemaIsolated = lazy(() =>
 		task: "string",
 		"isolated?": "boolean",
 		"cwd?": "string",
+		"successorOf?": "string",
 		"+": "delete",
 	}),
 );
@@ -102,6 +104,8 @@ export interface TaskItem {
 	isolated?: boolean;
 	/** Per-spawn cwd override; see {@link TaskParams.cwd}. */
 	cwd?: string;
+	/** Predecessor agent ID when this spawn is an explicit successor. */
+	successorOf?: string;
 }
 
 export const taskSchema = lazy(() =>
@@ -111,6 +115,7 @@ export const taskSchema = lazy(() =>
 		task: "string",
 		"isolated?": "boolean",
 		"cwd?": "string",
+		"successorOf?": "string",
 		"+": "delete",
 	}),
 );
@@ -120,6 +125,7 @@ const taskSchemaNoIsolation = lazy(() =>
 		agent: "string = 'deep'",
 		task: "string",
 		"cwd?": "string",
+		"successorOf?": "string",
 		"+": "delete",
 	}),
 );
@@ -174,6 +180,7 @@ function createTaskSchema(options: {
 				task: "string",
 				"isolated?": "boolean",
 				"cwd?": "string",
+				"successorOf?": "string",
 				"+": "delete",
 			});
 			return type.raw({
@@ -187,6 +194,7 @@ function createTaskSchema(options: {
 			agent,
 			task: "string",
 			"cwd?": "string",
+			"successorOf?": "string",
 			"+": "delete",
 		});
 		return type.raw({
@@ -202,6 +210,7 @@ function createTaskSchema(options: {
 			task: "string",
 			"isolated?": "boolean",
 			"cwd?": "string",
+			"successorOf?": "string",
 			"+": "delete",
 		});
 	}
@@ -210,6 +219,7 @@ function createTaskSchema(options: {
 		agent,
 		task: "string",
 		"cwd?": "string",
+		"successorOf?": "string",
 		"+": "delete",
 	});
 }
@@ -274,6 +284,8 @@ export interface TaskParams {
 	 * must exist and be a directory.
 	 */
 	cwd?: string;
+	/** Predecessor agent ID for an explicit successor spawn. */
+	successorOf?: string;
 	/** Internal native-ledger ticket identity; never exposed by the model-facing schema. */
 	ticketId?: string;
 	/** Internal WorkerBackend run identity; never exposed by the model-facing schema. */

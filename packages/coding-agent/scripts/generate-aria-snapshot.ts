@@ -83,6 +83,37 @@ export function resolveAriaRef(ref: string): Element | null {
 }
 `;
 
+// Fail closed when the pinned upstream value producer changes: a regeneration must
+// never silently restore password values to snapshots.
+export function omitPasswordValues(source: string): string {
+	const expected = "element.type !== 'checkbox' && element.type !== 'radio' && element.type !== 'file'";
+	const first = source.indexOf(expected);
+	if (first === -1 || source.indexOf(expected, first + expected.length) !== -1) {
+		throw new Error(
+			"Expected exactly one pinned ARIA input-value condition; review password omission before regenerating.",
+		);
+	}
+	return source.replace(expected, `${expected} && element.type !== 'password'`);
+}
+
+// Embedded controls contribute their values to another element's accessible name.
+// Passwords must fall through to label computation instead, regardless of ARIA role.
+export function omitPasswordDerivedNames(source: string): string {
+	const condition =
+		"!!options.embeddedInLabel || !!options.embeddedInLabelledBy || options.embeddedInTargetElement === 'descendant'";
+	const expected = `if (${condition}) {`;
+	const first = source.indexOf(expected);
+	if (first === -1 || source.indexOf(expected, first + expected.length) !== -1) {
+		throw new Error(
+			"Expected exactly one pinned ARIA embedded-control condition; review password omission before regenerating.",
+		);
+	}
+	return source.replace(
+		expected,
+		`const isPasswordInput = element.localName.toLowerCase() === 'input' && element.getAttribute('type')?.toLowerCase() === 'password';\n  if (!isPasswordInput && (${condition})) {`,
+	);
+}
+
 async function main(): Promise<void> {
 	const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-aria-"));
 	try {
@@ -91,7 +122,12 @@ async function main(): Promise<void> {
 			const url = `${RAW_BASE}/${src}`;
 			const res = await fetch(url);
 			if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
-			await Bun.write(path.join(tmp, dst), await res.text());
+			let source = await res.text();
+			if (src === "injected/src/ariaSnapshot.ts") source = omitPasswordValues(source);
+			if (src === "injected/src/roleUtils.ts") source = omitPasswordDerivedNames(source);
+			const destination = path.join(tmp, dst);
+			await fs.mkdir(path.dirname(destination), { recursive: true });
+			await fs.writeFile(destination, source);
 		}
 		const entry = path.join(tmp, "entry.ts");
 		await Bun.write(entry, ENTRY_SOURCE);
@@ -133,4 +169,4 @@ async function main(): Promise<void> {
 	}
 }
 
-await main();
+if (import.meta.main) await main();

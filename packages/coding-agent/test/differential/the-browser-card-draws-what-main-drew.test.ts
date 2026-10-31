@@ -59,21 +59,17 @@ const BROWSER_KINDS: Record<NonNullable<BrowserToolDetails["browser"]>, true> = 
 	spawned: true,
 	connected: true,
 	cmux: true,
-	extension: true,
 };
 
 /** Every action the tool takes, as a total record of the schema's own union. */
-const ACTIONS: Record<BrowserParams["action"], true> = { open: true, close: true, run: true, save_state: true };
+const ACTIONS: Record<BrowserParams["action"], true> = {
+	open: true,
+	close: true,
+	run: true,
+	save_state: true,
+};
 
-/** Actions main's renderer never drew, so there is nothing of main's to compare them to. */
-const NEWER_THAN_MAIN: ReadonlySet<BrowserParams["action"]> = new Set(["save_state"]);
-
-/** Kinds main's renderer never drew, so there is nothing of main's to compare them to. */
-const KIND_NEWER_THAN_MAIN: ReadonlySet<NonNullable<BrowserToolDetails["browser"]>> = new Set(["extension"]);
-
-const KINDS = (Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>).filter(
-	kind => !KIND_NEWER_THAN_MAIN.has(kind),
-);
+const KINDS = Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>;
 const EVERY_ACTION = Object.keys(ACTIONS) as Array<BrowserParams["action"]>;
 const WIDTHS = [200, WIDTH, 40];
 const DISCLOSURES = [
@@ -131,7 +127,7 @@ describe("browser tool differential", () => {
 
 	it("draws the tab row byte for byte, over every action, every browser kind and every outcome", () => {
 		for (const action of EVERY_ACTION) {
-			if (action === "run" || NEWER_THAN_MAIN.has(action)) continue;
+			if (action === "run" || action === "save_state") continue;
 			for (const kind of KINDS) {
 				const args: BrowserViewArgs = { action, name: "docs", url: "https://example.com/asked-for" };
 				const settled: BrowserViewResult = {

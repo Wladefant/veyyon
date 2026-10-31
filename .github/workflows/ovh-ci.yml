@@ -1,6 +1,8 @@
 name: OVH CI
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       target_sha:
@@ -33,7 +35,14 @@ permissions:
 
 jobs:
   prepare:
-    if: (!inputs.typecheck) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Automatic PR work stays closed until the runner admission receipt in #676
+    # is accepted. This job condition is evaluated before allocating a runner.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
+      (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       vars.OVH_CI_PR_ADMISSION == 'verified')
     runs-on: [self-hosted, Linux, X64, veyyon]
     timeout-minutes: 15
     outputs:
@@ -49,7 +58,7 @@ jobs:
       - name: Record checkout identity
         shell: bash
         env:
-          EXPECTED_SHA: ${{ inputs.target_sha }}
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
           if [[ -n "$EXPECTED_SHA" ]]; then
             [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
@@ -79,10 +88,17 @@ jobs:
           base="$(git merge-base "$PINNED_BASE" HEAD)"
           echo "PINNED_BASE=$PINNED_BASE" >> "$GITHUB_ENV"
           echo "DIFF_BASE=$base" >> "$GITHUB_ENV"
+          workflow_changes="$(git diff --name-only "$base" HEAD -- .github/workflows/ovh-ci.yml scripts/validate-ovh-pr-workflow.ts)"
+          if [[ -n "$workflow_changes" ]]; then
+            echo 'workflow_changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'workflow_changed=false' >> "$GITHUB_OUTPUT"
+          fi
           echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
           echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
           echo "TOUCHED_PACKAGES=$RUNNER_TEMP/ovh-touched-packages" >> "$GITHUB_ENV"
           git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\ntsc-start=0\\ntsc-end=0\\ntsc-elapsed=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');require('fs').writeFileSync(process.env.TOUCHED_PACKAGES,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+          printf 'pinned-base=%s\n' "$PINNED_BASE" >> "$RECEIPT"
           if [[ -n "$FOCUSED_TESTS" ]]; then
             node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -101,13 +117,17 @@ jobs:
           fs.writeFileSync(process.env.RELATED_TESTS, [...new Set(files)].join('\n') + '\n');
           fs.writeFileSync(process.env.TOUCHED_PACKAGES, '');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'has_code=true\n');
-          fs.appendFileSync(process.env.RECEIPT, `pinned-base=${process.env.PINNED_BASE}\nfocused-tests=${JSON.stringify(files)}\n`);
+          fs.appendFileSync(process.env.RECEIPT, `focused-tests=${JSON.stringify(files)}\n`);
           NODE
           fi
       - name: Install dependencies and generate code
         id: install
         if: steps.changed.outputs.has_code == 'true'
         uses: ./.github/actions/bun-install
+      - name: Validate OVH pull-request workflow
+        if: steps.changed.outputs.workflow_changed == 'true' && steps.install.outcome == 'success' && !inputs.test_files
+        shell: bash
+        run: bun scripts/validate-ovh-pr-workflow.ts
       - name: Resolve related test graph
         id: selection
         if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
@@ -138,7 +158,7 @@ jobs:
       - name: TypeScript check
         id: types
         if: steps.selection.outputs.ts_changed == 'true'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
         run: |
@@ -207,6 +227,13 @@ jobs:
   test:
     name: test (shard ${{ matrix.index }})
     needs: prepare
+    if: >-
+      needs.prepare.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
+       (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       vars.OVH_CI_PR_ADMISSION == 'verified'))
     runs-on: [self-hosted, Linux, X64, veyyon]
     timeout-minutes: 15
     strategy:
@@ -223,7 +250,7 @@ jobs:
       - name: Record checkout identity
         shell: bash
         env:
-          EXPECTED_SHA: ${{ inputs.target_sha }}
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
           if [[ -n "$EXPECTED_SHA" ]]; then
             [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
@@ -378,7 +405,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   typecheck:
-    if: inputs.typecheck
+    if: github.event_name == 'workflow_dispatch' && inputs.typecheck
     runs-on: [self-hosted, Linux, X64, veyyon]
     timeout-minutes: 15
     env:
@@ -391,7 +418,7 @@ jobs:
       - name: Record checkout identity
         shell: bash
         env:
-          EXPECTED_SHA: ${{ inputs.target_sha }}
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
           if [[ -n "$EXPECTED_SHA" ]]; then
             [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
@@ -404,7 +431,7 @@ jobs:
         uses: ./.github/actions/bun-install
       - name: Run TypeScript check
         id: check
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RAW_LOG: ${{ runner.temp }}/ovh-typecheck-raw.log
           KEYS_FILE: ${{ runner.temp }}/ovh-typecheck-keys.txt
@@ -452,3 +479,4 @@ jobs:
             echo "::error::TypeScript check failed with exit code ${exit_code:-unknown}"
             exit "${exit_code:-1}"
           fi
+

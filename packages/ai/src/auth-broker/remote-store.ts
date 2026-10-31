@@ -128,6 +128,46 @@ function credentialEntryWithBlocks(
 	return incoming;
 }
 
+/**
+ * Bind a broker refresh reply to the exact grant that requested it. A schema-valid OAuth
+ * response for another row/provider, or one exposing a refresh token, is not usable by
+ * this client. The broker remains the only writer/owner of the refresh credential.
+ */
+function assertBrokerOAuthRefresh(
+	entry: AuthCredentialSnapshotEntry,
+	credentialId: number,
+	provider: string,
+): asserts entry is AuthCredentialSnapshotEntry & { credential: OAuthCredential } {
+	if (entry.id !== credentialId || entry.provider !== provider) {
+		throw new AIError.AuthBrokerError(
+			`Broker refresh identity mismatch for credential id=${credentialId} provider=${provider}`,
+		);
+	}
+	if (entry.credential.type !== "oauth") {
+		throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+	}
+	if (entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
+		throw new AIError.AuthBrokerError(`Broker returned unredacted OAuth refresh credential for id=${credentialId}`);
+	}
+}
+
+/**
+ * Refuse an unrelated grant before broker-side refresh and a revoked grant after reply.
+ * The broker alone rotates refresh credentials; this is a client identity fence.
+ */
+function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: number, provider?: string): SnapshotEntry & { credential: OAuthCredential } {
+	const current = snapshot.credentials.find(candidate => candidate.id === credentialId);
+	if (
+		!current ||
+		(provider !== undefined && current.provider !== provider) ||
+		current.credential.type !== "oauth" ||
+		current.credential.refresh !== REMOTE_REFRESH_SENTINEL
+	) {
+		throw new AIError.AuthBrokerError(`Broker refresh refused unknown or mismatched OAuth credential id=${credentialId}`);
+	}
+	return current as SnapshotEntry & { credential: OAuthCredential };
+}
+
 function emptySnapshot(): SnapshotResponse {
 	return {
 		generation: 0,
@@ -602,9 +642,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId);
+		const selectedAccess = current.credential.access;
 		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
-		if (entry.credential.type !== "oauth") {
-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
+		const reconciled = requireLocalOAuthRefresh(this.#snapshot, credentialId, current.provider);
+		if (reconciled.credential.access !== selectedAccess && reconciled.credential.access !== entry.credential.access) {
+			throw new AIError.AuthBrokerError(`Broker suspect refresh superseded by newer OAuth credential id=${credentialId}`);
 		}
 		this.#applyCredentialEntry(entry);
 		this.#maybeRefreshSnapshot("suspect credential refresh");
@@ -867,19 +911,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * the `refresh` slot.
 	 */
 	async refreshOAuthCredential(
-		_provider: Provider,
+		provider: Provider,
 		credentialId: number,
 		_credential: OAuthCredential,
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
+		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
+		const selectedAccess = current.credential.access;
 		const { entry } = await this.#client.refreshCredential(credentialId, signal);
+		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
+		requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
 		if (!this.#streamingActive) {
 			await this.refreshSnapshot().catch(error => {
 				this.#reportStaleSnapshot("refresh-after-credential-refresh", error, { credentialId });
 			});
 		}
-		if (entry.credential.type !== "oauth") {
-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+		// A non-streaming reconciliation is another await after response validation: it may
+		// observe a disable or a newer access token that must not be overwritten by this reply.
+		const reconciled = requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
+		if (reconciled.credential.access !== selectedAccess && reconciled.credential.access !== entry.credential.access) {
+			throw new AIError.AuthBrokerError(`Broker refresh superseded by newer OAuth credential id=${credentialId}`);
 		}
 		const refreshed = entry.credential;
 		return {

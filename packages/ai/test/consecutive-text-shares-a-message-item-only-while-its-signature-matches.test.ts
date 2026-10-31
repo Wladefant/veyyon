@@ -75,6 +75,7 @@ const BLOCKS: { [K in Block["type"]]: Variant[] } = {
 			item: "function_call",
 		},
 	],
+	image: [{ label: "image", block: () => ({ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }) }],
 	redactedThinking: [{ label: "redacted thinking", block: data => ({ type: "redactedThinking", data }) }],
 	fallback: [
 		{

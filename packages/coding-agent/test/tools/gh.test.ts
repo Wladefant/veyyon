@@ -14,7 +14,6 @@ import {
 	parsePrUnifiedDiff,
 	parseSearchDateBound,
 	resolveDefaultRepoMemoized,
-	resolveTailLimit,
 } from "@veyyon/coding-agent/tools/web/gh";
 import { resetCheckoutHosts } from "@veyyon/coding-agent/tools/web/gh-format";
 import * as git from "@veyyon/coding-agent/utils/git";
@@ -293,46 +292,6 @@ describe("parsePositiveDecimalInt", () => {
 
 	it("returns undefined for a digit run past the safe-integer range rather than losing precision", () => {
 		expect(parsePositiveDecimalInt("99999999999999999999")).toBeUndefined();
-	});
-});
-
-/**
- * resolveTailLimit turns the `tail` tool argument into the line count handed to tailLogLines, which
- * does `lines.slice(-tail)`. Its output MUST be a positive integer: `slice(-0)` is `slice(0)`, so a
- * returned 0 would dump the ENTIRE CI log where a tiny tail was requested. Regression for
- * FINDING-GH-RESOLVETAILLIMIT-FRACTIONAL-ZERO: a fractional request in (0,1) like 0.5 passed the
- * `<= 0` guard yet floored to 0. These pin the default, integer passthrough, MAX clamp, the
- * never-below-1 floor (the bug), the floor-down of larger fractionals, and the strict throws.
- */
-describe("resolveTailLimit", () => {
-	it("returns the default of 15 when no tail is supplied", () => {
-		expect(resolveTailLimit(undefined)).toBe(15);
-	});
-
-	it("passes a positive integer through and clamps to the max of 200", () => {
-		expect(resolveTailLimit(15)).toBe(15);
-		expect(resolveTailLimit(1)).toBe(1);
-		expect(resolveTailLimit(200)).toBe(200);
-		expect(resolveTailLimit(999)).toBe(200);
-	});
-
-	it("never floors a positive fractional tail below 1 (the slice(-0) full-log footgun)", () => {
-		// 0.5 is positive (passes the guard) but Math.floor(0.5) === 0 would make tailLogLines emit
-		// the whole log. The floored count must be clamped up to at least one line.
-		expect(resolveTailLimit(0.5)).toBe(1);
-		expect(resolveTailLimit(0.001)).toBe(1);
-	});
-
-	it("floors a fractional tail of 1 or more down to whole lines", () => {
-		expect(resolveTailLimit(1.9)).toBe(1);
-		expect(resolveTailLimit(15.9)).toBe(15);
-	});
-
-	it("throws for zero, negatives, and non-finite tails", () => {
-		expect(() => resolveTailLimit(0)).toThrow("tail must be a positive number");
-		expect(() => resolveTailLimit(-1)).toThrow("tail must be a positive number");
-		expect(() => resolveTailLimit(Number.NaN)).toThrow("tail must be a positive number");
-		expect(() => resolveTailLimit(Number.POSITIVE_INFINITY)).toThrow("tail must be a positive number");
 	});
 });
 
@@ -1174,8 +1133,19 @@ exec ${JSON.stringify(realGit)} "$@"
 		expect(properties.grace).toBeUndefined();
 	});
 
-	it("tails failed job logs inline and saves the full failed-job logs as an artifact", async () => {
+	it.each([
+		[undefined, 15],
+		[1, 1],
+		[3, 3],
+		[200, 200],
+		[999, 200],
+		[0.5, 1],
+		[0.001, 1],
+		[1.9, 1],
+		[15.9, 15],
+	])("tails failed job logs with tail=%s to %s lines and saves the full log", async (tail, expectedLines) => {
 		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "gh-run-watch-artifacts-"));
+		const logLines = Array.from({ length: 220 }, (_, index) => `log-line-${index}`);
 		vi.spyOn(git.github, "json")
 			.mockResolvedValueOnce({
 				id: 77,
@@ -1213,7 +1183,7 @@ exec ${JSON.stringify(realGit)} "$@"
 			});
 		vi.spyOn(git.github, "run").mockResolvedValue({
 			exitCode: 0,
-			stdout: "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta",
+			stdout: logLines.join("\n"),
 			stderr: "",
 		});
 
@@ -1224,7 +1194,7 @@ exec ${JSON.stringify(realGit)} "$@"
 			const result = await tool.execute("run-watch", {
 				op: "run_watch",
 				run: "https://github.com/owner/repo/actions/runs/77",
-				tail: 3,
+				tail,
 			});
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
@@ -1232,30 +1202,36 @@ exec ${JSON.stringify(realGit)} "$@"
 			// The run URL named a host, so the repo keeps it.
 			expect(text).toContain("Repository: github.com/owner/repo");
 			expect(text).toContain("### test [failure]");
-			expect(text).toContain("delta");
-			expect(text).toContain("epsilon");
-			expect(text).toContain("zeta");
-			expect(text).not.toContain("alpha");
+			const displayedTail = result.details?.watch?.failedLogs?.[0]?.tail;
+			expect(displayedTail?.split("\n")).toHaveLength(expectedLines!);
+			expect(displayedTail?.split("\n")[0]).toBe(`log-line-${220 - expectedLines!}`);
+			expect(displayedTail?.split("\n").at(-1)).toBe("log-line-219");
 			expect(text).toContain("Run failed.");
 			expect(text).toContain("Full failed-job logs: artifact://0");
 			expect(result.details?.artifactId).toBe("0");
 			expect(result.details?.watch?.mode).toBe("run");
 			expect(result.details?.watch?.state).toBe("completed");
 			expect(result.details?.watch?.failedLogs?.[0]?.jobName).toBe("test");
-			expect(result.details?.watch?.failedLogs?.[0]?.tail).toContain("zeta");
+			expect(result.details?.watch?.failedLogs?.[0]?.tail).toContain("log-line-219");
 
 			const artifactText = await Bun.file(path.join(artifactsDir, "0-github.md")).text();
 			expect(artifactText).toContain("# GitHub Actions Run #77");
 			expect(artifactText).toContain("Full log:");
-			expect(artifactText).toContain("alpha");
-			expect(artifactText).toContain("beta");
-			expect(artifactText).toContain("gamma");
-			expect(artifactText).toContain("delta");
-			expect(artifactText).toContain("epsilon");
-			expect(artifactText).toContain("zeta");
+			expect(artifactText).toContain(logLines.join("\n"));
 		} finally {
 			await removeWithRetries(artifactsDir);
 		}
+	});
+
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid log tail %s", async tail => {
+		const tool = new GithubTool(createSession());
+		await expect(
+			tool.execute("run-watch", {
+				op: "run_watch",
+				run: "https://github.com/owner/repo/actions/runs/77",
+				tail,
+			}),
+		).rejects.toThrow("tail must be a positive number");
 	});
 
 	it("honors the explicit `repo` argument and does not fall back to the cwd repo (issue #1949)", async () => {
