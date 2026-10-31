@@ -663,6 +663,73 @@ describe("runEvalCompletion", () => {
 	});
 });
 
+/**
+ * `completion(schema:)` requires the `respond` call. A host whose compat declares
+ * `supportsToolChoice: false` receives no `tool_choice`, so the request asks for the call in its
+ * text; a reply that skips the tool still yields the value parsed from its text, or one error that
+ * names the schema. Driven through the real provider with only `fetch` replaced.
+ */
+describe("completion(schema:) on a host that cannot force the respond tool", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const HOST = makeModel("p", "host", { compat: { supportsToolChoice: false } as Model<Api>["compat"] });
+	const FORCING = makeModel("p", "forcing", {
+		compat: { supportsToolChoice: true, supportsForcedToolChoice: true } as Model<Api>["compat"],
+	});
+	const SCHEMA = { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] };
+	const INSTRUCTION = "This turn must call the `respond` tool.";
+
+	/** Answer every request with `reply` and return the request bodies as they arrive. */
+	function serve(reply: () => Response): Record<string, unknown>[] {
+		const bodies: Record<string, unknown>[] = [];
+		const host = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const body =
+				input instanceof Request ? await input.clone().text() : typeof init?.body === "string" ? init.body : "{}";
+			bodies.push(JSON.parse(body) as Record<string, unknown>);
+			return reply();
+		};
+		vi.spyOn(globalThis, "fetch").mockImplementation(Object.assign(host, { preconnect: fetch.preconnect }));
+		return bodies;
+	}
+
+	function complete(model: Model<Api>) {
+		return runEvalCompletion(
+			{ prompt: "q", model: `p/${model.id}`, schema: SCHEMA },
+			{ session: makeSession({ available: [model] }) },
+		);
+	}
+
+	it("asks for the respond call in the request and returns its arguments", async () => {
+		const bodies = serve(() => createOpenAiToolResponse("respond", '{"answer":4}'));
+		const result = await complete(HOST);
+		expect(JSON.parse(result.text)).toEqual({ answer: 4 });
+		expect(bodies[0]?.tool_choice).toBeUndefined();
+		expect(JSON.stringify(bodies[0]?.input)).toContain(INSTRUCTION);
+	});
+
+	it("forces the respond call on a host that can, and does not ask for it in text", async () => {
+		const bodies = serve(() => createOpenAiToolResponse("respond", '{"answer":4}'));
+		await complete(FORCING);
+		expect(bodies[0]?.tool_choice).toEqual({ type: "function", name: "respond" });
+		expect(JSON.stringify(bodies[0]?.input)).not.toContain(INSTRUCTION);
+	});
+
+	it("parses the value from a reply that skips the tool", async () => {
+		serve(() => createOpenAiTextResponse('{"answer": 4}'));
+		const result = await complete(HOST);
+		expect(JSON.parse(result.text)).toEqual({ answer: 4 });
+	});
+
+	it("fails naming the schema when the reply holds no structured value", async () => {
+		serve(() => createOpenAiTextResponse("four"));
+		await expect(complete(HOST)).rejects.toThrow(
+			"completion() did not return a structured response matching the schema.",
+		);
+	});
+});
+
 describe("completion() through eval runtimes", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();

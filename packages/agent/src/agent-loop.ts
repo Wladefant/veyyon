@@ -23,8 +23,6 @@ import type {
 // but the other ten had been arriving with the catalogue, the providers and the usage backends
 // attached. Types stay on the entry point, which is free.
 import { isApiKeyResolver, resolveApiKeyOnce, seedApiKeyResolver } from "@veyyon/ai/auth-retry";
-import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
-import { INTENT_FIELD } from "@veyyon/wire";
 import {
 	type Dialect,
 	encodeInbandToolHistory,
@@ -59,6 +57,7 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
+import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
 import {
@@ -1368,10 +1367,16 @@ interface ProviderTurn {
 	readonly ownedDialect: Dialect | undefined;
 	/** Set when the owned dialect rendered tools into the prompt. */
 	readonly inband: InbandToolCalling | undefined;
+	/** The native `tool_choice` the call sends; unset under an owned dialect, which sends no native tools. */
+	readonly toolChoice: ToolChoice | undefined;
 }
 
 /** Build the provider context of one call. This is where AgentMessage[] gets transformed to Message[] for the LLM. */
-async function buildProviderTurn(run: LoopRun, model: Model): Promise<ProviderTurn> {
+async function buildProviderTurn(
+	run: LoopRun,
+	model: Model,
+	toolChoice: ToolChoice | undefined,
+): Promise<ProviderTurn> {
 	const { context, config } = run;
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	const messages = config.transformContext
@@ -1401,19 +1406,26 @@ async function buildProviderTurn(run: LoopRun, model: Model): Promise<ProviderTu
 		llmContext = await config.transformProviderContext(llmContext, model);
 	}
 	const tools = llmContext.tools;
-	if (!ownedDialect || !tools || tools.length === 0) return { llmContext, ownedDialect, inband: undefined };
+	if (!ownedDialect) return { llmContext, ownedDialect, inband: undefined, toolChoice };
+	if (!tools || tools.length === 0) return { llmContext, ownedDialect, inband: undefined, toolChoice: undefined };
 	// Owned tool calling: take tool calls away from the provider and run them through the selected in-band prompt
 	// dialect. `VEYYON_DIALECT=1` still force-enables GLM; `VEYYON_DIALECT=<dialect>` force-enables that dialect.
+	// The catalog is prompt text, so no wire field can force a call: a required one rides the conversation as text.
 	return {
-		llmContext: {
-			...llmContext,
-			systemPrompt: (llmContext.systemPrompt ?? []).concat(renderInbandToolPrompt(tools, ownedDialect)),
-			messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, tools),
-			tools: undefined,
-
-		},
+		llmContext: carryRequiredToolCall(
+			{
+				...llmContext,
+				systemPrompt: (llmContext.systemPrompt ?? []).concat(renderInbandToolPrompt(tools, ownedDialect)),
+				messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, tools),
+				tools: undefined,
+			},
+			toolChoice,
+			"open",
+			{ tools },
+		),
 		ownedDialect,
 		inband: { dialect: ownedDialect, tools, abort: new AbortController() },
+		toolChoice: undefined,
 	};
 }
 
@@ -1450,8 +1462,7 @@ async function resolveTurnOptions(
 		// Re-resolved after credential selection so the per-request value reflects the credential actually used, not
 		// the snapshot from AgentLoopConfig construction.
 		metadata: config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata,
-		// Owned tool calling sends no native tools, so any tool_choice would error.
-		toolChoice: turn.ownedDialect ? undefined : (state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice),
+		toolChoice: turn.toolChoice,
 		reasoning,
 		disableReasoning,
 		temperature:
@@ -1498,7 +1509,11 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 	// fallback — must apply on the next call instead of the run silently finishing on the stale model captured at run
 	// start.
 	const model = config.getModel?.() ?? config.model;
-	const turn = await buildProviderTurn(run, model);
+	const turn = await buildProviderTurn(
+		run,
+		model,
+		state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice,
+	);
 	// Wrap the user-supplied onResponse so we always observe response headers for telemetry
 	// (`ChatUsageEvent.headers`, gateway auto-detection) without stealing them from the configured hook.
 	let responseHeaders: Readonly<Record<string, string>> | undefined;
@@ -2556,7 +2571,6 @@ class ToolBatch {
 			return false;
 		}
 	}
-
 
 	/** Answers a call whose own signal fired before it started with the abort placeholder. */
 	#answerAbortedBeforeStart(record: ToolCallRecord): void {

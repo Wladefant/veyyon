@@ -4,11 +4,17 @@
 
 ### Fixed
 
+- Send the signing Codex account’s access program and model routing hint on requests.
+- Honor Kimi Code mandatory reasoning without an effort ladder and preserve required tool calls as text when an endpoint cannot force them.
+- Report non-streaming success bodies and provider rejection text without repeated sentences, and reject unlabelled streams with a blank prefix of 64 KiB.
+- Keep exhausted Cursor allowances parked for their reset window and retain gateway usage on early stream completion.
+- Request a fresh Codex browser sign-in with password reauthentication.
 - Remote auth-broker clients reject unbound OAuth refresh requests and discard revoked or superseded refresh replies, including delayed suspect-credential results, while preserving sole broker refresh ownership ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 - Required auth-gateway completion fixtures to cover the production route type without changing runtime behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Corrected Anthropic cache-control and request-ID types without changing request behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Removed unused upstream Codex transport copies and their stale test; the provider keeps its production transport in `openai-codex-responses.ts` ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+
 ## [1.6.6] - 2026-10-29
 
 ### Fixed

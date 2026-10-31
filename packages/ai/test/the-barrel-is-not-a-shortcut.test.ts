@@ -289,6 +289,7 @@ describe("the modules that were repointed stay cut", () => {
 	 * through it; its imports are `@veyyon/utils/type-guards` and `ai/error`, both already reached, so no
 	 * consumer gained an edge to a subsystem it did not already reach.
 	 */
+
 	it.each([
 		// The ceilings below were raised by two to three on the santhreal/veyyon sync: `utils/src/log-file.ts`,
 		// `catalog/src/compat/share.ts` and the precompiled-prompt pair arrive with the upstream logger and prompt

@@ -16,13 +16,13 @@ import type { AuthStorage, OAuthAccess } from "@veyyon/ai/auth-storage";
 import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
-import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
-import { fetchCodexModels } from "../src/discovery/codex";
+import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
+import { ANTIGRAVITY_PRIMARY_ENDPOINT } from "../src/provider-endpoints";
 import { toModelSpec } from "../src/provider-models/bundled-references";
 import {
 	CODEX_IMAGE_MODEL,
@@ -112,7 +112,9 @@ export function mergePreviousSnapshotModels(
 				!RETIRED_PROVIDERS.has(model.provider) &&
 				!excludedProviders.has(model.provider)
 			) {
-				merged.push(model);
+				// Later policies mutate restored specs. Preserve the original snapshot so a
+				// --providers run cannot rewrite providers outside its requested output.
+				merged.push(structuredClone(model));
 			}
 		}
 	}
@@ -409,29 +411,6 @@ function applyCodexSubscriptionFields(models: readonly ModelSpec[]): ModelSpec[]
 }
 
 /**
- * The Kimi Code subscription endpoint aliases `kimi-for-coding` and
- * `kimi-for-coding-highspeed` to its current flagship (K3) server-side;
- * models.dev declares the alias rows with empty reasoning_options because
- * the alias itself has no distinct surface. The aliases accept the same
- * effort levels as the K3 row they route to (same provider, same host),
- * so they inherit its declared surface; their own subscription limits stay.
- */
-function applyKimiCodingAliasSurface(models: readonly ModelSpec[], modelsDevModels: readonly ModelSpec[]): ModelSpec[] {
-	const k3 = modelsDevModels.find(model => model.provider === "kimi-code" && model.id === "k3");
-	const surface = k3?.reasoningOptions;
-	if (surface === undefined) return [...models];
-	const aliasIds = new Set(["kimi-for-coding", "kimi-for-coding-highspeed"]);
-	return models.map(model => {
-		if (model.provider !== "kimi-code" || !aliasIds.has(model.id)) return model;
-		// models.dev's empty alias declaration normalizes to `noEffortControl`;
-		// that describes the alias row, not the K3 it routes to, so it is
-		// replaced here. A real declared ladder always wins.
-		if (model.reasoning !== true || model.reasoningOptions?.efforts !== undefined) return model;
-		return { ...model, reasoningOptions: surface };
-	});
-}
-
-/**
  * First-party twin providers: same company serving the same models over the
  * same wire API under a different auth surface, which models.dev catalogs only
  * once. The twin's declared reasoning surface applies verbatim:
@@ -669,7 +648,7 @@ export async function fetchCodexDiscoveryModels(
 			return [];
 		}
 		console.log(`Fetched ${models.length} models from Codex API`);
-		return models.map(({ accessPrograms: _accessPrograms, ...spec }) => spec);
+		return models.map(({ accountAccess: _accountAccess, ...spec }) => spec);
 	} catch (error) {
 		console.warn("Codex API fetch failed, keeping previous models.", error);
 		return [];
@@ -861,7 +840,6 @@ async function generateModels() {
 	// policy re-bake so the aliases get the same baked thinking metadata.
 	allModels = projectOpenAIProReasoningAliases(allModels);
 	allModels = overlayModelsDevReasoningOptions(allModels, modelsDevModels);
-	allModels = applyKimiCodingAliasSurface(allModels, modelsDevModels);
 	allModels = applyTwinReasoningSurfaces(allModels, modelsDevModels);
 	applyGeneratedModelPolicies(allModels);
 	linkOpenAIPromotionTargets(allModels);

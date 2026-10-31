@@ -1,6 +1,5 @@
 import { lazy } from "@veyyon/utils/abortable";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import type { CodexModelDiscoveryResult } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import type { ModelManagerOptions } from "../model-manager";
 import { GITLAB_SAAS_URL, TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
@@ -41,11 +40,13 @@ export interface OpenAICodexAccount {
 }
 
 export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
-	return accountFingerprint ? `openai-codex:union-v1:${accountFingerprint}` : "openai-codex:union-v1";
+	return accountFingerprint ? `openai-codex:union-v2:${accountFingerprint}` : "openai-codex:union-v2";
 }
 
 export interface OpenAICodexModelManagerConfig {
+	/** Access token of the account discovery lists when `accounts` resolves none. Discovery runs only with one. */
 	accessToken?: string;
+	/** `chatgpt-account-id` of `accessToken`'s account. */
 	accountId?: string;
 	clientVersion?: string;
 	fetch?: FetchImpl;
@@ -70,42 +71,21 @@ export function openaiCodexModelManagerOptions(
 		...(resolveAccounts || accessToken
 			? {
 					fetchDynamicModels: async hooks => {
-						const accounts = resolveAccounts
+						const resolved = resolveAccounts
 							? await resolveAccounts()
 							: [{ accessToken: accessToken!, accountId }];
-						if (!accounts || accounts.length === 0) return null;
-						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
-						const { fetchCodexModels } = await import("../discovery/codex");
-						const results = await Promise.all(
-							accounts.map(account =>
-								fetchCodexModels({
-									accessToken: account.accessToken,
-									accountId: account.accountId,
-									clientVersion,
-									fetchFn: fetch,
-									onFailure: hooks?.onFailure,
-								}),
-							),
-						);
-						return unionCodexModels(results);
+						if (!resolved || resolved.length === 0) return null;
+						const { fetchCodexAccountModels } = await import("../discovery/codex");
+						return fetchCodexAccountModels({
+							accounts: resolved,
+							clientVersion,
+							fetchFn: fetch,
+							onFailure: hooks?.onFailure,
+						});
 					},
 				}
 			: undefined),
 	};
-}
-
-/** Unions per-account Codex catalogs by model id; returns null if any account failed. */
-function unionCodexModels(
-	results: readonly (CodexModelDiscoveryResult | null)[],
-): ModelSpec<"openai-codex-responses">[] | null {
-	const byId = new Map<string, ModelSpec<"openai-codex-responses">>();
-	for (const result of results) {
-		if (!result) return null;
-		for (const model of result.models) {
-			if (!byId.has(model.id)) byId.set(model.id, model);
-		}
-	}
-	return [...byId.values()];
 }
 
 // ---------------------------------------------------------------------------

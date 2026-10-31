@@ -3,6 +3,7 @@ import { emptyUsage } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { captureRequestHeaders, resolvePromptCacheKey } from "../auth-gateway/http";
+import { gatewayResponseStream } from "../auth-gateway/response-stream";
 import * as AIError from "../error";
 import type {
 	AssistantMessage,
@@ -522,73 +523,55 @@ export function encodeStream(
 	_options?: ParsedRequest["options"],
 	control?: AuthGatewayStreamControl,
 ): ReadableStream<Uint8Array> {
-	let pingTimer: NodeJS.Timeout | undefined;
-	let cancelled = control?.signal?.aborted === true;
-	const markCancelled = () => {
-		cancelled = true;
-	};
-	control?.signal?.addEventListener("abort", markCancelled, { once: true });
-	const stopPings = () => {
-		if (pingTimer !== undefined) {
-			clearInterval(pingTimer);
-			pingTimer = undefined;
-		}
-	};
-	return new ReadableStream<Uint8Array>({
-		async start(controller) {
-			const messageId = newMessageId();
-			let started = false;
-			let lastPartial: AssistantMessage | undefined;
-			const open = new Map<number, OpenBlock>();
+	return gatewayResponseStream(control, out => {
+		const messageId = newMessageId();
+		let started = false;
+		let lastPartial: AssistantMessage | undefined;
+		const open = new Map<number, OpenBlock>();
 
-			const ensureStart = (partial: AssistantMessage | undefined) => {
-				if (started) return;
-				started = true;
-				controller.enqueue(
-					sseFrame("message_start", {
-						type: "message_start",
-						message: {
-							id: messageId,
-							type: "message",
-							role: "assistant",
-							model: requestedModelId,
-							content: [],
-							stop_reason: null,
-							// TODO: same as encodeResponse — surface matched stop sequence
-							// once pi-ai propagates it.
-							stop_sequence: null,
-							usage: partial ? encodeUsage(partial) : ZERO_WIRE_USAGE,
-						},
-					}),
-				);
-			};
+		const ensureStart = (partial: AssistantMessage | undefined) => {
+			if (started) return;
+			started = true;
+			out.enqueue(
+				sseFrame("message_start", {
+					type: "message_start",
+					message: {
+						id: messageId,
+						type: "message",
+						role: "assistant",
+						model: requestedModelId,
+						content: [],
+						stop_reason: null,
+						// TODO: same as encodeResponse — surface matched stop sequence
+						// once pi-ai propagates it.
+						stop_sequence: null,
+						usage: partial ? encodeUsage(partial) : ZERO_WIRE_USAGE,
+					},
+				}),
+			);
+		};
 
-			const closeBlock = (index: number) => {
-				if (!open.has(index)) return;
-				controller.enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index }));
-				open.delete(index);
-			};
+		const closeBlock = (index: number) => {
+			if (!open.has(index)) return;
+			out.enqueue(sseFrame("content_block_stop", { type: "content_block_stop", index }));
+			open.delete(index);
+		};
 
-			pingTimer = setInterval(() => {
+		const run = async () => {
+			const pingTimer = setInterval(() => {
 				try {
-					if (cancelled) {
-						stopPings();
-						return;
-					}
-					controller.enqueue(sseFrame("ping", { type: "ping" }));
+					out.enqueue(sseFrame("ping", { type: "ping" }));
 				} catch {
 					// Controller already closed/errored (client gone); stop the timer.
-					stopPings();
+					clearInterval(pingTimer);
 				}
 			}, STREAM_PING_INTERVAL_MS);
-
+			const stopPings = () => clearInterval(pingTimer);
+			out.signal.addEventListener("abort", stopPings, { once: true });
 			try {
-				if (cancelled) {
-					controller.close();
-					return;
-				}
 				for await (const ev of events) {
-					if (cancelled) return;
+					if (out.cancelled) return;
+					if (ev.type !== "done" && ev.type !== "error") lastPartial = ev.partial;
 					switch (ev.type) {
 						case "start":
 							ensureStart(ev.partial);
@@ -596,7 +579,7 @@ export function encodeStream(
 						case "text_start": {
 							ensureStart(ev.partial);
 							open.set(ev.contentIndex, { index: ev.contentIndex, kind: "text" });
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_start", {
 									type: "content_block_start",
 									index: ev.contentIndex,
@@ -606,7 +589,7 @@ export function encodeStream(
 							break;
 						}
 						case "text_delta":
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_delta", {
 									type: "content_block_delta",
 									index: ev.contentIndex,
@@ -620,7 +603,7 @@ export function encodeStream(
 						case "thinking_start": {
 							ensureStart(ev.partial);
 							open.set(ev.contentIndex, { index: ev.contentIndex, kind: "thinking" });
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_start", {
 									type: "content_block_start",
 									index: ev.contentIndex,
@@ -630,7 +613,7 @@ export function encodeStream(
 							break;
 						}
 						case "thinking_delta":
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_delta", {
 									type: "content_block_delta",
 									index: ev.contentIndex,
@@ -641,7 +624,7 @@ export function encodeStream(
 						case "thinking_end": {
 							const c = ev.partial.content[ev.contentIndex];
 							if (c?.type === "thinking" && c.thinkingSignature) {
-								controller.enqueue(
+								out.enqueue(
 									sseFrame("content_block_delta", {
 										type: "content_block_delta",
 										index: ev.contentIndex,
@@ -656,7 +639,7 @@ export function encodeStream(
 							ensureStart(ev.partial);
 							const tc = ev.partial.content[ev.contentIndex] as ToolCall | undefined;
 							open.set(ev.contentIndex, { index: ev.contentIndex, kind: "tool_use" });
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_start", {
 									type: "content_block_start",
 									index: ev.contentIndex,
@@ -671,7 +654,7 @@ export function encodeStream(
 							break;
 						}
 						case "toolcall_delta":
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("content_block_delta", {
 									type: "content_block_delta",
 									index: ev.contentIndex,
@@ -684,7 +667,7 @@ export function encodeStream(
 							break;
 						case "done": {
 							for (const idx of Array.from(open.keys())) closeBlock(idx);
-							controller.enqueue(
+							out.enqueue(
 								sseFrame("message_delta", {
 									type: "message_delta",
 									// TODO: surface matched stop sequence once pi-ai
@@ -693,16 +676,14 @@ export function encodeStream(
 									usage: encodeUsage(ev.message),
 								}),
 							);
-							controller.enqueue(sseFrame("message_stop", { type: "message_stop" }));
-							controller.close();
+							out.enqueue(sseFrame("message_stop", { type: "message_stop" }));
+							out.close();
 							return;
 						}
 						case "error": {
 							const msg = ev.error.errorMessage ?? "stream error";
-							controller.enqueue(
-								sseFrame("error", { type: "error", error: { type: "api_error", message: msg } }),
-							);
-							controller.close();
+							out.enqueue(sseFrame("error", { type: "error", error: { type: "api_error", message: msg } }));
+							out.close();
 							return;
 						}
 					}
@@ -712,36 +693,30 @@ export function encodeStream(
 				// clients don't reject the response as a protocol error.
 				ensureStart(lastPartial);
 				for (const idx of Array.from(open.keys())) closeBlock(idx);
-				controller.enqueue(
+				out.enqueue(
 					sseFrame("message_delta", {
 						type: "message_delta",
 						delta: { stop_reason: "end_turn", stop_sequence: null },
 						usage: lastPartial ? encodeUsage(lastPartial) : ZERO_WIRE_USAGE,
 					}),
 				);
-				controller.enqueue(sseFrame("message_stop", { type: "message_stop" }));
-				controller.close();
-			} catch (err) {
-				if (!cancelled) {
-					controller.enqueue(
-						sseFrame("error", {
-							type: "error",
-							error: { type: "api_error", message: errorMessage(err) },
-						}),
-					);
-					controller.close();
-				}
+				out.enqueue(sseFrame("message_stop", { type: "message_stop" }));
+				out.close();
 			} finally {
-				control?.signal?.removeEventListener("abort", markCancelled);
 				stopPings();
 			}
-		},
-		cancel(reason) {
-			cancelled = true;
-			control?.signal?.removeEventListener("abort", markCancelled);
-			control?.onCancel?.(reason);
-			stopPings();
-		},
+		};
+
+		return {
+			run,
+			fail: err =>
+				out.enqueue(
+					sseFrame("error", {
+						type: "error",
+						error: { type: "api_error", message: errorMessage(err) },
+					}),
+				),
+		};
 	});
 }
 

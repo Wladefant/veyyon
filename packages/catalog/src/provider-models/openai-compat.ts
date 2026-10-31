@@ -54,8 +54,8 @@ import {
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
-import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
+import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
@@ -3355,6 +3355,62 @@ export interface KimiCodeModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+/** What a Kimi Code `/models` entry states about reasoning; `reasoningOptions` absent keeps the bundled surface. */
+interface KimiCodeReasoning {
+	reasoning: boolean;
+	reasoningOptions?: ModelReasoningOptions;
+}
+
+/**
+ * The reasoning surface of a Kimi Code `/models` entry, from its `reasoning` object:
+ * `{ type: "only" | "both" | "none", effort?: { valid: string[], default?: string } }`.
+ *
+ * `only` reasons on every request, so the model offers no off state. `none` declares no effort
+ * control too, so a bundled ladder cannot return through the merge, which keeps a bundled row's
+ * `reasoning` flag. An entry without an `effort` block reasons with no selectable level. A default
+ * the entry does not list is dropped, as the Kimi Code client drops it. An effort block naming only
+ * levels Veyyon does not know keeps the bundled ladder rather than hiding the control. `undefined`
+ * for an entry without the object, or with a type this parser does not know.
+ */
+function mapKimiCodeReasoning(value: unknown): KimiCodeReasoning | undefined {
+	if (!isRecord(value)) return undefined;
+	const type = value.type;
+	if (type === "none") return { reasoning: false, reasoningOptions: { noEffortControl: true } };
+	if (type !== "only" && type !== "both") return undefined;
+	const effort = isRecord(value.effort) ? value.effort : undefined;
+	if (effort === undefined) {
+		return {
+			reasoning: true,
+			reasoningOptions: { noEffortControl: true, ...(type === "only" ? { requiresEffort: true } : {}) },
+		};
+	}
+	const valid = Array.isArray(effort.valid) ? effort.valid.filter(isEffort) : [];
+	if (valid.length === 0) return { reasoning: true };
+	const efforts = canonicalizeEfforts(valid);
+	const declaredDefault = effort.default;
+	const defaultLevel = isEffort(declaredDefault) && efforts.includes(declaredDefault) ? declaredDefault : undefined;
+	return {
+		reasoning: true,
+		reasoningOptions: {
+			efforts,
+			...(defaultLevel !== undefined ? { defaultLevel } : {}),
+			...(type === "only" ? { requiresEffort: true } : {}),
+		},
+	};
+}
+
+/**
+ * A models.dev Kimi Code row with an effort ladder has no off state. The endpoint's `/models`
+ * listing declares `reasoning.type: "only"` for every model it serves; models.dev records the
+ * levels without that fact and lists `none` on some rows. Live discovery replaces the row's surface
+ * with what the account's listing declares.
+ */
+function markKimiCodeLadderAlwaysOn(model: ModelSpec<Api>): ModelSpec<Api> {
+	const options = model.reasoningOptions;
+	if (options?.efforts === undefined || options.efforts.length === 0) return model;
+	return { ...model, reasoningOptions: { ...options, requiresEffort: true } };
+}
+
 export function kimiCodeModelManagerOptions(
 	config?: KimiCodeModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -3381,14 +3437,18 @@ export function kimiCodeModelManagerOptions(
 						defaults: ModelSpec<"openai-completions">,
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
 					): ModelSpec<"openai-completions"> => {
-						// The bundled reference carries the models.dev-declared reasoning
-						// surface and endpoint limits; the live listing only wins for the
-						// fields it actually reports (name, modalities, context length).
+						// The bundled reference carries the models.dev surface and endpoint limits;
+						// the live listing wins for the fields it reports: name, modalities, context
+						// length, and the account's reasoning ladder, default and off state.
 						const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
+						const declared = mapKimiCodeReasoning(entry.reasoning);
 						return {
 							...model,
 							name: typeof entry.display_name === "string" ? entry.display_name : model.name,
-							reasoning: entry.supports_reasoning === true || model.reasoning,
+							reasoning: declared?.reasoning ?? (entry.supports_reasoning === true || model.reasoning),
+							...(declared?.reasoningOptions !== undefined
+								? { reasoningOptions: declared.reasoningOptions }
+								: {}),
 							input:
 								entry.supports_image_in === true || model.input.includes("image")
 									? model.input.includes("video") || entry.supports_video_in === true
@@ -6085,9 +6145,10 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDe
 	simpleModelsDevDescriptor("sakana", "sakana", "openai-responses", "https://api.sakana.ai/v1", {
 		compat: { includeEncryptedReasoning: false, streamIdleTimeoutMs: 0 },
 	}),
-	// --- Kimi Code (models.dev key: kimi-for-coding) ---
-	openAiCompletionsDescriptor("kimi-for-coding", "kimi-code", "https://api.kimi.com/coding/v1", {
+	// --- Kimi Code (models.dev key: kimi-code-plan-cn, the api.kimi.com deployment) ---
+	openAiCompletionsDescriptor("kimi-code-plan-cn", "kimi-code", "https://api.kimi.com/coding/v1", {
 		headers: { "User-Agent": "KimiCLI/1.0", "X-Msh-Platform": "kimi_cli" },
+		transformModel: markKimiCodeLadderAlwaysOn,
 	}),
 	// --- MiniMax Coding Plan ---
 	openAiCompletionsDescriptor("minimax-coding-plan", "minimax-code", "https://api.minimax.io/v1", {

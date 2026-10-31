@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { Api, AuthStorage, FetchImpl, Model } from "@veyyon/ai";
+import type { Api, AuthStorage, CyberAccessProgram, FetchImpl, Model } from "@veyyon/ai";
+import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
 import * as catalogModels from "@veyyon/catalog/models";
 import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchCodex } from "@veyyon/coding-agent/tools/web/search/providers/codex";
@@ -220,13 +221,27 @@ describe("searchCodex model selection", () => {
 		},
 	} as unknown as AuthStorage;
 	let capturedRequest: CapturedRequest | null = null;
+	/** The models the account's `/codex/models` listing returns; a search lists its account before it searches. */
+	let accountListing: unknown[] = [];
+	/** The `chatgpt-account-id` of every listing request, in order. */
+	const listingAccounts: Array<string | null> = [];
+
+	/** Answers the account's model listing and forwards every other request to `fetch`. */
+	function answeringListings(fetch: FetchImpl): FetchImpl {
+		return (url, init) => {
+			const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+			if (!new URL(href).pathname.endsWith("/models")) return fetch(url, init);
+			listingAccounts.push(new Headers(init?.headers).get("chatgpt-account-id"));
+			return Promise.resolve(new Response(JSON.stringify({ models: accountListing })));
+		};
+	}
 
 	function makeSearchParams(query: string, fetch?: FetchImpl): SearchParams {
 		return {
 			query,
 			systemPrompt: "Codex test system prompt",
 			authStorage: fakeAuthStorage,
-			...(fetch ? { fetch } : {}),
+			...(fetch ? { fetch: answeringListings(fetch) } : {}),
 		};
 	}
 
@@ -250,6 +265,9 @@ describe("searchCodex model selection", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		capturedRequest = null;
+		accountListing = [];
+		listingAccounts.length = 0;
+		resetCodexAccessProgramListings();
 		if (originalCodexSearchModel === undefined) {
 			delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
 		} else {
@@ -264,6 +282,7 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest).not.toBeNull();
 		expect(capturedRequest?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
 		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
+		expect(new Headers(capturedRequest?.headers).get("x-codex-routing-hint")).toBe("model=gpt-5.6-luna");
 		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
 	});
@@ -309,6 +328,28 @@ describe("searchCodex model selection", () => {
 			}),
 		).rejects.toThrow("No Codex OAuth credentials found");
 	});
+	// A search is judged under the account's program like a turn. Keyed by program, so a program added
+	// to the union fails the type check until a level is recorded here.
+	const SEARCH_ACCOUNT_LEVELS: Record<CyberAccessProgram, { offered: string[]; sent: unknown }> = {
+		standard: { offered: ["standard"], sent: undefined },
+		daybreak_blue: { offered: ["standard", "daybreak_blue"], sent: { cyber: "daybreak_blue" } },
+		daybreak_red: { offered: ["standard", "daybreak_red"], sent: { cyber: "daybreak_red" } },
+	};
+	for (const [level, { offered, sent }] of Object.entries(SEARCH_ACCOUNT_LEVELS)) {
+		it(`sends the program a ${level} account is offered for the search model`, async () => {
+			delete process.env.VEYYON_CODEX_WEB_SEARCH_MODEL;
+			accountListing = [
+				{ slug: "gpt-5.6-luna", supported_in_api: true, available_access_programs: { cyber: offered } },
+			];
+
+			await searchCodex(makeSearchParams("vulnerability advisory", mockCodexFetch("gpt-5.6-luna")));
+			await searchCodex(makeSearchParams("vulnerability advisory", mockCodexFetch("gpt-5.6-luna")));
+
+			expect(capturedRequest?.body?.access_programs).toEqual(sent);
+			// The account is listed once, under the account id the search sends, and the listing is reused.
+			expect(listingAccounts).toEqual(["acct-test"]);
+		});
+	}
 
 	it("falls back to the default model when VEYYON_CODEX_WEB_SEARCH_MODEL is blank", async () => {
 		process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = "   ";

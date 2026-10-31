@@ -175,4 +175,46 @@ describe("finalizeErrorMessage captured-body rendering", () => {
 		});
 		expect(message).toBe("400 status code: quota exceeded");
 	});
+
+	// A provider error is thrown as `<status> <sentence>` from the body it captured, so appending the
+	// body whole printed the sentence twice: `401 key expired\nkey expired (type=… code=…)`.
+	const expiredKey = {
+		status: 401,
+		bodyText: '{"error":{"message":"key expired","type":"authentication_error","code":"api_key_expired"}}',
+		bodyJson: { error: { message: "key expired", type: "authentication_error", code: "api_key_expired" } },
+	};
+
+	it("adds only the body's fields when the message already ends with its sentence", async () => {
+		const message = await finalizeErrorMessage(new HttpError(401, "401 key expired"), undefined, expiredKey);
+		expect(message).toBe("401 key expired (type=authentication_error code=api_key_expired)");
+	});
+
+	it("states a server-directed wait after the body's fields", async () => {
+		const message = await finalizeErrorMessage(new HttpError(429, "429 slow down"), undefined, {
+			status: 429,
+			headers: new Headers({ "retry-after": "120" }),
+			bodyText: '{"error":{"message":"slow down","type":"rate_limit_error"}}',
+			bodyJson: { error: { message: "slow down", type: "rate_limit_error" } },
+		});
+		expect(message).toBe("429 slow down (type=rate_limit_error) retry-after-ms=120000");
+	});
+
+	it("keeps the body's sentence on its own line when the message holds the body as JSON", async () => {
+		const message = await finalizeErrorMessage(
+			new HttpError(401, `401 ${expiredKey.bodyText}`),
+			undefined,
+			expiredKey,
+		);
+		expect(message).toBe(`401 ${expiredKey.bodyText}\nkey expired (type=authentication_error code=api_key_expired)`);
+	});
+
+	it("keeps a server-directed wait when a status-only message is replaced by the body", async () => {
+		const message = await finalizeErrorMessage(new Error("429 status code (no body)"), undefined, {
+			status: 429,
+			headers: new Headers({ "retry-after": "120" }),
+			bodyText: '{"error":{"message":"quota exceeded"}}',
+			bodyJson: { error: { message: "quota exceeded" } },
+		});
+		expect(message).toBe("429 status code: quota exceeded retry-after-ms=120000");
+	});
 });

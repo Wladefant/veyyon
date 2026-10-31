@@ -1,10 +1,18 @@
 import * as path from "node:path";
+import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
+import {
+	MAX_PROVIDER_ERROR_BODY_BYTES,
+	type ProviderErrorBody,
+	providerErrorEnvelopeMessage,
+	readProviderErrorBody,
+} from "../error/error-body";
 import * as AIError from "../error/flags";
+import { ProviderResponseError } from "../error/provider";
 import { redactDiagnosticHeaders } from "./request-debug.js";
-import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
+import { appendRetryAfterHint, errorText } from "./retry-after.js";
 
 export type RawHttpRequestDump = {
 	provider: string;
@@ -71,6 +79,139 @@ export async function captureHttpErrorResponse(response: Response): Promise<Capt
 	return { status: response.status, headers: response.headers, bodyText, bodyJson };
 }
 
+/** An event stream opens with a field name, a comment or a blank line, never with markup or a JSON value. */
+const NON_EVENT_STREAM_LEAD = /^[<{[]/;
+/** The most of an HTML page's title a failure quotes. */
+const MAX_QUOTED_TITLE_CHARS = 120;
+
+/**
+ * `body` as an event stream, or a stream that fails with what the body is instead.
+ *
+ * A body labelled `text/event-stream` is returned as it is. Any other body is read on its first pull
+ * up to its first non-blank byte, within the provider error-body byte ceiling. A prefix that exhausts
+ * that ceiling is cancelled and rejected rather than buffered indefinitely. An event stream never
+ * opens with `<`, `{` or `[`. Such a body is HTML or JSON, returned on every attempt: decoded as
+ * an event stream it held no events, the turn failed as a truncated stream, and the truncated stream
+ * was retried until the retry budget ran out. Such a body fails the stream with what it is and where
+ * it came from; a mislabelled event stream is replayed from the bytes already read. The check runs
+ * inside the stream, so the caller's first-event and idle deadlines cover it.
+ */
+export function eventStreamBody(
+	response: Response,
+	body: ReadableStream<Uint8Array>,
+	url: string | undefined,
+): ReadableStream<Uint8Array> {
+	const contentType = response.headers.get("content-type");
+	if (contentType !== null && /^\s*text\/event-stream\b/i.test(contentType)) return body;
+	const reader = body.getReader();
+	let checked = false;
+	return new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				if (checked) {
+					const { done, value } = await reader.read();
+					if (done) controller.close();
+					else controller.enqueue(value);
+					return;
+				}
+				checked = true;
+				const held: Uint8Array[] = [];
+				let heldBytes = 0;
+				const decoder = new TextDecoder();
+				let lead = "";
+				let ended = false;
+				while (lead.length === 0) {
+					const { done, value } = await reader.read();
+					if (done) {
+						ended = true;
+						break;
+					}
+					if (value.byteLength === 0) continue;
+					const room = MAX_PROVIDER_ERROR_BODY_BYTES - heldBytes;
+					lead = decoder.decode(value.subarray(0, room), { stream: true }).trimStart();
+					if (lead.length === 0 && value.byteLength >= room) {
+						await reader.cancel().catch(() => {});
+						throw new ProviderResponseError(
+							`${response.status} response has no event-stream content within the first ${MAX_PROVIDER_ERROR_BODY_BYTES} bytes. Check the provider's baseUrl.`,
+							{ kind: "envelope" },
+						);
+					}
+					held.push(value);
+					heldBytes += value.byteLength;
+				}
+				if (NON_EVENT_STREAM_LEAD.test(lead)) {
+					const read = await readProviderErrorBody({
+						body: replayed(
+							held,
+							() => reader.read(),
+							reason => reader.cancel(reason),
+						),
+						headers: response.headers,
+						text: () => Promise.resolve(""),
+					});
+					throw nonEventStreamError(response.status, url, read);
+				}
+				for (const chunk of held) controller.enqueue(chunk);
+				if (ended) controller.close();
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+}
+
+/** `held`, then what `next` reads; cancelling it calls `cancel`. */
+function replayed(
+	held: Uint8Array[],
+	next: () => Promise<{ done: boolean; value?: Uint8Array }>,
+	cancel: (reason: unknown) => Promise<void>,
+): ReadableStream<Uint8Array> {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of held) controller.enqueue(chunk);
+		},
+		async pull(controller) {
+			const { done, value } = await next();
+			if (done || value === undefined) controller.close();
+			else controller.enqueue(value);
+		},
+		cancel,
+	});
+}
+
+/**
+ * The failure a `2xx` body that is not an event stream states: the provider's own sentence when it
+ * is a JSON error envelope, which classifies as that sentence does on any other answer, and what came
+ * back and from where otherwise. The endpoint is stated without its query string, which can hold a
+ * key. Not retried unless the provider's sentence reads as transient.
+ */
+function nonEventStreamError(status: number, url: string | undefined, read: ProviderErrorBody): ProviderResponseError {
+	let from = "";
+	if (url) {
+		try {
+			const parsed = new URL(url);
+			from = ` from ${parsed.origin}${parsed.pathname}`;
+		} catch {}
+	}
+	const text = read.text.trimStart();
+	if (text.startsWith("<")) {
+		const title = collapseWhitespace(/<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]);
+		const named = title ? ` titled "${title.slice(0, MAX_QUOTED_TITLE_CHARS)}"` : "";
+		return new ProviderResponseError(
+			`${status}${from} is an HTML page${named}, not an event stream. Check the provider's baseUrl.`,
+			{ kind: "envelope" },
+		);
+	}
+	const sentence = providerErrorEnvelopeMessage(read);
+	if (sentence) return new ProviderResponseError(`${status} ${sentence}`, { kind: "envelope" });
+	return new ProviderResponseError(
+		`${status}${from} is a JSON document, not an event stream. Check the provider's baseUrl and that the endpoint streams.`,
+		{ kind: "envelope" },
+	);
+}
+
 /**
  * Build the JSON persisted for a rejected request. Request fields stay at the
  * top level (so existing dump parsers still read `body`); the provider's error
@@ -126,16 +267,28 @@ export async function finalizeErrorMessage(
 	rawRequestDump: RawHttpRequestDump | undefined,
 	capturedErrorResponse?: CapturedHttpErrorResponse,
 ): Promise<string> {
-	let message = formatErrorMessageWithRetryAfter(error, capturedErrorResponse?.headers);
-	const capturedMessage = formatCapturedHttpError(capturedErrorResponse);
-	if (capturedMessage) {
-		if (/\bstatus code\s*\(no body\)/i.test(message)) {
-			message = `${capturedErrorResponse?.status ?? "HTTP"} status code: ${capturedMessage}`;
-		} else if (!message.includes(capturedMessage)) {
-			message = `${message}\n${capturedMessage}`;
-		}
-	}
+	const message = appendRetryAfterHint(
+		withCapturedBody(errorText(error), capturedErrorResponse),
+		error,
+		capturedErrorResponse?.headers,
+	);
 	return appendRawHttpRequestDumpFor400(message, error, rawRequestDump);
+}
+
+/**
+ * `message` with what the captured body states that it does not. A provider error is usually thrown
+ * as `<status> <sentence>` from the same body, so when `message` ends with the body's sentence only
+ * the body's `type`/`param`/`code` fields are added to it; a body whose sentence `message` does not
+ * end with (an `HTTP 401 from <url>`, or a body embedded as JSON) is added on its own line.
+ */
+function withCapturedBody(message: string, captured: CapturedHttpErrorResponse | undefined): string {
+	const body = readCapturedHttpError(captured);
+	if (!body) return message;
+	const stated = body.fields === undefined ? body.sentence : `${body.sentence} (${body.fields})`;
+	if (/\bstatus code\s*\(no body\)/i.test(message)) return `${captured?.status ?? "HTTP"} status code: ${stated}`;
+	if (message.includes(stated)) return message;
+	if (body.fields !== undefined && message.endsWith(body.sentence)) return `${message} (${body.fields})`;
+	return `${message}\n${stated}`;
 }
 
 /**
@@ -179,29 +332,36 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 	return redactDiagnosticHeaders(Object.entries(headers));
 }
 
-function formatCapturedHttpError(captured: CapturedHttpErrorResponse | undefined): string | undefined {
+/** A captured error body as an operator reads it: the provider's sentence and its machine fields. */
+interface CapturedHttpErrorText {
+	sentence: string;
+	/** `type=… param=… code=…`, or undefined when the body states none of them. */
+	fields: string | undefined;
+}
+
+function readCapturedHttpError(captured: CapturedHttpErrorResponse | undefined): CapturedHttpErrorText | undefined {
 	if (!captured) return undefined;
 	const bodyText = captured.bodyText?.trim();
 	if (!bodyText) return undefined;
 	const payload = parseCapturedErrorPayload(captured);
-	if (!payload) return bodyText;
+	if (!payload) return { sentence: bodyText, fields: undefined };
 
 	const errorPayload = asRecord(payload.error) ?? payload;
 	// {"error": "string"} — the error value is a plain string, not a nested object.
 	// Fall back to it when the structured fields ("message", etc.) are absent.
 	const stringError = errorPayload === payload ? getNonBlankStringProperty(payload, "error") : undefined;
-	const message =
+	const sentence =
 		getNonBlankStringProperty(errorPayload, "message") ??
 		getNonBlankStringProperty(payload, "message") ??
 		stringError ??
 		bodyText;
-	const extras = (["type", "param", "code"] as const)
+	const fields = (["type", "param", "code"] as const)
 		.map(field => {
 			const value = getNonBlankStringProperty(errorPayload, field) ?? getNonBlankStringProperty(payload, field);
 			return value === undefined ? undefined : `${field}=${value}`;
 		})
 		.filter((entry): entry is string => entry !== undefined);
-	return extras.length > 0 ? `${message} (${extras.join(" ")})` : message;
+	return { sentence, fields: fields.length > 0 ? fields.join(" ") : undefined };
 }
 
 function parseCapturedErrorPayload(captured: CapturedHttpErrorResponse): Record<string, unknown> | undefined {

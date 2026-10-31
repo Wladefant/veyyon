@@ -167,11 +167,19 @@ export function resolveModelThinking<TApi extends Api>(
 		if (spec.reasoningOptions.noEffortControl === true) return undefined;
 		const discovered = spec.reasoningOptions.efforts;
 		if (discovered !== undefined && discovered.length > 0) {
-			return thinkingConfigFromEfforts(
+			const config = thinkingConfigFromEfforts(
 				spec,
 				compat,
 				normalizeOllamaWireEfforts(spec, canonicalizeEfforts(discovered)),
 			);
+			const { defaultLevel, requiresEffort } = spec.reasoningOptions;
+			if (defaultLevel !== undefined && config.efforts.includes(defaultLevel)) {
+				config.defaultLevel = defaultLevel;
+			}
+			if (requiresEffort === true) {
+				config.requiresEffort = true;
+			}
+			return config;
 		}
 	}
 	if (spec.thinking && Array.isArray(spec.thinking.efforts) && spec.thinking.efforts.length > 0) {
@@ -228,10 +236,7 @@ function fillThinkingWireDefaults<TApi extends Api>(
 			? inferEffortMap(spec, compat, thinking.mode, normalizedEfforts)
 			: undefined;
 	const shouldReplaceEffortMap = thinking.effortMap === undefined ? effortMap !== undefined : effortsChanged;
-	const needsDisplay =
-		thinking.supportsDisplay === undefined &&
-		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
-		supportsAdaptiveThinkingDisplay(spec.id);
+	const needsDisplay = thinking.supportsDisplay === undefined && acceptsAdaptiveThinkingDisplay(spec);
 	const needsPrefixBinding = thinking.prefixBinding === undefined && enforcesThinkingPrefixBinding(spec.id);
 	const needsRequiresEffort = thinking.requiresEffort === undefined && impliesMandatoryReasoning(parsed, spec.id);
 	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsPrefixBinding && !needsRequiresEffort) {
@@ -279,10 +284,7 @@ function thinkingConfigFromEfforts<TApi extends Api>(
 	if (effortMap !== undefined) {
 		config.effortMap = effortMap;
 	}
-	if (
-		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
-		supportsAdaptiveThinkingDisplay(spec.id)
-	) {
+	if (acceptsAdaptiveThinkingDisplay(spec)) {
 		config.supportsDisplay = true;
 	}
 	if (enforcesThinkingPrefixBinding(spec.id)) {
@@ -356,6 +358,23 @@ function isAnthropicMessagesGlm52ReasoningEffortModel<TApi extends Api>(spec: Mo
 
 function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
 	return spec.api === "anthropic-messages" && (isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id));
+}
+
+/**
+ * Kimi Code's Anthropic-compatible endpoint takes adaptive thinking: the effort rides
+ * `output_config.effort` and `thinking.display` selects summarized reasoning, the request the
+ * Kimi Code client sends.
+ */
+function isKimiCodeAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return spec.api === "anthropic-messages" && spec.provider === "kimi-code";
+}
+
+function acceptsAdaptiveThinkingDisplay<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	if (isKimiCodeAnthropicEndpoint(spec)) return true;
+	return (
+		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
+		supportsAdaptiveThinkingDisplay(spec.id)
+	);
 }
 
 function isOpenAICompatMimoReasoningEffortModel<TApi extends Api>(
@@ -445,7 +464,7 @@ function inferThinkingControlMode<TApi extends Api>(
 			return parsedModel.family === "gemini" && semverGte(parsedModel.version, "3.0") ? "google-level" : "budget";
 
 		case "anthropic-messages":
-			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
+			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec) || isKimiCodeAnthropicEndpoint(spec)) {
 				return "anthropic-adaptive";
 			}
 			if (isAnthropicMessagesGlm52ReasoningEffortModel(spec)) {

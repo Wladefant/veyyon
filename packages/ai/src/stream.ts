@@ -1609,6 +1609,7 @@ function optionsForApi(mapping: OptionsMapping): OptionsForApi<Api> {
 				execHandlers,
 				onToolResult: options.cursorOnToolResult ?? execHandlers?.onToolResult,
 				wireModelId: selection.wireModelId,
+				toolChoice: options.toolChoice,
 			} satisfies OptionsForApi<"cursor-agent">;
 		}
 		case "gitlab-duo-agent":
@@ -1618,7 +1619,11 @@ function optionsForApi(mapping: OptionsMapping): OptionsForApi<Api> {
 				toolChoice: options.toolChoice,
 			} satisfies OptionsForApi<"gitlab-duo-agent">;
 		case "devin-agent":
-			return { ...base, chatModelUid: selection.wireModelId } satisfies OptionsForApi<"devin-agent">;
+			return {
+				...base,
+				chatModelUid: selection.wireModelId,
+				toolChoice: options.toolChoice,
+			} satisfies OptionsForApi<"devin-agent">;
 		default:
 			throw new AIError.ConfigurationError(`Unhandled API in mapOptionsForApi: ${model.api}`);
 	}

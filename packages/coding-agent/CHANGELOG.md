@@ -34,13 +34,15 @@
 - Ambiguous artifact errors no longer expose paths from other sessions ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
 - Oversized artifact remedies preserve an explicitly selected execution session when paged through `read` ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
 
-- Exact history pages require a matching branch and record revision across continuations, honor the active branch, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
+- Send Codex access programs and routing hints from search, image generation, and prewarm requests.
+- Preserve required tool calls through session requests and avoid unchanged failed-discovery cache writes.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

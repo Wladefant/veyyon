@@ -211,7 +211,6 @@ describe.each(Object.entries(ROUTES))("completion route %s", (route, fixture) =>
 			});
 		}
 	});
-
 	it("answers a credential lookup that throws with the classifier's verdict", async () => {
 		const failure = statusError(503, "credential broker unreachable");
 		vi.spyOn(storage, "getApiKey").mockRejectedValue(failure);

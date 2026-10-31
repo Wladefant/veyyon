@@ -178,6 +178,12 @@ export const OBSERVED_PROVIDER_ERRORS: readonly ObservedProviderError[] = [
 	},
 	{
 		message:
+			"Connect error resource_exhausted: Increase limits for faster responses: You're out of usage. Switch to Auto or Composer 2.5, or ask your admin to increase your limit to continue. (ERROR_RATE_LIMITED)",
+		verdict: "wall",
+		why: "Cursor stating the plan's allowance for the model is spent. The same account gets the same answer until the plan changes or the limit is raised.",
+	},
+	{
+		message:
 			"429 Rate limit exceeded. Please try again later. retry-after-ms=50352000\nRate limit exceeded. Please try again later. (type=FreeUsageLimitError)",
 		verdict: "wall",
 		why: "A retry-after of fourteen hours is a cap, whatever the sentence beside it suggests.",

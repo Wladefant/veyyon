@@ -17,7 +17,8 @@
  *
  * DIRECTORIES. `dialect/` is one guide per tool-call syntax, plus the catalog
  * template that carries them; `provider/` is text a single provider needs for a
- * reason that is not about syntax.
+ * reason that is not about syntax; `tool-choice/` is the instruction a request
+ * carries when the caller requires a tool call its wire format cannot force.
  */
 import { definePromptRegistry, type PromptEntry } from "@veyyon/utils/prompt-registry";
 import dialectAnthropic from "./dialect/anthropic.md" with { type: "text" };
@@ -34,6 +35,8 @@ import dialectPromptTemplate from "./dialect/prompt-template.md" with { type: "t
 import dialectQwen3 from "./dialect/qwen3.md" with { type: "text" };
 import dialectXml from "./dialect/xml.md" with { type: "text" };
 import providerGitlabDuoWorkflowChatmlNote from "./provider/gitlab-duo-workflow-chatml-note.md" with { type: "text" };
+import toolChoiceAny from "./tool-choice/any.md" with { type: "text" };
+import toolChoiceNamed from "./tool-choice/named.md" with { type: "text" };
 
 export type { PromptEntry };
 
@@ -93,6 +96,14 @@ export const aiPrompts = definePromptRegistry("packages/ai/src/prompts", {
 	"provider/gitlab-duo-workflow-chatml-note": {
 		text: providerGitlabDuoWorkflowChatmlNote,
 		purpose: "tells the model that ChatML markers in its flattened history are a record, not a syntax to emit",
+	},
+	"tool-choice/any": {
+		text: toolChoiceAny,
+		purpose: "requires a call to some offered tool when the wire format cannot force one",
+	},
+	"tool-choice/named": {
+		text: toolChoiceNamed,
+		purpose: "requires a call to the named tool when the wire format cannot force it",
 	},
 });
 

@@ -297,6 +297,8 @@ If `llama.cpp` is not explicitly configured, registry adds an implicit discovera
 
 Runtime discovery calls llama.cpp model endpoints and synthesizes model entries with local defaults.
 
+Discovery probes a llama.cpp endpoint, implicit or configured, on every refresh whatever `models.db` holds, so a server restarted with a new `n_ctx` reports its context window at the next launch. When the probe fails, the cached models stay listed, and the cache entry is rewritten only when its content changes.
+
 ### Implicit LM Studio discovery
 
 If `lm-studio` is not explicitly configured, registry adds an implicit discoverable provider:
@@ -593,8 +595,8 @@ Request shaping:
 - `supportsMultipleSystemMessages`: preserve separate leading system/developer messages instead of coalescing them. Default: auto (known OpenAI-compatible hosted APIs preserve; strict-template/local hosts coalesce).
 - `supportsUsageInStreaming`: send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: `true`.
 - `maxTokensField`: `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
-- `supportsToolChoice`: emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. A 400 that names `tool_choice` as unsupported retries the request once without it, and the session omits that form (`auto`, `none` or a forced choice) for that model afterwards. Set `false` to omit the field from the first request (e.g. DeepSeek when reasoning is on).
-- `supportsForcedToolChoice`: accept a forced `tool_choice` that requires a specific tool. Default: `true`. When `false`, a forced selector is downgraded to `auto` so the tool stays available for endpoints that reject forced tool calls (e.g. some thinking-required OpenAI-compatible models).
+- `supportsToolChoice`: emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. A 400 that names `tool_choice` as unsupported retries the request once without it, and the session omits that form (`auto`, `none` or a forced choice) for that model afterwards. Set `false` to omit the field from the first request (e.g. DeepSeek when reasoning is on). A request that omits a forced choice closes its last turn with a reminder that names the required tool.
+- `supportsForcedToolChoice`: accept a forced `tool_choice` that requires a specific tool. Default: `true`. When `false`, a forced selector is downgraded to `auto` so the tool stays available for endpoints that reject forced tool calls (e.g. some thinking-required OpenAI-compatible models), and the request closes its last turn with a reminder that names the required tool.
 - `disableReasoningOnForcedToolChoice`: drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
 - `disableReasoningOnToolChoice`: drop reasoning fields whenever any `tool_choice` is sent. Default: auto (DeepSeek reasoning models).
 - `alwaysSendMaxTokens`: always send a max-token field when the caller did not provide one. Default: auto (Kimi-family models derive TPM limits from `max_tokens`).
@@ -660,7 +662,7 @@ For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` sh
 - `supportsEagerToolInputStreaming`: tools may carry the per-tool `eager_input_streaming` flag. Default: `true`.
 - `supportsLongCacheRetention`: the host accepts `ttl: "1h"` prompt-cache markers. Default: `true` on the Anthropic API.
 - `supportsMidConversationSystem`: the host accepts `role: "system"` messages inside `messages`. Default: auto from model id and base URL.
-- `supportsForcedToolChoice`: accept a forced `tool_choice`; when `false`, a forced choice is sent as `auto`. Default: `false` for Claude Opus and Sonnet 5.5 and later, Claude Fable and Mythos, and models with `requiresThinkingEnabled`; `true` otherwise. An endpoint that answers a forced choice with a 400 naming `tool_choice` gets `auto` for that model for the rest of the session.
+- `supportsForcedToolChoice`: accept a forced `tool_choice`; when `false`, a forced choice is sent as `auto` and the request closes its last turn with a reminder that names the required tool. Default: `false` for Claude Opus and Sonnet 5.5 and later, Claude Fable and Mythos, and models with `requiresThinkingEnabled`; `true` otherwise. An endpoint that answers a forced choice with a 400 naming `tool_choice` gets `auto` for that model for the rest of the session.
 - `supportsSamplingParams`: the model accepts `temperature`, `top_p` and `top_k`. Default: auto from model id.
 - `requiresToolResultId`: add a non-standard `id` alias to `tool_result` blocks (Z.AI-style proxies).
 - `replayUnsignedThinking`: replay unsigned thinking blocks as native thinking instead of text.

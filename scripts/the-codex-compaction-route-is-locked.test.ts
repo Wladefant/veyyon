@@ -36,6 +36,16 @@
  * branch (`resolveOpenAiCompactRequest`) so a compaction sends the same
  * `x-opencode-session` as the turns around it. The Codex branch, its endpoint,
  * its trigger item and its SSE reader are byte-identical to the 2026-09-01 lock.
+ *
+ * Re-locked 2026-10-21 with operator permission. The Codex branch sends
+ * `access_programs.cyber`, the Daybreak program the signing account is offered
+ * for the model, read from the model's per-account discovery entry or from the
+ * account listing its turn fetched; the compaction fetches no listing, so the
+ * compaction POST is its only request. Measured 2026-10-21 against a
+ * `daybreak_blue` ChatGPT account on `gpt-5.6-sol`: `POST {base}/codex/responses`
+ * with `access_programs: { cyber: "daybreak_blue" }`, `stream: true` and the
+ * trailing trigger answered `200` with one `compaction` item. The endpoint, the
+ * trigger item and the SSE reader are byte-identical to the 2026-09-01 lock.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -59,8 +69,10 @@ const LOCKED_FILE = "packages/ai/src/providers/openai-compaction.ts";
  * Re-locked after merging origin/main `ccfa28057e` (OpenCode conversation id
  * has one owner). The wire is unchanged: `{base}/codex/responses`, `stream: true`,
  * trailing `compaction_trigger`. `{base}/codex/responses/compact` still answers 404.
+ *
+ * Re-locked 2026-10-21 for the Codex `access_programs` field (see the header).
  */
-const LOCKED_SHA256 = "2c18e649bd3279671519feacfb14400dfb94800022d887539c69781127d51ff8";
+const LOCKED_SHA256 = "a2a4561ae2478c78bd53616b0fedd8ce248f543b33db0fb911a03e5bab4a71fb";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 

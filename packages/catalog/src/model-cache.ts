@@ -9,10 +9,10 @@ import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v14 invalidates Codex
-// rows discovered before `available_access_programs` was read: a cached row
-// without `accessPrograms` sends no `access_programs.cyber` for up to the 24
-// hour TTL. v13 invalidates
+// the model manager rebuilds via `buildModel` on load. v15 invalidates rows
+// with single-account `accessPrograms`; discovery now records `accountAccess`.
+// v14 invalidates Codex rows discovered before `available_access_programs`
+// was read. v13 invalidates
 // Antigravity rows discovered as client 2.1.4: the endpoint lists Gemini 4 Argon
 // and the per-tier Gemini 3.8 Flash deployments only to client 3.0.0 or later,
 // so a cached list keeps Argon out of the picker for up to the 24 hour TTL. v12 invalidates rows
@@ -42,7 +42,7 @@ import type { Api, Model, ModelSpec } from "./types";
 // (222222/8888); v5 invalidated rows predating effort-tier variant collapsing
 // (raw `-low`/`-high`/`-thinking` member ids); v4 dropped the pre-efforts
 // ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 14;
+const CACHE_SCHEMA_VERSION = 15;
 
 interface CacheRow {
 	provider_id: string;
@@ -230,6 +230,11 @@ export function readModelCache<TApi extends Api>(
 	}
 }
 
+/**
+ * Upsert `providerId`'s row. With `skipUnchanged`, a row that already states the same content (every
+ * persisted field except the timestamp) is left as it is, timestamp included: the upsert then modifies no
+ * page, so it appends no WAL frame and costs no sync.
+ */
 export function writeModelCache<TApi extends Api>(
 	providerId: string,
 	updatedAt: number,
@@ -237,6 +242,7 @@ export function writeModelCache<TApi extends Api>(
 	authoritative: boolean,
 	staticFingerprint: string,
 	dbPath?: string,
+	options: { skipUnchanged?: boolean } = {},
 ): void {
 	try {
 		withModelCacheDb(dbPath, db => {
@@ -253,6 +259,9 @@ export function writeModelCache<TApi extends Api>(
 				.digest("hex");
 			// An upsert, not INSERT OR REPLACE: the latter deletes and re-inserts,
 			// which fires the mutation triggers for a row whose content did not move.
+			const unchangedGuard = options.skipUnchanged
+				? " WHERE model_cache.content_fingerprint IS NOT excluded.content_fingerprint"
+				: "";
 			db.run(
 				`INSERT INTO model_cache
 				 (provider_id, version, updated_at, authoritative, static_fingerprint, content_fingerprint, models)
@@ -263,7 +272,7 @@ export function writeModelCache<TApi extends Api>(
 				     authoritative = excluded.authoritative,
 				     static_fingerprint = excluded.static_fingerprint,
 				     content_fingerprint = excluded.content_fingerprint,
-				     models = excluded.models`,
+				     models = excluded.models${unchangedGuard}`,
 				[
 					providerId,
 					CACHE_SCHEMA_VERSION,

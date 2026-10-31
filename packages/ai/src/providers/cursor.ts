@@ -6,7 +6,6 @@ import { create, fromBinary, fromJson, type JsonValue, toBinary, toJson, type Un
 import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import type { McpToolDefinition } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
-import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import {
 	AgentClientMessageSchema,
 	AgentConversationTurnStructureSchema,
@@ -96,6 +95,7 @@ import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { clampLow, logger } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
+import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import * as AIError from "../error";
@@ -118,6 +118,7 @@ import type {
 	ThinkingContent,
 	Tool,
 	ToolCall,
+	ToolChoice,
 	ToolResultMessage,
 	VideoContent,
 } from "../types";
@@ -148,6 +149,7 @@ import {
 	type RequestDebugSession,
 } from "../utils/request-debug";
 import { toolWireSchema } from "../utils/schema/wire";
+import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
 	buildDeleteErrorResult,
 	buildDeleteRejectedResult,
@@ -242,6 +244,8 @@ export interface CursorOptions extends StreamOptions {
 	onToolResult?: CursorToolResultHandler;
 	/** Wire model uid selected after thinking-effort routing (see mapOptionsForApi). */
 	wireModelId?: string;
+	/** A tool call the turn requires. The run request cannot force one, so the requirement is sent as text. */
+	toolChoice?: ToolChoice;
 }
 
 interface CursorLogEntry {
@@ -1415,7 +1419,10 @@ function handleKvServerMessage(
 		const responseBytes = toBinary(AgentClientMessageSchema, kvClientMessage);
 		h2Request.write(frameConnectMessage(responseBytes));
 
-		void logCursorDiagnostic("kvClient", "getBlobResult", { blobId: blobIdKey.slice(0, 40), hit: blobData !== undefined });
+		void logCursorDiagnostic("kvClient", "getBlobResult", {
+			blobId: blobIdKey.slice(0, 40),
+			hit: blobData !== undefined,
+		});
 	} else if (kvCase === "setBlobArgs") {
 		const { blobId, blobData } = kvMsg.message.value;
 		const blobIdKey = Buffer.from(blobId).toString("hex");
@@ -3308,7 +3315,7 @@ function countTextOccurrences(haystack: string, needle: string): number {
 /** Build the run request. Exported so a test can read what the active turn carries. */
 export async function buildGrpcRequest(
 	model: Model<"cursor-agent">,
-	context: Context,
+	requestContext: Context,
 	options: CursorOptions | undefined,
 	state: {
 		conversationId: string;
@@ -3326,6 +3333,8 @@ export async function buildGrpcRequest(
 	 */
 	systemPromptBlobIds: ReadonlySet<string>;
 }> {
+	// Cursor's run request has no tool-choice field, so a required call rides the turn as text.
+	const context = carryRequiredToolCall(requestContext, options?.toolChoice, "open");
 	const blobStore = state.blobStore;
 
 	const systemPromptJsons = buildCursorSystemPromptJsons();
