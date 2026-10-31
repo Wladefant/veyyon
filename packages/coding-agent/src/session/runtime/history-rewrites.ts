@@ -403,9 +403,11 @@ export class HistoryRewrites {
 				serialized: JSON.stringify(original),
 				appliedSerialized: "",
 			};
-		}).filter(change => this.#unprofitableRecoveryCandidates.get(change.original) !== change.serialized);
-		// The selector may reselect an unchanged, unprofitable useless result on every turn.
-		// Refuse it before allocating another artifact; a changed entry is reconsidered.
+		}).filter(change =>
+			operation === "drop-images" || this.#unprofitableRecoveryCandidates.get(change.original) !== change.serialized,
+		);
+		// This memo is a pruning cost decision, not an image-removal permission.
+		// An unchanged image-bearing result must still be archived and stripped.
 		if (changes.length === 0) return { changedCount: 0, tokensSaved: 0 };
 		const archive = JSON.stringify({
 			version: 1,

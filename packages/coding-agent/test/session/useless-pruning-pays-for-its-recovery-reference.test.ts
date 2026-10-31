@@ -33,7 +33,7 @@ type UselessPruneHarness = {
 	entryIds: string[];
 };
 
-async function createHarness(texts: readonly string[]): Promise<UselessPruneHarness> {
+async function createHarness(texts: readonly string[], includeNestedImage = false): Promise<UselessPruneHarness> {
 	const temp = TempDir.createSync("@veyyon-useless-recovery-cost-");
 	const manager = SessionManager.create(temp.path(), temp.path(), new FileSessionStorage());
 	try {
@@ -58,6 +58,9 @@ async function createHarness(texts: readonly string[]): Promise<UselessPruneHarn
 				isError: false,
 				useless: true,
 				content: [{ type: "text", text }],
+				...(includeNestedImage
+					? { details: { images: [{ type: "image", data: "c3ludGhldGljLWltYWdl", mimeType: "image/png" }] } }
+					: {}),
 				timestamp: Date.now(),
 			});
 		});
@@ -150,6 +153,44 @@ describe("useless pruning pays for its recovery reference", () => {
 			const archived = JSON.parse(await fs.readFile(artifact, "utf8"));
 			expect(archived.entries[0].message.content).toEqual([{ type: "text", text: PROFITABLE_RESULT }]);
 		} finally {
+			await closeHarness(harness);
+		}
+	});
+
+	it("does not let an unprofitable prune suppress explicit image removal", async () => {
+		const harness = await createHarness([SMALL_RESULT], true);
+		let reloaded: SessionManager | undefined;
+		try {
+			const entryId = harness.entryIds[0]!;
+			const original = structuredClone(getToolResult(harness.manager, entryId));
+			const artifacts = harness.manager.getArtifactManager();
+			if (!artifacts) throw new Error("Expected session artifact manager");
+			const before = await artifacts.listFiles();
+
+			// The first pass rejects this short result after writing a cost-check
+			// artifact. Its memo cannot prohibit a later image-only operation.
+			expect(await harness.rewrites.pruneStale()).toBeUndefined();
+			expect(await artifacts.listFiles()).toHaveLength(before.length + 1);
+			expect(getToolResult(harness.manager, entryId)).toEqual(original);
+
+			expect(await harness.rewrites.dropImages()).toEqual({ removed: 1 });
+			expect(await artifacts.listFiles()).toHaveLength(before.length + 2);
+			const stripped = getToolResult(harness.manager, entryId);
+			expect(stripped.message.details).toEqual({ images: [] });
+			const artifactId = JSON.stringify(stripped.message.content).match(/artifact:\/\/([^\s)]+)/)?.[1];
+			if (!artifactId) throw new Error("Expected a recovery reference after image removal");
+
+			reloaded = await SessionManager.open(harness.file, harness.temp.path(), undefined, { suppressBreadcrumb: true });
+			expect(reloaded.getEntry(entryId)).toEqual(stripped);
+			const artifactPath = await reloaded.getArtifactPath(artifactId);
+			if (!artifactPath) throw new Error("Expected an archived original image after reload");
+			const archive = JSON.parse(await fs.readFile(artifactPath, "utf8"));
+			expect(archive.operation).toBe("drop-images");
+			expect(archive.entries).toEqual([original]);
+			expect(harness.agent.state.messages).toEqual(harness.manager.buildSessionContext().messages);
+			expect(await harness.rewrites.dropImages()).toEqual({ removed: 0 });
+		} finally {
+			if (reloaded) await reloaded.close();
 			await closeHarness(harness);
 		}
 	});

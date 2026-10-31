@@ -628,6 +628,8 @@ The saved archive may also contain selected originals that remain unchanged afte
 It saves complete original entries in a `drop-images` recovery envelope before publishing removals.
 Retained text names the archive and entry.
 Each affected file mention carries its own reference.
+A previous cost-negative useless-result prune never suppresses explicit image removal:
+still-present images in tool-result details are archived and stripped even when the text was too short to prune.
 
 Archive failure leaves live entries and persisted bytes unchanged.
 Persistence failure restores unchanged records, but never overwrites concurrent edits.
