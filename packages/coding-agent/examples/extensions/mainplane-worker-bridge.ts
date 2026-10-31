@@ -1,10 +1,11 @@
 /** Explicit opt-in native Mainplane worker tools; provider/auth services are unchanged. */
 import type { ExtensionAPI } from "@veyyon/coding-agent";
 import { bindReceipt, bridgeRequest, type BridgeReceipt, digest, MainplaneError, mainplaneRequestHash,
-	remoteRunId, remoteSessionId, SHA256, validateReceipt, visibleError, WORKER_ID } from "./mainplane-bridge-wire";
+	receiptIsError, remoteRunId, remoteSessionId, SHA256, validateReceipt, visibleError, WORKER_ID } from "./mainplane-bridge-wire";
 import { registerMainplaneWrite } from "./mainplane-bridge-write";
 import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
 import { registerMainplaneOutputRecovery } from "./mainplane-bridge-output";
+import { registerMainplaneJobs } from "./mainplane-bridge-jobs";
 
 export async function readRemoteReceipt(origin: string, token: string, runId: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch): Promise<BridgeReceipt> {
@@ -52,7 +53,7 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 			if (!sessionFile) return { content: [{ type: "text", text: "A persisted Veyyon session is required" }], isError: true };
 			try {
 				const answer = await runRemote(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", { ...params, sessionFile, toolCallId }, signal);
-				return { content: [{ type: "text", text: JSON.stringify(answer) }], isError: answer.result.state !== "completed" || answer.result.exit !== 0,
+				return { content: [{ type: "text", text: JSON.stringify(answer) }], isError: receiptIsError(answer.result),
 					details: { run_id: answer.id, state: answer.result.state, exit: answer.result.exit, replayed: answer.replayed } };
 			} catch (error) { return { content: [{ type: "text", text: visibleError(error) }], isError: true }; }
 		},
@@ -70,16 +71,17 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	});
 	pi.registerTool({
 		name: "mainplane_run_receipt", label: "Mainplane operation receipt",
-		description: "Inspect a validated durable operation receipt; never executes or retries work.",
+		description: "Inspect a validated durable operation receipt; never executes or retries work. Accepted jobs remain pending.",
 		parameters: z.object({ runId: z.string().regex(WORKER_ID) }),
 		async execute(_toolCallId, params, signal) {
 			try {
 				const result = await readRemoteReceipt(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", params.runId, signal);
-				return { content: [{ type: "text", text: JSON.stringify(result) }], isError: result.state !== "completed" || result.exit !== 0 };
+				return { content: [{ type: "text", text: JSON.stringify(result) }], isError: receiptIsError(result) };
 			} catch (error) { return { content: [{ type: "text", text: visibleError(error) }], isError: true }; }
 		},
 	});
 	registerMainplaneWrite(pi);
 	registerMainplaneCancellation(pi);
 	registerMainplaneOutputRecovery(pi);
+	registerMainplaneJobs(pi);
 }
