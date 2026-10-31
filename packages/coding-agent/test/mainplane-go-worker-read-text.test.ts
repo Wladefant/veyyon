@@ -30,4 +30,20 @@ describe("Mainplane worker read integrity", () => {
 		expect(result.text).toBe("x".repeat(49_999));
 		expect(result.truncated).toBe(true);
 	});
+	test("rejects digest-valid NUL-containing UTF-8 even beyond the preview", async () => {
+		for (const value of ["ok\\0hidden", "x".repeat(50_001) + "\\0hidden"]) {
+			const transport = (async () => response(Buffer.from(value, "utf8"))) as typeof fetch;
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				"/binary-like", undefined, transport)).rejects.toThrow("binary");
+		}
+	});
+	test("preserves ordinary Unicode and line breaks across the binary boundary", async () => {
+		const content = "München\\n東京";
+		const transport = (async () => response(Buffer.from(content, "utf8"))) as typeof fetch;
+		const result = await readRemoteText("https://fleet.example/", "fixture-key",
+			"pc2", "/unicode", undefined, transport);
+		expect(result.text).toBe(content);
+		expect(result.bytes).toBe(Buffer.byteLength(content, "utf8"));
+		expect(result.truncated).toBe(false);
+	});
 });
