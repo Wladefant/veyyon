@@ -25,7 +25,7 @@ describe("telegram-delivery-trace", () => {
 		const parsed = parseTelegramTrace({
 			updateId: 101,
 			messageId: 202,
-			chatId: "chat-xyz",
+			chatId: "-100123456",
 			topicId: 5,
 			sourceTimestampMs: 1700000000000,
 			extraField: "should-be-stripped",
@@ -34,7 +34,7 @@ describe("telegram-delivery-trace", () => {
 		expect(parsed).toEqual({
 			updateId: 101,
 			messageId: 202,
-			chatId: "chat-xyz",
+			chatId: "-100123456",
 			topicId: 5,
 			sourceTimestampMs: 1700000000000,
 		});
