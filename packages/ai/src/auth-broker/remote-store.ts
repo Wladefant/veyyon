@@ -155,7 +155,7 @@ function assertBrokerOAuthRefresh(
  * Refuse an unrelated grant before broker-side refresh and a revoked grant after reply.
  * The broker alone rotates refresh credentials; this is a client identity fence.
  */
-function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: number, provider?: string): SnapshotEntry {
+function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: number, provider?: string): SnapshotEntry & { credential: OAuthCredential } {
 	const current = snapshot.credentials.find(candidate => candidate.id === credentialId);
 	if (
 		!current ||
@@ -165,7 +165,7 @@ function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: numb
 	) {
 		throw new AIError.AuthBrokerError(`Broker refresh refused unknown or mismatched OAuth credential id=${credentialId}`);
 	}
-	return current;
+	return current as SnapshotEntry & { credential: OAuthCredential };
 }
 
 function emptySnapshot(): SnapshotResponse {
@@ -913,6 +913,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
 		const current = requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
+		const selectedAccess = current.credential.access;
 		const { entry } = await this.#client.refreshCredential(credentialId, signal);
 		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
 		requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
@@ -920,6 +921,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			await this.refreshSnapshot().catch(error => {
 				this.#reportStaleSnapshot("refresh-after-credential-refresh", error, { credentialId });
 			});
+		}
+		// A non-streaming reconciliation is another await after response validation: it may
+		// observe a disable or a newer access token that must not be overwritten by this reply.
+		const reconciled = requireLocalOAuthRefresh(this.#snapshot, credentialId, provider);
+		if (reconciled.credential.access !== selectedAccess && reconciled.credential.access !== entry.credential.access) {
+			throw new AIError.AuthBrokerError(`Broker refresh superseded by newer OAuth credential id=${credentialId}`);
 		}
 		const refreshed = entry.credential;
 		return {
