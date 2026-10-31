@@ -4,6 +4,7 @@ import { bindReceipt, bridgeRequest, type BridgeReceipt, digest, MainplaneError,
 	remoteRunId, remoteSessionId, SHA256, validateReceipt, visibleError, WORKER_ID } from "./mainplane-bridge-wire";
 import { registerMainplaneWrite } from "./mainplane-bridge-write";
 import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
+import { registerMainplaneOutputRecovery } from "./mainplane-bridge-output";
 
 export async function readRemoteReceipt(origin: string, token: string, runId: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch): Promise<BridgeReceipt> {
@@ -80,4 +81,5 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	});
 	registerMainplaneWrite(pi);
 	registerMainplaneCancellation(pi);
+	registerMainplaneOutputRecovery(pi);
 }
