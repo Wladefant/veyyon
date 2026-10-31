@@ -42,6 +42,8 @@ export async function readRemoteText(origin: string, token: string, worker: stri
 	let value: string;
 	try { value = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
 	catch { throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool"); }
+	// Validate the whole digest-verified payload, not just the visible preview.
+	if (value.includes("\0")) throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool");
 	let end = Math.min(value.length, 50_000);
 	if (end < value.length && /[\uD800-\uDBFF]/.test(value.charAt(end - 1))) end--;
 	return { text: value.slice(0, end), bytes: bytes.byteLength, sha256: data.sha256, truncated: end < value.length };
