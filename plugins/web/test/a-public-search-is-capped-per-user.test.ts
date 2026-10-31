@@ -27,14 +27,18 @@ interface Account {
 	key: BraveKey | null;
 }
 
-const ALICE: Account = { token: "token-alice", userId: "alice", key: { apiKey: "key-alice", costMicrousdPerRequest: 1 } };
+const ALICE: Account = {
+	token: "token-alice",
+	userId: "alice",
+	key: { apiKey: "key-alice", costMicrousdPerRequest: 1 },
+};
 const BOB: Account = { token: "token-bob", userId: "bob", key: { apiKey: "key-bob", costMicrousdPerRequest: 1 } };
 const CAROL: Account = { token: "token-carol", userId: "carol", key: null };
 
 interface UpstreamCall {
 	url: URL;
 	token: string | null;
-	redirect: RequestRedirect | undefined;
+	redirect: RequestInit["redirect"];
 }
 
 interface Upstream {
@@ -71,19 +75,19 @@ interface HarnessOptions {
 
 function harness(options: HarnessOptions = {}) {
 	const accounts = options.accounts ?? [ALICE, BOB, CAROL];
-	const byToken = new Map(accounts.map((account) => [account.token, account] as const));
+	const byToken = new Map(accounts.map(account => [account.token, account] as const));
 	const lookups: string[] = [];
 	const fake = options.upstream ?? upstream();
 	const clock = { nowMs: options.start ?? T0 };
 	const handle = createPublicSearchHandler({
-		authorize: async (request) => {
+		authorize: async request => {
 			const token = request.headers.get("authorization")?.replace("Bearer ", "") ?? "";
 			const account = byToken.get(token);
 			return account ? { userId: account.userId } : null;
 		},
-		resolveBraveKey: async (userId) => {
+		resolveBraveKey: async userId => {
 			lookups.push(userId);
-			return accounts.find((account) => account.userId === userId)?.key ?? null;
+			return accounts.find(account => account.userId === userId)?.key ?? null;
 		},
 		budget: new InMemoryPublicSearchBudget({ expiresAt: options.budgetExpiresAt ?? FAR_FUTURE }),
 		fetch: fake.fetch,
@@ -109,7 +113,7 @@ function searchRequest(body: unknown, token: string | null = ALICE.token): Reque
 	});
 }
 
-function send(h: Harness, body: unknown, token: string = ALICE.token): Promise<Response> {
+function send(h: Harness, body: unknown, token: string | null = ALICE.token): Promise<Response> {
 	return h.handle(searchRequest(body, token));
 }
 
@@ -142,21 +146,16 @@ describe("public search admission", () => {
 
 	it("refuses a body that is not exactly one non-blank query of at most 2048 characters, or a non-POST method", async () => {
 		const h = harness();
-		const invalid = [
-			"not json",
-			"[]",
-			"{}",
-			{ query: 5 },
-			{ query: "   " },
-			{ query: "x".repeat(2049) },
-		];
+		const invalid = ["not json", "[]", "{}", { query: 5 }, { query: "   " }, { query: "x".repeat(2049) }];
 		for (const body of invalid) {
 			expect((await send(h, body)).status).toBe(400);
 		}
-		const get = await h.handle(new Request("https://worker.test/v1/search", {
-			method: "GET",
-			headers: { authorization: `Bearer ${ALICE.token}` },
-		}));
+		const get = await h.handle(
+			new Request("https://worker.test/v1/search", {
+				method: "GET",
+				headers: { authorization: `Bearer ${ALICE.token}` },
+			}),
+		);
 		expect(get.status).toBe(405);
 		expect(h.upstream.calls).toHaveLength(0);
 	});
@@ -190,7 +189,7 @@ describe("per-user credentials and limits", () => {
 		expect(carol.status).toBe(403);
 		expect(await carol.json()).toEqual({ error: "no_key" });
 
-		expect(h.upstream.calls.map((call) => call.token)).toEqual([
+		expect(h.upstream.calls.map(call => call.token)).toEqual([
 			"key-alice",
 			"key-alice",
 			"key-alice",
@@ -300,12 +299,10 @@ describe("budget failure modes fail closed", () => {
 describe("concurrency and failed upstream attempts", () => {
 	it("admits only five of twelve concurrent searches from one user", async () => {
 		const h = harness({ start: T0 });
-		const responses = await Promise.all(
-			Array.from({ length: 12 }, () => send(h, { query: "rust" })),
-		);
-		const statuses = responses.map((res) => res.status).sort((a, b) => a - b);
-		expect(statuses.filter((status) => status === 200)).toHaveLength(5);
-		expect(statuses.filter((status) => status === 429)).toHaveLength(7);
+		const responses = await Promise.all(Array.from({ length: 12 }, () => send(h, { query: "rust" })));
+		const statuses = responses.map(res => res.status).sort((a, b) => a - b);
+		expect(statuses.filter(status => status === 200)).toHaveLength(5);
+		expect(statuses.filter(status => status === 429)).toHaveLength(7);
 		expect(h.upstream.calls).toHaveLength(5);
 	});
 
@@ -317,7 +314,7 @@ describe("concurrency and failed upstream attempts", () => {
 		};
 		const h = harness({
 			accounts: [expensive],
-			upstream: upstream((index) => {
+			upstream: upstream(index => {
 				if (index === 1) return new Response("upstream says key-erin rust", { status: 500 });
 				if (index === 2) throw new Error(`network down for ${KEY_MARKER}`);
 				return okResponse([]);
@@ -339,7 +336,7 @@ describe("concurrency and failed upstream attempts", () => {
 
 	it("returns 502 for an oversize or malformed upstream body and still counts the attempt", async () => {
 		const h = harness({
-			upstream: upstream((index) => {
+			upstream: upstream(index => {
 				if (index === 1) return new Response("x".repeat(256 * 1024 + 1), { status: 200 });
 				return new Response("{not json", { status: 200 });
 			}),
@@ -390,7 +387,11 @@ describe("upstream request and response contract", () => {
 			},
 			{ title: "exact", url: exactUrl, description: "" },
 			{ title: "long", url: longUrl, description: "" },
-			...Array.from({ length: 8 }, (_, i) => ({ title: `t${i}`, url: `https://example.com/${i}`, description: `d${i}` })),
+			...Array.from({ length: 8 }, (_, i) => ({
+				title: `t${i}`,
+				url: `https://example.com/${i}`,
+				description: `d${i}`,
+			})),
 			{ title: "dropped", url: "https://example.com/11", description: "dropped" },
 		];
 		const h = harness({ upstream: upstream(() => okResponse(results)) });
@@ -411,7 +412,7 @@ describe("upstream request and response contract", () => {
 		});
 		expect(body.results[1]).toEqual({ title: "exact", url: exactUrl, snippet: "" });
 		// The overlong URL is skipped, not cut, and frees its slot: the ten admitted results are exactly these.
-		expect(body.results.map((item) => item.url)).toEqual([
+		expect(body.results.map(item => item.url)).toEqual([
 			"https://example.com/a",
 			exactUrl,
 			...Array.from({ length: 8 }, (_, i) => `https://example.com/${i}`),

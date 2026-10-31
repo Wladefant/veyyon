@@ -87,7 +87,7 @@ const ERROR_STATUS: Record<PublicSearchErrorCode, number> = {
 	upstream_oversize: 502,
 };
 
-const JSON_HEADERS: HeadersInit = {
+const JSON_HEADERS = {
 	"content-type": "application/json; charset=utf-8",
 	"cache-control": "no-store",
 };

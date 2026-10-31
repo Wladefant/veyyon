@@ -28,3 +28,51 @@ that rather than reaching for a global.
 
 A cancelled signal raises an error whose `name` is `AbortError` or `TimeoutError`, so
 `isCancellation` from `@veyyon/utils` recognizes it and the abort reason survives on `cause`.
+
+## Public fetch HTTP handler
+
+`createPublicFetchHandler` in `@veyyon/web/public-fetch-handler` returns `(request: Request) => Promise<Response>` for a Worker `fetch` entry. It wraps `createPublicFetchService`.
+
+```ts
+import { createPublicFetchHandler } from "@veyyon/web/public-fetch-handler";
+
+export default {
+	fetch: createPublicFetchHandler({
+		authorize: authorizeFromCredentials, // host function: verified request -> { userId } | null
+		admission: budgetBinding, // host binding to the durable budget from issue #628
+	}),
+};
+```
+
+### Required binding
+
+- `admission` must bind to the durable budget from issue #628. This package does not implement that binding and has no default allowance.
+- `authorize` must derive `userId` from a credential the server verifies. The handler never reads a user id from a header, a query parameter or a body.
+- `transport` is optional. Without it, the service dials through the Node TLS transport, which needs `node:net` and `node:tls`. A runtime without them must inject a transport.
+- `timeoutMs` is optional. It must be above 0 and at most 15000. The default is 15000. One deadline covers `authorize` and the service.
+
+### GET contract
+
+- Accepts `GET /?url=<https-url>` with exactly one `url` parameter.
+- `405` for any other method, with `Allow: GET`.
+- `400` for a missing, repeated, empty or non-https `url`.
+- `403` when `authorize` returns `null`, returns no user id, or throws. No admission reservation and no upstream call happen.
+- `429` when admission denies the reservation. `502` for any other failure, with a generic message.
+- `504` with `{"error":"public fetch timed out"}` when the handler or the service deadline passes.
+- `200` returns JSON with `url`, `contentType`, `text` and `truncated`. Headers: `content-type: application/json; charset=utf-8` and `cache-control: no-store`.
+- Error bodies hold a fixed message only. They never echo the URL, a credential or an upstream error.
+
+### Fixed bounds
+
+- Redirects: at most 3. Each hop repeats DNS vetting.
+- Body read cap: 2 MiB. Returned text: at most 256 KiB of UTF-8.
+- Media types: `text/html`, `text/plain`, `application/json`, `application/rss+xml`, `application/atom+xml`. Charsets: `utf-8` and `us-ascii`. Identity content encoding only.
+- SSRF: IP literals and local host suffixes are refused before DNS. Every DNS answer must be global. The first vetted address is pinned for the TLS dial. Non-default ports and URL credentials are refused.
+- Admission request: scope `fetch:public`, 10 per minute and 1000 per month.
+
+### Not in this package
+
+- Issue #628 (durable budget and authentication), and sibling shared contracts #630, #631 and #632, are not implemented here.
+- No deployment, provisioning, Worker configuration, secret or database is included.
+- Workers deployment remains blocked: production-edge probes of IP-pinned TLS fail while hostname controls succeed, matching [workerd #6903](https://github.com/cloudflare/workerd/issues/6903). Pausing the raw socket before its TLS handoff fixes the pending-reader failure; it does not fix the edge's unsupported `expectedServerHostname` option. The service retains IP pinning and never retries through an unpinned hostname fetch.
+- The three deterministic public-fetch suites passed at `363075d757ef971184273ea6f74884d8595291a0` ([157 tests, 367 assertions](https://github.com/Wladefant/veyyon/actions/runs/40636353511)). That run skipped static checks and cannot prove the deployed Workers TLS behavior. The later raw-socket handoff change requires its own test run.
