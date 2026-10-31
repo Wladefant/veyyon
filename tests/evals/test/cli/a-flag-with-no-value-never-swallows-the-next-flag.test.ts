@@ -19,15 +19,20 @@
 
 import { describe, expect, it } from "bun:test";
 import { harnessFlags, suites } from "../../engine/members/loaded";
-import { BOOLEAN_FLAGS, CliUsageError, evalsUsage, parseEvalsArgs, suiteContext, VALUE_FLAGS } from "../../evals";
+import {
+	BOOLEAN_FLAGS,
+	CliUsageError,
+	evalsUsage,
+	parseEvalsArgs,
+	parseSkillCommandArgs,
+	suiteContext,
+	VALUE_FLAGS,
+} from "../../evals";
 
 const fixedValueFlags = Object.keys(VALUE_FLAGS);
 const declaredHarnessFlags = harnessFlags().map(flag => `--${flag}`);
 const valueFlags = [...fixedValueFlags, ...declaredHarnessFlags];
 const booleanFlags = Object.keys(BOOLEAN_FLAGS);
-
-/** Flags the `serve` subcommand parser owns, not the main flag grammar. */
-const SERVE_ONLY_FLAGS = new Set(["--port", "--host"]);
 
 describe("a value flag refuses a missing value", () => {
 	it("has value flags to sweep", () => {
@@ -85,6 +90,18 @@ describe("axis flags", () => {
 			"deep-swe",
 			"typescript-edit",
 		]);
+	});
+	it("accepts the diagnostic pilot phase without a tuning split", () => {
+		const args = parseEvalsArgs([
+			"--skill-experiment",
+			"skills/example.json",
+			"--skill-phase",
+			"pilot",
+			"--limit",
+			"1",
+		]);
+		expect(args.skillPhase).toBe("pilot");
+		expect(args.skillSplitSeed).toBeNull();
 	});
 });
 
@@ -162,17 +179,35 @@ describe("the parser and the help it prints agree", () => {
 		expect(undocumented).toEqual([]);
 	});
 
-	it("accepts every flag its help advertises", () => {
-		const advertised = [...new Set([...evalsUsage().matchAll(/(--[a-z][a-z-]+)/g)].map(match => match[1] as string))];
+	it("accepts every flag advertised by the main command grammar", () => {
+		const mainHelp = evalsUsage().split("\nAxes:\n")[1] ?? "";
+		const advertised = [...new Set([...mainHelp.matchAll(/(--[a-z][a-z-]+)/g)].map(match => match[1] as string))];
 		const rejected = advertised.filter(
-			flag =>
-				!VALUE_FLAGS[flag] &&
-				!BOOLEAN_FLAGS[flag] &&
-				!harnessFlags().includes(flag.slice(2)) &&
-				!SERVE_ONLY_FLAGS.has(flag),
+			flag => !VALUE_FLAGS[flag] && !BOOLEAN_FLAGS[flag] && !harnessFlags().includes(flag.slice(2)),
 		);
 
 		expect(rejected).toEqual([]);
+		for (const flag of advertised) {
+			if (BOOLEAN_FLAGS[flag]) {
+				expect(() => parseEvalsArgs([flag])).not.toThrow();
+			} else {
+				expect(() => parseEvalsArgs([flag])).toThrow(CliUsageError);
+			}
+		}
+	});
+
+	it("accepts skill flags only in the subcommand grammar that owns them", () => {
+		const skillFlags = {
+			revise: ["--manifest", "--tasks", "--run", "--split-seed", "--model", "--output"],
+			select: ["--manifest", "--tasks", "--run", "--split-seed", "--candidate", "--output"],
+			inspect: ["--manifest", "--run", "--candidate"],
+		} as const;
+		for (const [command, flags] of Object.entries(skillFlags)) {
+			for (const flag of flags) {
+				expect(parseSkillCommandArgs(command, [flag, "value"]).get(flag)).toBe("value");
+				expect(() => parseSkillCommandArgs(command, [flag])).toThrow(/unique supported/);
+			}
+		}
 	});
 
 	it("names the harnesses that read each harness flag, so help says who it reaches", () => {

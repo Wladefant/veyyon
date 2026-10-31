@@ -52,6 +52,7 @@ function variantIdentity(variant: Variant): string {
 		variant.model,
 		[...variant.attachments].sort().join(","),
 		...(variant.build ? [variant.build] : []),
+		...(variant.skillArm ? [JSON.stringify(variant.skillArm)] : []),
 	].join("\u0000");
 }
 
@@ -68,6 +69,8 @@ export function planIdentity(plan: RunPlan): string {
 	hash.update(plan.provenance.sha ?? "");
 	hash.update("\u0000");
 	hash.update(plan.suite.backend);
+	if (plan.skillBinding) hash.update(JSON.stringify(plan.skillBinding));
+	if (plan.skillPhase) hash.update(`\u0002${plan.skillPhase}`);
 	for (const identity of plan.variants.map(variantIdentity).sort()) {
 		hash.update("\u0001");
 		hash.update(identity);

@@ -38,6 +38,30 @@ import {
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
 
+/** Accept only the JSON-RPC envelopes the stream dispatcher can safely consume. */
+function isStreamMessage(value: unknown): value is JsonRpcMessage {
+	if (!isRecord(value) || value.jsonrpc !== "2.0") return false;
+	const hasId = "id" in value;
+	const validId = typeof value.id === "string" || (typeof value.id === "number" && Number.isFinite(value.id));
+	if ("method" in value) {
+		return (
+			typeof value.method === "string" &&
+			(!hasId || validId) &&
+			(value.params === undefined || isRecord(value.params)) &&
+			!("result" in value) &&
+			!("error" in value)
+		);
+	}
+	if (!hasId || (!validId && value.id !== null)) return false;
+	const hasResult = "result" in value;
+	const hasError = "error" in value;
+	if (hasResult === hasError) return false;
+	return (
+		!hasError ||
+		(isRecord(value.error) && Number.isInteger(value.error.code) && typeof value.error.message === "string")
+	);
+}
+
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 
 type MCPToolArgsAttemptFactory = () => Promise<Record<string, unknown>>;

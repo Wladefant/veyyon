@@ -14,6 +14,7 @@
 
 - Invalid JSON-RPC records no longer terminate MCP HTTP event streams or block valid batch notifications ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - MCP HTTP streams no longer treat request extension fields as final responses ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
 - Child prompts and IRC rosters distinguish delegation from exclusive write ownership ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 - The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).

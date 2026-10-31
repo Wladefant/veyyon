@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import type { Variant } from "../contracts";
+import type { FrozenSkillArm } from "../skills/arms";
 
 export class VariantMatrixError extends Error {
 	constructor(message: string) {
@@ -82,6 +83,7 @@ export interface VariantCellInput {
 	readonly model: string;
 	readonly attachments: readonly string[];
 	readonly build: BuildSpec | null;
+	readonly skillArm?: FrozenSkillArm;
 }
 
 export type MutableVariantCellInput = {
@@ -91,6 +93,7 @@ export type MutableVariantCellInput = {
 	model: string;
 	attachments: readonly string[];
 	build: BuildSpec | null;
+	skillArm?: FrozenSkillArm;
 	[key: string]: unknown;
 };
 
@@ -111,6 +114,7 @@ export interface VariantMatrixSelection {
 	readonly attachments?: readonly string[] | readonly (readonly string[])[];
 	/** Builds to compare, each `name=path` or a bare path named for its last segment. */
 	readonly builds?: readonly (string | BuildSpec)[];
+	readonly skillArms?: readonly FrozenSkillArm[];
 	readonly nameFormatter?: (cell: VariantCellInput) => string;
 }
 
@@ -325,6 +329,16 @@ export const VARIANT_MATRIX_AXES: readonly AxisDescriptor<unknown, unknown>[] = 
 			cell.build = value as BuildSpec | null;
 		},
 	},
+	{
+		id: "skillArms",
+		plural: "skill arms",
+		select: (selection: VariantMatrixSelection) => selection.skillArms,
+		defaultValues: [undefined],
+		normalize: (arm: unknown) => arm as FrozenSkillArm | undefined,
+		project: (cell: MutableVariantCellInput, value: unknown) => {
+			cell.skillArm = value as FrozenSkillArm | undefined;
+		},
+	},
 ];
 
 /**
@@ -419,9 +433,10 @@ export function expandVariantMatrix(
 			...cell,
 		};
 
-		const name = selection.nameFormatter
+		const baseName = selection.nameFormatter
 			? selection.nameFormatter(cellInput)
 			: defaultVariantName(cellInput, selection);
+		const name = cellInput.skillArm ? `${baseName}__skill-${cellInput.skillArm.id}` : baseName;
 
 		if (seenNames.has(name)) {
 			throw new DuplicateVariantNameError(name);
@@ -436,6 +451,7 @@ export function expandVariantMatrix(
 			model: cellInput.model,
 			attachments: cellInput.attachments,
 			...(cellInput.build ? { build: cellInput.build.path } : {}),
+			...(cellInput.skillArm ? { skillArm: cellInput.skillArm } : {}),
 		});
 	}
 

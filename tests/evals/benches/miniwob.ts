@@ -30,7 +30,7 @@ import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { errorMessage } from "@veyyon/utils";
-import { type FlagGrammar, flagCount, parseFlags, requireFlag } from "../engine/flag-grammar";
+import { type FlagGrammar, flagCount, parseFlags, requireFlag } from "../engine/plan/flag-grammar";
 
 /** Form entry in every shape the element actions meet, and one click-only control. */
 export const DEFAULT_TASKS = [

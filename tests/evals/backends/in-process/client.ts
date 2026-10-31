@@ -5,22 +5,30 @@
  * Eliminates ~2-3s CLI startup overhead per task by creating sessions
  * in-process and sharing auth/model infrastructure across tasks.
  */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { createHash } from "node:crypto";
+import type { FrozenSkillArm } from "../../engine/skills/arms";
 import type { AgentEvent, AgentMessage, ResolvedThinkingLevel, ThinkingLevel } from "@veyyon/agent-core";
 import type { Model, ToolExample } from "@veyyon/ai";
 import type { AgentSession, AgentSessionEvent, AuthStorage, SessionStats } from "@veyyon/coding-agent";
 import {
 	type CreateAgentSessionResult,
+	buildSkillPromptMessage,
 	createAgentSession,
 	discoverAuthStorage,
 	ModelRegistry,
 	SessionManager,
 	Settings,
+	SKILL_PROMPT_MESSAGE_TYPE,
 } from "@veyyon/coding-agent";
 import {
 	applyPromptOverridesToSystemPrompt,
 	loadAndValidateConfigOverlay,
 	loadAndValidatePromptOverlay,
 } from "../../engine/plan/overlays";
+import { parseModelId } from "../../engine/trial/model";
+import { type EditableCanaryReceipt, verifyEditableCanary } from "./editable-canary";
 
 export type InProcessEventListener = (event: AgentEvent) => void;
 
@@ -39,7 +47,6 @@ export interface DumpedTool {
 	readonly examples?: readonly ToolExample[];
 }
 
-/** What a live in-process session reports about itself. */
 export interface InProcessSessionState {
 	readonly sessionFile?: string;
 	readonly systemPrompt?: string[];
@@ -47,6 +54,10 @@ export interface InProcessSessionState {
 	readonly thinkingLevel?: ThinkingLevel | undefined;
 	readonly dumpTools?: readonly DumpedTool[];
 	readonly settings?: Settings;
+	readonly skillArm?: FrozenSkillArm;
+	readonly observedSkillHashes?: readonly { readonly name: string; readonly contentHash: string }[];
+	readonly observedSkillPrompt?: ObservedSkillPrompt;
+	readonly editableCanary?: EditableCanaryReceipt;
 }
 
 export interface InProcessClientOptions {
@@ -68,6 +79,8 @@ export interface InProcessClientOptions {
 	promptVariantPath?: string | null;
 	/** Pre-loaded prompt overrides map */
 	promptOverrides?: Record<string, string> | null;
+	/** Frozen skill resource used for this experimental arm; baseline omits it. */
+	skillArm?: FrozenSkillArm;
 	/** Pre-constructed settings instance */
 	settings?: Settings;
 }
@@ -108,6 +121,8 @@ export class InProcessClient {
 	#sessionResult: CreateAgentSessionResult | null = null;
 	#eventListeners: InProcessEventListener[] = [];
 	#unsubscribe: (() => void) | null = null;
+	#skillSnapshotDir: string | null = null;
+	#editableCanary: EditableCanaryReceipt | undefined;
 	#options: InProcessClientOptions;
 
 	constructor(options: InProcessClientOptions) {
@@ -145,6 +160,23 @@ export class InProcessClient {
 			const loaded = await loadAndValidatePromptOverlay(this.#options.promptVariantPath, this.#options.cwd);
 			promptOverrides = loaded.overrides;
 		}
+		const skillArm = this.#options.skillArm;
+		const skill: NonNullable<Parameters<typeof createAgentSession>[0]>["skills"] = [];
+		if (skillArm && skillArm.content !== null) {
+			this.#skillSnapshotDir = await fs.mkdtemp(path.join(path.dirname(this.#options.cwd), ".veyyon-eval-skill-"));
+			const skillDir = path.join(this.#skillSnapshotDir, skillArm.skillName);
+			await fs.mkdir(skillDir, { recursive: true });
+			const filePath = path.join(skillDir, "SKILL.md");
+			await fs.writeFile(filePath, skillArm.content, { encoding: "utf8", flag: "wx" });
+			await fs.chmod(filePath, 0o444);
+			skill.push({
+				name: skillArm.skillName,
+				description: "Frozen skill experiment resource",
+				filePath,
+				baseDir: skillDir,
+				source: "eval-experiment",
+			});
+		}
 
 		const result = await createAgentSession({
 			cwd: this.#options.cwd,
@@ -167,7 +199,7 @@ export class InProcessClient {
 			hasUI: false,
 			enableMCP: false,
 			enableLsp: false,
-			skills: [],
+			skills: skill,
 			rules: [],
 			contextFiles: [],
 			disableExtensionDiscovery: true,
@@ -175,6 +207,21 @@ export class InProcessClient {
 
 		this.#sessionResult = result;
 		this.#session = result.session;
+		if (skillArm) this.#editableCanary = await verifyEditableCanary(this.#session, this.#options.cwd);
+		if (this.#options.skillArm) {
+			const requestedModel = parseModelId(this.#options.model);
+			const resolvedModel = this.#session.model;
+			if (!resolvedModel || requestedModel.provider !== resolvedModel.provider || requestedModel.model !== resolvedModel.id) {
+				throw new Error(
+					`Skill experiment model mismatch: requested ${requestedModel.id}, resolved ${resolvedModel?.provider ?? "unknown"}/${resolvedModel?.id ?? "unknown"}`,
+				);
+			}
+		}
+
+		// Freeze the actual resource before adding its existing autoload representation to history.
+		if (skillArm && skillArm.content !== null) {
+			await appendFrozenSkillPrompt(this.#session, skillArm);
+		}
 
 		// Subscribe to events and forward to listeners
 		this.#unsubscribe = this.#session.subscribe((event: AgentSessionEvent) => {
@@ -210,7 +257,6 @@ export class InProcessClient {
 		await this.#session!.followUp(text);
 		await this.#session!.waitForIdle();
 	}
-
 	abort(): void {
 		this.#session?.abort();
 	}
@@ -233,6 +279,22 @@ export class InProcessClient {
 
 	async getState(): Promise<InProcessSessionState> {
 		const session = this.#session!;
+		const skills = session.skills;
+		const selectedArm = this.#options.skillArm;
+		const selectedResource = selectedArm?.content === null || !selectedArm
+			? undefined
+			: skills.find(skill => skill.name === selectedArm.skillName);
+		if (selectedArm?.content === null && skills.some(skill => skill.name === selectedArm.skillName)) {
+			throw new Error(`Baseline skill arm contamination: ${selectedArm.skillName} is present in the session`);
+		}
+		if (selectedArm?.content !== null && selectedArm) {
+			if (!selectedResource) throw new Error(`Skill arm isolation failed: ${selectedArm.skillName} is absent from the session`);
+			const actualContent = await fs.readFile(selectedResource.filePath, "utf8");
+			if (actualContent !== selectedArm.content) {
+				throw new Error(`Skill arm isolation failed: session resource ${selectedArm.skillName} does not match its frozen content`);
+			}
+		}
+		const observedSkillPrompt = selectedArm ? await observeFrozenSkillPrompt(session, selectedArm) : undefined;
 		return {
 			sessionFile: undefined,
 			systemPrompt: session.systemPrompt,
@@ -245,8 +307,16 @@ export class InProcessClient {
 				examples: tool.examples,
 			})),
 			settings: session.settings,
+			skillArm: selectedArm,
+			observedSkillPrompt,
+			editableCanary: this.#editableCanary,
+			observedSkillHashes: await Promise.all(skills.map(async skill => ({
+				name: skill.name,
+				contentHash: createHash("sha256").update(await fs.readFile(skill.filePath, "utf8"), "utf8").digest("hex"),
+			}))),
 		};
 	}
+	
 
 	async dispose(): Promise<void> {
 		this.#unsubscribe?.();
@@ -260,6 +330,10 @@ export class InProcessClient {
 		}
 		this.#sessionResult = null;
 		this.#eventListeners = [];
+		if (this.#skillSnapshotDir) {
+			await fs.rm(this.#skillSnapshotDir, { recursive: true, force: true });
+			this.#skillSnapshotDir = null;
+		}
 	}
 
 	[Symbol.dispose](): void {
@@ -268,6 +342,54 @@ export class InProcessClient {
 		// needs the teardown to succeed awaits `dispose()` itself, which reports in full.
 		this.dispose().catch(() => {});
 	}
+}
+
+export interface ObservedSkillPrompt {
+	readonly role: "developer";
+	readonly attribution: "agent";
+	readonly present: boolean;
+	readonly contentHash: string | null;
+	readonly messageHash: string | null;
+}
+
+/** Verify the resource treatment against actual history, not its declared metadata. */
+export async function observeFrozenSkillPrompt(session: AgentSession, arm: FrozenSkillArm): Promise<ObservedSkillPrompt> {
+	if (arm.content === null) {
+		return { role: "developer", attribution: "agent", present: false, contentHash: null, messageHash: null };
+	}
+	const skill = session.skills.find(candidate => candidate.name === arm.skillName);
+	if (!skill) throw new Error(`Skill prompt observation failed: ${arm.skillName} resource is absent`);
+	const built = await buildSkillPromptMessage(skill, "", "autoload");
+	const observed = session.agent.state.messages.find(message => {
+		if (message.role !== "developer" || message.attribution !== "agent" || typeof message.content === "string") return false;
+		return message.content.some(block => block.type === "text" && block.text === built.message);
+	});
+	if (!observed) throw new Error(`Skill prompt observation failed: ${arm.skillName} body is absent from model history`);
+	return {
+		role: "developer",
+		attribution: "agent",
+		present: true,
+		contentHash: createHash("sha256").update(arm.content).digest("hex"),
+		messageHash: createHash("sha256").update(built.message).digest("hex"),
+	};
+}
+
+/** Append the selected frozen skill through the same hidden autoload message the coding agent uses. */
+export async function appendFrozenSkillPrompt(session: AgentSession, arm: FrozenSkillArm): Promise<void> {
+	if (arm.content === null) return;
+	const skill = session.skills.find(candidate => candidate.name === arm.skillName);
+	if (!skill) throw new Error(`Skill arm isolation failed: ${arm.skillName} is absent from the session`);
+	const content = await fs.readFile(skill.filePath, "utf8");
+	if (content !== arm.content) {
+		throw new Error(`Skill arm isolation failed: session resource ${arm.skillName} does not match its frozen content`);
+	}
+	const builtMessage = await buildSkillPromptMessage(skill, "", "autoload");
+	session.agent.appendMessage({
+		role: "developer",
+		content: [{ type: "text", text: builtMessage.message }],
+		attribution: "agent",
+		timestamp: Date.now(),
+	});
 }
 
 const AGENT_EVENT_TYPES = new Set([
