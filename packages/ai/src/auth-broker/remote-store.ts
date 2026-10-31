@@ -276,7 +276,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#snapshot: SnapshotResponse = emptySnapshot();
 	#snapshotReceivedAt = Date.now();
 	#generation = 0;
-	/** Monotonic local application revision; broker generation can reset on restart. */
+	/** Monotonic revision of accepted broker state AND local edits; fences stale GETs across restarts and disables. */
 	#appliedSnapshotRevision = 0;
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
@@ -631,6 +631,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const entry of this.#snapshot.credentials) {
 			if (entry.id !== id) continue;
 			entry.credential = credential as typeof entry.credential;
+			this.#appliedSnapshotRevision += 1;
 			return;
 		}
 	}
@@ -790,6 +791,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
 		this.#snapshot = { ...this.#snapshot, credentials: others.concat(incoming) };
+		this.#appliedSnapshotRevision += 1;
 	}
 	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
@@ -797,21 +799,27 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
 		if (index === -1) {
 			this.#snapshot = { ...this.#snapshot, credentials: this.#snapshot.credentials.concat([incoming]) };
+			this.#appliedSnapshotRevision += 1;
 			return;
 		}
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = incoming;
 		this.#snapshot = { ...this.#snapshot, credentials };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#removeProviderEntries(provider: string): void {
 		const next = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
+		if (next.length === this.#snapshot.credentials.length) return;
 		this.#snapshot = { ...this.#snapshot, credentials: next };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#removeCredentialById(id: number): void {
 		const next = this.#snapshot.credentials.filter(entry => entry.id !== id);
+		if (next.length === this.#snapshot.credentials.length) return;
 		this.#snapshot = { ...this.#snapshot, credentials: next };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#upsertSnapshotBlock(block: StoredCredentialBlock): void {
@@ -836,6 +844,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = { ...entry, blocks };
 		this.#snapshot = { ...this.#snapshot, credentials };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#deleteSnapshotBlocks(credentialId: number): void {
@@ -848,6 +857,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = next;
 		this.#snapshot = { ...this.#snapshot, credentials };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#pruneExpiredCredentialBlocks(nowMs: number): void {
@@ -862,7 +872,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			delete next.blocks;
 			return next;
 		});
-		if (changed) this.#snapshot = { ...this.#snapshot, credentials };
+		if (changed) {
+			this.#snapshot = { ...this.#snapshot, credentials };
+			this.#appliedSnapshotRevision += 1;
+		}
 	}
 
 	/**
