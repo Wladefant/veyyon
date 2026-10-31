@@ -596,12 +596,15 @@ describe("file-lock candidate publication errors", () => {
 			const rename = spyOn(fs, "rename").mockImplementation(async (_source, destination) => {
 				renameAttempts += 1;
 				await fs.mkdir(destination);
-				await fs.writeFile(path.join(destination, "info"), JSON.stringify(ownerInfo({ token: competingToken })));
+				await fs.writeFile(
+					path.join(String(destination), "info"),
+					JSON.stringify(ownerInfo({ token: competingToken })),
+				);
 				throw error;
 			});
 			const delays: number[] = [];
 			const sleep = spyOn(Bun, "sleep").mockImplementation(async ms => {
-				delays.push(ms);
+				delays.push(Number(ms));
 			});
 			try {
 				await expect(
@@ -638,7 +641,10 @@ describe("file-lock candidate publication errors", () => {
 			const rename = spyOn(fsSync, "renameSync").mockImplementation((_source, destination) => {
 				renameAttempts += 1;
 				fsSync.mkdirSync(destination);
-				fsSync.writeFileSync(path.join(destination, "info"), JSON.stringify(ownerInfo({ token: competingToken })));
+				fsSync.writeFileSync(
+					path.join(String(destination), "info"),
+					JSON.stringify(ownerInfo({ token: competingToken })),
+				);
 				throw error;
 			});
 			const delays: number[] = [];
