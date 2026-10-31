@@ -352,7 +352,7 @@ export class HttpTransport implements MCPTransport {
 							continue;
 						}
 						const message = value;
-						if ("id" in message && message.id === id && ("result" in message || "error" in message)) {
+						if (!("method" in message) && message.id === id && ("result" in message || "error" in message)) {
 							if (message.error) {
 								throw Object.assign(new Error(`MCP error ${message.error.code}: ${message.error.message}`), {
 									code: message.error.code,

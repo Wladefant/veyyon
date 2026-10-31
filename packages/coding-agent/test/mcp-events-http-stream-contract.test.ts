@@ -277,12 +277,13 @@ function rawFrame(id: string | number, data: string): void {
 	controllers.get(id)?.enqueue(encoder.encode(`data: ${data}\n\n`));
 }
 
-// WHY: A malformed member must not discard a valid batch notification or stop later frames; this covers invalid-frame recovery, but not every parser error shape.
+// WHY: Bad records and request extensions must not stop a stream or discard valid batch siblings.
+// This covers field-based misrouting and frame recovery, not every JSON-RPC schema rule.
 describe("MCP HTTP stream invalid-frame handling", () => {
 	it.each([
-		["malformed JSON", "{not json"],
-		["null JSON", "null"],
-		["scalar JSON", "17"],
+		["malformed JSON", "{not json", ""],
+		["null JSON", "null", ""],
+		["scalar JSON", "17", ""],
 		[
 			"invalid batch member",
 			JSON.stringify([
@@ -299,8 +300,33 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 					params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "after-invalid-member" },
 				},
 			]),
+			"after-invalid-member",
 		],
-	])("skips %s frames and continues delivering later valid notifications", async (name, invalidFrame) => {
+		[
+			"request error extension",
+			JSON.stringify([
+				{ jsonrpc: "2.0", id: "__stream_id__", method: "server/request", error: { code: "invalid", message: "extension" } },
+				{
+					jsonrpc: "2.0",
+					method: "notifications/events/event",
+					params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "after-request-error" },
+				},
+			]),
+			"after-request-error",
+		],
+		[
+			"request result extension",
+			JSON.stringify([
+				{ jsonrpc: "2.0", id: "__stream_id__", method: "server/request", result: { extension: true } },
+				{
+					jsonrpc: "2.0",
+					method: "notifications/events/event",
+					params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "after-request-result" },
+				},
+			]),
+			"after-request-result",
+		],
+	])("keeps %s frames from stopping later valid notifications", async (_name, interleavedFrame, batchMarker) => {
 		server = Bun.serve({
 			port: 0,
 			async fetch(request) {
@@ -344,14 +370,13 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 				doneSettled = true;
 			},
 		);
-		const expected =
-			name === "invalid batch member"
-				? ["before-invalid-frame", "after-invalid-member", "after-invalid-frame"]
-				: ["before-invalid-frame", "after-invalid-frame"];
+		const expected = batchMarker
+			? ["before-invalid-frame", batchMarker, "after-invalid-frame"]
+			: ["before-invalid-frame", "after-invalid-frame"];
 		try {
 			await until(() => controllers.has(stream.id));
 			push(stream.id, stream.id, "before-invalid-frame");
-			rawFrame(stream.id, invalidFrame.replaceAll("__stream_id__", String(stream.id)));
+			rawFrame(stream.id, interleavedFrame.replaceAll("__stream_id__", String(stream.id)));
 			push(stream.id, stream.id, "after-invalid-frame");
 			await until(() => received.length >= expected.length || doneSettled);
 			expect(received).toEqual(expected);
