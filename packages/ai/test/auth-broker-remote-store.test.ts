@@ -224,6 +224,39 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+	test("does not overwrite newer broker state with a late suspect-refresh reply", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+
+		let release!: (response: { entry: typeof entry }) => void;
+		const delayedReply = new Promise<{ entry: typeof entry }>(resolve => {
+			release = resolve;
+		});
+		spyOn(client, "refreshCredential").mockImplementation(async () => delayedReply);
+		const pending = remote.markCredentialSuspect(entry.id);
+
+		// A peer refresh becomes authoritative while the first broker reply is pending.
+		store!.updateAuthCredential(entry.id, mintOAuthCredential("new", Date.now() + 120_000));
+		await storage!.reload();
+		await remote.refreshSnapshot();
+		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+			type: "oauth",
+			access: "access-new",
+			refresh: REMOTE_REFRESH_SENTINEL,
+		});
+		release({ entry });
+		await expect(pending).rejects.toThrow(/superseded/i);
+		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+			type: "oauth",
+			access: "access-new",
+			refresh: REMOTE_REFRESH_SENTINEL,
+		});
+	});
+
 	test("does not apply an unrelated or unredacted suspect-refresh response", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
