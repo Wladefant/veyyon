@@ -644,6 +644,7 @@ export interface SecretRuntimeLease {
 	/** True when the redaction-only authority still holds live values or tombstones. */
 	readonly hasRedactions: boolean;
 	obfuscateText(text: string): string;
+	pendingRedactionPrefixLength(text: string): number;
 	obfuscateMessages(messages: Message[]): Message[];
 	obfuscateContext(context: Context): Context;
 	obfuscatePayload(payload: unknown): unknown;

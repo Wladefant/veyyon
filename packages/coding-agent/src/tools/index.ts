@@ -33,6 +33,7 @@ import type { ContextFile } from "../discovery/capability/context-file";
 import type { Rule } from "../discovery/capability/rule";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import type { DiscoverableTool, DiscoverableToolSearchIndex, DiscoverableToolSource } from "../discovery/tool-index";
+import type { ProducerSecretOwner } from "../secrets/producer-owner";
 import type { NoopLoopGuard } from "../edit/hashline/noop-loop-guard";
 import { editResultCodec } from "../edit/result-codec";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -204,6 +205,10 @@ export interface ToolSession extends ToolSessionLocalState {
 	 * The callback is live: callers must invoke it immediately before dispatch.
 	 */
 	obfuscateProviderText?: (text: string) => string;
+	/** Capture the immutable redaction authority for a producer job. */
+	captureProducerSecretOwner?: () => ProducerSecretOwner;
+	/** Refuse plain reads of protected credential files before a tool materializes them. */
+	assertCredentialReadAllowed?: (absolutePath: string) => Promise<void>;
 	/**
 	 * The session's side-request transport, handed to a request a tool makes on
 	 * the session's behalf (today the tiny-model label for a spawned agent).
@@ -764,7 +769,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// One detector per session, so out-of-cwd activity is counted across the whole
 	// session rather than per tool, and a spawned agent starts from zero.
 	const rerootDetector = new RerootDetector();
-	const wrap = (tool: Tool): Tool => wrapToolWithRerootHint(wrapToolWithMetaNotice(tool), rerootDetector, session);
+	const wrap = (tool: Tool): Tool => wrapToolWithRerootHint(wrapToolWithMetaNotice(tool, session), rerootDetector, session);
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {

@@ -213,6 +213,7 @@ export class SessionSecrets {
 			redactionObfuscator: obfuscator,
 			hasRedactions: obfuscator?.hasSecrets() ?? false,
 			obfuscateText: text => obfuscator?.obfuscate(text) ?? text,
+			pendingRedactionPrefixLength: text => obfuscator?.pendingRedactionPrefixLength(text) ?? 0,
 			obfuscateMessages: messages => (obfuscator ? obfuscateMessages(obfuscator, messages) : messages),
 			obfuscateContext: context => (obfuscator ? obfuscateProviderContext(obfuscator, context) : context),
 			obfuscatePayload: payload => obfuscateProviderPayload(payload, obfuscator),

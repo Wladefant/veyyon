@@ -6,14 +6,19 @@
  * is therefore read through a resolver when a tool calls it, never captured at construction.
  */
 
+import * as path from "node:path";
 import type { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { errorMessage, logger } from "@veyyon/utils";
+import { CONFIG_DIR_NAME, errorMessage, getAgentDir, getGlobalConfigRootDir, logger } from "@veyyon/utils";
 import { formatModelString } from "../config/model-resolver";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
+import type { ProducerSecretOwner } from "../secrets/producer-owner";
+import { createProtectedCredentialReadPolicy, type ProtectedCredentialResource } from "../secrets/protected-resources";
+import { VAULT_SCOPES, resolveVaultLocations, vaultPathFor } from "../secrets/vault";
+import { vaultKeyPath } from "../secrets/vault-crypto";
 import { BUILTIN_TOOLS, TOOL_SESSION_LOCAL_STATE_KEYS, type Tool, type ToolSession } from "../tools";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { wrapToolWithMetaNotice } from "../tools/core/output-meta";
@@ -35,6 +40,7 @@ export interface SessionToolSessionInputs {
 	/** Whether the startup model was chosen explicitly rather than by role default. */
 	hasExplicitModel: boolean;
 	obfuscateProviderText: (text: string) => string;
+	captureProducerSecretOwner: () => ProducerSecretOwner;
 	/** A spawned agent shares this process with its parent and may not move the process cwd. */
 	isSpawned: boolean;
 	agentId: string;
@@ -57,6 +63,32 @@ export interface SessionToolSessionInputs {
 		| "onSubagentStartFailed"
 		| "onSubagentComplete"
 	>;
+}
+
+type ProtectedCredentialReadPolicy = (file: string) => Promise<void>;
+
+function protectedRuntimeResources(options: CreateAgentSessionOptions, cwd: string): ProtectedCredentialResource[] {
+	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
+	const agentDir = options.agentDir ?? getAgentDir();
+	const vaultLocations = resolveVaultLocations({ globalConfigRoot, agentDir, cwd });
+	const paths = [
+		vaultKeyPath(globalConfigRoot),
+		...VAULT_SCOPES.map(scope => vaultPathFor(vaultLocations, scope)),
+		path.join(cwd, CONFIG_DIR_NAME, "secrets.yml"),
+		path.join(agentDir, "secrets.yml"),
+	];
+	return paths.map(canonicalPath => ({
+		owner: "session secret runtime",
+		canonicalPath,
+		kind: "credential" as const,
+	}));
+}
+
+function configuredMetadataIndexes(value: unknown): string[] {
+	if (!Array.isArray(value) || value.some(entry => typeof entry !== "string" || entry.length === 0)) {
+		throw new Error("Protected credential metadata indexes must be an array of non-empty paths.");
+	}
+	return value;
 }
 
 export interface SessionToolSession {
@@ -108,10 +140,10 @@ export async function buildAdvisorTools(advisorToolSession: ToolSession): Promis
 		builds.push(BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS](advisorToolSession));
 	}
 	const built = await Promise.all(builds);
-	return built.filter((tool): tool is Tool => tool != null).map(wrapToolWithMetaNotice);
+	return built.filter((tool): tool is Tool => tool != null).map(tool => wrapToolWithMetaNotice(tool, advisorToolSession));
 }
 
-export function createSessionToolSession(inputs: SessionToolSessionInputs): SessionToolSession {
+export async function createSessionToolSession(inputs: SessionToolSessionInputs): Promise<SessionToolSession> {
 	const { options, sessionManager } = inputs;
 	const liveSession = (): AgentSession => {
 		const session = inputs.session();
@@ -122,6 +154,30 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 	const activeModelString = (): string | undefined => {
 		const model = activeModel();
 		return model ? formatModelString(model) : undefined;
+	};
+	const protectedReadPolicies = new Map<string, Promise<ProtectedCredentialReadPolicy>>();
+	const protectedPolicyForCwd = (cwd: string): Promise<ProtectedCredentialReadPolicy> => {
+		const key = path.resolve(cwd);
+		const cached = protectedReadPolicies.get(key);
+		if (cached) return cached;
+		const profileMetadataIndexes = configuredMetadataIndexes(
+			inputs.fields.settings.get("secrets.protectedCredentialMetadataIndexes"),
+		);
+		const sdkMetadataIndexes = configuredMetadataIndexes(options.protectedCredentialMetadataIndexes ?? []);
+		const metadataIndexes = new Set(
+			[...profileMetadataIndexes, ...sdkMetadataIndexes].map(index => path.resolve(key, index)),
+		);
+		const policy = createProtectedCredentialReadPolicy(
+			[...(options.protectedCredentialResources ?? []), ...protectedRuntimeResources(options, key)],
+			[...metadataIndexes],
+		);
+		protectedReadPolicies.set(key, policy);
+		return policy;
+	};
+	await protectedPolicyForCwd(sessionManager.getCwd());
+	const assertCredentialReadAllowed = async (absolutePath: string): Promise<void> => {
+		const policy = await protectedPolicyForCwd(sessionManager.getCwd());
+		await policy(absolutePath);
 	};
 	// Per-path mutation counter shared across edit/write tools. Late-diagnostics
 	// entries capture it at fetch time and are dropped at injection if a newer
@@ -160,6 +216,8 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 		},
 		setCwd,
 		obfuscateProviderText: inputs.obfuscateProviderText,
+		captureProducerSecretOwner: inputs.captureProducerSecretOwner,
+		assertCredentialReadAllowed,
 		// A generated spawned agent label is a side request of THIS session, so it
 		// rides the session's side transport and inherits its watchdogs and
 		// concurrency bracket.

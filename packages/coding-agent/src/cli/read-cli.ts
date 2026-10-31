@@ -36,7 +36,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		getSessionSpawns: () => "*",
 	};
 
-	const tool = wrapToolWithMetaNotice(new ReadTool(session));
+	const tool = wrapToolWithMetaNotice(new ReadTool(session), session);
 
 	try {
 		// `veyyon read` has no session, so the call carries a policy-only frame:

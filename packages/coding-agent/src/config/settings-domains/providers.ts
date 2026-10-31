@@ -87,6 +87,12 @@ export const PROVIDERS_SETTINGS = {
 		},
 	},
 
+
+	/** Metadata adapters whose classified files are protected from ordinary agent reads. */
+	"secrets.protectedCredentialMetadataIndexes": {
+		type: "array",
+		default: [] as string[],
+	},
 	/**
 	 * Lifetime given to a `/secret` entry when the command does not say.
 	 *

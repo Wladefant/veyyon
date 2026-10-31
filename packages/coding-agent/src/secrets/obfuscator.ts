@@ -275,9 +275,21 @@ class MatchBudget {
 interface LiteralMatcherNode<T> {
 	/** Child node index by the UTF-16 code unit that leads to it. */
 	children: Map<number, number>;
+	/** Length of the trie path from the root. */
+	depth: number;
 	fail: number;
 	outputLink: number;
 	outputs: Array<{ literal: string; value: T }>;
+}
+
+function buildPrefixTable(literal: string): Int32Array {
+	const prefix = new Int32Array(literal.length);
+	for (let index = 1, matched = 0; index < literal.length; index++) {
+		while (matched > 0 && literal.charCodeAt(index) !== literal.charCodeAt(matched)) matched = prefix[matched - 1];
+		if (literal.charCodeAt(index) === literal.charCodeAt(matched)) matched++;
+		prefix[index] = matched;
+	}
+	return prefix;
 }
 
 /**
@@ -291,9 +303,9 @@ interface LiteralMatcherNode<T> {
  * `#rootLatin1`; every other transition is one `Map` lookup by code unit.
  */
 class LiteralMatcher<T> {
-	readonly #nodes: Array<LiteralMatcherNode<T>> = [{ children: new Map(), fail: 0, outputLink: 0, outputs: [] }];
+	readonly #nodes: Array<LiteralMatcherNode<T>> = [{ children: new Map(), depth: 0, fail: 0, outputLink: 0, outputs: [] }];
 	readonly #rootLatin1 = new Int32Array(256);
-	readonly #longEntries: Array<{ literal: string; value: T }> = [];
+	readonly #longEntries: Array<{ literal: string; value: T; prefix: Int32Array }> = [];
 
 	constructor(entries: Iterable<readonly [string, T]>) {
 		for (const [literal, value] of entries) {
@@ -302,7 +314,7 @@ class LiteralMatcher<T> {
 				if (this.#longEntries.length >= MAX_LONG_TERMINAL_ALIASES) {
 					throw new Error("Refusing too many long literal secret rules.");
 				}
-				this.#longEntries.push({ literal, value });
+				this.#longEntries.push({ literal, value, prefix: buildPrefixTable(literal) });
 				continue;
 			}
 			this.#nodes[this.#insert(literal)].outputs.push({ literal, value });
@@ -321,7 +333,7 @@ class LiteralMatcher<T> {
 			let next = this.#nodes[nodeIndex].children.get(code);
 			if (next === undefined) {
 				next = this.#nodes.length;
-				this.#nodes.push({ children: new Map(), fail: 0, outputLink: 0, outputs: [] });
+				this.#nodes.push({ children: new Map(), depth: this.#nodes[nodeIndex].depth + 1, fail: 0, outputLink: 0, outputs: [] });
 				this.#nodes[nodeIndex].children.set(code, next);
 			}
 			nodeIndex = next;
@@ -428,6 +440,29 @@ class LiteralMatcher<T> {
 		);
 		return matched;
 	}
+	/** Longest suffix that can still extend to a registered literal. */
+	pendingPrefixLength(text: string): number {
+		let nodeIndex = 0;
+		for (let index = 0; index < text.length; index++) {
+			nodeIndex = this.#advance(nodeIndex, text.charCodeAt(index));
+		}
+		while (nodeIndex !== 0 && this.#nodes[nodeIndex].children.size === 0) {
+			nodeIndex = this.#nodes[nodeIndex].fail;
+		}
+		let longest = this.#nodes[nodeIndex].depth;
+		for (const entry of this.#longEntries) {
+			let matched = 0;
+			for (let index = 0; index < text.length; index++) {
+				const code = text.charCodeAt(index);
+				while (matched > 0 && code !== entry.literal.charCodeAt(matched)) matched = entry.prefix[matched - 1];
+				if (code === entry.literal.charCodeAt(matched)) matched++;
+				if (matched === entry.literal.length) matched = entry.prefix[matched - 1];
+			}
+			if (matched > longest) longest = matched;
+		}
+		return longest;
+	}
+
 }
 
 function assertBoundedSecretString(value: string): void {
@@ -1307,7 +1342,14 @@ export class SecretObfuscator {
 		return this.#rejections;
 	}
 
-	/** Obfuscate all secrets in text. Reversible values get placeholders; replace mode stays one-way. */
+	/** Longest suffix that is a prefix of any registered plain literal. */
+	pendingRedactionPrefixLength(text: string): number {
+		if (!this.#hasAny) return 0;
+		this.#forgetExpired();
+		this.#ensurePlainMatcher();
+		return this.#plainMatcher.pendingPrefixLength(text);
+	}
+
 	obfuscate(text: string): string {
 		if (!this.#hasAny) return text;
 		assertBoundedTransformText(text);

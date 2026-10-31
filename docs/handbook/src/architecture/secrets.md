@@ -64,10 +64,57 @@ the tombstone that keeps an old value hidden from providers keeps it out of this
 The full arguments the model wrote are persisted with the assistant message, and those hold the
 placeholder, since the model never saw anything else.
 
-What the command printed is handled separately. Tool output is saved as it was printed and
-redacted on its way to the provider, not on its way to disk, so a command that echoes a credential
-puts it in the session file. Veyyon redacts what it records itself; it cannot redact what a command
-chose to print.
+Producer output may be retained by the session, so configured credential
+resources are redacted at the producer boundary before retention, as described
+in [Protecting producer output before retention](#protecting-producer-output-before-retention).
+This does not cover arbitrary host-side output or side effects outside that
+configured path.
+
+### Protecting producer output before retention
+
+The host SDK accepts configured credential resources in
+`protectedCredentialResources` and metadata index paths in
+`protectedCredentialMetadataIndexes`. Existing vault, key, and `secrets.yml`
+paths are protected through their existing path owners. An external
+working-copy path requires a configured metadata adapter; the SDK does not
+guess resource paths from filenames.
+
+The lease is immutable for the lifetime of the job. The producer boundary
+reuses the existing secret obfuscator and redacts `OutputSink` output before
+retention. This covers artifacts, result details, progress, and asynchronous
+replay. Multiline literal matching holds back a possible prefix across chunks,
+so the producer does not retain it before the rest of a secret arrives.
+
+Metadata indexes, their source files, and documentation remain readable.
+Trusted direct filesystem consumers are unchanged. This protection does not
+guarantee detection of unknown or transformed values, network exfiltration by
+a host shell, images or opaque bytes, or arbitrary host side effects. It does
+not establish that an installed host configured or deployed the SDK options,
+or that shell behavior was exercised end to end.
+
+### Registering a private value
+
+Trusted host code can register one unnamed value with
+`SessionSecretRuntime.registerPrivateSecret(value: string)`. It returns a
+`ProducerSecretOwner` pinned to the immutable lease created by that
+registration. The runtime also installs the new lease as current and carries
+forward known redactions. Registration grants no expansion name or right, and
+does not add the value to the model's named inventory or tool arguments. The
+owner scopes redaction to trusted producer execution; the value itself never
+enters model arguments.
+
+Registration fails closed when the obfuscator would leave the exact value
+unchanged. This rejects inputs of one through five characters, but it is not a
+fixed-length guarantee: acceptance depends on whether the full exact value
+changes under obfuscation. The registered value is known literal text. This
+does not promise detection of arbitrary encodings, transformed values, or
+exfiltration through other host behavior.
+
+The runtime contract is covered by
+[`private-values-stay-redacted-across-leases.test.ts`](../../../packages/coding-agent/test/secrets/private-values-stay-redacted-across-leases.test.ts);
+producer-owner scoping is covered by
+[`producer-secret-owner.test.ts`](../../../packages/coding-agent/test/secrets/producer-secret-owner.test.ts).
+These tests do not establish installed-host or shell end-to-end coverage.
 
 Two modes control what happens to each secret:
 
