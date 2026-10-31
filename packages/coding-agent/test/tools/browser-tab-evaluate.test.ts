@@ -4,6 +4,7 @@ import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import { browserToolView } from "@veyyon/coding-agent/tools/web/browser/view";
 import { chromiumCanLaunch } from "../helpers/chromium-can-launch";
+
 const PASSWORD_CANARIES = {
 	main: ["MAIN_", "PASSWORD_SENTINEL"].join(""),
 	disabled: ["DISABLED_", "PASSWORD_SENTINEL"].join(""),
@@ -59,16 +60,17 @@ const PASSWORD_HTML = `<!doctype html><html><body>
 	<main aria-label="Synthetic credential form">
 		<label for="primary-secret">Primary password</label>
 		<input id="primary-secret" type="password">
+		<button aria-labelledby="primary-secret">Confirm</button>
 		<label for="ordinary-text">Display name</label>
 		<input id="ordinary-text" type="text" value="VISIBLE_TEXT_SENTINEL">
 		<label for="disabled-secret">Disabled password</label>
 		<input id="disabled-secret" type="password" disabled>
 		<div id="shadow-host"></div>
-		<iframe title="Nested credential frame" srcdoc="&lt;!doctype html&gt;&lt;html&gt;&lt;body&gt;&lt;label for='frame-secret'&gt;Frame password&lt;/label&gt;&lt;input id='frame-secret' type='password'&gt;&lt;/body&gt;&lt;/html&gt;"></iframe>
+		<iframe title="Nested credential frame" srcdoc="&lt;!doctype html&gt;&lt;html&gt;&lt;body&gt;&lt;label for='frame-secret'&gt;Frame password&lt;/label&gt;&lt;input id='frame-secret' type='password'&gt;&lt;button aria-labelledby='frame-secret'&gt;Confirm&lt;/button&gt;&lt;/body&gt;&lt;/html&gt;"></iframe>
 	</main>
 	<script>
 		const root = document.querySelector('#shadow-host').attachShadow({mode: 'open'});
-		root.innerHTML = '<label for="shadow-secret">Shadow password</label><input id="shadow-secret" type="password">';
+		root.innerHTML = '<label for="shadow-secret">Shadow password</label><input id="shadow-secret" type="password"><button aria-labelledby="shadow-secret">Confirm</button>';
 	</script>
 </body></html>`;
 
@@ -123,7 +125,8 @@ async function readPasswordApiError(): Promise<string> {
 			});
 			throw new Error("Missing-selector browser API call unexpectedly succeeded");
 		} catch (error) {
-			if (error instanceof Error && error.message === "Missing-selector browser API call unexpectedly succeeded") throw error;
+			if (error instanceof Error && error.message === "Missing-selector browser API call unexpectedly succeeded")
+				throw error;
 			return JSON.stringify({
 				name: error instanceof Error ? error.name : undefined,
 				message: error instanceof Error ? error.message : String(error),
@@ -137,6 +140,66 @@ async function readPasswordApiError(): Promise<string> {
 }
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
+	// WHY: Password values can enter another control's name through a label traversal.
+	// Exercise each embedded-value role; page-authored text that copies a secret is outside this boundary.
+	it("uses password labels, never password values, when naming another control", async () => {
+		const tool = new BrowserTool(makeSession());
+		const name = `indirect-password-${process.pid}-${crypto.randomUUID()}`;
+		const runArgs = {
+			action: "run" as const,
+			name,
+			code: `
+				await tab.evaluate(() => {
+					const secret = ['INDIRECT_', 'PASSWORD_SENTINEL'].join('');
+					const roles = ['', 'textbox', 'combobox', 'listbox', 'progressbar', 'scrollbar', 'slider', 'spinbutton', 'meter'];
+					for (const role of roles) {
+						const input = document.createElement('input');
+						input.type = 'password';
+						input.id = 'secret-' + (role || 'native');
+						input.setAttribute('value', secret);
+						input.setAttribute('aria-label', 'Safe ' + (role || 'native') + ' label');
+						if (role) input.setAttribute('role', role);
+						const button = document.createElement('button');
+						button.setAttribute('aria-labelledby', input.id);
+						document.body.append(input, button);
+					}
+					const ordinary = document.createElement('input');
+					ordinary.id = 'ordinary';
+					ordinary.value = 'Visible ordinary value';
+					const ordinaryButton = document.createElement('button');
+					ordinaryButton.setAttribute('aria-labelledby', ordinary.id);
+					document.body.append(ordinary, ordinaryButton);
+					const label = document.createElement('label');
+					label.innerHTML = 'Notify <input type="checkbox"><input type="password" aria-label="Safe nested label">';
+					label.querySelector('input[type="password"]').value = secret;
+					const descendant = document.createElement('div');
+					descendant.setAttribute('role', 'button');
+					descendant.innerHTML = 'Continue <input type="password" aria-label="Safe descendant label">';
+					descendant.querySelector('input').value = secret;
+					document.body.append(label, descendant);
+				});
+				return await tab.ariaSnapshot();
+			`,
+		};
+		try {
+			await tool.execute("open", { action: "open", name, url: "data:text/html,<body></body>" });
+			const result = await tool.execute("run", runArgs);
+			const rendered = browserToolView.renderResult(result, { expanded: true }, runArgs);
+			const output = JSON.stringify({ result, rendered });
+			const snapshot = result.details?.result;
+			expect(typeof snapshot).toBe("string");
+			expect(snapshot).toContain('button "Safe native label"');
+			expect(snapshot).toContain('button "Safe combobox label"');
+			expect(snapshot).toContain('button "Safe slider label"');
+			expect(snapshot).toContain('checkbox "Notify Safe nested label"');
+			expect(snapshot).toContain('button "Continue Safe descendant label"');
+			expect(snapshot).toContain('button "Visible ordinary value"');
+			expect(output).not.toContain(["INDIRECT_", "PASSWORD_SENTINEL"].join(""));
+		} finally {
+			await tool.execute("close", { action: "close", name, kill: true });
+		}
+	}, 60_000);
+
 	it("does not disclose password values in the default ARIA snapshot", async () => {
 		const output = await readPasswordPage("tab.ariaSnapshot()");
 		const evidence = JSON.parse(output) as {
@@ -190,11 +253,11 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser password observation", () => {
 			return { passwordLabels: labels, passwordControlNames: controlNames, allValuesUndefined: true };
 		})()`);
 
-		expect(output).toContain('Primary password');
-		expect(output).toContain('Disabled password');
-		expect(output).toContain('Shadow password');
-		expect(output).toContain('passwordControlNames');
-		expect(output).toContain('allValuesUndefined');
+		expect(output).toContain("Primary password");
+		expect(output).toContain("Disabled password");
+		expect(output).toContain("Shadow password");
+		expect(output).toContain("passwordControlNames");
+		expect(output).toContain("allValuesUndefined");
 		expect(output).not.toContain(PASSWORD_CANARIES.disabled);
 		expect(output).not.toContain(PASSWORD_CANARIES.shadow);
 		expect(output).not.toContain(PASSWORD_CANARIES.frame);
