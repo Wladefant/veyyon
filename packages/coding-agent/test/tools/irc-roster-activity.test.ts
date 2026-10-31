@@ -42,8 +42,8 @@ describe("IRC roster activity", () => {
 		mock.restore();
 	});
 
-	// Ancestors delegate this slice; they are not competing owners. This proves
-	// roster classification, not whether a model follows the ownership guidance.
+	// Ancestry is visible but does not confer exclusive write ownership.
+	// This checks roster classification and its safety guidance, not model compliance.
 	it("separates every ancestor from other lanes for A.B.C", async () => {
 		for (const [id, parentId] of [
 			["A", undefined],
@@ -60,7 +60,10 @@ describe("IRC roster activity", () => {
 			"A.B",
 		]);
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
-		expect(text).toContain("Your ancestors (delegating owners, not duplicate lanes):");
+		expect(text).toContain("Your ancestors (delegation context; verify write ownership):");
+		expect(text).toContain("An ancestor may still have uncommitted edits");
+		expect(text).toContain("Confirm the assigned writer and paths before overlapping writes");
+		expect(text).not.toContain("not duplicate lanes");
 		const otherLanes = text.split("Other lanes:")[1] ?? "";
 		expect(otherLanes).toContain("- A.B.Cousin ");
 		expect(otherLanes).toContain("- A.Peer ");
