@@ -253,6 +253,10 @@ export async function readRemoteText(
 	} catch {
 		throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool");
 	}
+	// Reject NUL anywhere in the verified payload, including beyond the preview.
+	if (value.includes("\0")) {
+		throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool");
+	}
 	let end = Math.min(value.length, 50_000);
 	if (end < value.length && /[\uD800-\uDBFF]/.test(value.charAt(end - 1))) end--;
 	return { text: value.slice(0, end), bytes: bytes.byteLength, sha256: data.sha256, truncated: end < value.length };
