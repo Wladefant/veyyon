@@ -261,3 +261,31 @@ test("repeated recovery and reconnect never requeue a pending answer already hel
 	expect(await consumed.accept(envelope("q-reconnect", "evt-replay"), "followUp")).toBe("duplicate");
 	expect(queue).toEqual([]);
 });
+
+
+test("an unavailable runtime queue during recovery does not block startup or consume the pending answer", async () => {
+	const { manager, dir } = newSession();
+	const answer = envelope("q-queue-unavailable", "evt-1");
+	const beforeCrash = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("crash before user-message persistence");
+		},
+		() => false,
+	);
+	await expect(beforeCrash.accept(answer, "auto")).rejects.toThrow("crash before");
+	const reopened = await SessionManager.open(manager.getSessionFile() as string, dir.path());
+	const queue: string[] = [];
+	const unavailable = new OperatorAnswerInbox(
+		() => reopened,
+		queueingInto(queue),
+		() => {
+			throw new Error("runtime queue not ready");
+		},
+	);
+	await expect(unavailable.recover()).resolves.toBeUndefined();
+	expect(queue).toEqual([]);
+	const ready = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await ready.recover();
+	expect(queue).toEqual([answer]);
+});
