@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run a step in a new session and reap its whole process group on every exit path.
+# Run a step in a new session and reap its process group on exit.
+# --cleanup finds groups with processes that keep OVH_PROCESS_OWNER.
+# A descendant that clears its environment after setsid is not covered.
 set -uo pipefail
 
 child_pid=

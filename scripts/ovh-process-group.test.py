@@ -113,16 +113,20 @@ def run_case(name, command, expected, sig=None, need_tree=False, timeout=None, e
             kill_test_pids(pids)
 
 
-def run_cleanup_case():
+def run_cleanup_case(matrix_index):
     with tempfile.TemporaryDirectory() as directory:
         pidfile = Path(directory) / "pids"
         workspace = str(Path(directory) / "ci-workspace")
         identity = dict(GITHUB_WORKSPACE=workspace, GITHUB_RUN_ID="12345", GITHUB_RUN_ATTEMPT="1", GITHUB_JOB="toy", PIDFILE=str(pidfile))
-        owner = f"{workspace}|12345|1|toy|"
-        tagged = subprocess.Popen(["python3", "-c", TREE, "sleep"], env=dict(os.environ, **identity, OVH_PROCESS_OWNER=owner), start_new_session=True)
+        environment = dict(os.environ, **identity)
+        environment.pop("OVH_MATRIX_INDEX", None)
+        if matrix_index is not None:
+            environment["OVH_MATRIX_INDEX"] = matrix_index
+        owner = f"{workspace}|12345|1|toy|{matrix_index or ''}"
+        tagged = subprocess.Popen(["python3", "-c", TREE, "sleep"], env=dict(environment, OVH_PROCESS_OWNER=owner), start_new_session=True)
         foreign_workspace = workspace + "-foreign"
         foreign_identity = dict(identity, GITHUB_WORKSPACE=foreign_workspace, PIDFILE=str(pidfile) + ".foreign")
-        foreign = subprocess.Popen(["python3", "-c", TREE, "sleep"], env=dict(os.environ, **foreign_identity, OVH_PROCESS_OWNER=f"{foreign_workspace}|12345|1|toy|"), start_new_session=True)
+        foreign = subprocess.Popen(["python3", "-c", TREE, "sleep"], env=dict(environment, **foreign_identity, OVH_PROCESS_OWNER=f"{foreign_workspace}|12345|1|toy|{matrix_index or ''}"), start_new_session=True)
         tagged_pids, foreign_pids = [], []
         try:
             wait_for_file(pidfile, tagged)
@@ -132,7 +136,7 @@ def run_cleanup_case():
             tagged_group = os.getpgid(tagged.pid)
             tagged.kill()  # Simulate runner actor loss; the tagged group remains.
             tagged.wait(timeout=2)
-            cleanup = subprocess.run(["bash", str(WRAPPER), "--cleanup"], env=dict(os.environ, **identity), timeout=4, check=False)
+            cleanup = subprocess.run(["bash", str(WRAPPER), "--cleanup"], env=environment, timeout=4, check=False)
             require(cleanup.returncode == 0, f"cleanup returned {cleanup.returncode}")
             require(not any(alive(pid) for pid in tagged_pids), f"cleanup left tagged group {tagged_group}: {tagged_pids}")
             require(any(alive(pid) for pid in foreign_pids), f"cleanup killed foreign group: {foreign_pids}")
@@ -189,7 +193,8 @@ def main():
     run_case("repeated TERM escalation", ["python3", "-c", TREE, "stubborn"], 143, sig=signal.SIGTERM, need_tree=True, repeated_sig=signal.SIGTERM)
     run_deadline_case("sleep")
     run_deadline_case("deadline-stubborn")
-    run_cleanup_case()
+    run_cleanup_case(None)
+    run_cleanup_case("0")
     workflow_shell = "bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail"
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "step.sh"
@@ -197,7 +202,7 @@ def main():
         script.write_text("printf ok | tee \"$OUTPUT\"\n")
         result = subprocess.run(["bash", str(WRAPPER), "bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], env=dict(os.environ, OUTPUT=str(output)), timeout=4, check=False)
         require(result.returncode == 0 and output.read_text() == "ok", f"workflow shell pipeline failed: {workflow_shell}")
-    print("ovh-process-group: 12 passed, 0 failed")
+    print("ovh-process-group: 13 passed, 0 failed")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,6 @@ describe("OVH process-group lifecycle", () => {
 	it.skipIf(process.platform !== "linux")("cleans the real Linux step process group", () => {
 		// Process-group cleanup depends on Linux sessions, signals, and /proc state.
 		const output = execFileSync("python3", [TEST], { encoding: "utf8", timeout: 60_000 });
-		expect(output).toContain("ovh-process-group: 12 passed, 0 failed");
+		expect(output).toContain("ovh-process-group: 13 passed, 0 failed");
 	});
 });
