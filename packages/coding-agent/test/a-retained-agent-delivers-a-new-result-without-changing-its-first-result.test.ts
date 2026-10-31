@@ -51,7 +51,7 @@ describe("retained agent result delivery", () => {
 			const output = `result-${index}`;
 			const result = await outbox.complete(agentId, "owner", phaseId, output);
 			const stem = result.handle.slice("agent://".length);
-			expect(stem).toMatch(/^agent-[a-f0-9]{64}\\.phase-[a-f0-9]{64}$/);
+			expect(stem).toMatch(/^agent-[a-f0-9]{64}\.phase-[a-f0-9]{64}$/);
 			expect(path.basename(`${stem}.md`)).toBe(`${stem}.md`);
 			expect(path.dirname(path.join(dir, `${stem}.md`))).toBe(dir);
 			expect(await fs.readFile(path.join(dir, `${stem}.md`), "utf8")).toBe(output);
