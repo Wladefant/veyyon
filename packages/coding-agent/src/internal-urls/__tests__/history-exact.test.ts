@@ -170,6 +170,33 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("returns bounded partial results for more than 500 readable matches without losing the current leaf", async () => {
+		const dir = TempDir.createSync("@veyyon-history-search-many-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records: Array<{ type: string; id: string; parentId?: string | null; message?: string }> = [
+				{ type: "session", id: "s-many" },
+			];
+			for (let i = 0; i < 502; i++) {
+				records.push({
+					type: "message", id: `e${i}`, parentId: i === 0 ? null : `e${i - 1}`,
+					message: `needle record ${i}`,
+				});
+			}
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const result = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(result.status).toBe("partial");
+			expect(result.leafId).toBe("e501");
+			expect(result.sessionId).toBe("s-many");
+			expect(result.matches.map(match => match.entryId))
+				.toEqual(["e501", "e500", "e499", "e498", "e497"]);
+			expect((await readStoredHistoryEntry(file, { entryId: "e501", offset: 0, limit: 100 })).status)
+				.toBe("ok");
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("does not infer an abandoned branch when a later oversized record was skipped", async () => {
 		const dir = TempDir.createSync("@veyyon-history-oversized-tail-");
 		try {
@@ -219,6 +246,46 @@ describe("history exact record lookup", () => {
 			expect(search.matches).toEqual([]);
 			expect((await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 200 })).status)
 				.toBe("ok");
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("refuses non-JSON corruption after records without rejecting initial titles or blanks", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonjson-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "archived-branch-only" },
+			];
+			await fs.writeFile(file, ["Optional title", "", ...records.map(record => JSON.stringify(record)), ""].join("\n") + "\n");
+			// Initial title and blank lines must not spoil valid implicit selection.
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 })).status)
+				.toBe("ok");
+			const healthy = await searchStoredHistoryEntries(file, { query: "archived-branch-only", limit: 5 });
+			expect(healthy.status).toBe("ok");
+			expect(healthy.matches.map(match => match.entryId)).toEqual(["b"]);
+
+			await fs.appendFile(file, "NOT-JSON\n");
+			const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 });
+			expect(implicitRead.status).toBe("unavailable");
+			expect(implicitRead.fragment).toBeUndefined();
+			const implicitSearch = await searchStoredHistoryEntries(file, { query: "archived-branch-only", limit: 5 });
+			expect(implicitSearch.status).toBe("unavailable");
+			expect(implicitSearch.matches).toEqual([]);
+
+			// Deliberately selected historic branch stays readable; search is partial.
+			const explicitRead = await readStoredHistoryEntry(file, {
+				entryId: "b", leafId: "b", offset: 0, limit: 100,
+			});
+			expect(explicitRead.status).toBe("ok");
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "archived-branch-only", leafId: "b", limit: 5,
+			});
+			expect(explicitSearch.status).toBe("partial");
+			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
 		} finally {
 			await dir.remove();
 		}

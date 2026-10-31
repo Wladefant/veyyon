@@ -207,13 +207,18 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
+	let startedJsonl = false;
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === undefined) {
 				incomplete = true;
 				continue;
 			}
-			if (!line.startsWith("{")) continue; // optional title slot and blank lines
+			if (!line.trimStart().startsWith("{")) {
+				if (startedJsonl && line.trim().length > 0) incomplete = true;
+				continue;
+			}
+			startedJsonl = true;
 			let record: unknown;
 			try {
 				record = JSON.parse(line);
@@ -357,19 +362,25 @@ export async function searchStoredHistoryEntries(
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
-	let incomplete = false;
+	let unreadable = false;
+	let truncated = false;
+	let startedJsonl = false;
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === undefined) {
-				incomplete = true;
+				unreadable = true;
 				continue;
 			}
-			if (!line.startsWith("{")) continue;
+			if (!line.trimStart().startsWith("{")) {
+				if (startedJsonl && line.trim().length > 0) unreadable = true;
+				continue;
+			}
+			startedJsonl = true;
 			let record: unknown;
 			try {
 				record = JSON.parse(line);
 			} catch {
-				incomplete = true;
+				unreadable = true;
 				continue;
 			}
 			if (!record || typeof record !== "object") continue;
@@ -380,7 +391,7 @@ export async function searchStoredHistoryEntries(
 			}
 			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
-				incomplete = true;
+				unreadable = true;
 				break;
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
@@ -388,7 +399,7 @@ export async function searchStoredHistoryEntries(
 			if (!line.toLowerCase().includes(query)) continue;
 			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
 				candidates.shift();
-				incomplete = true;
+				truncated = true;
 			}
 			candidates.push({
 				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query), digest: recordDigest(line),
@@ -402,7 +413,7 @@ export async function searchStoredHistoryEntries(
 		};
 	}
 	// An unreadable record may be the real tip rather than the last readable sibling.
-	if (request.leafId === undefined && incomplete) {
+	if (request.leafId === undefined && unreadable) {
 		return {
 			status: "unavailable", sessionId, query: request.query,
 			source: "stored-jsonl", matches: [],
@@ -420,9 +431,9 @@ export async function searchStoredHistoryEntries(
 	const matches = candidates.filter(item => onBranch(parents, item.entryId, leafId)).reverse().slice(0, request.limit)
 		.map(({ digest, ...match }) => ({ ...match, revision: recordRevision(digest, "stored-jsonl", leafId, sessionId) }));
 	return {
-		status: incomplete ? "partial" : "ok", sessionId, leafId, query: request.query,
+		status: unreadable || truncated ? "partial" : "ok", sessionId, leafId, query: request.query,
 		source: "stored-jsonl", matches,
-		detail: incomplete
+		detail: unreadable || truncated
 			? "Not exhaustive: malformed/oversized records or more than 500 candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
 			: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
