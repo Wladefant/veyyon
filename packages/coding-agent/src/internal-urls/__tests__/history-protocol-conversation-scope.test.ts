@@ -118,6 +118,67 @@ describe("history:// across conversations", () => {
 		}
 	});
 
+	/** Branching can select an earlier leaf without changing the file's physical tail. */
+	it("scopes persistent exact reads/search to the live leaf while retaining explicit archived-branch lookup", async () => {
+		const temp = TempDir.createSync("@veyyon-history-branch-");
+		try {
+			liveRoot("acp:a", "session-a");
+			const file = path.join(temp.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "session-a" }),
+				JSON.stringify({ type: "message", id: "root-entry", parentId: null, message: "root text" }),
+				JSON.stringify({ type: "message", id: "abandoned-entry", parentId: "root-entry", message: "onlyAbandoned" }),
+			].join("\n") + "\n");
+			let liveLeaf: string | null = "abandoned-entry";
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "acp:a",
+				session: { sessionManager: {
+					getSessionFile: () => file,
+					getLeafId: () => liveLeaf,
+				} } as unknown as AgentSession,
+				sessionFile: file, status: "running",
+			});
+			const handler = new HistoryProtocolHandler();
+			const read = async (query: string): Promise<{
+				status: string; leafId?: string; fragment?: string;
+				matches?: Array<{ entryId: string }>;
+			}> => {
+				const resource = await handler.resolve(new URL(`history://Scout?${query}`) as never);
+				return JSON.parse(resource.content);
+			};
+
+			// Before branching, last stored row matches the active branch.
+			expect((await read("entry=abandoned-entry")).status).toBe("ok");
+			// branch(root-entry) only changes the live leaf; no JSONL append follows.
+			liveLeaf = "root-entry";
+			const abandoned = await read("entry=abandoned-entry");
+			expect(abandoned.status).toBe("not_on_branch");
+			expect(abandoned.leafId).toBe("root-entry");
+			const search = await read("q=onlyAbandoned");
+			expect(search.status).toBe("ok");
+			expect(search.leafId).toBe("root-entry");
+			expect(search.matches).toEqual([]);
+			const active = await read("entry=root-entry");
+			expect(active.status).toBe("ok");
+			expect(active.fragment).toContain("root text");
+
+			// The caller may explicitly select a saved, abandoned branch for recall.
+			const explicit = await read("entry=abandoned-entry&leaf=abandoned-entry");
+			expect(explicit.status).toBe("ok");
+			expect(explicit.fragment).toContain("onlyAbandoned");
+			expect((await read("q=onlyAbandoned&leaf=abandoned-entry")).matches?.map(hit => hit.entryId))
+				.toEqual(["abandoned-entry"]);
+
+			// resetLeaf() may leave an empty branch; never fall back to the disk tail.
+			liveLeaf = null;
+			await expect(read("entry=abandoned-entry")).rejects.toThrow(/no branch leaf/);
+			await expect(read("q=onlyAbandoned")).rejects.toThrow(/no branch leaf/);
+			expect((await read("entry=abandoned-entry&leaf=abandoned-entry")).status).toBe("ok");
+		} finally {
+			await temp.remove();
+		}
+	});
+
 	it("resolves normally when the process drives one conversation", async () => {
 		liveRoot("acp:a", "session-a");
 		AgentRegistry.global().register({

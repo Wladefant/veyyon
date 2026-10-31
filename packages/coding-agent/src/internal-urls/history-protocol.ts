@@ -134,6 +134,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				sessionFile = found?.[1];
 			}
 			if (sessionFile) {
+				if (exactRequest?.leafId === null || searchRequest?.leafId === null) {
+					throw new Error("history:// active session has no branch leaf; pass leaf= to select stored history");
+				}
 				const result = exactRequest
 					? await readStoredHistoryEntry(sessionFile, exactRequest)
 					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
