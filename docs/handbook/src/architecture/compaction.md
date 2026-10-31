@@ -194,6 +194,14 @@ rewritten from the earliest pruned entry on; the lines before it are copied as t
    the turn has usable usage data. Its savings feed `postMaintenanceContextTokens`, which is the
    trigger figure reported to the compaction it may schedule.
 
+The threshold prune stages replacements away from the live branch and saves a versioned recovery
+artifact containing the exact original entries before applying them. Each changed result keeps its
+usual notice followed by an `artifact://` recovery reference and original entry ID. A missing or
+failed artifact save leaves the live messages and transcript unchanged; a failed transcript rewrite
+restores the original live entries. If the branch or selected entries change while the archive is
+being written, the pass aborts without replacing newer evidence. An in-memory session can recover
+its archive only while that session remains alive. Reported savings exclude recovery-reference text.
+
 Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
 from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized
 away, so the passes neither rewrite nor read them, and a turn costs the same after hundreds of
@@ -593,3 +601,4 @@ From `settings-schema.ts`:
 - `branchSummary.reserveTokens` = `16384`
 
 These values are consumed at runtime by `AgentSession` and compaction/branch summarization modules.
+

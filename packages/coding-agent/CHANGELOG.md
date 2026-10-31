@@ -20,6 +20,10 @@
 
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
+### Fixed
+
+- Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
