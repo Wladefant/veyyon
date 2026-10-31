@@ -22,6 +22,9 @@
 
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
+### Fixed
+
+- Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
