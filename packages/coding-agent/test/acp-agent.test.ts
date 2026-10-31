@@ -3,14 +3,17 @@ import { setImmediate } from "node:timers/promises";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type {
-	AgentSideConnection,
-	ClientCapabilities,
-	CreateElicitationRequest,
-	CreateElicitationResponse,
-	PromptRequest,
-	PromptResponse,
-	SessionNotification,
+import {
+	ClientSideConnection,
+	ndJsonStream,
+	type AgentSideConnection,
+	type Client,
+	type ClientCapabilities,
+	type CreateElicitationRequest,
+	type CreateElicitationResponse,
+	type PromptRequest,
+	type PromptResponse,
+	type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import {
 	zForkSessionResponse,
@@ -36,6 +39,7 @@ import {
 	AcpAgent,
 	createAcpExtensionUiContext,
 } from "@veyyon/coding-agent/modes/acp/acp-agent";
+import { createAcpConnection } from "@veyyon/coding-agent/modes/acp/acp-mode";
 import type { PlanModeState } from "@veyyon/coding-agent/plan-mode/state";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
@@ -1320,6 +1324,57 @@ describe("ACP agent", () => {
 		).rejects.toThrow(`ACP session ${stored.sessionId} is already loaded for ${harness.cwdA}, not ${harness.cwdB}`);
 
 		harness.abortController.abort();
+	});
+
+	it("loads a stored session over ACP JSON-RPC after the client cwd changes", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const clientToAgent = new TransformStream();
+		const agentToClient = new TransformStream();
+		const client = {
+			sessionUpdate: async () => {},
+		} as unknown as Client;
+		const loadedSessions: FakeAgentSession[] = [];
+		const clientConnection = new ClientSideConnection(
+			() => client,
+			ndJsonStream(clientToAgent.writable, agentToClient.readable),
+		);
+		const serverConnection = createAcpConnection(
+			ndJsonStream(agentToClient.writable, clientToAgent.readable),
+			async cwd => {
+				const session = new FakeAgentSession(cwd);
+				loadedSessions.push(session);
+				return session as unknown as AgentSession;
+			},
+		);
+
+		try {
+			await clientConnection.initialize({ protocolVersion: 1, clientCapabilities: {} });
+			const loaded = await clientConnection.loadSession({
+				sessionId: stored.sessionId,
+				cwd: harness.cwdB,
+				mcpServers: [],
+			});
+
+			expectAcpStructure(zLoadSessionResponse, loaded);
+			expect(loadedSessions.at(-1)?.sessionId).toBe(stored.sessionId);
+			expect(loadedSessions.at(-1)?.sessionManager.getCwd()).toBe(harness.cwdA);
+		} finally {
+			const closeTransport = async (writable: WritableStream<unknown>): Promise<void> => {
+				for (let i = 0; i < 100 && writable.locked; i++) {
+					await setImmediate();
+				}
+				await Promise.allSettled([writable.close()]);
+			};
+			await Promise.all([closeTransport(clientToAgent.writable), closeTransport(agentToClient.writable)]);
+			await Promise.allSettled([clientConnection.closed, serverConnection.closed]);
+			harness.abortController.abort();
+		}
 	});
 
 	it("resumes a stored session without replaying it, and refuses a missing id or a foreign cwd", async () => {
