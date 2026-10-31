@@ -348,3 +348,41 @@ test("a pending answer whose queue state is unknown stays retryable without a fa
 	expect(await ready.accept(envelope("q-accept-unknown", "evt-retry"), "auto")).toBe("queued");
 	expect(queue).toEqual([answer]);
 });
+
+
+test("concurrent inbox instances serialize the same pending decision", async () => {
+	const { manager } = newSession();
+	const queue: string[] = [];
+	const original = envelope("q-concurrent", "evt-first");
+	const first = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	const second = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+
+	// These calls race from separate inbox objects and enter the journal on the same tick.
+	const results = await Promise.all([
+		first.accept(original, "followUp"),
+		second.accept(envelope("q-concurrent", "evt-retry"), "followUp"),
+	]);
+	expect(results.sort()).toEqual(["duplicate", "queued"]);
+	expect(queue).toEqual([original]);
+	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});
+
+test("a failed first concurrent injection permits exactly one later pending-answer retry", async () => {
+	const { manager } = newSession();
+	const queue: string[] = [];
+	const original = envelope("q-concurrent-retry", "evt-first");
+	const failing = new OperatorAnswerInbox(
+		() => manager,
+		async () => { throw new Error("first injection failed"); },
+		waiting(queue),
+	);
+	const succeeding = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	const [failure, retry] = await Promise.allSettled([
+		failing.accept(original, "followUp"),
+		succeeding.accept(envelope("q-concurrent-retry", "evt-retry"), "followUp"),
+	]);
+	expect(failure.status).toBe("rejected");
+	expect(retry).toEqual({ status: "fulfilled", value: "queued" });
+	expect(queue).toEqual([original]);
+	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});

@@ -4,6 +4,8 @@ import { logger } from "@veyyon/utils";
 const ENTRY_TYPE = "terminal:operator-answer";
 const ANSWER_MARKER = /^\[operator-answer question=([^\s\]]{1,256}) event=[^\s\]]{1,256}\](?:\s|$)/;
 type DeliveryMode = "auto" | "steer" | "followUp";
+// In-process FIFO across inbox instances that reference the same session journal.
+const journalOperationChains = new WeakMap<SessionManager, Promise<void>>();
 interface PendingAnswer {
 	version: 1;
 	sessionId: string;
@@ -72,8 +74,16 @@ export class OperatorAnswerInbox {
 		return { pending, consumed };
 	}
 
-	#serialize<T>(operation: () => Promise<T>): Promise<T> {
-		const run = this.#chain.then(operation);
+	#serialize<T>(operation: (journal: SessionManager) => Promise<T>): Promise<T> {
+		const run = this.#chain.then(() => {
+			const journal = this.#journal();
+			// Reconnect can replace an inbox while the old instance is still accepting a sender retry.
+			// Serialize both instances against their shared durable journal, not only each inbox's chain.
+			const previous = journalOperationChains.get(journal) ?? Promise.resolve();
+			const queued = previous.then(() => operation(journal));
+			journalOperationChains.set(journal, queued.then(() => {}, () => {}));
+			return queued;
+		});
 		this.#chain = run.then(() => {}, () => {});
 		return run;
 	}
@@ -93,8 +103,8 @@ export class OperatorAnswerInbox {
 	accept(text: string, mode: DeliveryMode): Promise<string | undefined> {
 		const questionId = operatorAnswerQuestionId(text);
 		if (!questionId) return Promise.resolve(undefined);
-		return this.#serialize(async () => {
-			const journal = this.#journal();
+		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before acceptance");
 			const sessionId = journal.getSessionId();
 			const key = `${sessionId}:${questionId}`;
 			const { pending, consumed } = this.#scan(journal);
@@ -128,8 +138,8 @@ export class OperatorAnswerInbox {
 	 * effort: an answer that cannot be injected now stays pending for the sender's retry and never blocks startup.
 	 */
 	recover(): Promise<void> {
-		return this.#serialize(async () => {
-			const journal = this.#journal();
+		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) return;
 			const { pending, consumed } = this.#scan(journal);
 			for (const answer of pending.values()) {
 				if (consumed.has(answer.questionId)) continue;
