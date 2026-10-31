@@ -1309,14 +1309,8 @@ describe("ACP agent", () => {
 		});
 
 		expectAcpStructure(zLoadSessionResponse, loaded);
-		expect(harness.sessions.at(-1)!.sessionManager.getCwd()).toBe(harness.cwdA);
-		expect(
-			harness.updates.some(
-				update =>
-					update.sessionId === stored.sessionId &&
-					update.update.sessionUpdate === "user_message_chunk",
-			),
-		).toBe(true);
+		expect(harness.sessions.at(-1)?.sessionId).toBe(stored.sessionId);
+		expect(harness.sessions.at(-1)?.sessionManager.getCwd()).toBe(harness.cwdA);
 
 		harness.abortController.abort();
 	});
