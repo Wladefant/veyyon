@@ -35,6 +35,13 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<v
 	if (!predicate()) throw new Error("waitUntil timeout");
 }
 
+/** Keep synthetic broker streams pending until the production store closes them. */
+function untilAborted(signal: AbortSignal | undefined): Promise<void> {
+	if (!signal) throw new Error("expected broker stream abort signal");
+	if (signal.aborted) return Promise.resolve();
+	return new Promise(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+}
+
 describe("RemoteAuthCredentialStore SSE integration", () => {
 	let tempDir = "";
 	let store: SqliteAuthCredentialStore | undefined;
@@ -72,6 +79,64 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (savedEnv[key] === undefined) delete process.env[key];
 			else process.env[key] = savedEnv[key];
 		}
+	});
+
+	test("accepts the first snapshot of a reconnected SSE stream after broker generation resets", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const before = structuredClone(initial.snapshot);
+		expect(before.generation).toBeGreaterThan(0);
+		expect(before.credentials).toHaveLength(1);
+		const restarted: SnapshotResponse = { ...before, generation: 0, credentials: [] };
+
+		// Drive the real streaming store with a synthetic reconnect from a restarted broker.
+		// Only the transport frame is controlled; no OAuth refresh or vault access occurs.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...restarted };
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before });
+		await waitUntil(() => remote!.snapshot.generation === 0 && remote!.snapshot.credentials.length === 0);
+		expect(remote.snapshot.credentials).toEqual([]);
+	});
+
+	test("rejects an old first SSE frame when a newer GET landed during stream connection", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const before = structuredClone(initial.snapshot);
+		expect(before.generation).toBeGreaterThan(0);
+		const restarted: SnapshotResponse = { ...before, generation: 0, credentials: [] };
+		const connected = Promise.withResolvers<void>();
+		const releaseOldFrame = Promise.withResolvers<void>();
+		const frameHandled = Promise.withResolvers<void>();
+
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			connected.resolve();
+			await releaseOldFrame.promise;
+			try {
+				yield { kind: "snapshot" as const, ...before };
+			} finally {
+				frameHandled.resolve();
+			}
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before });
+		await connected.promise;
+		spyOn(client, "fetchSnapshot").mockResolvedValueOnce({
+			status: 200, snapshot: restarted, generation: 0,
+		});
+		await remote.refreshSnapshot();
+		expect(remote.snapshot.generation).toBe(0);
+		expect(remote.snapshot.credentials).toEqual([]);
+
+		// The old stream connected first but delivered its higher-generation
+		// frame after the newer GET. It must not reintroduce the revoked row.
+		releaseOldFrame.resolve();
+		await frameHandled.promise;
+		expect(remote.snapshot.generation).toBe(0);
+		expect(remote.snapshot.credentials).toEqual([]);
 	});
 
 	test("consumes initial snapshot, upsert, and removal over SSE without manual refresh", async () => {
