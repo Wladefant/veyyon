@@ -9,6 +9,8 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { AgentRegistry } from "../src/registry/agent-registry";
+import { HistoryProtocolHandler } from "../src/internal-urls/history-protocol";
 
 /**
  * The per-turn stale-result pass (`#pruneStaleToolResults`) and the
@@ -63,7 +65,10 @@ describe("AgentSession per-turn prune", () => {
 		};
 	}
 
-	async function startSession(overrides: Record<string, unknown>): Promise<void> {
+	async function startSession(
+		overrides: Record<string, unknown>,
+		activeSessionManager = sessionManager,
+	): Promise<void> {
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
@@ -71,7 +76,7 @@ describe("AgentSession per-turn prune", () => {
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
 		session = new AgentSession({
 			agent,
-			sessionManager,
+			sessionManager: activeSessionManager,
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"compaction.dropUseless": true,
@@ -206,9 +211,107 @@ describe("AgentSession per-turn prune", () => {
 		try {
 			await session?.dispose();
 		} finally {
+			AgentRegistry.resetGlobalForTests();
 			authStorage?.close();
 			await tempDir?.remove();
 		}
+	});
+
+	/**
+	 * WHY: a live manager can select an older sibling while its file keeps later
+	 * records. This real handler path defends default isolation, explicit selection,
+	 * pinned rewrites and the empty leaf; it does not test disk scan bounds.
+	 */
+	it("uses the real active leaf for stored exact reads and searches", async () => {
+		const rootId = sessionManager.appendMessage({
+			role: "user", content: "shared branch root", timestamp: Date.now(),
+		});
+		const activeId = sessionManager.appendMessage({
+			role: "user", content: "active branch only", timestamp: Date.now(),
+		});
+		sessionManager.branch(rootId);
+		const historicalId = sessionManager.appendMessage({
+			role: "user", content: "historical-branch-marker", timestamp: Date.now(),
+		});
+		sessionManager.branch(activeId);
+		await sessionManager.ensureOnDisk();
+		await sessionManager.flush();
+		await startSession({});
+		AgentRegistry.global().register({
+			id: "Main", displayName: "main", kind: "main", session,
+			sessionFile: sessionManager.getSessionFile(), scope: "history-leaf-test",
+		});
+		const handler = new HistoryProtocolHandler();
+		const read = async (query: string) => JSON.parse((await handler.resolve(
+			new URL(`history://Main?${query}`) as never,
+		)).content) as {
+			status: string; fragment?: string; revision?: string; nextOffset?: number | null;
+			matches?: Array<{ entryId: string }>;
+		};
+
+		expect((await read(`entry=${historicalId}`)).status).toBe("not_on_branch");
+		expect((await read("q=historical-branch-marker")).matches).toEqual([]);
+		const first = await read(`entry=${historicalId}&leaf=${historicalId}&limit=8`);
+		expect(first.status).toBe("ok");
+		const nextOffset = first.nextOffset;
+		if (nextOffset === undefined || nextOffset === null || !first.revision) {
+			throw new Error("Expected a revision-pinned next page for the historical record");
+		}
+		const continuation = await read(
+			`entry=${historicalId}&leaf=${historicalId}&offset=${nextOffset}&limit=8000&revision=${first.revision}`,
+		);
+		expect(continuation.status).toBe("ok");
+		expect((first.fragment ?? "") + (continuation.fragment ?? "")).toContain("historical-branch-marker");
+
+		const record = sessionManager.getEntry(historicalId);
+		if (record?.type !== "message" || record.message.role !== "user") {
+			throw new Error("Expected the real session manager to retain its historical user entry");
+		}
+		record.message.content = "rewritten-history-marker";
+		await sessionManager.rewriteEntries([record]);
+		const stale = await read(
+			`entry=${historicalId}&leaf=${historicalId}&offset=${nextOffset}&limit=8000&revision=${first.revision}`,
+		);
+		expect(stale.status).toBe("stale");
+		expect(stale.fragment).toBeUndefined();
+		expect(stale.nextOffset).toBeUndefined();
+
+		sessionManager.resetLeaf();
+		expect((await read(`entry=${activeId}`)).status).toBe("missing");
+		expect((await read("q=historical-branch-marker")).status).toBe("missing_branch");
+		expect((await read("q=historical-branch-marker")).matches).toEqual([]);
+	});
+
+	it("honors explicit historical leaves in a real in-memory session", async () => {
+		const manager = SessionManager.inMemory(tempDir.path());
+		const rootId = manager.appendMessage({ role: "user", content: "memory root", timestamp: Date.now() });
+		const activeId = manager.appendMessage({ role: "user", content: "active memory branch", timestamp: Date.now() });
+		manager.branch(rootId);
+		const historicalId = manager.appendMessage({
+			role: "user", content: "historical-memory-marker", timestamp: Date.now(),
+		});
+		manager.branch(activeId);
+		await startSession({}, manager);
+		AgentRegistry.global().register({
+			id: "Memory", displayName: "memory", kind: "main", session, scope: "history-memory-leaf-test",
+		});
+		const handler = new HistoryProtocolHandler();
+		const read = async (query: string) => JSON.parse((await handler.resolve(
+			new URL(`history://Memory?${query}`) as never,
+		)).content) as {
+			status: string; fragment?: string; matches?: Array<{ entryId: string }>;
+		};
+
+		expect((await read(`entry=${historicalId}`)).status).toBe("missing");
+		expect((await read("q=historical-memory-marker")).matches).toEqual([]);
+		const explicit = await read(`entry=${historicalId}&leaf=${historicalId}`);
+		expect(explicit.status).toBe("ok");
+		expect(explicit.fragment).toContain("historical-memory-marker");
+		expect((await read(`q=historical-memory-marker&leaf=${historicalId}`)).matches?.map(match => match.entryId))
+			.toEqual([historicalId]);
+		manager.resetLeaf();
+		expect((await read(`entry=${activeId}`)).status).toBe("missing");
+		expect((await read("q=historical-memory-marker")).status).toBe("missing_branch");
 	});
 
 	it("persists the pruned rewrite so a from-disk rebuild matches the live context", async () => {

@@ -142,7 +142,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
 			}
 			if (ref?.session) {
-				const branch = ref.session.sessionManager.getBranch();
+				const requestedLeaf = exactRequest ? exactRequest.leafId : searchRequest!.leafId;
+				const branch = requestedLeaf === null ? [] : ref.session.sessionManager.getBranch(requestedLeaf);
 				const result = exactRequest
 					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
 					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());
