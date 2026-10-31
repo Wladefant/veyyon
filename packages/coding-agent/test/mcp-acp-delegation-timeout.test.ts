@@ -20,9 +20,10 @@ function makeConnection(provider?: string): { connection: MCPServerConnection; c
 		connection: {
 			name: "child",
 			config: { command: "child", args: [] },
-			...(provider ? { _source: { provider, providerName: provider, path: "test", level: "native" as const } } : {}),
+			...(provider ? { _source: { provider, providerName: provider, path: "test", level: "project" as const } } : {}),
 			serverInfo: { name: "child", version: "1" },
 			capabilities: { tools: {} },
+			transport,
 		},
 		calls,
 	};
