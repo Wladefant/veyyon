@@ -13,9 +13,9 @@ const nativePath = process.argv[2];
 assert.ok(nativePath, "pass the matching 1.6.8 native addon path");
 const native: {
 	Process: { fromPid(pid: number): Process | null };
-	__veyyonNativesV1_6_8: () => unknown;
+	__veyyonNativesV1_7_0: () => unknown;
 } = createRequire(import.meta.url)(nativePath);
-assert.equal(typeof native.__veyyonNativesV1_6_8, "function");
+assert.equal(typeof native.__veyyonNativesV1_7_0, "function");
 
 // This OS integration needs a real termination deadline, not a simulated clock.
 const runner = spawn("python", ["-u", fileURLToPath(new URL("../runner.py", import.meta.url))], {

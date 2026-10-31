@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [1.7.0] - 2026-10-31
+
 - The terminal launch status row now reads file-backed Git HEAD without eagerly loading Git subprocess and diff helpers; background status and PR queries still load the full Git implementation when needed ([#701](https://github.com/Wladefant/veyyon/issues/701)).
 - Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
@@ -9,8 +12,13 @@
 
 - Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence, redacts task strings before JSON escaping, accepts fully covered keep-nothing boundaries, and preserves execution and pending-work ownership ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Directed cross-session IRC notices can resolve a unique live project/cwd and report session identity instead of broadcasting ([Refs #694](https://github.com/Wladefant/veyyon/issues/694)).
-
 - Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
+- Added experimental native Mainplane tools for fleet discovery, worker operations, current-session receipts and cancellation, background jobs, and output recovery, disabled by default; demo, settings differential, and bench proof remain open ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
+### Changed
+
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
+- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
 ### Fixed
 
@@ -18,9 +26,7 @@
 - Image removal leaves cold assistant payloads unloaded when they contain no supported images ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Image removal refuses user and developer image records with preserved native OpenAI Responses history ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Useless-result pruning retains entries unless their complete recovery placeholders reduce context tokens ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-
 - Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Invalid JSON-RPC records no longer terminate MCP HTTP event streams or block valid batch notifications ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - MCP HTTP streams no longer treat request extension fields as final responses ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
@@ -36,52 +42,26 @@
 - Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
 - Task successors reject missing or non-directory inherited working directories before claiming a predecessor checkpoint.
-
-### Changed
-
-- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
-- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
-
-### Fixed
-
 - Artifact reads stay within their selected execution session, support explicit owner selectors and bounded availability metadata, and refuse duplicate numeric-ID matches ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - `read` honors `artifact://<id>?view=metadata` and rejects unknown or duplicate views instead of returning artifact bytes ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Ambiguous artifact errors no longer expose paths from other sessions ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
 - Oversized artifact remedies preserve an explicitly selected execution session when paged through `read` ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
-
 - Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-
 - Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
 - Failed kernel initialization retains runner ownership and blocks replacement until shutdown confirms exit.
 - Queued kernel replacements preserve runner ownership and honor each waiting caller's cancellation and deadline ([#751](https://github.com/Wladefant/veyyon/issues/751)).
-
 - Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 - Send Codex access programs and routing hints from search, image generation, and prewarm requests.
 - Preserve required tool calls through session requests and avoid unchanged failed-discovery cache writes.
-
 - Retained agents deliver each parent-requested native continuation through a separate durable result without changing their first result ([#766](https://github.com/Wladefant/veyyon/issues/766)).
-### Fixed
-
 - Eval tool calls keep framework intent metadata out of execution arguments while preserving tool-declared intent fields ([Refs #753](https://github.com/Wladefant/veyyon/issues/753)).
-
 - Added `--mcp-config` to load explicit run-only MCP connectors in direct and ACP sessions without rewriting a profile; server-name collisions and connector setup failures stop activation ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 - Fixed run-only MCP config validation to accept shared server options across stdio, HTTP and SSE while rejecting unknown keys ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 - ACP session creation, load, resume and fork now wait for run-only MCP tool discovery before the first provider turn ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
-
-### Fixed
-
 - Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
-
-### Added
-
-- Added experimental native Mainplane tools for fleet discovery, worker operations, current-session receipts and cancellation, background jobs, and output recovery, disabled by default; demo, settings differential, and bench proof remain open ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
-
-### Fixed
-
 - Native Mainplane text reads reject malformed Unicode paths before transport while preserving valid Unicode filenames ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 - Preserved a UTF-8 BOM in recovered output pages instead of dropping the leading marker ([Refs #797](https://github.com/Wladefant/veyyon/issues/797)).
 - Native Mainplane run receipts now allow Go JSON escaping within a 1 MiB response bound.

@@ -4,6 +4,85 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-31
+
+### Breaking Changes
+
+- Replace single-account `Model.accessPrograms` with per-account `Model.accountAccess` in discovered models.
+
+### Added
+
+- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence, redacts task strings before JSON escaping, accepts fully covered keep-nothing boundaries, and preserves execution and pending-work ownership ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Directed cross-session IRC notices can resolve a unique live project/cwd and report session identity instead of broadcasting ([Refs #694](https://github.com/Wladefant/veyyon/issues/694)).
+- Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
+- Added experimental native Mainplane tools for fleet discovery, worker operations, current-session receipts and cancellation, background jobs, and output recovery, disabled by default; demo, settings differential, and bench proof remain open ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Add declared default and mandatory reasoning metadata to `ModelReasoningOptions`.
+- The web plugin exports a bounded public-fetch handler that validates destinations and takes caller identity only from the host authorize function ([Refs #629](https://github.com/Wladefant/veyyon/issues/629)).
+
+### Changed
+
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
+- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
+
+### Fixed
+
+- Image removal archives original image records, leaves recovery references, and restores only unchanged live records when persistence fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal leaves cold assistant payloads unloaded when they contain no supported images ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal refuses user and developer image records with preserved native OpenAI Responses history ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Useless-result pruning retains entries unless their complete recovery placeholders reduce context tokens ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Invalid JSON-RPC records no longer terminate MCP HTTP event streams or block valid batch notifications ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- MCP HTTP streams no longer treat request extension fields as final responses ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
+- Multiline registered secrets stay redacted or withheld across producer output chunks.
+- Ordinary agent reads block credential files named by the profile's configured metadata indexes.
+- Reconnected operator-answer inboxes reject pending answer replays already waiting in the runtime queue ([Refs #705](https://github.com/Wladefant/veyyon/issues/705)).
+- Child prompts and IRC rosters distinguish delegation from exclusive write ownership ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
+- The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
+- Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
+- Task successors reject missing or non-directory inherited working directories before claiming a predecessor checkpoint.
+- Artifact reads stay within their selected execution session, support explicit owner selectors and bounded availability metadata, and refuse duplicate numeric-ID matches ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- `read` honors `artifact://<id>?view=metadata` and rejects unknown or duplicate views instead of returning artifact bytes ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Ambiguous artifact errors no longer expose paths from other sessions ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
+- Oversized artifact remedies preserve an explicitly selected execution session when paged through `read` ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
+- Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
+- Failed kernel initialization retains runner ownership and blocks replacement until shutdown confirms exit.
+- Queued kernel replacements preserve runner ownership and honor each waiting caller's cancellation and deadline ([#751](https://github.com/Wladefant/veyyon/issues/751)).
+- Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
+- Send Codex access programs and routing hints from search, image generation, and prewarm requests.
+- Preserve required tool calls through session requests and avoid unchanged failed-discovery cache writes.
+- Retained agents deliver each parent-requested native continuation through a separate durable result without changing their first result ([#766](https://github.com/Wladefant/veyyon/issues/766)).
+- Eval tool calls keep framework intent metadata out of execution arguments while preserving tool-declared intent fields ([Refs #753](https://github.com/Wladefant/veyyon/issues/753)).
+- Added `--mcp-config` to load explicit run-only MCP connectors in direct and ACP sessions without rewriting a profile; server-name collisions and connector setup failures stop activation ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Fixed run-only MCP config validation to accept shared server options across stdio, HTTP and SSE while rejecting unknown keys ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- ACP session creation, load, resume and fork now wait for run-only MCP tool discovery before the first provider turn ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Native Mainplane text reads reject malformed Unicode paths before transport while preserving valid Unicode filenames ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Preserved a UTF-8 BOM in recovered output pages instead of dropping the leading marker ([Refs #797](https://github.com/Wladefant/veyyon/issues/797)).
+- Native Mainplane run receipts now allow Go JSON escaping within a 1 MiB response bound.
+- Preserve required tool calls as text when an in-band dialect cannot force them.
+- Send the signing Codex account’s access program and model routing hint on requests.
+- Honor Kimi Code mandatory reasoning without an effort ladder and preserve required tool calls as text when an endpoint cannot force them.
+- Report non-streaming success bodies and provider rejection text without repeated sentences, and reject unlabelled streams with a blank prefix of 64 KiB.
+- Keep exhausted Cursor allowances parked for their reset window and retain gateway usage on early stream completion.
+- Request a fresh Codex browser sign-in with password reauthentication.
+- Remote auth-broker clients reject unbound OAuth refresh requests and discard revoked or superseded refresh replies, including delayed suspect-credential results, while preserving sole broker refresh ownership ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Required auth-gateway completion fixtures to cover the production route type without changing runtime behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Corrected Anthropic cache-control and request-ID types without changing request behavior ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Removed unused upstream Codex transport copies and their stale test; the provider keeps its production transport in `openai-codex-responses.ts` ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Scoped model regeneration preserves the previous snapshot of unselected providers even when generation policies mutate restored models.
+- Preserve per-account Codex access in discovery and reject stale schema-14 model cache rows.
+- Honor Kimi Code effort declarations, filter unsupported overlay providers, and avoid rewriting unchanged failed-probe cache rows.
+- The model generator reads Antigravity's primary endpoint from the catalog provider-endpoints module.
+- Parse rate-limit reset windows stated in words.
+- Pause the public-fetch TCP socket before its TLS handoff so a raw read cannot retain the reader lock during upgrade; Workers hostname verification remains blocked by the upstream runtime limitation.
+
 ## [1.6.8] - 2026-10-30
 
 ## [1.6.7] - 2026-10-29

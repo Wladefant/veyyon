@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-31
+
 ### Breaking Changes
 
 - Replace single-account `Model.accessPrograms` with per-account `Model.accountAccess` in discovered models.

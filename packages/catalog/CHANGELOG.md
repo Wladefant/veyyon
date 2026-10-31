@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-31
+
 ### Fixed
 
 - Scoped model regeneration preserves the previous snapshot of unselected providers even when generation policies mutate restored models.

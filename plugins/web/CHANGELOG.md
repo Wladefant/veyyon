@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-31
+
 ### Added
 
 - The web plugin exports a bounded public-fetch handler that validates destinations and takes caller identity only from the host authorize function ([Refs #629](https://github.com/Wladefant/veyyon/issues/629)).
+
+### Fixed
+
+- Pause the public-fetch TCP socket before its TLS handoff so a raw read cannot retain the reader lock during upgrade; Workers hostname verification remains blocked by the upstream runtime limitation.
 
 ## [1.6.0] - 2026-10-28
 
@@ -27,7 +33,6 @@
 
 ### Fixed
 
-- Pause the public-fetch TCP socket before its TLS handoff so a raw read cannot retain the reader lock during upgrade; Workers hostname verification remains blocked by the upstream runtime limitation.
 - The Hugging Face handler omits a model field the API returns as `null` or as an empty list, and renders a single-segment model path such as `huggingface.co/gpt2` with the same fields as an `org/model` path.
 - The GitLab handler decodes percent-encoded path segments before it builds an API URL, and reads a project README from its raw URL instead of the HTML blob page.
 - The docs.rs handler reads rustdoc JSON format 61, lists only public items, resolves an item page by its kind so `macro.make.html` and `fn.make.html` render different items, and degrades when the compressed document exceeds the size cap.
