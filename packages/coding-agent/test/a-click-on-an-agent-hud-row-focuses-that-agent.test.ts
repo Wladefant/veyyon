@@ -25,10 +25,8 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AGENT_HUD_VISIBLE_LIMIT } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-hud";
-import {
-	InteractiveMode,
-	SUBAGENT_OBSERVER_UI_COALESCE_MS,
-} from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { SUBAGENT_OBSERVER_UI_COALESCE_MS } from "@veyyon/coding-agent/modes/terminal/controllers/anchored-blocks";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type AgentProgressPayload, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
