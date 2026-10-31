@@ -1044,7 +1044,7 @@ export class AcpAgent implements Agent {
 		// released and its transcript closed, then open it from disk like any stored session.
 		await this.#backgrounded.get(sessionId)?.released;
 
-		const storedSession = await this.#findStoredSession(sessionId, cwd);
+		const storedSession = await this.#findStoredSessionById(sessionId);
 		if (!storedSession) {
 			throw new Error(`ACP session not found: ${sessionId}`);
 		}
@@ -1733,10 +1733,6 @@ export class AcpAgent implements Agent {
 		});
 	}
 
-	async #findStoredSession(sessionId: string, cwd: string): Promise<StoredSessionInfo | undefined> {
-		const sessions = await listStoredSessions(cwd);
-		return sessions.find(session => session.id === sessionId);
-	}
 
 	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await listStoredSessions();
