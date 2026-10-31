@@ -1,10 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { __internalsForTesting, acquireFileLock, tryWithFileLock, withFileLock, withFileLockSync } from "../src/file-lock";
+import * as sleepHelpers from "../src/sleep";
 import { getProcessStartIdentity } from "../src/process-liveness";
 import { removeWithRetries } from "../src/temp";
 
@@ -572,117 +573,128 @@ describe("acquireFileLock lease handle (F5)", () => {
 	});
 });
 
-describe("Windows candidate publication rename contention (#816)", () => {
-	const windowsRenameContention = (): NodeJS.ErrnoException =>
-		Object.assign(new Error("Windows lock publication is occupied"), { code: "EPERM" });
+// Public acquisition calls must treat platform contention codes as bounded retries
+// only when a competing lock exists. These tests leave the winning lock in place:
+// retries must observe it rather than inventing repeated rename attempts.
+describe("file-lock candidate publication errors", () => {
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"retries public async acquisition after %s only when a competing owner exists",
+		async (code) => {
+			const root = await mkRoot();
+			const target = path.join(root, `async-${code}.json`);
+			const lockPath = getLockPath(target);
+			const competingToken = randomUUID();
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			let bodyRuns = 0;
+			const rename = spyOn(fs, "rename").mockImplementation(async (_source, destination) => {
+				renameAttempts += 1;
+				await fs.mkdir(destination);
+				await fs.writeFile(path.join(destination, "info"), JSON.stringify(ownerInfo({ token: competingToken })));
+				throw error;
+			});
+			const delays: number[] = [];
+			const sleep = spyOn(Bun, "sleep").mockImplementation(async (ms) => {
+				delays.push(ms);
+			});
+			try {
+				await expect(
+					withFileLock(target, async () => {
+						bodyRuns += 1;
+					}, { retries: 3, retryDelayMs: 7 }),
+				).rejects.toThrow(/after 3 attempts/);
+				expect((await readLockInfo(lockPath))?.token).toBe(competingToken);
+				expect(renameAttempts).toBe(1);
+				expect(bodyRuns).toBe(0);
+				expect(delays).toEqual([7, 7]);
+				expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
+			} finally {
+				sleep.mockRestore();
+				rename.mockRestore();
+			}
+		},
+	);
 
-	test("async loser preserves a competing winner and removes only its own candidate", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "agent.db.recovery"));
-		let winner!: Awaited<ReturnType<typeof __internalsForTesting.prepareCandidate>>;
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"retries public sync acquisition after %s only when a competing owner exists",
+		async (code) => {
+			const root = await mkRoot();
+			const target = path.join(root, `sync-${code}.json`);
+			const lockPath = getLockPath(target);
+			const competingToken = randomUUID();
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			let bodyRuns = 0;
+			const rename = spyOn(fsSync, "renameSync").mockImplementation((_source, destination) => {
+				renameAttempts += 1;
+				fsSync.mkdirSync(destination);
+				fsSync.writeFileSync(
+					path.join(destination, "info"),
+					JSON.stringify(ownerInfo({ token: competingToken })),
+				);
+				throw error;
+			});
+			const delays: number[] = [];
+			const sleep = spyOn(sleepHelpers, "sleepSync").mockImplementation((ms) => {
+				delays.push(ms);
+			});
+			try {
+				expect(() =>
+					withFileLockSync(target, () => {
+						bodyRuns += 1;
+					}, { retries: 3, retryDelayMs: 7 }),
+				).toThrow(/after 3 attempts/);
+				expect(readLockInfoSync(lockPath)?.token).toBe(competingToken);
+				expect(renameAttempts).toBe(1);
+				expect(bodyRuns).toBe(0);
+				expect(delays).toEqual([7, 7]);
+				expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
+			} finally {
+				sleep.mockRestore();
+				rename.mockRestore();
+			}
+		},
+	);
 
-		// The other acquirer publishes after our first inspection, before our
-		// candidate rename. Windows reports EPERM instead of EEXIST here.
-		const loser = await tryAcquireLock(
-			lockPath,
-			async (_candidatePath, targetPath) => {
-				winner = await __internalsForTesting.prepareCandidate(lockPath);
-				await fs.rename(winner.path, targetPath);
-				throw windowsRenameContention();
-			},
-			true,
-		);
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"preserves public async %s when no competing owner exists",
+		async (code) => {
+			const root = await mkRoot();
+			const target = path.join(root, `async-no-winner-${code}.json`);
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			const rename = spyOn(fs, "rename").mockImplementation(async () => {
+				renameAttempts += 1;
+				throw error;
+			});
+			try {
+				await expect(withFileLock(target, async () => undefined, { retries: 3, retryDelayMs: 0 })).rejects.toBe(error);
+				expect(renameAttempts).toBe(1);
+				expect(await fs.readdir(root)).toEqual([]);
+			} finally {
+				rename.mockRestore();
+			}
+		},
+	);
 
-		expect(loser).toBeNull();
-		expect((await readLockInfo(lockPath))?.token).toBe(winner.lease.token);
-		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
-		await releaseLock(lockPath, winner.lease);
-		const retry = await tryAcquireLock(lockPath);
-		expect(retry).not.toBeNull();
-		if (retry) await releaseLock(lockPath, retry);
-	});
-
-	test("sync loser preserves a competing winner and removes only its own candidate", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "agent.db.recovery"));
-		let winner!: ReturnType<typeof __internalsForTesting.prepareCandidateSync>;
-
-		const loser = tryAcquireLockSync(
-			lockPath,
-			(_candidatePath, targetPath) => {
-				winner = __internalsForTesting.prepareCandidateSync(lockPath);
-				fsSync.renameSync(winner.path, targetPath);
-				throw windowsRenameContention();
-			},
-			true,
-		);
-
-		expect(loser).toBeNull();
-		expect(readLockInfoSync(lockPath)?.token).toBe(winner.lease.token);
-		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
-		releaseLockSync(lockPath, winner.lease);
-		const retry = tryAcquireLockSync(lockPath);
-		expect(retry).not.toBeNull();
-		if (retry) releaseLockSync(lockPath, retry);
-	});
-
-	test("Windows EPERM without a published winner stays a permission error (async)", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "no-winner-async.json"));
-		await expect(
-			tryAcquireLock(
-				lockPath,
-				async () => {
-					throw windowsRenameContention();
-				},
-				true,
-			),
-		).rejects.toMatchObject({ code: "EPERM" });
-		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
-	});
-
-	test("Windows EPERM without a published winner stays a permission error (sync)", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "no-winner-sync.json"));
-		expect(() =>
-			tryAcquireLockSync(
-				lockPath,
-				() => {
-					throw windowsRenameContention();
-				},
-				true,
-			),
-		).toThrow("Windows lock publication is occupied");
-		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
-	});
-
-	test("async non-Windows EPERM remains an error, with no abandoned candidate", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "permissions.json"));
-		await expect(
-			tryAcquireLock(
-				lockPath,
-				async () => {
-					throw windowsRenameContention();
-				},
-				false,
-			),
-		).rejects.toMatchObject({ code: "EPERM" });
-		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
-	});
-
-	test("sync non-Windows EPERM remains an error, with no abandoned candidate", async () => {
-		const root = await mkRoot();
-		const lockPath = getLockPath(path.join(root, "permissions.json"));
-		expect(() =>
-			tryAcquireLockSync(
-				lockPath,
-				() => {
-					throw windowsRenameContention();
-				},
-				false,
-			),
-		).toThrow("Windows lock publication is occupied");
-		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
-	});
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"preserves public sync %s when no competing owner exists",
+		async (code) => {
+			const root = await mkRoot();
+			const target = path.join(root, `sync-no-winner-${code}.json`);
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			const rename = spyOn(fsSync, "renameSync").mockImplementation(() => {
+				renameAttempts += 1;
+				throw error;
+			});
+			try {
+				expect(() => withFileLockSync(target, () => undefined, { retries: 3, retryDelayMs: 0 })).toThrow(error);
+				expect(renameAttempts).toBe(1);
+				expect(fsSync.readdirSync(root)).toEqual([]);
+			} finally {
+				rename.mockRestore();
+			}
+		},
+	);
 });
