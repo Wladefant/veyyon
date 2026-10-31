@@ -70,6 +70,8 @@ import { resolveHarnessProfileForModel, resolvePromptSectionOrderForModel } from
 import { attachSecretsNoticeSink } from "./secrets/notices";
 import { currentProducerSecretOwner } from "./secrets/producer-owner";
 import { SessionSecretRuntime } from "./secrets/session-runtime";
+import { prepareSecretIntakeHost } from "./secrets/intake-host";
+import { installSessionSecretIntakeAlias, installSessionSecretIntakeFactory, registerSessionSecretIntakeActor } from "./secrets/intake-session";
 import { AgentSession } from "./session/agent-session";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { type SessionCpuExecHooks, sessionCpuExecHooks } from "./session/cpu-limit";
@@ -344,6 +346,7 @@ class SessionStartup {
 	#registered = false;
 	#session: AgentSession | undefined;
 	#agent: Agent | undefined;
+	readonly #secretIntakeCleanup: Array<() => void> = [];
 	#replenishmentEngine: TopicReplenishmentEngine | null = null;
 	readonly #sessionPolicy = () => this.#toolContextStore.getContext();
 
@@ -593,9 +596,21 @@ class SessionStartup {
 		// A manager startup created is disconnected when no release holds it.
 		if (this.#releaseMcpManager) await this.#releaseMcpManager();
 		else await this.#createdMcpManager?.disconnectAll();
+		this.#disposeSecretIntake();
+
 		await this.#createdSessionManager?.close();
 		this.#createdAuthStorage?.close();
 	}
+	#disposeSecretIntake(): void {
+		for (const dispose of this.#secretIntakeCleanup.splice(0).reverse()) {
+			try {
+				dispose();
+			} catch {
+				logger.warn("Secret intake cleanup failed");
+			}
+		}
+	}
+
 
 	#detachNoticeSinks(): void {
 		for (const detach of this.#noticeSinks.splice(0)) detach();
@@ -829,8 +844,39 @@ class SessionStartup {
 		this.#scopedAsyncJobManager = sessionAsyncJobManager(this.#asyncJobManager, options);
 		this.#agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 		this.#identity = resolveAgentIdentity(options, this.#isSpawned, sessionManager.getSessionId?.());
+		const ownerSessionId = sessionManager.getSessionId();
+		const nativeCwd = path.resolve(sessionManager.getCwd());
+		const normalizeCwd = (cwd: string): string => {
+			const resolved = path.resolve(cwd);
+			return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+		};
+		const isCurrent = (): boolean =>
+			sessionManager.getSessionId() === ownerSessionId && normalizeCwd(sessionManager.getCwd()) === normalizeCwd(nativeCwd);
+		const prepared = !this.#isSpawned && this.#identity.kind === "main"
+			? await prepareSecretIntakeHost({
+					agentDir: this.#agentDir,
+					cwd: nativeCwd,
+					ownerSessionId,
+					runtime: this.#secretRuntime,
+					configuration: options.secretIntake,
+					getCwd: () => sessionManager.getCwd(),
+					getOwnerSessionId: () => sessionManager.getSessionId(),
+				})
+			: undefined;
+		if (prepared) {
+			this.#secretIntakeCleanup.push(prepared.close);
+		}
+		const toolSessionOptions = prepared
+			? {
+					...options,
+					protectedCredentialResources: [
+						...(options.protectedCredentialResources ?? []),
+						...prepared.protectedResources,
+					],
+				}
+			: options;
 		this.#tools = await createSessionToolSession({
-			options,
+			options: toolSessionOptions,
 			sessionManager,
 			session: () => this.#session,
 			agent: () => this.#agent,
@@ -907,6 +953,35 @@ class SessionStartup {
 				},
 			},
 		});
+		if (prepared) {
+			const create = async (actorId: string) => {
+				if (!isCurrent()) throw new Error("Secret intake request refused");
+				const binding = await prepared.create(actorId);
+				const unsubscribe = binding.broker.subscribe(({ request, secretRef }) => {
+					if (!["saved", "declined", "cancelled", "failed"].includes(request.status) || !isCurrent()) return;
+					const session = this.#session;
+					if (!session) return;
+					const metadata = { requestId: request.requestId, status: request.status, ...(secretRef ? { secretRef } : {}) };
+					void session.promptCustomMessage({
+						customType: "secret-intake-status",
+						content: JSON.stringify(metadata),
+						display: false,
+						details: metadata,
+						attribution: "agent",
+					}, { streamingBehavior: "followUp" }).catch(() => {
+						logger.warn("Secret intake status notification failed");
+					});
+				});
+				this.#secretIntakeCleanup.push(unsubscribe);
+				return binding;
+			};
+			this.#secretIntakeCleanup.push(
+				installSessionSecretIntakeFactory(this.#tools.toolSession, ownerSessionId, create, isCurrent),
+			);
+			if (prepared.actorId) {
+				await registerSessionSecretIntakeActor(this.#tools.toolSession, prepared.actorId, ownerSessionId);
+			}
+		}
 	}
 
 	/**
@@ -1606,6 +1681,9 @@ class SessionStartup {
 			titleSystemPrompt: options.titleSystemPrompt,
 		});
 		this.#session = session;
+		if (this.#identity.kind === "main" && this.#secretIntakeCleanup.length > 0) {
+			this.#secretIntakeCleanup.push(installSessionSecretIntakeAlias(session, toolSession));
+		}
 		return session;
 	}
 
@@ -1693,6 +1771,7 @@ class SessionStartup {
 			this.#detachNoticeSinks();
 			this.#unregisterUnlessParked();
 			this.#credentialDisabled.dispose();
+			this.#disposeSecretIntake();
 		}
 	}
 

@@ -15,6 +15,8 @@ import { exitAfterStdoutDrain } from "../../cli/stdout-drain";
 import { reset as resetCapabilities } from "../../discovery/capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
+import { getSessionSecretIntake, getSessionSecretIntakeContext } from "../../secrets/intake-session";
+import type { SecretIntakeResult } from "../../secrets/intake-broker";
 import { type AttachableSession, BackgroundSessions, type NextSessionFactory } from "../../session/background-sessions";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import type { EventBus } from "../../utils/event-bus";
@@ -346,9 +348,26 @@ export async function runRpcMode(attached: AttachableSession, options: RpcModeOp
 			const stopCommandUpdates = session.subscribeCommandMetadataChanged(() => {
 				void emitAvailableCommandsUpdate();
 			});
+			const broker = getSessionSecretIntake(session);
+			const context = getSessionSecretIntakeContext(session);
+			const stopSecretIntake = broker && context
+				? (() => {
+						const publishSecretRequest = ({ request }: SecretIntakeResult): void => {
+							if (request.ownerSessionId !== context.ownerSessionId || request.projectId !== context.projectId) return;
+							output({
+								type: request.status === "pending" ? "secret_request_created" : "secret_request_updated",
+								request,
+							});
+						};
+						const stop = broker.subscribe(publishSecretRequest);
+						for (const request of broker.listPending(context)) publishSecretRequest(request);
+						return stop;
+					})()
+				: undefined;
 			return () => {
 				stopEvents();
 				stopCommandUpdates();
+				stopSecretIntake?.();
 			};
 		},
 		adopt: async next => {

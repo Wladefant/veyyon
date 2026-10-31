@@ -9,7 +9,7 @@ import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
 const getConfigRoot = useIsolatedConfigRoot();
 
-async function createRuntime() {
+async function createRuntime(expansionEnabled = false) {
 	const root = TempDir.createSync("private-secret-runtime-");
 	const cwd = path.resolve(root.join("project"));
 	const agentDir = path.resolve(root.join("agent"));
@@ -17,7 +17,7 @@ async function createRuntime() {
 		fs.mkdir(cwd, { recursive: true }),
 		fs.mkdir(agentDir, { recursive: true }),
 	]);
-	const settings = Settings.isolated();
+	const settings = Settings.isolated({ "secrets.enabled": expansionEnabled });
 	const runtime = await SessionSecretRuntime.load(
 		{
 			settings,
@@ -32,13 +32,14 @@ async function createRuntime() {
 }
 
 describe("private secret runtime registration", () => {
-	it("pins redaction to each owner and carries private values across refreshes only in redaction", async () => {
-		const fixture = await createRuntime();
+	it.each([false, true])("keeps private values redaction-only across refreshes with expansion=%s", async expansionEnabled => {
+		const fixture = await createRuntime(expansionEnabled);
 		try {
 			const installed: Array<{ revision: number; obfuscateText(text: string): string }> = [];
+			const notices: string[] = [];
 			fixture.runtime.attachSession({
 				installSecretRuntime: lease => installed.push(lease),
-				emitNotice: () => {},
+				emitNotice: (_level, message) => notices.push(message),
 			});
 			const prior = fixture.runtime.lease;
 			const values = [
@@ -63,11 +64,25 @@ describe("private secret runtime registration", () => {
 
 			await fixture.runtime.refresh(fixture.cwd);
 			const refreshedLease = fixture.runtime.lease;
+			expect(Boolean(refreshedLease.expansionObfuscator)).toBe(expansionEnabled);
 			for (const value of values) {
 				expect(refreshedLease.obfuscateText(value)).not.toContain(value);
 				expect(refreshedLease.expansionObfuscator?.obfuscate(value) ?? value).toBe(value);
+				const args = { command: refreshedLease.obfuscateText(value) };
+				if (expansionEnabled) {
+					expect(fixture.runtime.deobfuscateForExecution(refreshedLease, args, "bash", undefined)).toEqual(args);
+				} else {
+					expect(() => fixture.runtime.deobfuscateForExecution(refreshedLease, args, "bash", undefined)).toThrow(
+						"is no longer available",
+					);
+				}
+				expect(notices.join("\n")).not.toContain(value);
 			}
 			expect(currentLease.obfuscateText(values[0]!)).not.toBe(values[0]);
+			const ordinaryArgs = { command: "printf ordinary-text" };
+			expect(fixture.runtime.deobfuscateForExecution(refreshedLease, ordinaryArgs, "bash", undefined)).toEqual(
+				ordinaryArgs,
+			);
 		} finally {
 			fixture.root.remove();
 		}
