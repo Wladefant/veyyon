@@ -42,11 +42,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 180s bun test \
-            packages/coding-agent/test/mainplane-go-worker-extension.test.ts \
-            packages/coding-agent/test/mainplane-go-worker-read-text.test.ts \
-            packages/coding-agent/test/mainplane-go-tool-failure.test.ts \
-            packages/coding-agent/test/mainplane-go-worker-write.test.ts \
+          mapfile -t tests < <(find packages/coding-agent/test -maxdepth 1 -name 'mainplane-*.test.ts' -type f | sort)
+          test "${#tests[@]}" -ge 4
+          timeout 180s bun test "${tests[@]}" \
             --timeout 15000 --reporter=junit --reporter-outfile=fleet-ci-evidence/tests.xml \
             2>&1 | tee fleet-ci-evidence/tests.log
       - name: Record executed test receipt
