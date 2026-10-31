@@ -169,6 +169,60 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("does not infer an abandoned branch when a later oversized record was skipped", async () => {
+		const dir = TempDir.createSync("@veyyon-history-oversized-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "branchb-only abandoned sibling" },
+				{ type: "message", id: "c", parentId: "a", message: "x".repeat(8 * 1024 * 1024) },
+			];
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const defaultRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 });
+			expect(defaultRead.status).toBe("unavailable");
+			expect(defaultRead.fragment).toBeUndefined();
+			const defaultSearch = await searchStoredHistoryEntries(file, { query: "branchb-only", limit: 10 });
+			expect(defaultSearch.status).toBe("unavailable");
+			expect(defaultSearch.matches).toEqual([]);
+			// Deliberate archival selection stays available; the query remains partial
+			// because the large record itself could not be inspected.
+			const explicitRead = await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 100 });
+			expect(explicitRead.status).toBe("ok");
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "branchb-only", leafId: "b", limit: 10,
+			});
+			expect(explicitSearch.status).toBe("partial");
+			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("refuses implicit branch selection after an unreadable final JSONL record", async () => {
+		const dir = TempDir.createSync("@veyyon-history-broken-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const valid = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "old sibling" },
+			];
+			await fs.writeFile(file, valid.map(record => JSON.stringify(record)).join("\n") +
+				'\n{"type":"message","id":bad}\n');
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 })).status)
+				.toBe("unavailable");
+			const search = await searchStoredHistoryEntries(file, { query: "old sibling", limit: 10 });
+			expect(search.status).toBe("unavailable");
+			expect(search.matches).toEqual([]);
+			expect((await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 200 })).status)
+				.toBe("ok");
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
