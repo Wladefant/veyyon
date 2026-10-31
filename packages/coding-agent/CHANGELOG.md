@@ -6,6 +6,8 @@
 
 ### Added
 
+- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence, redacts task strings before JSON escaping, accepts fully covered keep-nothing boundaries, and preserves execution and pending-work ownership ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
 
 ### Fixed
