@@ -7,6 +7,37 @@ function response(data: Buffer, extra: Record<string, unknown> = {}): Response {
 		bytes: data.length, sha256: createHash("sha256").update(data).digest("hex"), ...extra }));
 }
 
+// WHY: Go replaces lone UTF-16 surrogates in JSON paths with U+FFFD.
+// Exercise production preflight and request bytes; no native host is accessed.
+describe("Mainplane worker read path identity", () => {
+	test("rejects lone high and low surrogate paths before authenticated transport", async () => {
+		let calls = 0;
+		const transport = (async () => {
+			calls++;
+			return response(Buffer.from("sample"));
+		}) as unknown as typeof fetch;
+		for (const path of ["/owned/\ud800.txt", "/owned/\udc00.txt"]) {
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				path, undefined, transport)).rejects.toThrow("Invalid worker or remote path");
+		}
+		expect(calls).toBe(0);
+	});
+	test("preserves Unicode, emoji and literal replacement-character paths on the wire", async () => {
+		for (const path of ["/owned/München-東京-😀.txt", "/owned/\ufffd.txt"]) {
+			let observedPath: unknown;
+			const transport = (async (_url: unknown, init?: RequestInit) => {
+				const body = Buffer.from(String(init?.body), "utf8").toString("utf8");
+				observedPath = JSON.parse(body).path;
+				return response(Buffer.from("sample"));
+			}) as unknown as typeof fetch;
+			const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				path, undefined, transport);
+			expect(observedPath).toBe(path);
+			expect(result.text).toBe("sample");
+		}
+	});
+});
+
 describe("Mainplane worker read integrity", () => {
 	test("preserves verified UTF-8", async () => {
 		const transport = (async () => response(Buffer.from("sample"))) as typeof fetch;
