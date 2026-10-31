@@ -100,6 +100,28 @@ describe("artifact recovery stays with its session", () => {
 		const duplicate = await handler.resolve(url(`artifact://${sharedId}?session=${b.getSessionId()}&view=metadata`));
 		expect(JSON.parse(duplicate.content).status).toBe("ambiguous");
 	});
+	it("keeps paths out of unpinned ambiguity metadata and errors", async () => {
+		const metadata = await handler.resolve(url(`artifact://${sharedId}?view=metadata`));
+		const detail = JSON.stringify(JSON.parse(metadata.content));
+		expect(JSON.parse(metadata.content)).toMatchObject({ status: "ambiguous" });
+		expect(JSON.parse(metadata.content).detail).toContain("2 files match");
+		for (const privatePath of [await a.getArtifactsDir(), await b.getArtifactsDir(),
+			await a.getArtifactPath(sharedId), await b.getArtifactPath(sharedId)]) {
+			expect(privatePath).toBeTruthy();
+			expect(detail).not.toContain(privatePath!);
+		}
+		let errorMessage = "";
+		try {
+			await handler.resolve(url(`artifact://${sharedId}`));
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : String(error);
+		}
+		expect(errorMessage).toContain("ambiguous");
+		for (const privatePath of [await a.getArtifactsDir(), await b.getArtifactsDir(),
+			await a.getArtifactPath(sharedId), await b.getArtifactPath(sharedId)]) {
+			expect(errorMessage).not.toContain(privatePath!);
+		}
+	});
 
 	it("metadata remains bounded for oversized artifacts while path-only access is available", async () => {
 		const artifactPath = await b.getArtifactPath(bOnlyId);

@@ -126,8 +126,7 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 		throw new ArtifactResolutionError("ambiguous",
 			`Artifact ${id} is ambiguous: ${matches.length} files match the selected owner set. ` +
 				`Artifact ids are per-session counters, so the id alone cannot say which one you mean. ` +
-				`Use artifact://${id}?session=<execution-session-id>, re-read it from its owner, or use its file path. ` +
-				`Candidates: ${matches.join(", ")}`,
+				`Use artifact://${id}?session=<execution-session-id> or re-read it from its owner.`,
 		);
 	}
 
