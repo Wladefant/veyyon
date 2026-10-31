@@ -1671,7 +1671,7 @@ export class AgentSession {
 			settings: this.settings,
 			withPlanProtection: config => this.#planMode.withProtection(config),
 			model: () => this.model,
-			keepBoundaryId: branch => contextCompaction(branch)?.firstKeptEntryId,
+			keepBoundaryId: branch => contextCompaction(branch, this.model?.provider)?.firstKeptEntryId,
 			rebuiltMessages: () => this.buildDisplaySessionContext().messages,
 			resetAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
@@ -4434,7 +4434,9 @@ export class AgentSession {
 		// history rewrite or a session switch, so a throw here does not fail one
 		// render, it fails the session. Degrades per string; never throws.
 		return this.#expandArgot(
-			this.#secrets.deobfuscateSessionContextForDisplay(this.sessionManager.buildSessionContext()),
+			this.#secrets.deobfuscateSessionContextForDisplay(
+				this.sessionManager.buildSessionContext({ activeProvider: this.model?.provider }),
+			),
 		);
 	}
 
@@ -4927,12 +4929,12 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 	): Promise<{
-		content: (TextContent | ImageContent)[];
+		content: (TextContent | ImageContent | VideoContent)[];
 		images: ImageContent[] | undefined;
 		imageDescriptionNotice: CustomMessage | undefined;
 	}> {
 		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
 		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
 		content.push(...normalizedImages);
 		return {

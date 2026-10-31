@@ -85,4 +85,23 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(streamed).toContain("#MULTILINE_CANARY#");
 	});
 
+	it.each(["", "{}\n"])("keeps an inventory after a held prefix with preamble %j out of output", preamble => {
+		const prefix = `synthetic-first-line\n${preamble}`;
+		const guard = guardFor(`${prefix}expected-tail`);
+
+		expect(guard.push(prefix)).toBe("");
+		expect(guard.push("FIRST_VALUE=synthetic-first-value\n")).toBe("");
+		expect(guard.push("SECOND_VALUE=synthetic-second-value\n")).toBe("");
+		expect(guard.push("THIRD_VALUE=synthetic-third-value\n")).toBe("[credential output withheld]\n");
+		expect(guard.finish()).toBe("");
+	});
+
+	it("includes the terminating newline when redacting a held literal", () => {
+		const secret = `${SECRET}\n`;
+		const guard = guardFor(secret);
+
+		expect(guard.push(secret)).toBe("#MULTILINE_CANARY#");
+		expect(guard.finish()).toBe("");
+	});
+
 });
