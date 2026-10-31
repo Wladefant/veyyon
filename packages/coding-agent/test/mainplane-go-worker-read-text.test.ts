@@ -24,6 +24,19 @@ describe("Mainplane worker read integrity", () => {
 		const transport = (async () => response(Buffer.from([0xff, 0]))) as typeof fetch;
 		await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/image", undefined, transport)).rejects.toThrow("binary");
 	});
+	test("rejects digest-valid UTF-8 NUL bytes, including beyond the preview slice", async () => {
+		for (const text of ["ok\0hidden", "x".repeat(50_001) + "\0hidden"]) {
+			const transport = (async () => response(Buffer.from(text, "utf8"))) as typeof fetch;
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/binary-like.bin", undefined, transport)).rejects.toThrow("binary");
+		}
+	});
+	test("keeps legitimate Unicode and newlines readable", async () => {
+		const text = "München\n東京";
+		const transport = (async () => response(Buffer.from(text, "utf8"))) as typeof fetch;
+		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/unicode.txt", undefined, transport);
+		expect(result.text).toBe(text);
+		expect(result.truncated).toBe(false);
+	});
 	test("display truncation does not split a surrogate pair", async () => {
 		const transport = (async () => response(Buffer.from("x".repeat(49_999) + "😀tail"))) as typeof fetch;
 		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/file", undefined, transport);

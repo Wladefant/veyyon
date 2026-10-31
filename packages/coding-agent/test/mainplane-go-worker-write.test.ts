@@ -3,15 +3,16 @@ import { digest, mainplaneRequestHash, remoteRunId, remoteSessionId } from "../e
 import { writeRemoteText } from "../examples/extensions/mainplane-bridge-write";
 
 const input = { worker: "pc2", path: "C:/owned/file.txt", text: "line one\r\né😀\r\n", sessionFile: "/session/one", toolCallId: "write-one" };
-function transportFor(change: Record<string, unknown> = {}, status = 200): typeof fetch {
+function transportFor(change: Record<string, unknown> = {}, status = 200, request = input): typeof fetch {
 	return (async (_url: string, init: RequestInit) => {
 		const body = JSON.parse(String(init.body));
-		expect(Buffer.from(body.data_base64, "base64").toString("utf8")).toBe(input.text);
-		const session = remoteSessionId(input.sessionFile);
-		return new Response(JSON.stringify({ schema_version: 2, operation: "write", worker: input.worker, session,
-			idempotency_sha256: digest(remoteRunId(input.sessionFile, input.toolCallId)),
-			request_sha256: mainplaneRequestHash("write", input.worker, session, input.path, digest(input.text)),
-			state: "completed", exit: 0, output_sha256: digest(input.text), full: input.path, ...change }), { status });
+		expect(Buffer.from(body.data_base64, "base64").toString("utf8")).toBe(request.text);
+		expect(body.path).toBe(request.path);
+		const session = remoteSessionId(request.sessionFile);
+		return new Response(JSON.stringify({ schema_version: 2, operation: "write", worker: request.worker, session,
+			idempotency_sha256: digest(remoteRunId(request.sessionFile, request.toolCallId)),
+			request_sha256: mainplaneRequestHash("write", request.worker, session, request.path, digest(request.text)),
+			state: "completed", exit: 0, output_sha256: digest(request.text), full: request.path, ...change }), { status });
 	}) as typeof fetch;
 }
 
@@ -39,5 +40,23 @@ describe("native worker text writes", () => {
 			await expect(writeRemoteText("https://fleet.example/", "fixture-key", { ...input, text }, undefined, transport)).rejects.toThrow();
 		}
 		expect(count).toBe(0);
+	});
+	test("rejects lone-surrogate worker paths before authenticated HTTP", async () => {
+		let calls = 0;
+		const transport = (async () => {
+			calls++;
+			throw new Error("Invalid remote path must not be sent to Mainplane");
+		}) as typeof fetch;
+		for (const path of ["C:/owned/\ud800.txt", "C:/owned/\udc00.txt"]) {
+			await expect(writeRemoteText("https://fleet.example/", "fixture-key", { ...input, path }, undefined, transport))
+				.rejects.toThrow("Invalid worker or remote path");
+		}
+		expect(calls).toBe(0);
+	});
+	test("preserves supplementary Unicode in a valid native worker path", async () => {
+		const request = { ...input, path: "C:/owned/🚀-résumé.txt" };
+		const result = await writeRemoteText("https://fleet.example/", "fixture-key", request, undefined, transportFor({}, 200, request));
+		expect(result.result.full).toBe(request.path);
+		expect(result.result.state).toBe("completed");
 	});
 });

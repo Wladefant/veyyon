@@ -26,6 +26,20 @@ describe("exact prior-output recovery", () => {
 		expect(second.text).toBe("éz"); expect(second.next_offset).toBe(null);
 		expect(methods).toEqual(["GET", "GET", "GET", "GET"]);
 	});
+	test("preserves a UTF-8 BOM across exact output pages", async () => {
+		const text = "\uFEFFa😀";
+		const methods: string[] = [];
+		const transport = transportFor(text, {}, method => methods.push(method));
+		const first = await recoverRemoteOutput("https://fleet.example/", "fixture-key", { ...input, limit: 1 }, undefined, transport);
+		const second = await recoverRemoteOutput("https://fleet.example/", "fixture-key", { ...input, offset: 1, limit: 1, outputSha256: first.output_sha256 }, undefined, transport);
+		const third = await recoverRemoteOutput("https://fleet.example/", "fixture-key", { ...input, offset: 2, limit: 1, outputSha256: first.output_sha256 }, undefined, transport);
+		expect(first.text).toBe("\uFEFF"); expect(second.text).toBe("a"); expect(third.text).toBe("😀");
+		expect([first.bytes, second.bytes, third.bytes]).toEqual([8, 8, 8]);
+		expect([first.output_sha256, second.output_sha256, third.output_sha256]).toEqual([digest(Buffer.from(text)), digest(Buffer.from(text)), digest(Buffer.from(text))]);
+		expect([first.next_offset, second.next_offset, third.next_offset]).toEqual([1, 2, null]);
+		expect(methods).toEqual(["GET", "GET", "GET", "GET", "GET", "GET"]);
+	});
+
 	test("rejects tampered or foreign artifacts", async () => {
 		for (const change of [{ request_sha256: "b".repeat(64) }, { data_base64: Buffer.from("wrong").toString("base64") }, { bytes: -1 }]) {
 			await expect(recoverRemoteOutput("https://fleet.example/", "fixture-key", input, undefined, transportFor("ok", change))).rejects.toThrow();
