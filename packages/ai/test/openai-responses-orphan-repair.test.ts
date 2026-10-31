@@ -1,15 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import type { ResponseInput } from "@veyyon/ai/providers/openai-responses-wire";
-import { repairOrphanResponsesToolCalls, repairOrphanResponsesToolOutputs } from "@veyyon/ai/providers/openai-shared";
+import { repairResponsesToolPairs } from "@veyyon/ai/providers/openai-shared";
 
-describe("repairOrphanResponsesToolCalls", () => {
+describe("repairResponsesToolPairs", () => {
 	it("appends a synthetic function_call_output after a call with no result", () => {
 		const input: ResponseInput = [
 			{ type: "function_call", call_id: "call_a", name: "read", arguments: "{}" },
 			{ role: "user", content: [{ type: "input_text", text: "continue" }] },
 		];
 
-		const repaired = repairOrphanResponsesToolCalls(input);
+		const repaired = repairResponsesToolPairs(input);
 		const callIndex = repaired.findIndex(
 			item =>
 				(item as { type?: string }).type === "function_call" && (item as { call_id?: string }).call_id === "call_a",
@@ -25,7 +25,7 @@ describe("repairOrphanResponsesToolCalls", () => {
 			{ type: "custom_tool_call", call_id: "call_c", name: "apply_patch", input: "patch" } as ResponseInput[number],
 		];
 
-		const repaired = repairOrphanResponsesToolCalls(input);
+		const repaired = repairResponsesToolPairs(input);
 		const output = repaired.find(item => (item as { type?: string }).type === "custom_tool_call_output") as
 			| { call_id?: string }
 			| undefined;
@@ -38,11 +38,11 @@ describe("repairOrphanResponsesToolCalls", () => {
 			{ type: "function_call_output", call_id: "call_a", output: "ok" } as ResponseInput[number],
 		];
 
-		const repaired = repairOrphanResponsesToolCalls(input);
+		const repaired = repairResponsesToolPairs(input);
 		expect(repaired).toBe(input);
 	});
 
-	it("composes with output repair so a tree-branch snapshot stays API-valid", () => {
+	it("repairs a tree-branch snapshot in one pass so it stays API-valid", () => {
 		// Branching to a node that ends on a tool call drops the result child:
 		// the assistant turn keeps the call, but no matching output remains.
 		const input: ResponseInput = [
@@ -50,7 +50,7 @@ describe("repairOrphanResponsesToolCalls", () => {
 			{ type: "function_call", call_id: "call_x", name: "bash", arguments: "{}" },
 		];
 
-		const repaired = repairOrphanResponsesToolCalls(repairOrphanResponsesToolOutputs(input));
+		const repaired = repairResponsesToolPairs(input);
 		const callIds = new Set(
 			repaired
 				.filter(i => (i as { type?: string }).type === "function_call")
