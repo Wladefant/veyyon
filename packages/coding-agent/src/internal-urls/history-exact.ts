@@ -178,6 +178,15 @@ export async function readStoredHistoryEntry(
 		lines.close();
 		input.destroy();
 	}
+	// A skipped record may be the *actual* branch tip, leaving lastId pointing
+	// at an abandoned sibling. Without an explicit leaf, never guess from it.
+	if (!request.leafId && incomplete) {
+		return {
+			status: "unavailable", entryId: request.entryId, sessionId,
+			source: "stored-jsonl",
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch reads",
+		};
+	}
 	const leafId = request.leafId ?? lastId;
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
@@ -231,7 +240,7 @@ export interface HistorySearchRequest {
 	limit: number;
 }
 export interface HistorySearchResult {
-	status: "ok" | "partial" | "missing_branch";
+	status: "ok" | "partial" | "missing_branch" | "unavailable";
 	sessionId?: string;
 	leafId?: string;
 	query: string;
@@ -318,6 +327,15 @@ export async function searchStoredHistoryEntries(
 	} finally {
 		lines.close();
 		input.destroy();
+	}
+	// The latest readable entry is not a safe default when a later branch
+	// record may have been skipped. Never present another branch's matches.
+	if (!request.leafId && incomplete) {
+		return {
+			status: "unavailable", sessionId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch search",
+		};
 	}
 	const leafId = request.leafId ?? lastId;
 	if (!leafId || !parents.has(leafId)) {
