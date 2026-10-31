@@ -513,11 +513,14 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 		const ancestorPeers = peers.filter(peer => peer.ancestor);
 		const otherPeers = peers.filter(peer => !peer.ancestor);
 		for (const [heading, group] of [
-			["Your ancestors (delegating owners, not duplicate lanes):", ancestorPeers],
+			["Your ancestors (delegation context; verify write ownership):", ancestorPeers],
 			["Other lanes:", otherPeers],
 		] as const) {
 			if (group.length === 0) continue;
 			lines.push(heading);
+			if (group === ancestorPeers) {
+				lines.push("An ancestor may still have uncommitted edits. Confirm the assigned writer and paths before overlapping writes.");
+			}
 			for (const peer of group) {
 				const extras = [
 					peer.activity || undefined,
