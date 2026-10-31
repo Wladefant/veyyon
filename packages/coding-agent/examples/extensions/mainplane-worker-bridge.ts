@@ -8,11 +8,14 @@ import { registerMainplaneOutputRecovery } from "./mainplane-bridge-output";
 import { registerMainplaneJobs } from "./mainplane-bridge-jobs";
 import { registerMainplaneDiscovery } from "./mainplane-bridge-discovery";
 
-export async function readRemoteReceipt(origin: string, token: string, runId: string,
+export async function readRemoteReceipt(origin: string, token: string, runId: string, sessionFile: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch): Promise<BridgeReceipt> {
 	if (!WORKER_ID.test(runId)) throw new MainplaneError("Invalid Mainplane run identifier");
+	const session = remoteSessionId(sessionFile);
 	const { data } = await bridgeRequest(origin, token, { path: "/fleet/runs/" + runId, method: "GET" }, signal, transport);
-	return validateReceipt(data, runId);
+	const receipt = validateReceipt(data, runId);
+	if (receipt.session !== session) throw new MainplaneError("Mainplane receipt belongs to another Veyyon session");
+	return receipt;
 }
 export interface RunInput { worker: string; interpreter: string; code: string; timeoutSeconds: number; sessionFile: string; toolCallId: string; }
 export async function runRemote(origin: string, token: string, args: RunInput,
@@ -74,9 +77,11 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 		name: "mainplane_run_receipt", label: "Mainplane operation receipt",
 		description: "Inspect a validated durable operation receipt; never executes or retries work. Accepted jobs remain pending.",
 		parameters: z.object({ runId: z.string().regex(WORKER_ID) }),
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const sessionFile = ctx.sessionManager.getSessionFile();
+			if (!sessionFile) return { content: [{ type: "text", text: "Receipt inspection requires the persisted current session" }], isError: true };
 			try {
-				const result = await readRemoteReceipt(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", params.runId, signal);
+				const result = await readRemoteReceipt(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", params.runId, sessionFile, signal);
 				return { content: [{ type: "text", text: JSON.stringify(result) }], isError: receiptIsError(result) };
 			} catch (error) { return { content: [{ type: "text", text: visibleError(error) }], isError: true }; }
 		},
