@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
 - Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.

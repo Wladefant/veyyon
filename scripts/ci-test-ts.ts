@@ -383,6 +383,7 @@ export const workspaceTestPackages = [
 // silently ignores unmatched filters when at least one other filter matches, so a
 // typo'd path in this array is invisible rather than fatal. Check the file exists.)
 export const repoScriptTests = [
+	"scripts/ovh-process-group.test.ts",
 	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 	"scripts/settings-doc-coherence.test.ts",
