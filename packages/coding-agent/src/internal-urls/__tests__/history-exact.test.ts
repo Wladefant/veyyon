@@ -31,17 +31,19 @@ describe("history exact record lookup", () => {
 			expect(first.leafId).toBe("c");
 			expect(first.sessionId).toBe("session-1");
 			expect(Array.from(first.fragment ?? "").length).toBeLessThanOrEqual(17);
-			const second = await readStoredHistoryEntry(file, { ...query!, offset: first.nextOffset! });
+			const second = await readStoredHistoryEntry(file, { ...query!, offset: first.nextOffset!, revision: first.revision });
 			expect(second.offset).toBe(first.nextOffset);
 			const whole = JSON.stringify(records[3]);
 			const parts: string[] = [];
 			let offset = 0;
+			let revision = first.revision;
 			while (true) {
-				const read = await readStoredHistoryEntry(file, { ...query!, offset });
+				const read = await readStoredHistoryEntry(file, { ...query!, offset, revision });
 				expect(read.status).toBe("ok");
 				parts.push(read.fragment!);
 				if (read.nextOffset === null) break;
 				offset = read.nextOffset!;
+				revision = read.revision;
 			}
 			expect(parts.join("")).toBe(whole);
 			// Sibling history must not be returned by a default-current-branch read.
@@ -62,9 +64,45 @@ describe("history exact record lookup", () => {
 			const index = Array.from(raw).indexOf("🔑");
 			const file = path.join(dir.path(), "session.jsonl");
 			await fs.writeFile(file, JSON.stringify({ type: "session", id: "s" }) + "\n" + raw + "\n");
-			const read = await readStoredHistoryEntry(file, { entryId: "emoji", offset: index, limit: 1 });
+			const first = await readStoredHistoryEntry(file, { entryId: "emoji", offset: 0, limit: index });
+			const read = await readStoredHistoryEntry(file, { entryId: "emoji", offset: index, limit: 1, revision: first.revision });
 			expect(read.fragment).toBe("🔑");
 			expect(read.nextOffset).toBe(index + 1);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+
+	it("rejects continuation after a same-ID record rewrite", async () => {
+		const dir = TempDir.createSync("@veyyon-history-revision-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s1" });
+			const firstRecord = { type: "message", id: "same", parentId: null, message: "alpha".repeat(12) };
+			const rewritten = { ...firstRecord, message: "omega".repeat(12) };
+			await fs.writeFile(file, header + "\n" + JSON.stringify(firstRecord) + "\n");
+			const first = await readStoredHistoryEntry(file, { entryId: "same", offset: 0, limit: 24 });
+			expect(first.status).toBe("ok");
+			expect(first.revision).toMatch(/^[0-9a-f]{64}$/);
+			const same = await readStoredHistoryEntry(file, {
+				entryId: "same", offset: first.nextOffset!, limit: 24, revision: first.revision,
+			});
+			expect(same.status).toBe("ok");
+			expect(same.revision).toBe(first.revision);
+			await fs.writeFile(file, header + "\n" + JSON.stringify(rewritten) + "\n");
+			const stale = await readStoredHistoryEntry(file, {
+				entryId: "same", offset: first.nextOffset!, limit: 24, revision: first.revision,
+			});
+			expect(stale.status).toBe("stale");
+			expect(stale.fragment).toBeUndefined();
+			const fresh = await readStoredHistoryEntry(file, { entryId: "same", offset: 0, limit: 24 });
+			expect(fresh.revision).not.toBe(first.revision);
+			const offset = JSON.stringify(rewritten).indexOf("omega");
+			const page = await readStoredHistoryEntry(file, {
+				entryId: "same", offset, limit: 5, revision: fresh.revision,
+			});
+			expect(page.fragment).toBe("omega");
 		} finally {
 			await dir.remove();
 		}
@@ -103,6 +141,8 @@ describe("history exact record lookup", () => {
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=../secret"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&limit=999999"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=-1"))).toThrow();
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10"))).toThrow(/rev/);
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&rev=short"))).toThrow(/SHA-256/);
 		expect(parseExactHistoryRequest(new URL("history://Scout"))).toBeUndefined();
 	});
 	it("finds stored evidence IDs on the selected branch and returns newest matches first", async () => {

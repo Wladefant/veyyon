@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

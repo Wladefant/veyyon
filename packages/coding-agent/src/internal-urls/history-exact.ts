@@ -7,6 +7,7 @@
  * reader does not pretend such references are the original media bytes.
  * No writer or session lock is opened.
  */
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
@@ -20,15 +21,18 @@ export interface ExactHistoryRequest {
 	leafId?: string;
 	offset: number;
 	limit: number;
+	/** First-page SHA-256 identity, required for subsequent pages. */
+	revision?: string;
 }
 
 export interface ExactHistoryResult {
-	status: "ok" | "missing" | "not_on_branch" | "unavailable";
+	status: "ok" | "missing" | "not_on_branch" | "unavailable" | "stale";
 	entryId: string;
 	leafId?: string;
 	sessionId?: string;
 	recordType?: string;
 	source: "stored-jsonl" | "live-session";
+	revision?: string;
 	offset?: number;
 	totalCharacters?: number;
 	fragment?: string;
@@ -64,7 +68,14 @@ export function parseExactHistoryRequest(url: URL): ExactHistoryRequest | undefi
 	const offset = numericParam(url.searchParams.get("offset"), "offset", 0, Number.MAX_SAFE_INTEGER);
 	const limit = numericParam(url.searchParams.get("limit"), "limit", DEFAULT_PAGE_CHARACTERS, MAX_PAGE_CHARACTERS);
 	if (limit === 0) throw new Error("history:// exact read limit must be at least 1");
-	return { entryId, leafId, offset, limit };
+	const revision = url.searchParams.get("rev");
+	if (revision !== null && !/^[0-9a-f]{64}$/.test(revision)) {
+		throw new Error("history:// exact read rev must be a SHA-256 digest");
+	}
+	if (offset > 0 && revision === null) {
+		throw new Error("history:// exact read continuation requires rev from its first page");
+	}
+	return { entryId, leafId, offset, limit, revision: revision ?? undefined };
 }
 
 function page(
@@ -75,6 +86,20 @@ function page(
 	recordType: string,
 	sessionId?: string,
 ): ExactHistoryResult {
+	// Rewrites may retain the entry and leaf IDs. Bind every continuation to
+	// the original source, session, selected leaf and record bytes.
+	if (request.offset > 0 && !request.revision) {
+		throw new Error("history:// exact read continuation requires rev from its first page");
+	}
+	const revision = createHash("sha256")
+		.update(JSON.stringify([source, sessionId ?? null, leafId, request.entryId, raw]))
+		.digest("hex");
+	if (request.revision && request.revision !== revision) {
+		return {
+			status: "stale", entryId: request.entryId, leafId, sessionId, source,
+			detail: "Saved record or selected branch changed; restart the exact read at offset 0",
+		};
+	}
 	// Page by Unicode code point rather than UTF-8 byte or JS UTF-16 offsets;
 	// splitting a multibyte character would corrupt a supposedly exact read.
 	const characters = Array.from(raw);
@@ -86,7 +111,7 @@ function page(
 	}
 	const next = Math.min(characters.length, request.offset + request.limit);
 	return {
-		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType,
+		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType, revision,
 		offset: request.offset, totalCharacters: characters.length,
 		fragment: characters.slice(request.offset, next).join(""),
 		nextOffset: next < characters.length ? next : null,
