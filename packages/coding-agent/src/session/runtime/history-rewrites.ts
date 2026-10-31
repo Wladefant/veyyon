@@ -98,6 +98,8 @@ export interface HistoryRewritesHost {
 
 export class HistoryRewrites {
 	readonly #host: HistoryRewritesHost;
+	/** Do not keep writing recovery artifacts for unchanged results that cannot shrink the context. */
+	readonly #unprofitableRecoveryCandidates = new WeakMap<SessionEntry, string>();
 
 	constructor(host: HistoryRewritesHost) {
 		this.#host = host;
@@ -381,7 +383,10 @@ export class HistoryRewrites {
 				serialized: JSON.stringify(original),
 				appliedSerialized: "",
 			};
-		});
+		}).filter(change => this.#unprofitableRecoveryCandidates.get(change.original) !== change.serialized);
+		// The selector may reselect an unchanged, unprofitable useless result on every turn.
+		// Refuse it before allocating another artifact; a changed entry is reconsidered.
+		if (changes.length === 0) return { changedCount: 0, tokensSaved: 0 };
 		const archive = JSON.stringify({
 			version: 1,
 			operation,
@@ -399,7 +404,7 @@ export class HistoryRewrites {
 			throw new Error("History changed while preserving original entries; retry the rewrite");
 		}
 		let tokensSaved = 0;
-		const committed = changes.filter(({ original, replacement }) => {
+		const committed = changes.filter(({ original, replacement, serialized }) => {
 			const notice = replacement.type === "message" && replacement.message.role === "toolResult"
 				? replacement.message.content[0]
 				: undefined;
@@ -410,7 +415,10 @@ export class HistoryRewrites {
 				const savings = estimateTokens(original.message) - estimateTokens(replacement.message);
 				// A useless result has no correctness reason to grow the prompt. Price its complete
 				// referenced replacement, not just the notice used by the upstream selector.
-				if (useless && savings <= 0) return false;
+				if (useless && savings <= 0) {
+					this.#unprofitableRecoveryCandidates.set(original, serialized);
+					return false;
+				}
 				tokensSaved += savings;
 			}
 			return true;

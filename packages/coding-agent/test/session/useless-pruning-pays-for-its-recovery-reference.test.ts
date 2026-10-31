@@ -122,6 +122,37 @@ describe("useless pruning pays for its recovery reference", () => {
 		}
 	});
 
+	it("does not rearchive an unchanged unprofitable result but retries changed evidence", async () => {
+		const harness = await createHarness([SMALL_RESULT]);
+		try {
+			const entryId = harness.entryIds[0]!;
+			expect(await harness.rewrites.pruneStale()).toBeUndefined();
+			const afterFirstPass = (await fs.readdir(harness.temp.path(), { recursive: true })).sort();
+			// Every repeated turn is allowed to reconsider the result, but it must not
+			// allocate new orphaned artifacts for evidence that still cannot shrink.
+			for (let turn = 0; turn < 3; turn++) {
+				expect(await harness.rewrites.pruneStale()).toBeUndefined();
+				expect((await fs.readdir(harness.temp.path(), { recursive: true })).sort()).toEqual(afterFirstPass);
+			}
+			const original = getToolResult(harness.manager, entryId);
+			expect(original.message.content).toEqual([{ type: "text", text: SMALL_RESULT }]);
+			original.message.content = [{ type: "text", text: PROFITABLE_RESULT }];
+			await harness.manager.rewriteEntries([original]);
+			const outcome = await harness.rewrites.pruneStale();
+			expect(outcome?.prunedCount).toBe(1);
+			expect(outcome?.tokensSaved).toBeGreaterThan(0);
+			const replacement = getToolResult(harness.manager, entryId);
+			const id = JSON.stringify(replacement.message.content).match(/artifact:\/\/([^\s)]+)/)?.[1];
+			if (!id) throw new Error("Expected recovery artifact for changed original");
+			const artifact = await harness.manager.getArtifactPath(id);
+			if (!artifact) throw new Error("Expected an addressable recovery artifact");
+			const archived = JSON.parse(await fs.readFile(artifact, "utf8"));
+			expect(archived.entries[0].message.content).toEqual([{ type: "text", text: PROFITABLE_RESULT }]);
+		} finally {
+			await closeHarness(harness);
+		}
+	});
+
 	it("archives and shrinks a profitable stale useless result", async () => {
 		const harness = await createHarness([PROFITABLE_RESULT]);
 		let reloaded: SessionManager | undefined;
