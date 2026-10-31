@@ -321,6 +321,53 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("fails closed on structurally invalid JSONL entry objects without hiding explicit archives", async () => {
+		const dir = TempDir.createSync("@veyyon-history-invalid-object-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "title", v: 1, title: "Initial title", updatedAt: "2026-10-31T00:00:00Z", pad: "" },
+				{ type: "session", id: "s-valid" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "abandoned-only evidence" },
+			];
+			const prefix = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+			await fs.writeFile(file, prefix);
+			const healthyRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 });
+			expect(healthyRead.status).toBe("ok");
+			expect(healthyRead.leafId).toBe("b");
+			expect((await searchStoredHistoryEntries(file, { query: "abandoned-only", limit: 5 })).status).toBe("ok");
+
+			for (const invalid of [
+				'{"type":"message"}',
+				'{"type":"message","id":42}',
+				'{"id":"new-tip"}',
+				'{"type":"session"}',
+				'{}',
+			]) {
+					await fs.writeFile(file, prefix + invalid + "\n");
+					const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 });
+					expect(implicitRead.status).toBe("unavailable");
+					expect(implicitRead.fragment).toBeUndefined();
+					const implicitSearch = await searchStoredHistoryEntries(file, { query: "abandoned-only", limit: 5 });
+					expect(implicitSearch.status).toBe("unavailable");
+					expect(implicitSearch.matches).toEqual([]);
+					const archivedRead = await readStoredHistoryEntry(file, {
+						entryId: "b", leafId: "b", offset: 0, limit: 200,
+					});
+					expect(archivedRead.status).toBe("ok");
+					expect(archivedRead.fragment).toContain("abandoned-only");
+					const archivedSearch = await searchStoredHistoryEntries(file, {
+						query: "abandoned-only", leafId: "b", limit: 5,
+					});
+					expect(archivedSearch.status).toBe("partial");
+					expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["b"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
