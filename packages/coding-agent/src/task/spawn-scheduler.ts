@@ -57,6 +57,7 @@ interface MergedInlinePayloads {
 	usage?: Usage;
 	outputPaths?: string[];
 	projectAgentsDir: string | null;
+	hasError: boolean;
 	/**
 	 * Spawns cancelled before they started, so they have no payload and no `SingleResult` to classify.
 	 * Counted separately because the batch summary is built from `results`, and a spawn that never ran is
@@ -99,6 +100,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	const spawn: TaskParams = { agent: item.agent?.trim() || defaultAgent };
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
+	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -169,6 +171,7 @@ function mergeInlinePayloads(
 		usage: hasUsage ? usageTotals : undefined,
 		outputPaths: outputPaths.length > 0 ? outputPaths : undefined,
 		projectAgentsDir,
+		hasError: payloads.some(payload => payload?.isError === true),
 		cancelledBeforeStart,
 	};
 }
@@ -211,7 +214,7 @@ interface InlineSummary {
 function summarizeInline(merged: MergedInlinePayloads): InlineSummary {
 	const summary = summarizeAgentBatch(merged.results);
 	summary.cancelled += merged.cancelledBeforeStart;
-	return { headline: describeAgentBatch(summary), isError: summary.isError };
+	return { headline: describeAgentBatch(summary), isError: summary.isError || merged.hasError };
 }
 
 /** Copy a finished job's result onto its progress row. Returns whether the spawn failed. */

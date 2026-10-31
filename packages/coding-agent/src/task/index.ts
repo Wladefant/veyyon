@@ -227,6 +227,9 @@ function appendCallApprovalLines(lines: string[], params: Partial<TaskParams>): 
 	if (typeof params.name === "string" && params.name.trim()) {
 		lines.push(`Name: ${truncateForPrompt(params.name)}`);
 	}
+	if (typeof params.successorOf === "string") {
+		lines.push(`Successor of: ${truncateForPrompt(params.successorOf)}`);
+	}
 	if (typeof params.task === "string") {
 		lines.push(`Task:\n${truncateForPrompt(params.task)}`);
 	}
@@ -244,6 +247,9 @@ function appendBatchApprovalLines(lines: string[], tasks: readonly Partial<TaskI
 	}
 	if (typeof firstTask.agent === "string" && firstTask.agent.trim()) {
 		lines.push(`Agent: ${truncateForPrompt(firstTask.agent)}`);
+	}
+	if (typeof firstTask.successorOf === "string") {
+		lines.push(`Successor of: ${truncateForPrompt(firstTask.successorOf)}`);
 	}
 	if (typeof firstTask.task === "string") {
 		lines.push(`Task:\n${truncateForPrompt(firstTask.task)}`);
@@ -266,6 +272,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	const item: TaskItem = { name: params.name, agent: params.agent, task: params.task };
 	if ("isolated" in params) item.isolated = params.isolated;
 	if (params.cwd !== undefined) item.cwd = params.cwd;
+	if (params.successorOf !== undefined) item.successorOf = params.successorOf;
 	return [item];
 }
 
@@ -530,15 +537,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (this.session.suppressSpawnAdvisory) return undefined;
 		const maxDepth = resolveSessionMaxNestedSpawnDepth(this.session.settings, this.session.maxNestedSpawnDepth);
 		return composeSpawnAdvisory({
-		agents: spawns.map(spawn => spawn.agentName),
-		enabledAgentNames: catalog.agents.map(agent => agent.name),
-		items: asyncItems,
-		depthCapacity: canSpawnAtDepth(maxDepth, this.session.taskDepth ?? 0),
-		ircEnabled,
-		// Coordination makes sense only for spawns that keep running after
-		// this call returns. Blocking items have completed by then, so a
-		// "coordinate while they run" hint would misfire.
-		willRunAsync: asyncItems.length > 0,
+			agents: spawns.map(spawn => spawn.agentName),
+			enabledAgentNames: catalog.agents.map(agent => agent.name),
+			items: asyncItems,
+			depthCapacity: canSpawnAtDepth(maxDepth, this.session.taskDepth ?? 0),
+			ircEnabled,
+			// Coordination makes sense only for spawns that keep running after
+			// this call returns. Blocking items have completed by then, so a
+			// "coordinate while they run" hint would misfire.
+			willRunAsync: asyncItems.length > 0,
 		});
 	}
 }
