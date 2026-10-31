@@ -788,6 +788,7 @@ interface LoopState {
 	/** Steering, asides and follow-ups injected before the next assistant response. */
 	pendingMessages: AgentMessage[];
 	activeTelegramTraces: TelegramDeliveryTraceData[];
+	harmonyRetryAttempt: number;
 	harmonyTruncateResumeCount: number;
 	pausedTurnContinuations: number;
 	/**
@@ -877,6 +878,7 @@ async function driveLoop(run: LoopRun): Promise<void> {
 		hasMoreToolCalls: true,
 		pendingMessages: await initialSteeringMessages(run),
 		activeTelegramTraces: [],
+		harmonyRetryAttempt: 0,
 		harmonyTruncateResumeCount: 0,
 		pausedTurnContinuations: 0,
 		softRequirementId: undefined,

@@ -6,8 +6,10 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentTool } from "@veyyon/agent-core";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { type as arkType } from "arktype";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "../src/config/model-registry";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -42,6 +44,26 @@ function connect(owner: TerminalOwner) {
 		predicate: (frame: Record<string, unknown>) => boolean;
 		resolve: (frame: Record<string, unknown>) => void;
 	}> = [];
+
+	interface DeliveryEventFrame {
+		event: {
+			kind: "delivery";
+			messageId?: string;
+			state?: string;
+			outcome?: string;
+			[key: string]: unknown;
+		};
+		[key: string]: unknown;
+	}
+
+	function isDeliveryEvent(frame: Record<string, unknown>, messageId?: string): frame is DeliveryEventFrame {
+		const event = frame.event;
+		if (typeof event !== "object" || event === null) return false;
+		const record = event as Record<string, unknown>;
+		if (record.kind !== "delivery") return false;
+		if (messageId !== undefined && record.messageId !== messageId) return false;
+		return true;
+	}
 	let buffer = "";
 	socket.setEncoding("utf8");
 	socket.on("data", chunk => {
@@ -65,13 +87,14 @@ function connect(owner: TerminalOwner) {
 				`${JSON.stringify({ version: 1, token: owner.token, sessionId: owner.sessionId, ...payload })}\n`,
 			);
 		},
-		next(predicate: (frame: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
+		next<T = Record<string, unknown>>(predicate: (frame: Record<string, unknown>) => boolean): Promise<T> {
 			const existing = frames.find(predicate);
-			if (existing) return Promise.resolve(existing);
-			const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
-			waiters.push({ predicate, resolve });
+			if (existing) return Promise.resolve(existing as unknown as T);
+			const { promise, resolve } = Promise.withResolvers<T>();
+			waiters.push({ predicate, resolve: resolve as (frame: Record<string, unknown>) => void });
 			return promise;
 		},
+		isDeliveryEvent,
 	};
 }
 
@@ -84,7 +107,7 @@ describe("telegram delivery tracing end-to-end", () => {
 
 		spyOn(utils, "getConfigRootDir").mockReturnValue(tempDir);
 		const loggedTraces: Array<{ message: string; context: Record<string, unknown> }> = [];
-		const infoSpy = spyOn(utils.logger, "info").mockImplementation((msg, ctx) => {
+		spyOn(utils.logger, "info").mockImplementation((msg, ctx) => {
 			if (msg === "Telegram delivery trace") {
 				loggedTraces.push({ message: msg, context: ctx ? { ...ctx } : {} });
 			}
@@ -196,7 +219,11 @@ describe("telegram delivery tracing end-to-end", () => {
 		await session.waitForIdle();
 
 		// Wait for delivery event on socket
-		const deliveryEvent = await client.next(f => f.event?.kind === "delivery");
+		const deliveryEvent = await client.next<
+			Parameters<typeof client.isDeliveryEvent>[0] & {
+				event: { kind: "delivery"; messageId: string; state: string; outcome: string };
+			}
+		>(f => client.isDeliveryEvent(f));
 		expect(deliveryEvent.event).toMatchObject({
 			kind: "delivery",
 			messageId: "msg-trace-1",
@@ -279,16 +306,17 @@ describe("telegram delivery tracing end-to-end", () => {
 		const { promise: toolRunning, resolve: signalToolRunning } = Promise.withResolvers<void>();
 		const { promise: canFinishTool, resolve: signalFinishTool } = Promise.withResolvers<void>();
 
-		const probeTool = {
+		const probeTool: AgentTool = {
 			name: "probe",
+			label: "probe",
 			description: "test probe tool",
-			parameters: { type: "object" as const, properties: {} },
+			parameters: arkType({}),
 			execute: async () => {
 				signalToolRunning();
 				await canFinishTool;
 				return { content: [{ type: "text" as const, text: "probe complete" }] };
 			},
-		};
+		} as unknown as AgentTool;
 
 		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		auth.setRuntimeApiKey("mock", "test-key");
@@ -413,9 +441,9 @@ describe("telegram delivery tracing end-to-end", () => {
 		await session.waitForIdle();
 
 		// Verify delivery events on socket
-		const steerDeliveryEvent = await client.next(
-			f => f.event?.kind === "delivery" && f.event?.messageId === "msg-steer-1",
-		);
+		const steerDeliveryEvent = await client.next<{
+			event: { kind: "delivery"; messageId: string; state: string; outcome: string };
+		}>(f => client.isDeliveryEvent(f, "msg-steer-1"));
 		expect(steerDeliveryEvent.event).toMatchObject({
 			kind: "delivery",
 			messageId: "msg-steer-1",
@@ -423,9 +451,9 @@ describe("telegram delivery tracing end-to-end", () => {
 			outcome: "steered",
 		});
 
-		const followUpDeliveryEvent = await client.next(
-			f => f.event?.kind === "delivery" && f.event?.messageId === "msg-followup-1",
-		);
+		const followUpDeliveryEvent = await client.next<{
+			event: { kind: "delivery"; messageId: string; state: string; outcome: string };
+		}>(f => client.isDeliveryEvent(f, "msg-followup-1"));
 		expect(followUpDeliveryEvent.event).toMatchObject({
 			kind: "delivery",
 			messageId: "msg-followup-1",
@@ -448,8 +476,12 @@ describe("telegram delivery tracing end-to-end", () => {
 		expect(steerStages).toContain("delivery_outcome");
 
 		expect(followUpStages.indexOf("session_acceptance")).toBeGreaterThanOrEqual(0);
-		expect(followUpStages.indexOf("terminal_delivery_start")).toBeGreaterThan(followUpStages.indexOf("session_acceptance"));
-		expect(followUpStages.indexOf("turn_consumption")).toBeGreaterThan(followUpStages.indexOf("terminal_delivery_start"));
+		expect(followUpStages.indexOf("terminal_delivery_start")).toBeGreaterThan(
+			followUpStages.indexOf("session_acceptance"),
+		);
+		expect(followUpStages.indexOf("turn_consumption")).toBeGreaterThan(
+			followUpStages.indexOf("terminal_delivery_start"),
+		);
 		expect(followUpStages.indexOf("provider_call_start")).toBeGreaterThan(followUpStages.indexOf("turn_consumption"));
 		expect(followUpStages).toContain("delivery_outcome");
 
@@ -462,5 +494,81 @@ describe("telegram delivery tracing end-to-end", () => {
 		);
 		expect(steerConsumptionIdx).toBeGreaterThanOrEqual(0);
 		expect(followUpConsumptionIdx).toBeGreaterThan(steerConsumptionIdx);
+	});
+
+	it("withholds hostile thrown error text, user prompt, and secrets when target.deliver throws", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-hostile-root-"));
+		cleanup.push(async () => {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		});
+
+		spyOn(utils, "getConfigRootDir").mockReturnValue(tempDir);
+		const loggedTraces: Array<{ message: string; context: Record<string, unknown> }> = [];
+		spyOn(utils.logger, "info").mockImplementation((msg, ctx) => {
+			if (msg === "Telegram delivery trace") {
+				loggedTraces.push({ message: msg, context: ctx ? { ...ctx } : {} });
+			}
+		});
+
+		const hostileToken = "secret-token-sk-ant-live-XYZ123456";
+		const hostilePrompt = "DROP DATABASE users; -- sensitive instruction";
+		const hostileError = new Error(`Connection failed for prompt: "${hostilePrompt}" with auth "${hostileToken}"`);
+
+		const target = {
+			identity: () => ({
+				sessionId: "sess-hostile",
+				cwd: tempDir,
+				sessionFile: path.join(tempDir, "session.jsonl"),
+			}),
+			deliver: async () => {
+				throw hostileError;
+			},
+			abort: async () => true,
+			history: () => [],
+			subscribe: () => () => {},
+		};
+
+		const serverClose = await serveTerminalControl(target, tempDir);
+		cleanup.push(serverClose);
+
+		const owner = await readOwner(tempDir);
+		const client = connect(owner);
+
+		const hostileTrace: utils.TelegramDeliveryTraceData = {
+			updateId: 9999,
+			messageId: 55,
+			chatId: "-100888",
+		};
+
+		client.send({
+			id: "req-hostile",
+			op: "deliver",
+			text: hostilePrompt,
+			mode: "auto",
+			ack: true,
+			messageId: "msg-hostile-1",
+			telegramTrace: hostileTrace,
+		});
+
+		const replyFrame = await client.next(f => f.id === "req-hostile");
+		expect(replyFrame).toMatchObject({
+			ok: false,
+		});
+
+		// Verify that logged trace for delivery_outcome exists and withholds prompt/secret/error
+		const outcomeRecords = loggedTraces.filter(
+			t => t.context.traceId === "-100888:9999:55" && t.context.stage === "delivery_outcome",
+		);
+		expect(outcomeRecords.length).toBe(1);
+		const outcomeRecord = outcomeRecords[0];
+		expect(outcomeRecord).toBeDefined();
+		if (!outcomeRecord) throw new Error("Expected outcomeRecord");
+		expect(outcomeRecord.context.outcome).toBe("failed");
+		expect(outcomeRecord.context.error).toBeUndefined();
+
+		const serialized = JSON.stringify(outcomeRecord.context);
+		expect(serialized).not.toContain(hostileToken);
+		expect(serialized).not.toContain(hostilePrompt);
+		expect(serialized).not.toContain(hostileError.message);
 	});
 });
