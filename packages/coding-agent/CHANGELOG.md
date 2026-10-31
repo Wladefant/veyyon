@@ -6,6 +6,7 @@
 ### Fixed
 
 - Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
