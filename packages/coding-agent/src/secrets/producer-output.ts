@@ -1,4 +1,5 @@
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
+import { currentProducerSecretOwner } from "./producer-owner";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -33,6 +34,7 @@ function isInventory(text: string): boolean {
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
 	#pending = "";
+	#recordLength = 0;
 	#dropping = false;
 	#withholding = false;
 	#candidate = "";
@@ -42,9 +44,15 @@ export class ProducerOutputGuard {
 	#quote = "";
 	#escaped = false;
 	readonly #redact: ((text: string) => string) | undefined;
+	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(redact?: (text: string) => string) {
-		this.#redact = redact;
+	constructor(
+		redact?: (text: string) => string,
+		pendingPrefixLength?: (text: string) => number,
+	) {
+		const owner = currentProducerSecretOwner();
+		this.#redact = redact ?? owner?.redact;
+		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
 
 	sanitize(text: string): string {
@@ -67,6 +75,7 @@ export class ProducerOutputGuard {
 	#block(): string {
 		this.#withholding = true;
 		this.#pending = "";
+		this.#recordLength = 0;
 		this.#candidate = "";
 		this.#dropping = false;
 		return BLOCKED_OUTPUT_RECORD;
@@ -86,39 +95,55 @@ export class ProducerOutputGuard {
 
 	#record(record: string, newline: string): string {
 		const normalized = sanitizeText(record);
-		if (this.sanitize(record) === BLOCKED_OUTPUT_RECORD) return this.#block() + newline;
-		const assignment = ENV_ASSIGNMENT.test(normalized);
+		if (this.sanitize(record + newline) === BLOCKED_OUTPUT_RECORD) return this.#block() + newline;
+		// A registered literal can hold several physical records together. Classify every
+		// raw line, but keep the group intact until redaction can see the complete literal.
+		const lines = normalized.split("\n");
+		const assignment = lines.some(line => ENV_ASSIGNMENT.test(line));
 		const separator = this.#candidate.length > 0 && !normalized.trim();
 		let prefix = "";
 		if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
 		if (this.#withholding) return prefix;
-		if (!this.#structured && /^\s*[[{]/.test(normalized)) this.#structured = true;
-		if (this.#structured || assignment || separator) {
+		const structured = this.#structured || lines.some(line => /^\s*[[{]/.test(line));
+		if (structured || assignment || separator) {
 			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
 				return prefix + this.#block() + newline;
 			this.#candidate += record + newline;
-			if (!this.#structured) {
-				if (assignment && ++this.#assignments >= 3) return prefix + this.#block() + newline;
-				return prefix;
-			}
-			// Track quoted delimiters too: a path or value can contain braces.
-			for (const character of normalized) {
-				if (this.#escaped) {
+			for (const line of lines) {
+				if (line.trim()) {
+					this.#assignments = ENV_ASSIGNMENT.test(line) ? this.#assignments + 1 : 0;
+					if (this.#assignments >= 3) return prefix + this.#block() + newline;
+				}
+				if (!this.#structured) {
+					if (!/^\s*[[{]/.test(line)) continue;
+					this.#structured = true;
+				}
+				// Track quoted delimiters only inside a structured record: an earlier
+				// ordinary line in the held group may itself contain quotes or braces.
+				for (const character of line) {
+					if (this.#escaped) {
+						this.#escaped = false;
+					} else if (this.#quote) {
+						if (character === "\\") this.#escaped = true;
+						else if (character === this.#quote) this.#quote = "";
+					} else if (character === '"' || character === "'") {
+						this.#quote = character;
+					} else if (character === "{" || character === "[") {
+						this.#depth++;
+					} else if (character === "}" || character === "]") {
+						this.#depth--;
+					}
+				}
+				if (this.#depth <= 0) {
+					this.#structured = false;
+					this.#depth = 0;
+					this.#quote = "";
 					this.#escaped = false;
-				} else if (this.#quote) {
-					if (character === "\\") this.#escaped = true;
-					else if (character === this.#quote) this.#quote = "";
-				} else if (character === '"' || character === "'") {
-					this.#quote = character;
-				} else if (character === "{" || character === "[") {
-					this.#depth++;
-				} else if (character === "}" || character === "]") {
-					this.#depth--;
 				}
 			}
-			return prefix + (this.#depth <= 0 ? this.#flushCandidate() : "");
+			return prefix + (this.#structured || this.#assignments > 0 ? "" : this.#flushCandidate());
 		}
-		return prefix + this.sanitize(record) + newline;
+		return prefix + this.sanitize(record + newline);
 	}
 
 	push(chunk: string): string {
@@ -128,16 +153,38 @@ export class ProducerOutputGuard {
 		while (offset < chunk.length) {
 			const newline = chunk.indexOf("\n", offset);
 			const end = newline < 0 ? chunk.length : newline;
+			const separator = newline < 0 ? "" : "\n";
 			if (!this.#dropping) {
-				if (this.#pending.length + end - offset > MAX_RECORD_CHARS) {
+				const segmentLength = end - offset;
+				if (
+					this.#recordLength + segmentLength > MAX_RECORD_CHARS ||
+					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
+				) {
 					this.#pending = "";
 					this.#dropping = true;
 				} else {
-					this.#pending += chunk.slice(offset, end);
+					this.#pending += chunk.slice(offset, end) + separator;
+					this.#recordLength += segmentLength;
 				}
 			}
 			if (newline < 0) break;
-			const record = this.#dropping ? this.#block() + "\n" : this.#record(this.#pending, "\n");
+			this.#recordLength = 0;
+			if (this.#dropping) {
+				output.push(this.#block() + "\n");
+				break;
+			}
+			let pendingPrefix = 0;
+			try {
+				pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+			} catch {
+				this.#block();
+				break;
+			}
+			if (pendingPrefix > 0) {
+				offset = newline + 1;
+				continue;
+			}
+			const record = this.#record(this.#pending.slice(0, -1), "\n");
 			output.push(record);
 			if (this.#withholding) break;
 			this.#pending = "";
@@ -149,15 +196,30 @@ export class ProducerOutputGuard {
 
 	finish(): string {
 		if (this.#withholding) return "";
-		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) return "";
+		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) {
+			return "";
+		}
+		let pendingPrefix = 0;
+		if (!this.#dropping) {
+			try {
+				pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+			} catch {
+				this.#block();
+				return "";
+			}
+		}
 		const text = this.#dropping ? this.#block() : this.#record(this.#pending, "");
 		this.#pending = "";
+		this.#recordLength = 0;
 		this.#dropping = false;
-		return text + (this.#withholding ? "" : this.#flushCandidate());
+		const output = text + (this.#withholding ? "" : this.#flushCandidate());
+		if (pendingPrefix > 0) this.#withholding = true;
+		return output;
 	}
 
 	reset(): void {
 		this.#pending = "";
+		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#withholding = false;
 		this.#candidate = "";

@@ -17,6 +17,18 @@ secrets:
 
 The setting takes effect in the current session. Veyyon reloads environment variables, `secrets.yml`, and the vault when you toggle protection or run a `/secret` command. Moving to another working directory loads that project's scope and drops the source project's mappings.
 
+### Protecting files named by a credential metadata index
+
+An external credential producer can publish a metadata index that classifies credential files without exposing their contents. Add its index path to the active profile's `config.yml`:
+
+```yaml
+secrets:
+  protectedCredentialMetadataIndexes:
+    - /path/to/credential-index.json
+```
+
+At startup, Veyyon reads the configured index and blocks ordinary agent `read` calls for files it classifies as credentials. Relative index paths resolve from the session working directory. The index itself, documentation, and source files remain readable. Trusted direct filesystem consumers are unchanged. Veyyon snapshots this policy for each working directory when the session starts or first enters that directory; restart the session after changing the index or this setting. This protects only files named by the configured index. It does not scan for other credentials or make the working copy itself unreadable.
+
 ## Your first secret
 
 If the credential is already an environment variable, you have nothing to declare to keep its value out of provider requests. Veyyon treats an environment variable as secret when its value is 8 characters or longer and its name ends with, or has an underscore after, one of `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `PASSPHRASE`, `AUTH`, `CREDENTIAL`, `PRIVATE`, or `OAUTH`.
@@ -787,13 +799,57 @@ The provider boundary is applied again whenever a local transcript is sent. Resu
 
 Changing the working directory is transactional. Veyyon loads the destination runtime before committing the move, and restores both the old directory and old runtime if loading fails. A resumed session or persisted agent starts from its recorded directory before loading project-scoped secrets.
 
+## Protecting credentials read by tools
+
+Secret protection also covers configured credential resources before producer
+output is retained. A host SDK can pass resource paths through
+`protectedCredentialResources` and metadata index paths through
+`protectedCredentialMetadataIndexes`. The SDK protects its existing vault, key,
+and `secrets.yml` paths through their existing path owners. An external
+working-copy integration must provide a metadata adapter; Veyyon does not guess
+resource names from filenames.
+
+The same-job immutable secret lease is available while output is produced.
+Veyyon reuses its existing obfuscator to redact `OutputSink` output before
+retention, including artifacts, result details, progress, and asynchronous
+replay. Multiline literals use prefix holdback so a chunk boundary does not
+retain a partial secret before the rest of the value arrives.
+
+Metadata indexes, their source files, and documentation remain readable.
+Trusted direct filesystem consumers also remain unaffected. This is a bounded
+producer-output safeguard, not a general sandbox: it cannot guarantee
+protection for unknown or transformed values, network exfiltration by a host
+shell, images or opaque bytes, or arbitrary host side effects. This documents
+the configured SDK boundary; it does not claim that an installed host has
+configured or deployed it, or that the host shell was exercised end to end.
+
+Trusted host code may also register one unnamed value with
+`SessionSecretRuntime.registerPrivateSecret(value: string)`. Registration
+returns a `ProducerSecretOwner` pinned to the new immutable lease and installs
+that lease as current. Later leases retain the known value for redaction.
+Registration grants no expansion name or right. The value does not enter the
+model's named inventory or tool arguments. The pinned owner scopes redaction
+to trusted producer execution.
+
+Registration refuses a value when obfuscation leaves the full exact value
+unchanged. This rejects values of one through five characters, but it is not
+a fixed-length guarantee. The result depends on whether obfuscation changes
+the exact value. This protection covers known literal values, not arbitrary
+encodings or transformed values.
+
+The runtime contract is tested in
+[`private-values-stay-redacted-across-leases.test.ts`](../../../packages/coding-agent/test/secrets/private-values-stay-redacted-across-leases.test.ts).
+Owner scoping is tested in
+[`producer-secret-owner.test.ts`](../../../packages/coding-agent/test/secrets/producer-secret-owner.test.ts).
+These tests do not prove installed-host configuration or shell end-to-end behavior.
+
 ## What this does not protect
 
 Be clear about the boundary.
 
 **The two stores differ on disk.** Vault entries added with `/secret` are encrypted. `secrets.yml` is a plain file: it holds declarations you wrote, in the clear, and anyone who can read it has those credentials. If a value needs to be encrypted at rest, put it in the vault rather than in `secrets.yml`.
 
-**A command the agent runs receives the real value.** So a command that prints the credential prints it for real. Its output is obfuscated again before it goes back to the model, but it reached the process, and anything that process wrote elsewhere is outside veyyon's reach. That output is also saved to the session file as it was printed, so a command that echoes a credential puts it there. The arguments veyyon itself records are redacted, but it cannot redact what a command chose to print.
+**A command the agent runs receives the real value.** A command can print it or pass it elsewhere. Configured producer-output resources are redacted before retention as described above. This does not guarantee protection for unknown or transformed values, host-shell network exfiltration, images or opaque bytes, or arbitrary host side effects.
 
 **Protection begins when the value is known.** Once you enable protection or store a value, old local transcript text containing that value is sanitized on subsequent provider requests. The local transcript is not rewritten in place.
 

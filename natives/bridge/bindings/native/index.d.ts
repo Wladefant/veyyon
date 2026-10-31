@@ -155,6 +155,8 @@ export declare class PtySession {
   resize(cols: number, rows: number): void
   /** Force-kill the active PTY command. */
   kill(): void
+  /** Stable process handle for the child spawned by the latest accepted run. */
+  get process(): Process | null
 }
 
 /** Persistent brush-core shell session. */
@@ -1700,7 +1702,9 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
+  /** Whether output capture stopped before EOF. */
   outputIncomplete: boolean
+  /** Retained raw output prefix, present only for incomplete buffered capture. */
   capturedOutput?: string
   /**
    * When the minimizer rewrote the captured output, this carries the

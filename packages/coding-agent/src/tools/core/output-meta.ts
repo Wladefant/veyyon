@@ -18,6 +18,14 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import type { Theme } from "../../theme/theme";
 import type { Settings } from "../../config/settings";
 import { getDefault } from "../../config/settings-schema";
+import { mapJsonStrings } from "../../json-transform";
+import {
+	currentProducerSecretOwner,
+	producerSecretOwnerFor,
+	runWithProducerSecretOwner,
+	type ProducerSecretOwner,
+} from "../../secrets/producer-owner";
+import type { ToolSession } from "../index";
 // `getDefault` from the SCHEMA that owns it, not through the store's re-export: the store is 95 modules
 // and the schema is 60, and this file only needs to know what a setting defaults to. `Settings` is a
 // type here, so naming the store for it is free.
@@ -512,6 +520,35 @@ function appendOutputNotice(
 }
 
 const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
+const kProducerSession = Symbol("OutputMeta.ProducerSession");
+
+/** Results are JSON; a refused walk must never return the uninspected payload. */
+function redactProducedResult<T>(value: T, owner: ProducerSecretOwner | undefined): T {
+	if (!owner) return value;
+	return mapJsonStrings(value, text => owner.redact(text));
+}
+
+/** Keep cancellation identity without carrying raw messages, causes, or error details onward. */
+function redactProducedError(error: Error, owner: ProducerSecretOwner, seen = new WeakSet<Error>()): void {
+	if (seen.has(error)) return;
+	seen.add(error);
+	for (const key of Object.getOwnPropertyNames(error)) {
+		const descriptor = Object.getOwnPropertyDescriptor(error, key);
+		if (!descriptor || !("value" in descriptor)) continue;
+		const value: unknown = descriptor.value;
+		if (value instanceof Error) {
+			redactProducedError(value, owner, seen);
+			continue;
+		}
+		let redacted: unknown;
+		try {
+			redacted = mapJsonStrings(value, text => owner.redact(text));
+		} catch {
+			redacted = "[credential output withheld]";
+		}
+		if (redacted !== value) Object.defineProperty(error, key, { ...descriptor, value: redacted });
+	}
+}
 
 // =============================================================================
 // Centralized artifact spill for large tool results
@@ -718,9 +755,22 @@ async function wrappedExecute(
 	context?: AgentToolContext,
 ): Promise<AgentToolResult> {
 	const originalExecute = this[kUnwrappedExecute];
+	const session = (this as AgentTool & { [kProducerSession]?: ToolSession })[kProducerSession];
+	const owner =
+		(typeof params === "object" && params !== null ? producerSecretOwnerFor(params) : undefined) ??
+		currentProducerSecretOwner() ??
+		session?.captureProducerSecretOwner?.() ??
+		(context?.obfuscateProviderText ? { redact: context.obfuscateProviderText } : undefined);
+	const execute = async (): Promise<AgentToolResult> => {
 
 	try {
-		let result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
+		const update: AgentToolUpdateCallback | undefined = onUpdate
+			? result => onUpdate(redactProducedResult(result, owner))
+			: undefined;
+		let result = redactProducedResult(
+			await originalExecute.call(this, toolCallId, params, signal, update, context),
+			owner,
+		);
 
 		// Spill large results to artifact, truncate to tail
 		result = await spillLargeResultToArtifact(result, this.name, context);
@@ -754,8 +804,14 @@ async function wrappedExecute(
 		//
 		// A non-Error throw still needs a message the agent loop can render, and there
 		// is no identity to keep in that case.
-		throw e instanceof Error ? e : new Error(renderError(e));
+		if (e instanceof Error) {
+			if (owner) redactProducedError(e, owner);
+			throw e;
+		}
+		throw new Error(owner ? owner.redact(renderError(e)) : renderError(e));
 	}
+	};
+	return owner ? runWithProducerSecretOwner(owner, execute) : execute();
 }
 
 /**
@@ -763,14 +819,16 @@ async function wrappedExecute(
  * 1. Automatically append output notices based on details.meta
  * 2. Handle ToolError rendering
  */
-export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(tool: T): T {
+export function wrapToolWithMetaNotice<T extends AgentTool<any, any, any>>(tool: T, session?: ToolSession): T {
 	if (kUnwrappedExecute in tool) {
+		if (session) Object.defineProperty(tool, kProducerSession, { value: session, configurable: true });
 		return tool;
 	}
 
 	const originalExecute = tool.execute;
 
 	return Object.defineProperties(tool, {
+		[kProducerSession]: { value: session, configurable: true },
 		[kUnwrappedExecute]: {
 			value: originalExecute,
 			enumerable: false,

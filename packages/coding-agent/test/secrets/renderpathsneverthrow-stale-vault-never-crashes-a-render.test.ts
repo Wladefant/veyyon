@@ -236,6 +236,7 @@ function installRuntime(
 		redactionObfuscator: obfuscator,
 		hasRedactions: obfuscator.hasSecrets(),
 		obfuscateText: text => obfuscator.obfuscate(text),
+		pendingRedactionPrefixLength: text => obfuscator.pendingRedactionPrefixLength(text),
 		obfuscateMessages: messages => messages,
 		obfuscateContext: context => context,
 		obfuscatePayload: payload => payload,
