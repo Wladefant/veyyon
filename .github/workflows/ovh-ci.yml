@@ -3,6 +3,10 @@ name: OVH CI
 on:
   workflow_dispatch:
     inputs:
+      runner_label:
+        description: Runner label admitted for this dispatch (empty uses veyyon)
+        type: string
+        default: veyyon
       target_sha:
         description: Exact source commit to exercise (empty uses workflow commit)
         type: string
@@ -38,7 +42,7 @@ permissions:
 jobs:
   prepare:
     if: (!inputs.typecheck) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
@@ -215,7 +219,7 @@ jobs:
   test:
     name: test (shard ${{ matrix.index }})
     needs: prepare
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -396,7 +400,7 @@ jobs:
           retention-days: 7
   typecheck:
     if: inputs.typecheck
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     env:
       NODE_OPTIONS: --max-old-space-size=4096
