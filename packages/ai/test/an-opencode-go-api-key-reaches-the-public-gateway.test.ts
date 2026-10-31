@@ -17,6 +17,10 @@ const GATEWAY_PATH: Readonly<Record<string, string>> = {
 	"anthropic-messages": "/v1/messages",
 };
 const MODELS_PATH = `${new URL(GATEWAY).pathname}/v1/models`;
+function gatewayPathFor(api: Api, model: Model<Api>): string {
+	if (api === "google-generative-ai") return `/v1/models/${model.id}:streamGenerateContent?alt=sse`;
+	return GATEWAY_PATH[api] ?? "";
+}
 
 interface RecordedRequest {
 	url: string;
@@ -30,11 +34,10 @@ function bundledModelPerApi(): Map<Api, Model<Api>> {
 	}
 	return models;
 }
-
 function wireApis(): Map<Api, Model<Api>> {
 	const models = bundledModelPerApi();
 	if (models.size === 0) throw new Error("OpenCode Go bundles no wire models");
-	const unarmed = [...models.keys()].filter(api => GATEWAY_PATH[api] === undefined);
+	const unarmed = [...models].filter(([api, model]) => gatewayPathFor(api, model) === "").map(([api]) => api);
 	expect(unarmed).toEqual([]);
 	return models;
 }
@@ -44,7 +47,7 @@ function recordingFetch(sent: RecordedRequest[], modelsDev: Response = Response.
 		const request = input instanceof Request ? new Request(input, init) : new Request(String(input), init);
 		const url = new URL(request.url);
 		if (url.origin === "https://models.dev") return modelsDev.clone();
-		sent.push({ url: `${url.origin}${url.pathname}`, headers: request.headers });
+		sent.push({ url: `${url.origin}${url.pathname}${url.search}`, headers: request.headers });
 		if (url.pathname === MODELS_PATH) return Response.json({ data: [{ id: "listed-model" }] });
 		return Response.json({ error: { message: "stubbed request ended" } }, { status: 400 });
 	};
@@ -71,12 +74,14 @@ describe("an OpenCode Go API key reaches the public gateway", () => {
 				requests: sent.slice(mark).map(request => ({
 					url: request.url,
 					credential:
-						request.headers.get("authorization")?.replace(/^Bearer /, "") ?? request.headers.get("x-api-key"),
+						request.headers.get("authorization")?.replace(/^Bearer /, "") ??
+						request.headers.get("x-api-key") ??
+						request.headers.get("x-goog-api-key"),
 					org: request.headers.get(OPENCODE_GO_ORG_HEADER),
 				})),
 			}).toEqual({
 				api,
-				requests: [{ url: `${GATEWAY}${GATEWAY_PATH[api]}`, credential: "sk-go-key", org: null }],
+				requests: [{ url: `${GATEWAY}${gatewayPathFor(api, model)}`, credential: "sk-go-key", org: null }],
 			});
 		}
 	});
@@ -100,12 +105,14 @@ describe("an OpenCode Go API key reaches the public gateway", () => {
 					requests: sent.slice(mark).map(request => ({
 						url: request.url,
 						credential:
-							request.headers.get("authorization")?.replace(/^Bearer /, "") ?? request.headers.get("x-api-key"),
+							request.headers.get("authorization")?.replace(/^Bearer /, "") ??
+							request.headers.get("x-api-key") ??
+							request.headers.get("x-goog-api-key"),
 						org: request.headers.get(OPENCODE_GO_ORG_HEADER),
 					})),
 				}).toEqual({
 					api,
-					requests: [{ url: `${GATEWAY}${GATEWAY_PATH[api]}`, credential: "sk-go-stored", org: null }],
+					requests: [{ url: `${GATEWAY}${gatewayPathFor(api, model)}`, credential: "sk-go-stored", org: null }],
 				});
 			}
 		} finally {
