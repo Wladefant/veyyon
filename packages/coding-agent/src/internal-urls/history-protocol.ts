@@ -15,9 +15,19 @@
  * URL forms:
  * - history:// - Index of all registry + on-disk agents (id, status, kind, last activity)
  * - history://<agentId> - Concise markdown transcript of that agent
+ * - history://<agentId>?q=term - Bounded, branch-aware search returning entry IDs
+ * - history://<agentId>?entry=<entryId>&offset=0&limit=8000 - Exact stored record page
  */
 
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import {
+	parseExactHistoryRequest,
+	parseHistorySearchRequest,
+	readLiveHistoryEntry,
+	readStoredHistoryEntry,
+	searchLiveHistoryEntries,
+	searchStoredHistoryEntries,
+} from "./history-exact";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
@@ -84,6 +94,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		const visible = registry.list().filter(ref => ref.kind !== "advisor");
 
 		if (!agentId) {
+			if (url.searchParams.has("entry") || url.searchParams.has("q")) {
+				throw new Error("history:// search and exact reads require an agent ID");
+			}
 			const content = await renderIndex(visible);
 			return {
 				url: url.href,
@@ -99,6 +112,50 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
 			const lower = agentId.toLowerCase();
 			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
+		}
+
+		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
+		// Resolve only registry-owned or uniquely discovered session files, never a
+		// path supplied in the URL. The multi-conversation refusal above still applies.
+		const exactRequest = parseExactHistoryRequest(url);
+		const searchRequest = parseHistorySearchRequest(url);
+		if (exactRequest || searchRequest) {
+			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
+			if (!sessionFile) {
+				const disk = await sessionFilesFromDisk();
+				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
+				sessionFile = found?.[1];
+			}
+			if (sessionFile) {
+				// A persisted live session can branch in memory without appending a JSONL row.
+				// Its last physical row may belong to an abandoned branch.
+				const liveLeafId = ref?.session?.sessionManager.getLeafId();
+				if (ref?.session && liveLeafId === null && !exactRequest?.leafId && !searchRequest?.leafId) {
+					throw new Error("history:// active session has no branch leaf; pass leaf= to select stored history");
+				}
+				const result = exactRequest
+					? await readStoredHistoryEntry(sessionFile, {
+						...exactRequest,
+						leafId: exactRequest.leafId ?? liveLeafId ?? undefined,
+					})
+					: await searchStoredHistoryEntries(sessionFile, {
+						...searchRequest!,
+						leafId: searchRequest!.leafId ?? liveLeafId ?? undefined,
+					});
+				const content = JSON.stringify(result, null, 2);
+				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
+					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
+			}
+			if (ref?.session) {
+				const branch = ref.session.sessionManager.getBranch();
+				const result = exactRequest
+					? readLiveHistoryEntry(branch, exactRequest)
+					: searchLiveHistoryEntries(branch, searchRequest!);
+				const content = JSON.stringify(result, null, 2);
+				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
+					notes: ["Active in-memory branch; no persistent session file"] };
+			}
+			// Preserve the existing ambiguous/unknown-agent diagnostic below.
 		}
 
 		if (!ref) {
@@ -240,6 +297,6 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 	for (const entry of entries) {
 		lines.push(`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} |`);
 	}
-	lines.push("", "Read a transcript with `read history://<id>`.");
+	lines.push("", "Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.");
 	return `${lines.join("\n")}\n`;
 }
