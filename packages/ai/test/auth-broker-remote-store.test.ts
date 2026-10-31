@@ -274,6 +274,53 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+	// Provider-wide mutation is not a transaction: a confirmed earlier disable
+	// must remain visible, but a later failed disable must abort the operation.
+	for (const operation of ["logout", "replace"] as const) {
+		test(`provider ${operation} surfaces a failed broker disable and preserves unrevoked grants`, async () => {
+			storage!.upsertCredential("anthropic", mintOAuthCredential("b", Date.now() + 120_000));
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			expect(initial.snapshot.credentials).toHaveLength(2);
+			const [first, failed] = initial.snapshot.credentials;
+			remote = new RemoteAuthCredentialStore({
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
+			});
+
+			// Keep the broker's real disable for the first grant, but inject an
+			// unavailable transport for the second. This is all synthetic data.
+			const realDisable = client.disableCredential.bind(client);
+			spyOn(client, "disableCredential").mockImplementation((id, cause, signal) => {
+				if (id === failed!.id) return Promise.reject(new Error("synthetic broker unavailable"));
+				return realDisable(id, cause, signal);
+			});
+			const run =
+				operation === "logout"
+					? remote.deleteAuthCredentialsRemote("anthropic", "synthetic logout")
+					: remote.replaceAuthCredentialsRemote("anthropic", [
+							mintOAuthCredential("replacement", Date.now() + 120_000),
+						]);
+			await expect(run).rejects.toThrow(/synthetic broker unavailable/);
+
+			const authoritative = await client.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected broker snapshot after failed disable");
+			expect(authoritative.snapshot.credentials.map(entry => entry.id)).toEqual([failed!.id]);
+			expect(authoritative.snapshot.credentials.some(entry => entry.id === first!.id)).toBe(false);
+			// A failed replace must not upload another credential while the old
+			// grant is still valid, and a failed logout cannot claim completion.
+			expect(
+				authoritative.snapshot.credentials.some(
+					entry => entry.credential.type === "oauth" && entry.credential.access === "access-replacement",
+				),
+			).toBe(false);
+			await remote.refreshSnapshot();
+			expect(remote.listAuthCredentials("anthropic").map(entry => entry.id)).toEqual([failed!.id]);
+		});
+	}
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
