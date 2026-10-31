@@ -64,6 +64,7 @@ import { loadSlashCommands } from "../../extensibility/slash-commands";
 // handler and reaches hundreds of modules.
 import { listLocalPlanFileUrls } from "../../internal-urls/local-protocol";
 import { MCPManager } from "../../mcp/manager";
+import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
 import type { MCPServerConfig } from "../../mcp/types";
 import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
@@ -2041,7 +2042,19 @@ export class AcpAgent implements Agent {
 		}
 		const manager = new MCPManager(record.session.sessionManager.getCwd());
 		try {
-			const result = await manager.connectServers(merged.configs, merged.sources);
+			const startupStatuses = new Map<
+				string,
+				{ promise: Promise<McpConnectionStatusEvent>; resolve: (event: McpConnectionStatusEvent) => void }
+			>();
+			for (const name of Object.keys(merged.configs)) {
+				const status = Promise.withResolvers<McpConnectionStatusEvent>();
+				startupStatuses.set(name, { promise: status.promise, resolve: status.resolve });
+			}
+			const result = await manager.connectServers(merged.configs, merged.sources, event => {
+				if (event.type === "connected" || event.type === "failed") {
+					startupStatuses.get(event.serverName)?.resolve(event);
+				}
+			});
 			if (result.errors.size > 0) {
 				throw new Error(
 					Array.from(result.errors.entries())
@@ -2049,8 +2062,19 @@ export class AcpAgent implements Agent {
 						.join("; "),
 				);
 			}
+			const connectedServers = new Set(result.connectedServers);
+			await Promise.all(
+				Array.from(startupStatuses.entries())
+					.filter(([name]) => !connectedServers.has(name))
+					.map(async ([name, status]) => {
+						const event = await status.promise;
+						if (event.type === "failed") {
+							throw new Error(`${name}: ${event.error}`);
+						}
+					}),
+			);
 			await record.mcpManager?.disconnectAll();
-			await record.session.refreshMCPTools(result.tools, { activateAll: true });
+			await record.session.refreshMCPTools(manager.getTools(), { activateAll: true });
 			record.mcpManager = manager;
 		} catch (error) {
 			await manager.disconnectAll();
