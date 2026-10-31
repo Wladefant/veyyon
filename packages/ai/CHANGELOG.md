@@ -5,6 +5,7 @@
 ### Fixed
 
 - Remote auth-broker snapshot readers discard delayed older generations after newer local updates so revoked credentials are not reintroduced ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement stop on a failed disable and retain any grants not confirmed disabled ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 ## [1.7.0] - 2026-10-31
 
