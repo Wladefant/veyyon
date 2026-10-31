@@ -4,6 +4,7 @@ import { bindReceipt, bridgeRequest, type BridgeReceipt, digest, MainplaneError,
 	remoteRunId, remoteSessionId, SHA256, validateReceipt, visibleError, WORKER_ID } from "./mainplane-bridge-wire";
 import { registerMainplaneWrite } from "./mainplane-bridge-write";
 import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
+import { registerMainplaneOutputRecovery } from "./mainplane-bridge-output";
 
 // Go JSON control escaping can expand the two retained 50 KiB outputs sixfold.
 const MAX_RUN_REPLY = 1024 * 1024;
@@ -87,4 +88,5 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	});
 	registerMainplaneWrite(pi);
 	registerMainplaneCancellation(pi);
+	registerMainplaneOutputRecovery(pi);
 }
