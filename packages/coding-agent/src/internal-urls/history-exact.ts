@@ -183,15 +183,16 @@ function page(
 	};
 }
 
-function onBranch(parents: ReadonlyMap<string, string | undefined>, entryId: string, leafId: string): boolean {
-	const seen = new Set<string>();
+/** A parent cycle makes an otherwise well-formed stored branch ambiguous. */
+function selectedBranchIds(parents: ReadonlyMap<string, string | undefined>, leafId: string): Set<string> | undefined {
+	const selected = new Set<string>();
 	let current: string | undefined = leafId;
-	while (current && !seen.has(current)) {
-		if (current === entryId) return true;
-		seen.add(current);
+	while (current) {
+		if (selected.has(current)) return undefined;
+		selected.add(current);
 		current = parents.get(current);
 	}
-	return false;
+	return selected;
 }
 
 /**
@@ -277,6 +278,13 @@ export async function readStoredHistoryEntry(
 		};
 	}
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
+	const selectedIds = leafId && parents.has(leafId) ? selectedBranchIds(parents, leafId) : undefined;
+	if (leafId && parents.has(leafId) && !selectedIds) {
+		return {
+			status: "unavailable", entryId: request.entryId, leafId, sessionId, source: "stored-jsonl",
+			detail: "Selected branch has cyclic parent links; exact history is ambiguous",
+		};
+	}
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
 			status: request.revision ? "stale" : incomplete ? "unavailable" : "missing", entryId: request.entryId, leafId,
@@ -285,7 +293,7 @@ export async function readStoredHistoryEntry(
 				"No stored record or requested branch leaf was found",
 		};
 	}
-	if (!onBranch(parents, request.entryId, leafId)) {
+	if (!selectedIds!.has(request.entryId)) {
 		return {
 			status: incomplete ? "unavailable" : "not_on_branch", entryId: request.entryId,
 			leafId, sessionId, source: "stored-jsonl",
@@ -456,11 +464,13 @@ export async function searchStoredHistoryEntries(
 	}
 	// Select the lineage before enforcing the candidate cap. Otherwise
 	// unrelated sibling matches can evict an older matching ancestor.
-	const selectedIds = new Set<string>();
-	let ancestor: string | undefined = leafId;
-	while (ancestor && !selectedIds.has(ancestor)) {
-		selectedIds.add(ancestor);
-		ancestor = parents.get(ancestor);
+	const selectedIds = selectedBranchIds(parents, leafId);
+	if (!selectedIds) {
+		return {
+			status: "unavailable", sessionId, leafId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Selected branch has cyclic parent links; search ancestry is ambiguous",
+		};
 	}
 	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	let truncated = false;
