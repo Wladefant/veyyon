@@ -150,9 +150,16 @@ describe("the notice queue", () => {
 		await liveOwner("sender", path.join(root, "shipnovo"));
 		await liveOwner("poly-a", path.join(root, "polysimulator"));
 		await liveOwner("poly-b", path.join(root, "polysimulator"));
-		expect(() =>
-			sendSessionNotice({ from: "sender", to: "project=polysimulator", body: "do not broadcast", root }),
-		).toThrow(/Ambiguous session project.*poly-a.*poly-b/);
+		let ambiguousError = "";
+		try {
+			sendSessionNotice({ from: "sender", to: "project=polysimulator", body: "do not broadcast", root });
+		} catch (error) {
+			ambiguousError = String(error);
+		}
+		expect(ambiguousError).toContain("Ambiguous session project");
+		// Owner record directory enumeration is not a routing-order contract.
+		expect(ambiguousError).toContain("poly-a");
+		expect(ambiguousError).toContain("poly-b");
 		expect(() =>
 			sendSessionNotice({ from: "sender", to: "project=unknown-project", body: "do not broadcast", root }),
 		).toThrow(/Unknown session project.*candidates/);
