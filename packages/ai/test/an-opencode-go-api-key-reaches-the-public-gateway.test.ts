@@ -81,19 +81,16 @@ describe("an OpenCode Go API key reaches the public gateway", () => {
 		}
 	});
 
-	it("routes a pasted OpenCode Go key from AuthStorage to the public gateway without an organization", async () => {
+	it("routes a key already stored under the provider ID to the public gateway without an organization", async () => {
 		const envKeySpy = vi.spyOn(envApiKeyModule, "getEnvApiKey").mockReturnValue(undefined);
 		const db = new Database(":memory:");
 		const store = new SqliteAuthCredentialStore(db);
 		const authStorage = new AuthStorage(store);
 		const sent: RecordedRequest[] = [];
 		try {
-			await authStorage.login("opencode-go", {
-				onAuth: () => {},
-				onPrompt: async () => "sk-go-pasted",
-			});
-			const apiKey = await authStorage.getApiKey("opencode-go", "session-open-code-go");
-			if (!apiKey) throw new Error("AuthStorage returned no pasted OpenCode Go API key");
+			await authStorage.set("opencode-go", [{ type: "api_key", key: "sk-go-stored", source: "login" }]);
+			const apiKey = await authStorage.getApiKey("opencode-go");
+			if (!apiKey) throw new Error("AuthStorage returned no stored OpenCode Go API key");
 			const fetch = recordingFetch(sent);
 			for (const [api, model] of wireApis()) {
 				const mark = sent.length;
@@ -108,7 +105,7 @@ describe("an OpenCode Go API key reaches the public gateway", () => {
 					})),
 				}).toEqual({
 					api,
-					requests: [{ url: `${GATEWAY}${GATEWAY_PATH[api]}`, credential: "sk-go-pasted", org: null }],
+					requests: [{ url: `${GATEWAY}${GATEWAY_PATH[api]}`, credential: "sk-go-stored", org: null }],
 				});
 			}
 		} finally {
