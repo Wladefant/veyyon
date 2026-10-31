@@ -571,3 +571,88 @@ describe("acquireFileLock lease handle (F5)", () => {
 		await handle.release();
 	});
 });
+
+describe("Windows candidate publication rename contention (#816)", () => {
+	const windowsRenameContention = (): NodeJS.ErrnoException =>
+		Object.assign(new Error("Windows lock publication is occupied"), { code: "EPERM" });
+
+	test("async loser preserves a competing winner and removes only its own candidate", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "agent.db.recovery"));
+		let winner!: Awaited<ReturnType<typeof __internalsForTesting.prepareCandidate>>;
+
+		// The other acquirer publishes after our first inspection, before our
+		// candidate rename. Windows reports EPERM instead of EEXIST here.
+		const loser = await tryAcquireLock(
+			lockPath,
+			async (_candidatePath, targetPath) => {
+				winner = await __internalsForTesting.prepareCandidate(lockPath);
+				await fs.rename(winner.path, targetPath);
+				throw windowsRenameContention();
+			},
+			true,
+		);
+
+		expect(loser).toBeNull();
+		expect((await readLockInfo(lockPath))?.token).toBe(winner.lease.token);
+		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
+		await releaseLock(lockPath, winner.lease);
+		const retry = await tryAcquireLock(lockPath);
+		expect(retry).not.toBeNull();
+		if (retry) await releaseLock(lockPath, retry);
+	});
+
+	test("sync loser preserves a competing winner and removes only its own candidate", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "agent.db.recovery"));
+		let winner!: ReturnType<typeof __internalsForTesting.prepareCandidateSync>;
+
+		const loser = tryAcquireLockSync(
+			lockPath,
+			(_candidatePath, targetPath) => {
+				winner = __internalsForTesting.prepareCandidateSync(lockPath);
+				fsSync.renameSync(winner.path, targetPath);
+				throw windowsRenameContention();
+			},
+			true,
+		);
+
+		expect(loser).toBeNull();
+		expect(readLockInfoSync(lockPath)?.token).toBe(winner.lease.token);
+		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
+		releaseLockSync(lockPath, winner.lease);
+		const retry = tryAcquireLockSync(lockPath);
+		expect(retry).not.toBeNull();
+		if (retry) releaseLockSync(lockPath, retry);
+	});
+
+	test("async non-Windows EPERM remains an error, with no abandoned candidate", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "permissions.json"));
+		await expect(
+			tryAcquireLock(
+				lockPath,
+				async () => {
+					throw windowsRenameContention();
+				},
+				false,
+			),
+		).rejects.toMatchObject({ code: "EPERM" });
+		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
+	});
+
+	test("sync non-Windows EPERM remains an error, with no abandoned candidate", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "permissions.json"));
+		expect(() =>
+			tryAcquireLockSync(
+				lockPath,
+				() => {
+					throw windowsRenameContention();
+				},
+				false,
+			),
+		).toThrow("Windows lock publication is occupied");
+		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
+	});
+});

@@ -756,7 +756,23 @@ function discardCandidateSync(candidatePath: string, expected: LockObservation):
 	}
 }
 
-async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
+/**
+ * Only candidate -> canonical lock publication treats a Windows EPERM as a race.
+ * Permission errors from preparing a candidate, checking its parent or retiring
+ * an old lock still fail closed. Windows can report EPERM where other systems
+ * report EEXIST/ENOTEMPTY when a competing publisher wins the rename.
+ */
+function isPublicationContention(error: unknown, windows: boolean): boolean {
+	const code = (error as NodeJS.ErrnoException)?.code;
+	return code === "EEXIST" || code === "ENOTEMPTY" || (windows && code === "EPERM");
+}
+
+async function tryAcquireLock(
+	lockPath: string,
+	// The optional publication seam is used by tests to model a losing Windows rename.
+	publishCandidate: (candidatePath: string, lockPath: string) => Promise<void> = fs.rename,
+	windows = process.platform === "win32",
+): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
 	let published = false;
 	try {
@@ -764,14 +780,13 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) return null;
 		if ((await inspectLockDirectory(lockPath)) !== null) return null;
 		try {
-			await fs.rename(candidate.path, lockPath);
-			published = true;
-			await assertParentIdentity(lockPath, candidate.parentIdentity);
+			await publishCandidate(candidate.path, lockPath);
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === "EEXIST" || code === "ENOTEMPTY") return null;
+			if (isPublicationContention(error, windows)) return null;
 			throw error;
 		}
+		published = true;
+		await assertParentIdentity(lockPath, candidate.parentIdentity);
 		const current = await inspectLockDirectory(lockPath);
 		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) {
@@ -785,7 +800,11 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 	}
 }
 
-function tryAcquireLockSync(lockPath: string): LockLease | null {
+function tryAcquireLockSync(
+	lockPath: string,
+	publishCandidate: (candidatePath: string, lockPath: string) => void = fsSync.renameSync,
+	windows = process.platform === "win32",
+): LockLease | null {
 	const candidate = prepareCandidateSync(lockPath);
 	let published = false;
 	try {
@@ -793,14 +812,13 @@ function tryAcquireLockSync(lockPath: string): LockLease | null {
 		if (inspectLockDirectorySync(getTransitionPath(lockPath)) !== null) return null;
 		if (inspectLockDirectorySync(lockPath) !== null) return null;
 		try {
-			fsSync.renameSync(candidate.path, lockPath);
-			published = true;
-			assertParentIdentitySync(lockPath, candidate.parentIdentity);
+			publishCandidate(candidate.path, lockPath);
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === "EEXIST" || code === "ENOTEMPTY") return null;
+			if (isPublicationContention(error, windows)) return null;
 			throw error;
 		}
+		published = true;
+		assertParentIdentitySync(lockPath, candidate.parentIdentity);
 		const current = inspectLockDirectorySync(lockPath);
 		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
 		if (inspectLockDirectorySync(getTransitionPath(lockPath)) !== null) {
