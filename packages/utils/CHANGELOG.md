@@ -7,6 +7,11 @@
 ### Added
 
 - Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+## [1.7.1] - 2026-10-31
+
+### Fixed
+
+- Retry lock publication EPERM, EACCES and EBUSY errors only when a competing lock is observable, preserving owner identity and candidate cleanup.
 
 ## [1.7.0] - 2026-10-31
 

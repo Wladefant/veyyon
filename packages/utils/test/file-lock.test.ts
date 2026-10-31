@@ -1,11 +1,18 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __internalsForTesting, acquireFileLock, tryWithFileLock, withFileLock, withFileLockSync } from "../src/file-lock";
+import {
+	__internalsForTesting,
+	acquireFileLock,
+	tryWithFileLock,
+	withFileLock,
+	withFileLockSync,
+} from "../src/file-lock";
 import { getProcessStartIdentity } from "../src/process-liveness";
+import * as sleepHelpers from "../src/sleep";
 import { removeWithRetries } from "../src/temp";
 
 const {
@@ -570,4 +577,143 @@ describe("acquireFileLock lease handle (F5)", () => {
 		);
 		await handle.release();
 	});
+});
+
+// Public acquisition calls must treat platform contention codes as bounded retries
+// only when a competing lock exists. These tests leave the winning lock in place:
+// retries must observe it rather than inventing repeated rename attempts.
+describe("file-lock candidate publication errors", () => {
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"retries public async acquisition after %s only when a competing owner exists",
+		async code => {
+			const root = await mkRoot();
+			const target = path.join(root, `async-${code}.json`);
+			const lockPath = getLockPath(target);
+			const competingToken = randomUUID();
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			let bodyRuns = 0;
+			const rename = spyOn(fs, "rename").mockImplementation(async (_source, destination) => {
+				renameAttempts += 1;
+				await fs.mkdir(destination);
+				await fs.writeFile(
+					path.join(String(destination), "info"),
+					JSON.stringify(ownerInfo({ token: competingToken })),
+				);
+				throw error;
+			});
+			const delays: number[] = [];
+			const sleep = spyOn(Bun, "sleep").mockImplementation(async ms => {
+				delays.push(Number(ms));
+			});
+			try {
+				await expect(
+					withFileLock(
+						target,
+						async () => {
+							bodyRuns += 1;
+						},
+						{ retries: 3, retryDelayMs: 7 },
+					),
+				).rejects.toThrow(/after 3 attempts/);
+				expect((await readLockInfo(lockPath))?.token).toBe(competingToken);
+				expect(renameAttempts).toBe(1);
+				expect(bodyRuns).toBe(0);
+				expect(delays).toEqual([7, 7]);
+				expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
+			} finally {
+				sleep.mockRestore();
+				rename.mockRestore();
+			}
+		},
+	);
+
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"retries public sync acquisition after %s only when a competing owner exists",
+		async code => {
+			const root = await mkRoot();
+			const target = path.join(root, `sync-${code}.json`);
+			const lockPath = getLockPath(target);
+			const competingToken = randomUUID();
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			let bodyRuns = 0;
+			const rename = spyOn(fsSync, "renameSync").mockImplementation((_source, destination) => {
+				renameAttempts += 1;
+				fsSync.mkdirSync(destination);
+				fsSync.writeFileSync(
+					path.join(String(destination), "info"),
+					JSON.stringify(ownerInfo({ token: competingToken })),
+				);
+				throw error;
+			});
+			const delays: number[] = [];
+			const sleep = spyOn(sleepHelpers, "sleepSync").mockImplementation(ms => {
+				delays.push(ms);
+			});
+			try {
+				expect(() =>
+					withFileLockSync(
+						target,
+						() => {
+							bodyRuns += 1;
+						},
+						{ retries: 3, retryDelayMs: 7 },
+					),
+				).toThrow(/after 3 attempts/);
+				expect(readLockInfoSync(lockPath)?.token).toBe(competingToken);
+				expect(renameAttempts).toBe(1);
+				expect(bodyRuns).toBe(0);
+				expect(delays).toEqual([7, 7]);
+				expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
+			} finally {
+				sleep.mockRestore();
+				rename.mockRestore();
+			}
+		},
+	);
+
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"preserves public async %s when no competing owner exists",
+		async code => {
+			const root = await mkRoot();
+			const target = path.join(root, `async-no-winner-${code}.json`);
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			const rename = spyOn(fs, "rename").mockImplementation(async () => {
+				renameAttempts += 1;
+				throw error;
+			});
+			try {
+				await expect(withFileLock(target, async () => undefined, { retries: 3, retryDelayMs: 0 })).rejects.toBe(
+					error,
+				);
+				expect(renameAttempts).toBe(1);
+				expect(await fs.readdir(root)).toEqual([]);
+			} finally {
+				rename.mockRestore();
+			}
+		},
+	);
+
+	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
+		"preserves public sync %s when no competing owner exists",
+		async code => {
+			const root = await mkRoot();
+			const target = path.join(root, `sync-no-winner-${code}.json`);
+			const error = Object.assign(new Error("rename denied"), { code });
+			let renameAttempts = 0;
+			const rename = spyOn(fsSync, "renameSync").mockImplementation(() => {
+				renameAttempts += 1;
+				throw error;
+			});
+			try {
+				expect(() => withFileLockSync(target, () => undefined, { retries: 3, retryDelayMs: 0 })).toThrow(error);
+				expect(renameAttempts).toBe(1);
+				expect(fsSync.readdirSync(root)).toEqual([]);
+			} finally {
+				rename.mockRestore();
+			}
+		},
+	);
 });

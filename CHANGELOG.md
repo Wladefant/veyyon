@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-10-31
+
+### Fixed
+
+- Retry recovery-lock publication access errors during startup contention ([#816](https://github.com/Wladefant/veyyon/issues/816)).
+- Retry lock publication EPERM, EACCES and EBUSY errors only when a competing lock is observable, preserving owner identity and candidate cleanup.
+
 ## [1.7.0] - 2026-10-31
 
 ### Breaking Changes
