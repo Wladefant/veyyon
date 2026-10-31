@@ -171,7 +171,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 					registry,
 					senderId,
 					this.noticeRuntime.listLiveSessionOwners?.() ?? [],
-					this.session.getSessionId?.(),
+					this.session.getSessionId?.() ?? undefined,
 				);
 			case "send":
 				return this.#executeSend(registry, senderId, params, signal);
