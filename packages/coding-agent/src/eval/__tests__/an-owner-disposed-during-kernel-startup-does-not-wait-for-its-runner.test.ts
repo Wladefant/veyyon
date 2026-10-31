@@ -1,7 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
+import type { Process } from "@veyyon/natives";
 import type { Subprocess } from "bun";
 import { KernelExecutionCancelledError, type KernelExecutorBaseOptions, KernelSessionPool } from "../executor-base";
-import { BaseKernel } from "../kernel-base";
+import { BaseKernel, initializeKernelSubprocess } from "../kernel-base";
 
 // WHY THIS SUITE EXISTS (issue 639: eval runners outlive their session)
 // --------------------------------------------------------------------
@@ -44,6 +45,7 @@ interface FakeRunner {
 	writes: string[];
 	/** Every signal the kernel sent to the process. */
 	signals: string[];
+	finish(code: number | null): void;
 }
 
 const BROKEN_PIPE = Object.assign(new Error("EPIPE: broken pipe, write"), { code: "EPIPE", syscall: "write" });
@@ -61,7 +63,31 @@ function pipeOutcome(outcome: PipeOutcome): Promise<void> {
 
 class TestKernel extends BaseKernel {}
 
-function createRunner(behaviour: RunnerBehaviour): FakeRunner {
+class FailedStartupKernel extends TestKernel {
+	exitConfirmed = false;
+	shutdownCalls = 0;
+
+	constructor(readonly failAt: string, readonly shutdownThrows: boolean) {
+		super("failed-startup", {
+			languageName: "Test",
+			traceIpc: false,
+			exitPayload: EXIT_PAYLOAD,
+			shutdownGraceMs: 20,
+		});
+	}
+
+	override async executeWithBudget(code: string): Promise<void> {
+		if (code === this.failAt) throw new Error("startup failed");
+	}
+
+	override async shutdown(): Promise<{ confirmed: boolean }> {
+		this.shutdownCalls += 1;
+		if (this.shutdownThrows && !this.exitConfirmed) throw new Error("shutdown failed");
+		return { confirmed: this.exitConfirmed };
+	}
+}
+
+function createRunner(behaviour: RunnerBehaviour, ownedProcess?: Process): FakeRunner {
 	const writes: string[] = [];
 	const signals: string[] = [];
 	const encoder = new TextEncoder();
@@ -113,8 +139,8 @@ function createRunner(behaviour: RunnerBehaviour): FakeRunner {
 		shutdownGraceMs: 20,
 		buildPayload: (code, msgId) => JSON.stringify({ type: "exec", id: msgId, code }),
 	});
-	kernel.setProcess(proc);
-	return { kernel, writes, signals };
+	kernel.setProcess(proc, ownedProcess);
+	return { kernel, writes, signals, finish };
 }
 
 function exitRequested(writes: readonly string[]): boolean {
@@ -141,7 +167,7 @@ describe("an owner disposed during kernel startup", () => {
 		const acquiring = acquire(pool, "lane");
 
 		await pool.disposeByOwner("lane");
-		expect(pool.startingSessions.has(KEY)).toBe(false);
+		expect(pool.startingSessions.has(KEY)).toBe(true);
 
 		ready.resolve(runner.kernel);
 		await expect(acquiring).rejects.toThrow(KernelExecutionCancelledError);
@@ -260,4 +286,215 @@ describe("an owner disposed during kernel startup", () => {
 		expect(runner.kernel.isAlive()).toBe(false);
 		expect(pool.sessions.size).toBe(0);
 	});
+
+	it("does not start another runner while an owned runner's disposal awaits exit", async () => {
+		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
+		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		let starts = 0;
+		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const original = await acquire(pool, "old-owner");
+		const disposing = pool.disposeByOwner("old-owner");
+		const acquiring = acquire(pool, "next-owner");
+		expect(starts).toBe(1);
+		expect(pool.sessions.get(KEY)).toBe(original);
+		expect([...original.ownerIds]).toEqual(["old-owner"]);
+
+		old.finish(0);
+		await disposing;
+		const replacement = await acquiring;
+		expect(starts).toBe(2);
+		expect(replacement.kernel).toBe(next.kernel);
+		expect([...replacement.ownerIds]).toEqual(["next-owner"]);
+		await pool.disposeByOwner("next-owner");
+	});
+
+	it("coalesces concurrent replacements behind the old runner's exit", async () => {
+		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
+		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		let starts = 0;
+		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const session = await acquire(pool, "lane");
+		const first = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
+		const second = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
+		expect(starts).toBe(1);
+		old.finish(0);
+		await Promise.all([first, second]);
+		expect(starts).toBe(2);
+		expect(session.kernel).toBe(next.kernel);
+		await pool.disposeByOwner("lane");
+	});
+
+	it("does not confirm a root exit until its owned descendants also exit", async () => {
+		let descendantExited = false;
+		const bounds: number[] = [];
+		const child = {
+			pid: 900002,
+			children: () => [],
+			waitForExit: async (options: { timeoutMs: number }) => {
+				bounds.push(options.timeoutMs);
+				return descendantExited;
+			},
+		};
+		const root = {
+			pid: 900001,
+			children: () => [child],
+			waitForExit: async () => true,
+		} as unknown as Process;
+		const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] }, root);
+		const first = runner.kernel.shutdown({ timeoutMs: 20 });
+		const duplicate = runner.kernel.shutdown({ timeoutMs: 20 });
+		expect(first).toBe(duplicate);
+		expect(await first).toEqual({ confirmed: false });
+		expect(bounds).toEqual([20]);
+		descendantExited = true;
+		expect(await runner.kernel.shutdown({ timeoutMs: 20 })).toEqual({ confirmed: true });
+		expect(bounds).toEqual([20, 20]);
+	});
+
+	it("keeps a shared startup usable when its first caller aborts", async () => {
+		const ready = Promise.withResolvers<BaseKernel>();
+		const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		let startupDeadline: number | undefined;
+		const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+			languageName: "Test",
+			logLabel: "shared-startup-cancellation",
+			startKernel: async (_cwd, options) => {
+				// Model the external startup's real abort-to-process-exit boundary.
+				startupDeadline = options.deadlineMs;
+				options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
+				return await ready.promise;
+			},
+		});
+		const abort = new AbortController();
+		const first = pool.acquireSession(KEY, "session", process.cwd(), {
+			kernelOwnerId: "first",
+			signal: abort.signal,
+			deadlineMs: Date.now() + 60_000,
+		});
+		const shared = acquire(pool, "shared");
+		abort.abort(new Error("first owner left"));
+		await expect(first).rejects.toThrow(KernelExecutionCancelledError);
+		ready.resolve(runner.kernel);
+		const session = await shared;
+		expect([...session.ownerIds]).toEqual(["shared"]);
+		expect(startupDeadline).toBeUndefined();
+		expect(session.kernel.isAlive()).toBe(true);
+		expect((await session.kernel.execute("1 + 1")).status).toBe("ok");
+		await pool.disposeByOwner("shared");
+	});
+	it("keeps shared startup alive when the first waiter's deadline expires", async () => {
+		vi.useFakeTimers();
+		try {
+			const ready = Promise.withResolvers<BaseKernel>();
+			const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+			const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+				languageName: "Test",
+				logLabel: "shared-startup-deadline",
+				startKernel: async (_cwd, options) => {
+					if (options.deadlineMs !== undefined) {
+						setTimeout(
+							() => runner.finish(null),
+							Math.max(0, options.deadlineMs - Date.now()),
+						);
+					}
+					options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
+					return await ready.promise;
+				},
+			});
+			const first = pool.acquireSession(KEY, "session", process.cwd(), {
+				kernelOwnerId: "first",
+				deadlineMs: Date.now() + 30,
+			});
+			const shared = acquire(pool, "shared");
+			vi.advanceTimersByTime(30);
+			await expect(first).rejects.toThrow(KernelExecutionCancelledError);
+			ready.resolve(runner.kernel);
+			const session = await shared;
+			expect([...session.ownerIds]).toEqual(["shared"]);
+			expect(session.kernel.isAlive()).toBe(true);
+			expect((await session.kernel.execute("1 + 1")).status).toBe("ok");
+			await pool.disposeByOwner("shared");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	for (const failAt of ["init", "prelude"]) {
+		for (const shutdownThrows of [false, true]) {
+			it(`fences ${failAt} failure when shutdown ${shutdownThrows ? "throws" : "is unconfirmed"}`, async () => {
+				const failed = new FailedStartupKernel(failAt, shutdownThrows);
+				const replacement = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+				let starts = 0;
+				const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+					languageName: "Test",
+					logLabel: "failed-startup-exit-fence",
+					startKernel: async () => {
+						starts += 1;
+						return starts === 1
+							? await initializeKernelSubprocess(failed, {
+									initScript: "init",
+									preludeScript: "prelude",
+									languageName: "Test",
+									releaseReason: "startup-failed",
+								})
+							: replacement.kernel;
+					},
+				});
+				await expect(acquire(pool, "owner")).rejects.toThrow("startup failed");
+				expect(failed.shutdownCalls).toBe(1);
+				await expect(acquire(pool, "owner")).rejects.toThrow(/shutdown/);
+				expect(starts).toBe(1);
+				expect(failed.shutdownCalls).toBe(2);
+				await pool.disposeByOwner("owner");
+				expect(failed.shutdownCalls).toBe(3);
+				await pool.disposeAll();
+				expect(failed.shutdownCalls).toBe(4);
+				await expect(pool.resetSession(KEY)).rejects.toThrow(/shutdown/);
+				expect(failed.shutdownCalls).toBe(5);
+				expect(starts).toBe(1);
+				failed.exitConfirmed = true;
+				const session = await acquire(pool, "owner");
+				expect(failed.shutdownCalls).toBe(6);
+				expect(starts).toBe(2);
+				expect(session.kernel).toBe(replacement.kernel);
+				await pool.disposeByOwner("owner");
+			}, 1_000);
+		}
+	}
+
+	it("fences a failed replacement before another replacement or acquisition can start", async () => {
+		const original = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		const failed = new FailedStartupKernel("prelude", false);
+		const replacement = createRunner({ exitOnPayload: true, exitOnSignals: [] });
+		let starts = 0;
+		const pool = new KernelSessionPool<KernelExecutorBaseOptions, BaseKernel>({
+			languageName: "Test",
+			logLabel: "failed-replacement-exit-fence",
+			startKernel: async () => {
+				starts += 1;
+				if (starts === 1) return original.kernel;
+				if (starts === 2) {
+					return await initializeKernelSubprocess(failed, {
+						initScript: "init",
+						preludeScript: "prelude",
+						languageName: "Test",
+						releaseReason: "replacement-failed",
+					});
+				}
+				return replacement.kernel;
+			},
+		});
+		const session = await acquire(pool, "owner");
+		await expect(pool.replaceSessionKernel(session, process.cwd(), {})).rejects.toThrow("startup failed");
+		await expect(pool.replaceSessionKernel(session, process.cwd(), {})).rejects.toThrow(/shutdown/);
+		await expect(acquire(pool, "owner")).rejects.toThrow(/shutdown/);
+		expect(starts).toBe(2);
+		failed.exitConfirmed = true;
+		await Promise.all([
+			pool.replaceSessionKernel(session, process.cwd(), {}),
+			pool.replaceSessionKernel(session, process.cwd(), {}),
+		]);
+		expect(starts).toBe(3);
+		expect(session.kernel).toBe(replacement.kernel);
+		await pool.disposeByOwner("owner");
+	}, 1_000);
 });

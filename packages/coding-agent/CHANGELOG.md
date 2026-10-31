@@ -41,6 +41,9 @@
 - Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
+- Failed kernel initialization retains runner ownership and blocks replacement until shutdown confirms exit.
+- Queued kernel replacements preserve runner ownership and honor each waiting caller's cancellation and deadline ([#751](https://github.com/Wladefant/veyyon/issues/751)).
 
 - Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 - Send Codex access programs and routing hints from search, image generation, and prewarm requests.
