@@ -165,6 +165,11 @@ export async function readRemoteText(
  } catch {
    throw new Error("Mainplane returned binary; use a binary-aware artifact tool");
  }
+ // U+0000 is valid UTF-8 but not a text file for this bounded tool.
+ // Reject the entire verified payload, including bytes past the preview slice.
+ if (value.includes("\0")) {
+   throw new Error("Mainplane returned binary; use a binary-aware artifact tool");
+ }
  return { text: value.slice(0, 50_000), bytes: bytes.byteLength,
           sha256: result.sha256, truncated: value.length > 50_000 };
 }
