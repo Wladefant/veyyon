@@ -75,19 +75,20 @@ function isFileReadError(error: unknown): boolean {
 export interface ExactHistoryRequest {
 	entryId: string;
 	leafId?: string | null;
-	revision?: string;
 	offset: number;
 	limit: number;
+	/** First-page SHA-256 identity, required for subsequent pages. */
+	revision?: string;
 }
 
 export interface ExactHistoryResult {
 	status: "ok" | "missing" | "not_on_branch" | "unavailable" | "stale";
-	revision?: string;
 	entryId: string;
 	leafId?: string;
 	sessionId?: string;
 	recordType?: string;
 	source: "stored-jsonl" | "live-session";
+	revision?: string;
 	offset?: number;
 	totalCharacters?: number;
 	fragment?: string;
@@ -246,6 +247,14 @@ export async function readStoredHistoryEntry(
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
+	// An unreadable record may be the real tip rather than the last readable sibling.
+	if (request.leafId === undefined && incomplete) {
+		return {
+			status: "unavailable", entryId: request.entryId, sessionId,
+			source: "stored-jsonl",
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch reads",
+		};
+	}
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
@@ -391,6 +400,14 @@ export async function searchStoredHistoryEntries(
 		return {
 			status: "unavailable", query: request.query, source: "stored-jsonl", matches: [],
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
+		};
+	}
+	// An unreadable record may be the real tip rather than the last readable sibling.
+	if (request.leafId === undefined && incomplete) {
+		return {
+			status: "unavailable", sessionId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch search",
 		};
 	}
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
