@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -131,6 +131,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(callbacks[0].generation).toBe(refreshed.generation);
 		expect(callbacks[0].snapshot).toEqual(refreshed);
 	});
+
 	test("does not return another credential's access or a non-redacted broker refresh", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
@@ -139,7 +140,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
 		const before = remote.snapshot.credentials.map(credential => structuredClone(credential));
-		const refresh = vi.spyOn(client, "refreshCredential");
+		const refresh = spyOn(client, "refreshCredential");
 		const wrongEntries: Array<{ label: string; entry: typeof entry }> = [
 			{ label: "different row", entry: { ...entry, id: entry.id + 100 } },
 			{ label: "different provider", entry: { ...entry, provider: "openai-codex" } },
@@ -156,7 +157,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await expect(
 				remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000)),
 			).rejects.toThrow(/broker.*(identity|redact)/i);
-			expect(remote.snapshot.credentials, mismatch.label).toEqual(before);
+			expect(remote.snapshot.credentials).toEqual(before);
 		}
 		expect(refresh).toHaveBeenCalledTimes(wrongEntries.length);
 	});
@@ -169,7 +170,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
 		const before = remote.snapshot.credentials.map(credential => structuredClone(credential));
-		const refresh = vi.spyOn(client, "refreshCredential");
+		const refresh = spyOn(client, "refreshCredential");
 		for (const other of [
 			{ ...entry, id: entry.id + 100 },
 			{ ...entry, provider: "openai-codex" },
@@ -189,7 +190,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected broker snapshot");
 		const entry = initial.snapshot.credentials[0]!;
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
-		const refresh = vi.spyOn(client, "refreshCredential").mockResolvedValue({ entry });
+		const refresh = spyOn(client, "refreshCredential").mockResolvedValue({ entry });
 		const credential = await remote.refreshOAuthCredential(
 			"anthropic",
 			entry.id,
@@ -201,5 +202,4 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.credentials[0]?.credential).toEqual(entry.credential);
 		expect(refresh).toHaveBeenCalledTimes(2);
 	});
-
 });
