@@ -420,12 +420,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async #consumeSnapshotStream(): Promise<void> {
+		const revisionAtConnect = this.#appliedSnapshotRevision;
+		let firstFrame = true;
 		const iterator = this.#client.openSnapshotStream({ signal: this.#backgroundAbort.signal });
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+				if (firstFrame && event.kind === "snapshot") {
+					// A reconnect starts with an authoritative full snapshot, even after
+					// the broker resets its generation. A newer local GET during connect
+					// instead supersedes that frame; reconnect rather than revert it.
+					if (revisionAtConnect !== this.#appliedSnapshotRevision) {
+						throw new AIError.AuthBrokerError("Auth broker stream initial snapshot superseded during connection");
+					}
+					const { kind: _kind, ...snapshot } = event;
+					this.#applySnapshot(snapshot, snapshot.generation);
+				} else {
+					this.#applyStreamEvent(event);
+				}
+				firstFrame = false;
 				this.#streamingActive = true;
-				this.#applyStreamEvent(event);
 			}
 		} finally {
 			this.#streamingActive = false;
