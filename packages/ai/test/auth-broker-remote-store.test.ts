@@ -131,4 +131,75 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(callbacks[0].generation).toBe(refreshed.generation);
 		expect(callbacks[0].snapshot).toEqual(refreshed);
 	});
+	test("does not return another credential's access or a non-redacted broker refresh", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const before = remote.snapshot.credentials.map(credential => structuredClone(credential));
+		const refresh = vi.spyOn(client, "refreshCredential");
+		const wrongEntries: Array<{ label: string; entry: typeof entry }> = [
+			{ label: "different row", entry: { ...entry, id: entry.id + 100 } },
+			{ label: "different provider", entry: { ...entry, provider: "openai-codex" } },
+			{
+				label: "unredacted refresh secret",
+				entry: {
+					...entry,
+					credential: { ...entry.credential, refresh: "synthetic-refresh-not-for-workers" },
+				},
+			},
+		];
+		for (const mismatch of wrongEntries) {
+			refresh.mockResolvedValue({ entry: mismatch.entry });
+			await expect(
+				remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000)),
+			).rejects.toThrow(/broker.*(identity|redact)/i);
+			expect(remote.snapshot.credentials, mismatch.label).toEqual(before);
+		}
+		expect(refresh).toHaveBeenCalledTimes(wrongEntries.length);
+	});
+
+	test("does not apply an unrelated or unredacted suspect-refresh response", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const before = remote.snapshot.credentials.map(credential => structuredClone(credential));
+		const refresh = vi.spyOn(client, "refreshCredential");
+		for (const other of [
+			{ ...entry, id: entry.id + 100 },
+			{ ...entry, provider: "openai-codex" },
+			{ ...entry, credential: { ...entry.credential, refresh: "synthetic-refresh-not-for-workers" } },
+		]) {
+			refresh.mockResolvedValue({ entry: other });
+			await expect(remote.markCredentialSuspect(entry.id)).rejects.toThrow(/broker.*(identity|redact)/i);
+			expect(remote.snapshot.credentials).toEqual(before);
+		}
+		await expect(remote.markCredentialSuspect(entry.id + 500)).rejects.toThrow(/unknown.*credential/i);
+		expect(refresh).toHaveBeenCalledTimes(3);
+	});
+
+	test("accepts a matching broker-redacted refresh without taking over refresh ownership", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const refresh = vi.spyOn(client, "refreshCredential").mockResolvedValue({ entry });
+		const credential = await remote.refreshOAuthCredential(
+			"anthropic",
+			entry.id,
+			mintOAuthCredential("a", Date.now() + 60_000),
+		);
+		expect(credential.access).toBe("access-a");
+		expect(credential.refresh).toBe(REMOTE_REFRESH_SENTINEL);
+		await remote.markCredentialSuspect(entry.id);
+		expect(remote.snapshot.credentials[0]?.credential).toEqual(entry.credential);
+		expect(refresh).toHaveBeenCalledTimes(2);
+	});
+
 });
