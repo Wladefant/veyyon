@@ -167,6 +167,37 @@ describe("read tool artifact view selection", () => {
 		expect(explicitText).toContain("payload from other B");
 		expect(explicitText).not.toContain("payload from caller A");
 	});
+	it("keeps owner selection when following oversized artifact remedies", async () => {
+		expect(await caller.saveArtifact("caller filler", "fixture")).toBe(otherOnlyId);
+		const callerMatchId = await caller.saveArtifact("payload owned only by caller A", "fixture");
+		const oversizedContent = `${"B marker line\n".repeat(3000)}${"x".repeat(8 * 1024 * 1024 + 1)}`;
+		const oversizedId = await other.saveArtifact(oversizedContent, "oversized");
+		expect(callerMatchId).toBe(oversizedId);
+
+		const blocked = await tool.execute("oversized", {
+			path: `artifact://${oversizedId}?session=${other.getSessionId()}:raw`,
+		});
+		const remedy = textOutput(blocked).match(/Use (artifact:\/\/\S+:raw:1-3000)/);
+		expect(remedy?.[1]).toBeDefined();
+		if (!remedy?.[1]) throw new Error("Expected a bounded raw artifact remedy URL");
+		const followed = await tool.execute("follow-remedy", { path: remedy[1] });
+		expect(textOutput(followed)).toContain("B marker line");
+		expect(textOutput(followed)).not.toContain("payload owned only by caller A");
+
+		const handlerError = await InternalUrlRouter.instance()
+			.resolve(`artifact://${oversizedId}?session=${other.getSessionId()}`)
+			.then(() => undefined)
+			.catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+		if (!handlerError) throw new Error("Expected artifact protocol oversized-resolution error");
+		const handlerRemedy = handlerError.match(/Use read selectors such as (artifact:\/\/\S+:1-3000)/);
+		expect(handlerRemedy?.[1]).toBeDefined();
+		if (!handlerRemedy?.[1]) throw new Error("Expected a bounded artifact handler remedy URL");
+		const handlerFollowed = await tool.execute("follow-handler-remedy", {
+			path: handlerRemedy[1],
+		});
+		expect(textOutput(handlerFollowed)).toContain("B marker line");
+		expect(textOutput(handlerFollowed)).not.toContain("payload owned only by caller A");
+	});
 
 	it("keeps path-only reads scoped to the explicitly selected source", async () => {
 		const resource = await InternalUrlRouter.instance().resolve(

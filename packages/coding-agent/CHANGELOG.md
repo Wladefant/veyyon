@@ -27,6 +27,7 @@
 - Artifact reads stay within their selected execution session, support explicit owner selectors and bounded availability metadata, and refuse duplicate numeric-ID matches ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - `read` honors `artifact://<id>?view=metadata` and rejects unknown or duplicate views instead of returning artifact bytes ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Ambiguous artifact errors no longer expose paths from other sessions ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
+- Oversized artifact remedies preserve an explicitly selected execution session when paged through `read` ([Refs #785](https://github.com/Wladefant/veyyon/issues/785)).
 
 - Exact history pages require a matching branch and record revision across continuations, honor the active branch, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).

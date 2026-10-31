@@ -52,7 +52,7 @@ export async function readArtifactFile(
 		localProtocolOptions: ctx.session.localProtocolOptions,
 		skills: ctx.session.skills,
 	});
-	const artifactUrl = `artifact://${artifact.id}`;
+	const artifactUrl = url.href;
 	const details: ReadToolDetails = {
 		resolvedPath: artifact.path,
 		contentType: "text/plain",

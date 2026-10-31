@@ -118,10 +118,12 @@ describe("cross-conversation id ambiguity", () => {
 
 			expect(error).toContain("ambiguous");
 			expect(error).not.toContain("not found");
-			// The remedy, and both candidate paths, so the operator can pick.
+			// The ambiguity count and owner-qualified remedy identify the issue without
+			// disclosing either candidate's filesystem path.
+			expect(error).toContain("2 files match");
 			expect(error).toContain("artifact://3?session=");
-			expect(error).toContain(path.join(dirA, "3.out.md"));
-			expect(error).toContain(path.join(dirB, "3.out.md"));
+			expect(error).not.toContain(path.join(dirA, "3.out.md"));
+			expect(error).not.toContain(path.join(dirB, "3.out.md"));
 		});
 
 		/**

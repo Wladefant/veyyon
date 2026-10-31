@@ -279,9 +279,8 @@ describe("AgentSession per-turn prune", () => {
 		expect(stale.nextOffset).toBeUndefined();
 
 		sessionManager.resetLeaf();
-		expect((await read(`entry=${activeId}`)).status).toBe("missing");
-		expect((await read("q=historical-branch-marker")).status).toBe("missing_branch");
-		expect((await read("q=historical-branch-marker")).matches).toEqual([]);
+		await expect(read(`entry=${activeId}`)).rejects.toThrow("history:// active session has no branch leaf");
+		await expect(read("q=historical-branch-marker")).rejects.toThrow("history:// active session has no branch leaf");
 	});
 
 	it("honors explicit historical leaves in a real in-memory session", async () => {

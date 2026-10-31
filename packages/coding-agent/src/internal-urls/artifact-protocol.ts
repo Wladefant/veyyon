@@ -192,7 +192,7 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 		if (artifact.size > MAX_INLINE_ARTIFACT_BYTES) {
 			throw new Error(
-				`Artifact ${artifact.id} is ${artifact.size} bytes; full internal resolution is blocked. Use read selectors such as artifact://${artifact.id}:1-3000 or artifact://${artifact.id}:raw:1-3000, and use the artifact file path for search/copy workflows: ${artifact.path}`,
+				`Artifact ${artifact.id} is ${artifact.size} bytes; full internal resolution is blocked. Use read selectors such as ${url.href}:1-3000 or ${url.href}:raw:1-3000, and use the artifact file path for search/copy workflows: ${artifact.path}`,
 			);
 		}
 
