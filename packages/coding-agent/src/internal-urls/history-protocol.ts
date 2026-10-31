@@ -128,7 +128,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				if (searchRequest && searchRequest.leafId === undefined) searchRequest.leafId = selectedLeaf;
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
-			if (!sessionFile) {
+			if (!sessionFile && !ref?.session) {
 				const disk = await sessionFilesFromDisk();
 				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];

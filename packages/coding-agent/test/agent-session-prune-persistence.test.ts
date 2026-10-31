@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
@@ -11,6 +12,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import { HistoryProtocolHandler } from "../src/internal-urls/history-protocol";
+import { registerArtifactsDir } from "../src/internal-urls/registry-helpers";
 
 /**
  * The per-turn stale-result pass (`#pruneStaleToolResults`) and the
@@ -313,7 +315,114 @@ describe("AgentSession per-turn prune", () => {
 		expect((await read(`entry=${activeId}`)).status).toBe("missing");
 		expect((await read("q=historical-memory-marker")).status).toBe("missing_branch");
 	});
+	/**
+	 * WHY: an old artifacts transcript can contain an ID also present in a live
+	 * in-memory manager. This real handler path checks live exact and search reads,
+	 * default and explicit leaves, and absent old IDs. It does not test ambiguous
+	 * artifact IDs.
+	 */
+	it("keeps a live non-persistent transcript ahead of stale artifact history", async () => {
+		await sessionManager.close();
+		const manager = SessionManager.inMemory(tempDir.path());
+		const rootId = manager.appendMessage({ role: "user", content: "live root", timestamp: Date.now() });
+		const activeId = manager.appendMessage({
+			role: "user", content: "live-active-marker", timestamp: Date.now(),
+		});
+		manager.branch(rootId);
+		const explicitId = manager.appendMessage({
+			role: "user", content: "explicit-live-marker", timestamp: Date.now(),
+		});
+		manager.branch(activeId);
+		await startSession({}, manager);
 
+		const artifactsDir = path.join(tempDir.path(), "artifacts");
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await fs.writeFile(path.join(artifactsDir, "Scout.jsonl"), [
+			JSON.stringify({ type: "session", id: "stale-session" }),
+			JSON.stringify({
+				type: "message", id: activeId, parentId: null,
+				message: { role: "user", content: "stale-copy-marker" },
+			}),
+			JSON.stringify({
+				type: "message", id: "archive-only-entry", parentId: activeId,
+				message: { role: "user", content: "archive-only-marker" },
+			}),
+		].join("\n") + "\n");
+		const unregisterArtifactsDir = registerArtifactsDir(artifactsDir);
+		try {
+			const scope = "history-live-stale-artifact-test";
+			AgentRegistry.global().register({
+				id: "Main", displayName: "main", kind: "main", session, scope,
+			});
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "Main", session, status: "running",
+			});
+			const handler = new HistoryProtocolHandler();
+			type HistoryPayload = {
+				status: string; source?: string; leafId?: string; fragment?: string;
+				matches?: Array<{ entryId: string }>;
+			};
+			const read = async (query: string): Promise<HistoryPayload> => JSON.parse((await handler.resolve(
+				new URL(`history://Scout?${query}`) as never,
+			)).content) as HistoryPayload;
+
+			const sameId = await read(`entry=${activeId}`);
+			expect(sameId.status).toBe("ok");
+			expect(sameId.source).toBe("live-session");
+			expect(sameId.leafId).toBe(activeId);
+			expect(sameId.fragment).toContain("live-active-marker");
+			expect(sameId.fragment).not.toContain("stale-copy-marker");
+
+			expect((await read(`entry=${explicitId}`)).status).toBe("missing");
+			const explicitLeaf = await read(`entry=${explicitId}&leaf=${explicitId}`);
+			expect(explicitLeaf.status).toBe("ok");
+			expect(explicitLeaf.source).toBe("live-session");
+			expect(explicitLeaf.leafId).toBe(explicitId);
+			expect(explicitLeaf.fragment).toContain("explicit-live-marker");
+
+			const missingOldEntry = await read("entry=archive-only-entry");
+			expect(missingOldEntry.status).toBe("missing");
+			expect(missingOldEntry.source).toBe("live-session");
+			expect(missingOldEntry.fragment).toBeUndefined();
+
+			const liveSearch = await read("q=live-active-marker");
+			expect(liveSearch.source).toBe("live-session");
+			expect(liveSearch.matches?.map(match => match.entryId)).toEqual([activeId]);
+			const staleSearch = await read("q=stale-copy-marker");
+			expect(staleSearch.source).toBe("live-session");
+			expect(staleSearch.matches).toEqual([]);
+		} finally {
+			unregisterArtifactsDir();
+		}
+	});
+
+
+	it("finds registered artifact history for a parked ref without a session file", async () => {
+		const artifactsDir = path.join(tempDir.path(), "parked-artifacts");
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await fs.writeFile(path.join(artifactsDir, "Scout.jsonl"), [
+			JSON.stringify({ type: "session", id: "parked-session" }),
+			JSON.stringify({
+				type: "message", id: "stored-only-entry", parentId: null,
+				message: { role: "user", content: "stored-only-marker" },
+			}),
+		].join("\n") + "\n");
+		const unregisterArtifactsDir = registerArtifactsDir(artifactsDir);
+		try {
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "Main",
+				session: null, status: "parked",
+			});
+			const payload = JSON.parse((await new HistoryProtocolHandler().resolve(
+				new URL("history://Scout?entry=stored-only-entry") as never,
+			)).content) as { status: string; source?: string; fragment?: string };
+			expect(payload.status).toBe("ok");
+			expect(payload.source).toBe("stored-jsonl");
+			expect(payload.fragment).toContain("stored-only-marker");
+		} finally {
+			unregisterArtifactsDir();
+		}
+	});
 	it("persists the pruned rewrite so a from-disk rebuild matches the live context", async () => {
 		seedUselessResult(Date.now());
 		await startSession({});
