@@ -26,6 +26,7 @@ import {
 	NOTICE_TTL_MS,
 	noticeState,
 	registerSessionNoticeQueue,
+	SESSION_NOTICE_VERSION,
 	type SessionNotice,
 	sendSessionNotice,
 } from "../src/launch/session-notices";
@@ -216,12 +217,44 @@ describe("the notice queue", () => {
 		expect(fs.existsSync(path.join(root, "run", "escape"))).toBe(false);
 	});
 
+	it("rejects stale version-one queued copies while delivering a current-version sibling", () => {
+		registerSessionNoticeQueue("target", root);
+		const [old] = sendSessionNotice({ from: "sender", to: "target", body: "stale copy", root });
+		const oldFile = path.join(queueDirectory("target"), `${old!.id}.json`);
+		const obsolete = JSON.parse(fs.readFileSync(oldFile, "utf8")) as Record<string, unknown>;
+		expect(obsolete.version).toBe(SESSION_NOTICE_VERSION);
+		obsolete.version = 1;
+		fs.writeFileSync(oldFile, JSON.stringify(obsolete));
+		const [fresh] = sendSessionNotice({ from: "sender", to: "target", body: "current copy", root });
+		const claimed = claimSessionNotices("target", root);
+		expect(claimed.map(notice => [notice.id, notice.body, notice.version])).toEqual([
+			[fresh!.id, "current copy", SESSION_NOTICE_VERSION],
+		]);
+		expect(fs.existsSync(oldFile)).toBe(false);
+		expect(noticeState("target", old!.id, root)).toBe("unknown");
+		ackSessionNotices("target", [fresh!.id], root);
+	});
+
+	it("rejects a stale version-one claimed copy on crash recovery", () => {
+		registerSessionNoticeQueue("target", root);
+		const [receipt] = sendSessionNotice({ from: "sender", to: "target", body: "unacknowledged", root });
+		expect(claimSessionNotices("target", root)).toHaveLength(1);
+		const claimedFile = path.join(queueDirectory("target"), "claimed", `${receipt!.id}.json`);
+		const obsolete = JSON.parse(fs.readFileSync(claimedFile, "utf8")) as Record<string, unknown>;
+		obsolete.version = 1;
+		fs.writeFileSync(claimedFile, JSON.stringify(obsolete));
+		const aged = new Date(Date.now() - CLAIM_STALE_MS - 1000);
+		fs.utimesSync(claimedFile, aged, aged);
+		expect(claimSessionNotices("target", root)).toEqual([]);
+		expect(fs.existsSync(claimedFile)).toBe(false);
+	});
+
 	it("does not read a notice that names another session", () => {
 		const directory = queueDirectory("target");
 		fs.mkdirSync(directory, { recursive: true });
 		fs.writeFileSync(
 			path.join(directory, "x.json"),
-			JSON.stringify({ version: 1, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
+			JSON.stringify({ version: SESSION_NOTICE_VERSION, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
 		);
 		expect(claimSessionNotices("target", root)).toEqual([]);
 	});

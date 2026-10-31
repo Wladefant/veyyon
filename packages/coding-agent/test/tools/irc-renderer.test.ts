@@ -189,6 +189,57 @@ describe("the irc card for an inbox", () => {
 });
 
 describe("the irc card for a peer list", () => {
+	it("shows live session destinations and capability in the terminal even without local peers", async () => {
+		const rendered = await card(
+			{
+				content: [{ type: "text", text: "Other live sessions" }],
+				details: {
+					op: "list",
+					from: "Main",
+					peers: [],
+					sessionPeers: [
+						{ sessionId: "poly-main", cwd: "/workspace/PolySimulator", project: "PolySimulator", capabilities: ["session-notices"] },
+						{ sessionId: "older", cwd: "/workspace/legacy", project: "legacy", capabilities: ["deliver-ack"] },
+						{ sessionId: "unverified", cwd: "/workspace/unknown", project: "unknown" },
+					],
+				} satisfies IrcDetails,
+			},
+			{ op: "list" },
+			true,
+		);
+		expect(rendered[0]).toContain("3 live sessions");
+		expect(rendered.some(line => line.includes("session:poly-main") && line.includes("project PolySimulator")
+			&& line.includes("cwd /workspace/PolySimulator") && line.includes("notices supported"))).toBe(true);
+		expect(rendered.some(line => line.includes("session:older") && line.includes("notices unsupported"))).toBe(true);
+		expect(rendered.some(line => line.includes("session:unverified") && line.includes("notices unverified"))).toBe(true);
+		expect(rendered.some(line => line.includes("no other agents"))).toBe(false);
+	});
+
+	it("keeps local peers and caps visible live-session rows until expanded", async () => {
+		const result: IrcViewResult = {
+			content: [{ type: "text", text: "" }],
+			details: {
+				op: "list",
+				from: "Main",
+				peers: [{
+					id: "AuthLoader", displayName: "task", kind: "sub", status: "running",
+					parentId: "Main", unread: 0, lastActivity: Date.now() - 1000,
+				}],
+				sessionPeers: Array.from({ length: 12 }, (_, i) => ({
+					sessionId: `session-${i + 1}`, project: `project-${i + 1}`,
+					cwd: `/workspace/project-${i + 1}`, capabilities: ["session-notices"],
+				})),
+			} satisfies IrcDetails,
+		};
+		const collapsed = await card(result, { op: "list" });
+		expect(collapsed.some(line => line.includes("AuthLoader"))).toBe(true);
+		expect(collapsed.some(line => line.includes("more sessions"))).toBe(true);
+		expect(collapsed.some(line => line.includes("session:session-12"))).toBe(false);
+		const expanded = await card(result, { op: "list" }, true);
+		expect(expanded.some(line => line.includes("session:session-12"))).toBe(true);
+		expect(expanded.some(line => line.includes("more sessions"))).toBe(false);
+	});
+
 	it("summarizes status counts and flags unread peers", async () => {
 		const rendered = await card(
 			{

@@ -21,8 +21,11 @@ import type { TerminalOwner } from "./terminal-control";
  * {@link CLAIM_STALE_MS}; the recipient drops a repeat by id.
  */
 
+/** On-disk notice envelope version. Additive fields also require a new version and stale-copy rejection. */
+export const SESSION_NOTICE_VERSION = 2 as const;
+
 export interface SessionNotice {
-	version: 1;
+	version: typeof SESSION_NOTICE_VERSION;
 	id: string;
 	/** Session id of the sender, or a free label when the sender has no session. */
 	from: string;
@@ -296,7 +299,7 @@ function writeNotice(
 	},
 ): string {
 	const id = `${fields.ts.toString().padStart(TIMESTAMP_DIGITS, "0")}-${(noticeSequence++).toString().padStart(6, "0")}-${crypto.randomUUID()}`;
-	const notice: SessionNotice = { version: 1, id, ...fields };
+	const notice: SessionNotice = { version: SESSION_NOTICE_VERSION, id, ...fields };
 	if (notice.ttlMs === undefined) delete notice.ttlMs;
 	if (notice.kind === undefined) delete notice.kind;
 	atomicWriteFileSync(path.join(directory, `${id}.json`), JSON.stringify(notice), { mode: 0o600 });
@@ -363,7 +366,7 @@ export function claimSessionNotices(sessionId: string, root = getConfigRootDir()
 		try {
 			const notice = JSON.parse(fs.readFileSync(file, "utf8")) as SessionNotice;
 			const valid =
-				notice.version === 1 &&
+				notice.version === SESSION_NOTICE_VERSION &&
 				typeof notice.id === "string" &&
 				typeof notice.from === "string" &&
 				typeof notice.body === "string" &&
