@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -167,6 +169,25 @@ describe("read tool artifact view selection", () => {
 		expect(explicitText).toContain("payload from other B");
 		expect(explicitText).not.toContain("payload from caller A");
 	});
+	it("rejects a missing bare caller artifact instead of reading another session's collision", async () => {
+		const callerPath = await caller.getArtifactPath(sharedId);
+		const callerArtifactsDir = caller.getArtifactsDir();
+		if (!callerPath || !callerArtifactsDir) throw new Error("Expected caller artifact path and directory");
+		if (path.dirname(path.resolve(callerPath)) !== path.resolve(callerArtifactsDir)) {
+			throw new Error("Refusing to unlink outside the caller artifacts directory");
+		}
+		await fs.unlink(callerPath);
+
+		await expect(tool.execute("missing-caller", { path: `artifact://${sharedId}:raw:1-1` })).rejects.toThrow(/not found/i);
+
+		const explicit = await tool.execute("explicit-other-after-caller-delete", {
+			path: `artifact://${sharedId}?session=${other.getSessionId()}:raw:1-1`,
+		});
+		const explicitText = textOutput(explicit);
+		expect(explicitText).toContain("payload from other B");
+		expect(explicitText).not.toContain("payload from caller A");
+	});
+
 	it("keeps owner selection when following oversized artifact remedies", async () => {
 		expect(await caller.saveArtifact("caller filler", "fixture")).toBe(otherOnlyId);
 		const callerMatchId = await caller.saveArtifact("payload owned only by caller A", "fixture");
