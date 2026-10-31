@@ -4,7 +4,13 @@ The gates themselves are listed in [`AGENTS.md`](../../AGENTS.md). This page rec
 and the measurements behind it, so a change to a workflow starts from the numbers rather than from
 taste.
 
-## The two public workflows
+## Current focused OVH path
+
+The current draft/ready behavior, resource-admission hold, exact source/base selection, and focused
+verification recipe are documented in [OVH CI](ovh-ci.md). The historical hosted-workflow layout
+below describes their source configuration; it does not mean those legacy workflows are enabled.
+
+## Historical hosted workflow layout
 
 `checks.yml` is the fast gate on every push to `main` and every PR. It runs on GitHub-hosted runners
 and covers workspace type checking and linting, Rust formatting and clippy, secret scanning of the
@@ -78,3 +84,4 @@ HTML. The `Site` workflow builds the handbook before deploying to Cloudflare Pag
 The mdbook version is pinned to v0.5.2. A different version renders content-hashed filenames
 differently, so CI and local builds use the same pinned version.
 *Verified against `9c904aa2db` on 2026-09-05.*
+

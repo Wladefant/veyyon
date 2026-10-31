@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
 ### Fixed
@@ -35,6 +36,7 @@
 
 - Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
+- Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

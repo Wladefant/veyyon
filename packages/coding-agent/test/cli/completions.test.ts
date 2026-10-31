@@ -276,6 +276,31 @@ describe("buildSpec", () => {
 });
 
 describe("veyyon completions (integration / drift)", () => {
+	it("shows retained source CLI commands without the removed browser extension command", async () => {
+		const { env, cleanup } = hermeticSpawnEnv({ VEYYON_NO_TITLE: "1" });
+		let stdout: string;
+		let stderr: string;
+		let exitCode: number;
+		try {
+			const proc = Bun.spawn([process.execPath, cliEntry, "--help"], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env,
+			});
+			[stdout, stderr, exitCode] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+		} finally {
+			cleanup();
+		}
+		expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+		expect(stdout).toContain("completions");
+		expect(stdout).not.toContain("browser-extension");
+	}, 30000);
+
 	it("emits a zsh script reflecting the live command + flag surface", async () => {
 		const { env, cleanup } = hermeticSpawnEnv({ VEYYON_NO_TITLE: "1" });
 		let stdout: string;
