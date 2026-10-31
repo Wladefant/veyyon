@@ -5,10 +5,11 @@
  * a replacement. A missing, stale or unarchivable record cancels this attempted compaction.
  */
 import { createHash } from "node:crypto";
-import { resolveServerCompactionTransport } from "@veyyon/agent-core/compaction";
+import { KEEP_NOTHING_ENTRY_ID, resolveServerCompactionTransport } from "@veyyon/agent-core/compaction";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { ReadonlySessionManager } from "@veyyon/kernel/session/session-manager";
 import { z } from "zod";
+import { mapJsonStrings } from "../../json-transform";
 import type { SessionBeforeCompactEvent, SessionBeforeCompactResult } from "../shared-events";
 import type { BuiltinExtensionAPI, ExtensionContext } from "./types";
 
@@ -157,7 +158,9 @@ export async function prepareTaskRecordCompaction(
 	if (entry.parentId !== state.coveredThroughEntryId || !entries.some(item => item.id === state.coveredThroughEntryId)) {
 		throw new Error("The task record does not cover this branch.");
 	}
-	const cut = entries.findIndex(item => item.id === event.preparation.firstKeptEntryId);
+	const cut = event.preparation.firstKeptEntryId === KEEP_NOTHING_ENTRY_ID
+		? entries.length
+		: entries.findIndex(item => item.id === event.preparation.firstKeptEntryId);
 	if (cut < 0 || cut > recordIndex + 1) {
 		throw new Error("Newly discarded work requires an updated task record.");
 	}
@@ -177,10 +180,10 @@ export async function prepareTaskRecordCompaction(
 	const recovery = { sessionId, branchLeafId: leaf, artifact: `artifact://${artifactId}`, sha256: digest };
 	return {
 		compaction: {
-			summary: transform(JSON.stringify({
+			summary: JSON.stringify(mapJsonStrings({
 				version: 1, policy: "task-record-retrieval", task: state.record,
 				taskRecordEntryId: entry.id, recovery,
-			})),
+			}, transform)),
 			firstKeptEntryId: event.preparation.firstKeptEntryId,
 			tokensBefore: event.preparation.tokensBefore,
 			details: { version: 1, contextPolicy: "task-record-retrieval", recovery, archiveBytes: Buffer.byteLength(archive, "utf8") },

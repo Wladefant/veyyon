@@ -219,7 +219,7 @@ describe("the opt-in task record policy preserves execution and evidence", () =>
 			if (change === "branch") manager.branch(resultId);
 			else {
 				const tail = manager.getEntry(tailId);
-				if (tail?.type !== "message") throw new Error("Expected tail entry");
+				if (tail?.type !== "message" || tail.message.role !== "assistant") throw new Error("Expected assistant tail entry");
 				tail.message.content = [{ type: "text", text: "changed during archive" }];
 			}
 			pending.resolve("fixture-archive");
@@ -260,7 +260,7 @@ describe("the opt-in task record policy preserves execution and evidence", () =>
 		expect(() => captureContinuityTaskRecord(manager, JSON.stringify(wrongOwner))).toThrow("owner");
 		expect(() => parseContinuityTaskRecord("x".repeat(12 * 1024 + 1))).toThrow("12 KiB");
 		const result = manager.getEntry(resultId);
-		if (result?.type !== "message") throw new Error("Expected result");
+		if (result?.type !== "message" || result.message.role !== "toolResult") throw new Error("Expected tool result");
 		result.message.content = [{ type: "text", text: "x".repeat(MAX_TASK_ARCHIVE_BYTES + 1) }];
 		await expect(prepareTaskRecordCompaction(event(), manager)).rejects.toThrow("8 MiB");
 	});
@@ -276,5 +276,39 @@ describe("the opt-in task record policy preserves execution and evidence", () =>
 		await expect(work).rejects.toThrow("cancelled");
 		saving.resolve("late-artifact");
 		expect(manager.getLeafId()).toBe(tailId);
+	});
+
+	for (const secret of ['fixture"quote', "fixture\\slash", "fixture\nnewline"]) {
+		it(`redacts escaped task strings without rewriting archived evidence: ${JSON.stringify(secret)}`, async () => {
+			const input = JSON.stringify({ ...JSON.parse(recordText), facts: [secret] });
+			const id = manager.appendCustomEntry(TASK_RECORD_TYPE, captureContinuityTaskRecord(manager, input));
+			const prepared = event();
+			prepared.preparation.firstKeptEntryId = id;
+			const result = (await prepareTaskRecordCompaction(prepared, manager, text => text.replaceAll(secret, "#REDACTED#")))
+				.compaction!;
+			const summary = JSON.parse(result.summary);
+			expect(summary.task.facts).toEqual(["#REDACTED#"]);
+			expect(summary.task.pending).toEqual(JSON.parse(recordText).pending);
+			expect(result.firstKeptEntryId).toBe(id);
+			expect(result.tokensBefore).toBe(prepared.preparation.tokensBefore);
+			const path = await manager.getArtifactPath(summary.recovery.artifact.slice(11));
+			if (!path) throw new Error("Expected exact recovery archive");
+			expect(await fs.readFile(path, "utf8")).toContain(JSON.stringify(secret));
+		});
+	}
+
+	it("accepts a fully covered keep-nothing boundary but rejects newly discarded work", async () => {
+		manager.branch(recordId);
+		const prepared = event();
+		prepared.preparation.firstKeptEntryId = "compaction:keep-nothing";
+		const before = JSON.stringify(manager.getBranch());
+		const result = (await prepareTaskRecordCompaction(prepared, manager)).compaction!;
+		expect(result.firstKeptEntryId).toBe(prepared.preparation.firstKeptEntryId);
+		expect(result.tokensBefore).toBe(prepared.preparation.tokensBefore);
+		expect(JSON.stringify(manager.getBranch())).toBe(before);
+		assistant("New work not covered by the record.");
+		const stale = event();
+		stale.preparation.firstKeptEntryId = "compaction:keep-nothing";
+		await expect(prepareTaskRecordCompaction(stale, manager)).rejects.toThrow("Newly discarded work");
 	});
 });

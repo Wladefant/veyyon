@@ -33,8 +33,8 @@ by the operator or harness. No automatic task-state extraction is claimed.
 Then use the ordinary `/compact` action or wait for the ordinary compaction trigger. A
 successful pass gives the model structured JSON containing the task record, the task-record
 entry ID, and a recovery object identifying the execution session, branch leaf, archive URL,
-and SHA-256. The model-visible JSON uses the existing provider text redaction transform. The
-local recovery artifact retains the unmodified evidence, including multimodal result data.
+and SHA-256. The model-visible JSON applies the existing provider redaction transform to
+strings before JSON escaping. The local archive keeps unmodified evidence, including media.
 
 Use `/context-record off` to disable the policy for this execution session for the rest of
 the current process. Capturing another record re-enables an explicitly flagged invocation.
@@ -49,6 +49,7 @@ The flag's default is unchanged by a saved record or session resume.
   immediately preceding entry, and the latest user message. A sibling's state is not selected.
 - A newer user message requires a refreshed record. Any newly discarded work after the record
   also requires a refresh; newer work that stays in the retained tail is preserved normally.
+  A keep-nothing boundary is valid only when the record covers the entire discarded branch.
 - The policy archives the exact branch entries before returning a replacement. Results already
   elided by preparation are reconstructed from their original messages in the preparation.
   The archive uses the recovery envelope `{version, operation, sessionId, branchLeafId, entries}`.
@@ -93,9 +94,9 @@ exact result recovery after reload, owner and freshness checks, unknown fields a
 limits, multimodal tail recovery, concurrent history changes, cancellation, and storage
 failures. The only injected failures are at the artifact storage boundary.
 
-Remote execution of these tests and a live end-to-end demo remain required. The current
-environment cannot dispatch Veyyon's manually triggered OVH workflow; no local tests are
-run under the shared remote-only policy. Keep this PR draft and the feature off by default.
+Run the focused regression target through the repository's required kernel sandbox and
+execution policy. These tests do not replace a live end-to-end demo. Keep the feature off
+by default until exact-head checks and live qualification are complete.
 The #774 A/B/C comparison must hold frozen task/trace/tools/provider inputs constant, test
 running jobs and delayed results across the transition, and measure correctness, transition
 time, first useful action, total task time, retrieval, cache state, CPU and memory. Superboard

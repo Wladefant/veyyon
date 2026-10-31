@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence before replacing a local summary, rejects stale records, and keeps the execution session and pending work ownership intact ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence, redacts task strings before JSON escaping, accepts fully covered keep-nothing boundaries, and preserves execution and pending-work ownership ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.6.8] - 2026-10-30
 
