@@ -57,4 +57,31 @@ const receipt = () => ({ schema_version: 2, operation: "run", worker: args.worke
 		await expect(runRemote("https://fleet.example/", "fixture-key", args, abort.signal, transport)).rejects.toThrow("transport failed");
 		expect(called).toBe(false);
 	});
+	test("accepts a valid native receipt whose escaped Go JSON envelope exceeds the reply cap", async () => {
+		const body = "\0".repeat(100 * 1024);
+		let calls = 0;
+		const response = { ...receipt(), body, output_sha256: digest(body) };
+		const envelope = JSON.stringify(response);
+		expect(envelope.length).toBeGreaterThan(600 * 1024);
+		const transport = (async () => { calls++; return new Response(envelope); }) as typeof fetch;
+		const result = await runRemote("https://fleet.example/", "fixture-key", args, undefined, transport);
+		expect(result.result.body).toBe(body);
+		expect(calls).toBe(1);
+		const oversizedBody = "\0".repeat(180 * 1024);
+		const oversizedEnvelope = JSON.stringify({ ...receipt(), body: oversizedBody, output_sha256: digest(oversizedBody) });
+		expect(Buffer.byteLength(oversizedEnvelope)).toBeGreaterThan(1024 * 1024);
+		let oversizedCalls = 0;
+		let cancelled = false;
+		const oversizedTransport = (async () => {
+			oversizedCalls++;
+			return new Response(new ReadableStream<Uint8Array>({
+				start(controller) { controller.enqueue(new TextEncoder().encode(oversizedEnvelope)); },
+				cancel() { cancelled = true; },
+			}));
+		}) as typeof fetch;
+		await expect(runRemote("https://fleet.example/", "fixture-key", args, undefined, oversizedTransport)).rejects.toThrow("response exceeded limit");
+		expect(oversizedCalls).toBe(1);
+		expect(cancelled).toBe(true);
+	});
+
 });

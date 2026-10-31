@@ -6,6 +6,8 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_REQUEST = 256 * 1024;
 const MAX_REPLY = 512 * 1024;
+// Go retains two 50 KiB outputs; JSON control escaping can expand NUL-heavy output sixfold.
+const MAX_RUN_REPLY = 1024 * 1024;
 
 export class MainplaneError extends Error {}
 const hash = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
@@ -216,7 +218,7 @@ export async function runRemote(
 		String(args.timeoutSeconds), args.code);
 	const { data, status } = await exchange(origin, token, "/fleet/run", "POST", JSON.stringify({
 		worker: args.worker, session, interpreter: args.interpreter, code: args.code, timeout: args.timeoutSeconds,
-	}), id, (args.timeoutSeconds + 15) * 1000, MAX_REPLY, [200, 409, 502], signal, transport);
+	}), id, (args.timeoutSeconds + 15) * 1000, MAX_RUN_REPLY, [200, 409, 502], signal, transport);
 	const result = validateRunReceipt(data, id);
 	if (result.request_sha256 !== fingerprint || result.worker !== args.worker || result.session !== session) {
 		throw new MainplaneError("Mainplane receipt belongs to different work");
