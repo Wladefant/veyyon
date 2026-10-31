@@ -164,6 +164,45 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.credentials).toHaveLength(0);
 	});
 
+	for (const pathKind of ["direct", "wait"] as const) {
+		test(`does not restore a pre-restart higher-generation ${pathKind} snapshot after accepting broker reset`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			expect(initial.snapshot.generation).toBeGreaterThan(0);
+			const before = structuredClone(initial.snapshot);
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before, streamSnapshots: false });
+
+			const restarted = { ...before, generation: 0, credentials: [] };
+			const delayed = Promise.withResolvers<void>();
+			let firstRequestPending = false;
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				const isOldRequest = pathKind === "direct" ? opts?.waitMs === undefined : opts?.waitMs === 250;
+				if (isOldRequest && !firstRequestPending) {
+					firstRequestPending = true;
+					await delayed.promise;
+					return { status: 200 as const, snapshot: before, generation: before.generation };
+				}
+				return { status: 200 as const, snapshot: restarted, generation: 0 };
+			});
+
+			const pending = pathKind === "direct" ? remote.refreshSnapshot() : remote.waitForFreshSnapshot(250);
+			expect(firstRequestPending).toBe(true);
+			try {
+				// A newer broker epoch is accepted before the old in-flight GET returns.
+				await remote.refreshSnapshot();
+				expect(remote.snapshot.generation).toBe(0);
+				expect(remote.snapshot.credentials).toEqual([]);
+			} finally {
+				delayed.resolve();
+			}
+			const outcome = await pending;
+			if (pathKind === "wait") expect(outcome).toBe(true);
+			expect(remote.snapshot.generation).toBe(0);
+			expect(remote.snapshot.credentials).toEqual([]);
+		});
+	}
+
 	test("calls onSnapshot for broker snapshots but not the constructor snapshot", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await client.fetchSnapshot();

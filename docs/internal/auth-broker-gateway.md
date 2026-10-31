@@ -151,7 +151,7 @@ The 15 s client window deliberately sits below the broker’s 5 min server cache
 
 ## Snapshot reply ordering
 
-Remote broker credential readers reject a delayed snapshot GET if a newer generation was applied by SSE or another GET while that request was pending. This prevents an earlier credential/usage-block view from restoring a row that a later broker event removed. Direct refresh, long polling and wait-for-fresh calls share the same fence. A broker restart may reset its generation: when no intervening local generation change occurred during the request, a lower-generation full snapshot is still accepted. This ordering safeguard does not introduce worker-side refresh-token ownership or replace broker revocation.
+Remote broker credential readers reject a delayed full-snapshot GET when an SSE frame or another accepted GET changed the local applied-state revision during that request, regardless of numeric broker generation. After a broker restart resets generation, a pre-restart response with a *higher* generation must not restore a credential removed by the newer, lower-generation snapshot. Direct refresh, long polling and wait-for-fresh calls share this fence. A lower-generation full snapshot is still accepted when no local state was applied during the request, so a restart can be reconciled safely. This ordering safeguard does not introduce worker-side refresh-token ownership or replace broker revocation.
 
 ## Client snapshot cache
 
