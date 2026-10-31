@@ -31,13 +31,13 @@ describe("history exact record lookup", () => {
 			expect(first.leafId).toBe("c");
 			expect(first.sessionId).toBe("session-1");
 			expect(Array.from(first.fragment ?? "").length).toBeLessThanOrEqual(17);
-			const second = await readStoredHistoryEntry(file, { ...query!, offset: first.nextOffset! });
+			const second = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset: first.nextOffset! });
 			expect(second.offset).toBe(first.nextOffset);
 			const whole = JSON.stringify(records[3]);
 			const parts: string[] = [];
 			let offset = 0;
 			while (true) {
-				const read = await readStoredHistoryEntry(file, { ...query!, offset });
+				const read = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset });
 				expect(read.status).toBe("ok");
 				parts.push(read.fragment!);
 				if (read.nextOffset === null) break;
@@ -62,7 +62,8 @@ describe("history exact record lookup", () => {
 			const index = Array.from(raw).indexOf("🔑");
 			const file = path.join(dir.path(), "session.jsonl");
 			await fs.writeFile(file, JSON.stringify({ type: "session", id: "s" }) + "\n" + raw + "\n");
-			const read = await readStoredHistoryEntry(file, { entryId: "emoji", offset: index, limit: 1 });
+			const first = await readStoredHistoryEntry(file, { entryId: "emoji", offset: 0, limit: 1 });
+			const read = await readStoredHistoryEntry(file, { entryId: "emoji", leafId: first.leafId, revision: first.revision, offset: index, limit: 1 });
 			expect(read.fragment).toBe("🔑");
 			expect(read.nextOffset).toBe(index + 1);
 		} finally {
@@ -136,3 +137,4 @@ describe("history exact record lookup", () => {
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=thing&limit=999"))).toThrow();
 	});
 });
+

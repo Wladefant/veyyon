@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
@@ -9,6 +10,9 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { AgentRegistry } from "../src/registry/agent-registry";
+import { HistoryProtocolHandler } from "../src/internal-urls/history-protocol";
+import { registerArtifactsDir } from "../src/internal-urls/registry-helpers";
 
 /**
  * The per-turn stale-result pass (`#pruneStaleToolResults`) and the
@@ -63,7 +67,10 @@ describe("AgentSession per-turn prune", () => {
 		};
 	}
 
-	async function startSession(overrides: Record<string, unknown>): Promise<void> {
+	async function startSession(
+		overrides: Record<string, unknown>,
+		activeSessionManager = sessionManager,
+	): Promise<void> {
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
@@ -71,7 +78,7 @@ describe("AgentSession per-turn prune", () => {
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
 		session = new AgentSession({
 			agent,
-			sessionManager,
+			sessionManager: activeSessionManager,
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"compaction.dropUseless": true,
@@ -206,11 +213,216 @@ describe("AgentSession per-turn prune", () => {
 		try {
 			await session?.dispose();
 		} finally {
+			AgentRegistry.resetGlobalForTests();
 			authStorage?.close();
 			await tempDir?.remove();
 		}
 	});
 
+	/**
+	 * WHY: a live manager can select an older sibling while its file keeps later
+	 * records. This real handler path defends default isolation, explicit selection,
+	 * pinned rewrites and the empty leaf; it does not test disk scan bounds.
+	 */
+	it("uses the real active leaf for stored exact reads and searches", async () => {
+		const rootId = sessionManager.appendMessage({
+			role: "user", content: "shared branch root", timestamp: Date.now(),
+		});
+		const activeId = sessionManager.appendMessage({
+			role: "user", content: "active branch only", timestamp: Date.now(),
+		});
+		sessionManager.branch(rootId);
+		const historicalId = sessionManager.appendMessage({
+			role: "user", content: "historical-branch-marker", timestamp: Date.now(),
+		});
+		sessionManager.branch(activeId);
+		await sessionManager.ensureOnDisk();
+		await sessionManager.flush();
+		await startSession({});
+		AgentRegistry.global().register({
+			id: "Main", displayName: "main", kind: "main", session,
+			sessionFile: sessionManager.getSessionFile(), scope: "history-leaf-test",
+		});
+		const handler = new HistoryProtocolHandler();
+		const read = async (query: string) => JSON.parse((await handler.resolve(
+			new URL(`history://Main?${query}`) as never,
+		)).content) as {
+			status: string; fragment?: string; revision?: string; nextOffset?: number | null;
+			matches?: Array<{ entryId: string }>;
+		};
+
+		expect((await read(`entry=${historicalId}`)).status).toBe("not_on_branch");
+		expect((await read("q=historical-branch-marker")).matches).toEqual([]);
+		const first = await read(`entry=${historicalId}&leaf=${historicalId}&limit=8`);
+		expect(first.status).toBe("ok");
+		const nextOffset = first.nextOffset;
+		if (nextOffset === undefined || nextOffset === null || !first.revision) {
+			throw new Error("Expected a revision-pinned next page for the historical record");
+		}
+		const continuation = await read(
+			`entry=${historicalId}&leaf=${historicalId}&offset=${nextOffset}&limit=8000&revision=${first.revision}`,
+		);
+		expect(continuation.status).toBe("ok");
+		expect((first.fragment ?? "") + (continuation.fragment ?? "")).toContain("historical-branch-marker");
+
+		const record = sessionManager.getEntry(historicalId);
+		if (record?.type !== "message" || record.message.role !== "user") {
+			throw new Error("Expected the real session manager to retain its historical user entry");
+		}
+		record.message.content = "rewritten-history-marker";
+		await sessionManager.rewriteEntries([record]);
+		const stale = await read(
+			`entry=${historicalId}&leaf=${historicalId}&offset=${nextOffset}&limit=8000&revision=${first.revision}`,
+		);
+		expect(stale.status).toBe("stale");
+		expect(stale.fragment).toBeUndefined();
+		expect(stale.nextOffset).toBeUndefined();
+
+		sessionManager.resetLeaf();
+		expect((await read(`entry=${activeId}`)).status).toBe("missing");
+		expect((await read("q=historical-branch-marker")).status).toBe("missing_branch");
+		expect((await read("q=historical-branch-marker")).matches).toEqual([]);
+	});
+
+	it("honors explicit historical leaves in a real in-memory session", async () => {
+		const manager = SessionManager.inMemory(tempDir.path());
+		const rootId = manager.appendMessage({ role: "user", content: "memory root", timestamp: Date.now() });
+		const activeId = manager.appendMessage({ role: "user", content: "active memory branch", timestamp: Date.now() });
+		manager.branch(rootId);
+		const historicalId = manager.appendMessage({
+			role: "user", content: "historical-memory-marker", timestamp: Date.now(),
+		});
+		manager.branch(activeId);
+		await startSession({}, manager);
+		AgentRegistry.global().register({
+			id: "Memory", displayName: "memory", kind: "main", session, scope: "history-memory-leaf-test",
+		});
+		const handler = new HistoryProtocolHandler();
+		const read = async (query: string) => JSON.parse((await handler.resolve(
+			new URL(`history://Memory?${query}`) as never,
+		)).content) as {
+			status: string; fragment?: string; matches?: Array<{ entryId: string }>;
+		};
+
+		expect((await read(`entry=${historicalId}`)).status).toBe("missing");
+		expect((await read("q=historical-memory-marker")).matches).toEqual([]);
+		const explicit = await read(`entry=${historicalId}&leaf=${historicalId}`);
+		expect(explicit.status).toBe("ok");
+		expect(explicit.fragment).toContain("historical-memory-marker");
+		expect((await read(`q=historical-memory-marker&leaf=${historicalId}`)).matches?.map(match => match.entryId))
+			.toEqual([historicalId]);
+		manager.resetLeaf();
+		expect((await read(`entry=${activeId}`)).status).toBe("missing");
+		expect((await read("q=historical-memory-marker")).status).toBe("missing_branch");
+	});
+	/**
+	 * WHY: an old artifacts transcript can contain an ID also present in a live
+	 * in-memory manager. This real handler path checks live exact and search reads,
+	 * default and explicit leaves, and absent old IDs. It does not test ambiguous
+	 * artifact IDs.
+	 */
+	it("keeps a live non-persistent transcript ahead of stale artifact history", async () => {
+		await sessionManager.close();
+		const manager = SessionManager.inMemory(tempDir.path());
+		const rootId = manager.appendMessage({ role: "user", content: "live root", timestamp: Date.now() });
+		const activeId = manager.appendMessage({
+			role: "user", content: "live-active-marker", timestamp: Date.now(),
+		});
+		manager.branch(rootId);
+		const explicitId = manager.appendMessage({
+			role: "user", content: "explicit-live-marker", timestamp: Date.now(),
+		});
+		manager.branch(activeId);
+		await startSession({}, manager);
+
+		const artifactsDir = path.join(tempDir.path(), "artifacts");
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await fs.writeFile(path.join(artifactsDir, "Scout.jsonl"), [
+			JSON.stringify({ type: "session", id: "stale-session" }),
+			JSON.stringify({
+				type: "message", id: activeId, parentId: null,
+				message: { role: "user", content: "stale-copy-marker" },
+			}),
+			JSON.stringify({
+				type: "message", id: "archive-only-entry", parentId: activeId,
+				message: { role: "user", content: "archive-only-marker" },
+			}),
+		].join("\n") + "\n");
+		const unregisterArtifactsDir = registerArtifactsDir(artifactsDir);
+		try {
+			const scope = "history-live-stale-artifact-test";
+			AgentRegistry.global().register({
+				id: "Main", displayName: "main", kind: "main", session, scope,
+			});
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "Main", session, status: "running",
+			});
+			const handler = new HistoryProtocolHandler();
+			type HistoryPayload = {
+				status: string; source?: string; leafId?: string; fragment?: string;
+				matches?: Array<{ entryId: string }>;
+			};
+			const read = async (query: string): Promise<HistoryPayload> => JSON.parse((await handler.resolve(
+				new URL(`history://Scout?${query}`) as never,
+			)).content) as HistoryPayload;
+
+			const sameId = await read(`entry=${activeId}`);
+			expect(sameId.status).toBe("ok");
+			expect(sameId.source).toBe("live-session");
+			expect(sameId.leafId).toBe(activeId);
+			expect(sameId.fragment).toContain("live-active-marker");
+			expect(sameId.fragment).not.toContain("stale-copy-marker");
+
+			expect((await read(`entry=${explicitId}`)).status).toBe("missing");
+			const explicitLeaf = await read(`entry=${explicitId}&leaf=${explicitId}`);
+			expect(explicitLeaf.status).toBe("ok");
+			expect(explicitLeaf.source).toBe("live-session");
+			expect(explicitLeaf.leafId).toBe(explicitId);
+			expect(explicitLeaf.fragment).toContain("explicit-live-marker");
+
+			const missingOldEntry = await read("entry=archive-only-entry");
+			expect(missingOldEntry.status).toBe("missing");
+			expect(missingOldEntry.source).toBe("live-session");
+			expect(missingOldEntry.fragment).toBeUndefined();
+
+			const liveSearch = await read("q=live-active-marker");
+			expect(liveSearch.source).toBe("live-session");
+			expect(liveSearch.matches?.map(match => match.entryId)).toEqual([activeId]);
+			const staleSearch = await read("q=stale-copy-marker");
+			expect(staleSearch.source).toBe("live-session");
+			expect(staleSearch.matches).toEqual([]);
+		} finally {
+			unregisterArtifactsDir();
+		}
+	});
+
+
+	it("finds registered artifact history for a parked ref without a session file", async () => {
+		const artifactsDir = path.join(tempDir.path(), "parked-artifacts");
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await fs.writeFile(path.join(artifactsDir, "Scout.jsonl"), [
+			JSON.stringify({ type: "session", id: "parked-session" }),
+			JSON.stringify({
+				type: "message", id: "stored-only-entry", parentId: null,
+				message: { role: "user", content: "stored-only-marker" },
+			}),
+		].join("\n") + "\n");
+		const unregisterArtifactsDir = registerArtifactsDir(artifactsDir);
+		try {
+			AgentRegistry.global().register({
+				id: "Scout", displayName: "scout", kind: "sub", parentId: "Main",
+				session: null, status: "parked",
+			});
+			const payload = JSON.parse((await new HistoryProtocolHandler().resolve(
+				new URL("history://Scout?entry=stored-only-entry") as never,
+			)).content) as { status: string; source?: string; fragment?: string };
+			expect(payload.status).toBe("ok");
+			expect(payload.source).toBe("stored-jsonl");
+			expect(payload.fragment).toContain("stored-only-marker");
+		} finally {
+			unregisterArtifactsDir();
+		}
+	});
 	it("persists the pruned rewrite so a from-disk rebuild matches the live context", async () => {
 		seedUselessResult(Date.now());
 		await startSession({});
