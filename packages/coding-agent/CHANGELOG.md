@@ -1,8 +1,26 @@
 # Changelog
 
 ## [Unreleased]
+- Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
+- Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
+### Added
+
+- Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
+
+### Fixed
 
 - The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
+- Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
+- Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
+- Task successors reject missing or non-directory inherited working directories before claiming a predecessor checkpoint.
+
+### Changed
+
+- Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

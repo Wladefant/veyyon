@@ -17,7 +17,8 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AuthStorage, type AuthStorageOptions, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage, type AuthStorageOptions } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import type { UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
 import "@veyyon/ai/usage/defaults";
 import { listRegisteredUsageProviders } from "@veyyon/ai/usage/registry";

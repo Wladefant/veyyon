@@ -328,7 +328,7 @@ describe("a rotated credential is re-read instead of re-sent", () => {
 			} else {
 				onChunk?.(null, "Bearer token-b");
 			}
-			return { exitCode: 0, cancelled: false, timedOut: false };
+			return { exitCode: 0, cancelled: false, timedOut: false, outputIncomplete: false };
 		});
 
 		const first = resolveConfigValue("!mint-token");
