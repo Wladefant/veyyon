@@ -5,6 +5,9 @@ import { bindReceipt, bridgeRequest, type BridgeReceipt, digest, MainplaneError,
 import { registerMainplaneWrite } from "./mainplane-bridge-write";
 import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
 
+// Go JSON control escaping can expand the two retained 50 KiB outputs sixfold.
+const MAX_RUN_REPLY = 1024 * 1024;
+
 export async function readRemoteReceipt(origin: string, token: string, runId: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch): Promise<BridgeReceipt> {
 	if (!WORKER_ID.test(runId)) throw new MainplaneError("Invalid Mainplane run identifier");
@@ -19,7 +22,7 @@ export async function runRemote(origin: string, token: string, args: RunInput,
 	const fingerprint = mainplaneRequestHash("run", args.worker, session, args.interpreter, String(args.timeoutSeconds), args.code);
 	try {
 		const response = await bridgeRequest(origin, token, { path: "/fleet/run", method: "POST", key: id,
-			timeoutMs: (args.timeoutSeconds + 15) * 1000, statuses: [200, 409, 502],
+			timeoutMs: (args.timeoutSeconds + 15) * 1000, responseLimit: MAX_RUN_REPLY, statuses: [200, 409, 502],
 			body: JSON.stringify({ worker: args.worker, session, interpreter: args.interpreter, code: args.code, timeout: args.timeoutSeconds }) }, signal, transport);
 		const result = bindReceipt(response.data, response.status, id, "run", args.worker, session, fingerprint);
 		return { id, result, replayed: response.status === 409, output_available: result.body !== undefined };
@@ -36,6 +39,10 @@ export async function readRemoteText(origin: string, token: string, worker: stri
 	let value: string;
 	try { value = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
 	catch { throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool"); }
+	// Reject NUL anywhere in the verified payload, including beyond the preview.
+	if (value.includes("\0")) {
+		throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool");
+	}
 	let end = Math.min(value.length, 50_000);
 	if (end < value.length && /[\uD800-\uDBFF]/.test(value.charAt(end - 1))) end--;
 	return { text: value.slice(0, end), bytes: bytes.byteLength, sha256: data.sha256, truncated: end < value.length };
