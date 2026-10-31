@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionAPI } from "@veyyon/coding-agent";
 import { z } from "zod";
 import { digest, remoteJobId, remoteRunId, remoteSessionId } from "../examples/extensions/mainplane-bridge-wire";
-import extension from "../examples/extensions/mainplane-worker-bridge";
+import extension, { readRemoteReceipt } from "../examples/extensions/mainplane-worker-bridge";
 
 interface ReceiptToolReply {
 	isError?: boolean;
@@ -82,6 +82,19 @@ describe("Mainplane operation receipts are scoped to the active session", () => 
 			expect(result.isError).toBe(true);
 			expect(JSON.stringify(result)).not.toContain("main-harness");
 		});
+	});
+	test("exported receipt reader refuses a foreign session even with valid digests", async () => {
+		const foreign = "/session/other.json"; const id = remoteRunId(foreign, "known-key");
+		const transport = (async () => new Response(JSON.stringify(nativeReceipt(foreign, id)))) as typeof fetch;
+		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key", id,
+			"/session/current.json", undefined, transport)).rejects.toThrow("another Veyyon session");
+	});
+	test("exported receipt reader requires a session before contacting the bridge", async () => {
+		const file = "/session/other.json"; const id = remoteRunId(file, "known-key");
+		let calls = 0;
+		const transport = (async () => { calls++; return new Response(JSON.stringify(nativeReceipt(file, id))); }) as typeof fetch;
+		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key", id, "", undefined, transport)).rejects.toThrow("Persisted session");
+		expect(calls).toBe(0);
 	});
 	test("current-session completed Run receipt remains readable", async () => {
 		const file = "/session/current.json";
