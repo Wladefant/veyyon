@@ -38,6 +38,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+
 permissions:
   contents: read
 
@@ -64,7 +68,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -76,7 +80,7 @@ jobs:
           echo "runner.name: ${RUNNER_NAME}"
       - name: Detect changed paths
         id: changed
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
@@ -145,14 +149,16 @@ jobs:
         id: install
         if: steps.changed.outputs.has_code == 'true'
         uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
       - name: Validate OVH pull-request workflow
         if: steps.changed.outputs.workflow_changed == 'true' && steps.install.outcome == 'success' && !inputs.test_files
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: bun scripts/validate-ovh-pr-workflow.ts
       - name: Resolve related test graph
         id: selection
         if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
@@ -172,7 +178,7 @@ jobs:
       - name: Biome changed TypeScript and JavaScript
         id: biome
         if: steps.install.outcome == 'success' && !inputs.test_files
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
           if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
@@ -205,7 +211,7 @@ jobs:
           done < "$RUNNER_TEMP/ovh-touched-packages"
       - name: Record skipped TypeScript check summary
         if: steps.selection.outputs.ts_changed != 'true'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
@@ -218,7 +224,7 @@ jobs:
           fi
       - name: Plan test shards
         id: planner
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
           OUTPUT_DIR: ${{ runner.temp }}/ovh-shards
@@ -229,6 +235,11 @@ jobs:
           node scripts/ovh-test-shards.mjs --input "$INPUT_FILE" --output "$OUTPUT_DIR"
           cp "$INPUT_FILE" "$OUTPUT_DIR/selected-tests.txt"
           cp "$RECEIPT" "$OUTPUT_DIR/ovh-receipt.txt"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: bash scripts/ovh-process-group.sh --cleanup
       - name: Upload selection plan artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -263,13 +274,14 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      OVH_MATRIX_INDEX: ${{ matrix.index }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -287,6 +299,8 @@ jobs:
       - name: Install dependencies and generate code
         id: install
         uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
       - name: Build native addon when required
         if: ${{ !cancelled() && needs.prepare.outputs.rust_changed == 'true' }}
         env:
@@ -298,7 +312,7 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "2"
           CARGO_PACKAGES: ${{ inputs.cargo_packages }}
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           set -euo pipefail
           package_names="$(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")"
@@ -328,7 +342,7 @@ jobs:
           echo 'VEYYON_SANDBOX_TIMEOUT=600' >> "$GITHUB_ENV"
       - name: Run selected tests serially
         if: ${{ !cancelled() && steps.bwrap.outcome == 'success' }}
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           SHARD_FILE: ${{ runner.temp }}/ovh-shards/shard-${{ matrix.index }}.txt
@@ -424,6 +438,11 @@ jobs:
           fi
           ((total_ran>0)) || { echo '::error::No selected tests ran'; status=1; }
           exit "$status"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: bash scripts/ovh-process-group.sh --cleanup
       - name: Upload test logs and receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -448,7 +467,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -461,6 +480,8 @@ jobs:
       - name: Install dependencies and generate code
         id: install
         uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
       - name: Run TypeScript check
         id: check
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
@@ -492,6 +513,11 @@ jobs:
           for (const key of keys) console.log(key);
           NODE
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: bash scripts/ovh-process-group.sh --cleanup
       - name: Upload typecheck artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -504,7 +530,7 @@ jobs:
           retention-days: 7
       - name: Enforce TypeScript check exit status
         if: always()
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           exit_code="${{ steps.check.outputs.exit_code }}"
           if [[ -z "$exit_code" || "$exit_code" -ne 0 ]]; then
