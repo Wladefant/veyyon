@@ -30,7 +30,7 @@ function sessionId(sessionFile: string): string {
 	return "sb-" + createHash("sha256").update(sessionFile).digest("hex").slice(0, 40);
 }
 
-async function boundedJson(response: Response): Promise<Record<string, unknown>> {
+async function boundedJson(response: Response, limit = MAX_REPLY): Promise<Record<string, unknown>> {
 	if (!response.body) throw new Error("Mainplane response body is empty");
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -40,7 +40,7 @@ async function boundedJson(response: Response): Promise<Record<string, unknown>>
 			const { value, done } = await reader.read();
 			if (done) break;
 			size += value.byteLength;
-			if (size > MAX_REPLY) throw new Error("Mainplane response exceeded limit");
+			if (size > limit) throw new Error("Mainplane response exceeded limit");
 			chunks.push(value);
 		}
 	} finally {
@@ -133,6 +133,47 @@ export async function runRemote(
 	return { id, result, replayed: false };
 }
 
+
+/** Read bounded UTF-8 through the Go bridge and verify original bytes. */
+export async function readRemoteText(
+ origin: string, token: string, worker: string, path: string,
+ signal?: AbortSignal, transport: typeof fetch = fetch,
+): Promise<{ text: string; bytes: number; sha256: string; truncated: boolean }> {
+ if (!token || token.includes("\n") || token.includes("\r")) throw new Error("Missing or invalid Mainplane key");
+ if (!ID.test(worker) || !path || path.length > 4096 || path.includes(String.fromCharCode(0))) {
+   throw new Error("Invalid worker or remote path");
+ }
+ const response = await transport(bridgeOrigin(origin) + "/fleet/read", {
+   method: "POST",
+   headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+   redirect: "error", signal, body: JSON.stringify({ worker, path }),
+ });
+ if (!response.ok) throw new Error("Mainplane read refused (" + response.status + ")");
+ const result = await boundedJson(response, 2 * 1024 * 1024);
+ if (typeof result.data_base64 !== "string" || typeof result.bytes !== "number" ||
+     typeof result.sha256 !== "string" || result.bytes > 1024 * 1024) {
+   throw new Error("Mainplane returned invalid read metadata");
+ }
+ const bytes = Buffer.from(result.data_base64, "base64");
+ if (bytes.byteLength !== result.bytes ||
+     createHash("sha256").update(bytes).digest("hex") !== result.sha256) {
+   throw new Error("Mainplane read digest or length mismatch");
+ }
+ let value: string;
+ try {
+   value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+ } catch {
+   throw new Error("Mainplane returned binary; use a binary-aware artifact tool");
+ }
+ // U+0000 is valid UTF-8 but not a text file for this bounded tool.
+ // Reject the entire verified payload, including bytes past the preview slice.
+ if (value.includes("\0")) {
+   throw new Error("Mainplane returned binary; use a binary-aware artifact tool");
+ }
+ return { text: value.slice(0, 50_000), bytes: bytes.byteLength,
+          sha256: result.sha256, truncated: value.length > 50_000 };
+}
+
 export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	const { z } = pi.zod;
 
@@ -169,6 +210,26 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 			}
 		},
 	});
+
+
+ pi.registerTool({
+   name: "mainplane_worker_read_text",
+   label: "Mainplane native worker file read",
+   description: "Read a bounded UTF-8 file from a named owner-controlled Mainplane Go worker, with SHA-256 verification.",
+   parameters: z.object({ worker: z.string().regex(ID), path: z.string().min(1).max(4096) }),
+   async execute(_toolCallId, params, signal) {
+     try {
+       const result = await readRemoteText(
+         process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "",
+         params.worker, params.path, signal,
+       );
+       return { content: [{ type: "text", text: JSON.stringify(result) }],
+                details: { bytes: result.bytes, sha256: result.sha256, truncated: result.truncated } };
+     } catch (error) {
+       return { content: [{ type: "text", text: error instanceof Error ? error.message : "Mainplane read failed" }], isError: true };
+     }
+   },
+ });
 
 	pi.registerTool({
 		name: "mainplane_run_receipt",
