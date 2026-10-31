@@ -20,6 +20,7 @@ import { submitInteractiveInput } from "../src/main";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 import type { SubmittedUserInput } from "../src/modes/terminal/types";
 import { AgentSession } from "../src/session/agent-session";
+import { OperatorAnswerInbox } from "../src/session/operator-answer-inbox";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -505,6 +506,78 @@ describe("telegram delivery tracing end-to-end", () => {
 		for (const record of [...steerRecords, ...followUpRecords]) {
 			expect(record.context.sessionId).toBe(store.getSessionId());
 		}
+	});
+
+	it("traces a replayed operator answer as a successful duplicate without injecting it twice", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-operator-answer-"));
+		cleanup.push(async () => {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		});
+		spyOn(utils, "getConfigRootDir").mockReturnValue(tempDir);
+		const loggedTraces: Array<Record<string, unknown>> = [];
+		spyOn(utils.logger, "info").mockImplementation((message, context) => {
+			if (message === "Telegram delivery trace" && context) loggedTraces.push({ ...context });
+		});
+
+		const store = SessionManager.create(tempDir, tempDir);
+		const sessionFile = store.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a session file");
+		const queued: string[] = [];
+		const inbox = new OperatorAnswerInbox(
+			() => store,
+			async text => {
+				queued.push(text);
+				return "queued";
+			},
+			() => queued.length > 0,
+		);
+		const target = {
+			identity: () => ({ sessionId: store.getSessionId(), cwd: tempDir, sessionFile }),
+			deliver: async (text: string, mode: "auto" | "steer" | "followUp") => {
+				const result = await inbox.accept(text, mode);
+				if (result === undefined) throw new Error("Expected an operator answer");
+				return result;
+			},
+			abort: async () => true,
+			history: () => [],
+			subscribe: () => () => {},
+		};
+		cleanup.push(await serveTerminalControl(target, tempDir));
+		const client = connect(await readOwner(tempDir));
+		const answer = (event: string) => `[operator-answer question=q-replay event=${event}] private answer text`;
+
+		for (const [index, event, outcome] of [
+			[1, "evt-1", "queued"],
+			[2, "evt-2", "duplicate"],
+		] as const) {
+			const requestId = `answer-${index}`;
+			const deliveryId = `delivery-${index}`;
+			client.send({
+				id: requestId,
+				op: "deliver",
+				text: answer(event),
+				mode: "auto",
+				ack: true,
+				messageId: deliveryId,
+				telegramTrace: { updateId: 12000 + index, messageId: 100 + index, chatId: "-100888" },
+			});
+			expect(await client.next(f => f.id === requestId)).toMatchObject({
+				ok: true,
+				result: { accepted: true, messageId: deliveryId, state: "pending" },
+			});
+			const delivered = await client.next<{ event: { kind: "delivery"; state: string; outcome: string } }>(f =>
+				client.isDeliveryEvent(f, deliveryId),
+			);
+			expect(delivered.event).toMatchObject({ kind: "delivery", state: "delivered", outcome });
+			const traceId = `-100888:${12000 + index}:${100 + index}`;
+			const traces = loggedTraces.filter(
+				record => record.traceId === traceId && record.stage === "delivery_outcome",
+			);
+			expect(traces).toHaveLength(1);
+			expect(traces[0]?.outcome).toBe(outcome);
+		}
+		expect(queued).toEqual([answer("evt-1")]);
+		expect(JSON.stringify(loggedTraces)).not.toContain("private answer text");
 	});
 
 	it("withholds hostile thrown error text, user prompt, and secrets when target.deliver throws", async () => {
