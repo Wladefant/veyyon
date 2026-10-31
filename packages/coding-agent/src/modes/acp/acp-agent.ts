@@ -2281,8 +2281,10 @@ function prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentS
 	if (
 		(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
 		event.message.role === "assistant" &&
-		(event.type === "message_start" || !record.liveMessageId || !record.liveMessageProgress)
+		(!record.liveMessageId || !record.liveMessageProgress)
 	) {
+		// Extension forwarding can delay message_start until after the first delta.
+		// Keep that delta's identity; message_end clears it for the next message.
 		record.liveMessageId = crypto.randomUUID();
 		record.liveMessageProgress = { textEmitted: false, thoughtEmitted: false };
 	}
