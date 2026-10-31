@@ -756,6 +756,12 @@ function discardCandidateSync(candidatePath: string, expected: LockObservation):
 	}
 }
 
+/** Windows can report an occupied rename target as an access or sharing error. */
+function isPublicationAccessConflict(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException)?.code;
+	return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
 async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
 	let published = false;
@@ -765,13 +771,19 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 		if ((await inspectLockDirectory(lockPath)) !== null) return null;
 		try {
 			await fs.rename(candidate.path, lockPath);
-			published = true;
-			await assertParentIdentity(lockPath, candidate.parentIdentity);
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
+			const code = (error as NodeJS.ErrnoException)?.code;
 			if (code === "EEXIST" || code === "ENOTEMPTY") return null;
+			if (
+				isPublicationAccessConflict(error) &&
+				((await inspectLockDirectory(lockPath)) !== null ||
+					(await inspectLockDirectory(getTransitionPath(lockPath))) !== null)
+			)
+				return null;
 			throw error;
 		}
+		published = true;
+		await assertParentIdentity(lockPath, candidate.parentIdentity);
 		const current = await inspectLockDirectory(lockPath);
 		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) {
@@ -794,13 +806,19 @@ function tryAcquireLockSync(lockPath: string): LockLease | null {
 		if (inspectLockDirectorySync(lockPath) !== null) return null;
 		try {
 			fsSync.renameSync(candidate.path, lockPath);
-			published = true;
-			assertParentIdentitySync(lockPath, candidate.parentIdentity);
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
+			const code = (error as NodeJS.ErrnoException)?.code;
 			if (code === "EEXIST" || code === "ENOTEMPTY") return null;
+			if (
+				isPublicationAccessConflict(error) &&
+				(inspectLockDirectorySync(lockPath) !== null ||
+					inspectLockDirectorySync(getTransitionPath(lockPath)) !== null)
+			)
+				return null;
 			throw error;
 		}
+		published = true;
+		assertParentIdentitySync(lockPath, candidate.parentIdentity);
 		const current = inspectLockDirectorySync(lockPath);
 		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
 		if (inspectLockDirectorySync(getTransitionPath(lockPath)) !== null) {

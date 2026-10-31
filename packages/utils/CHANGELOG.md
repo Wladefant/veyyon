@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Retry lock publication EPERM, EACCES and EBUSY errors only when a competing lock is observable, preserving owner identity and candidate cleanup.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
