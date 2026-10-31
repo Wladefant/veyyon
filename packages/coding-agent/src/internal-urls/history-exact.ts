@@ -289,21 +289,22 @@ export async function searchStoredHistoryEntries(
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
-	let incomplete = false;
+	let unreadable = false;
+	let truncated = false;
 	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
 	const lines = createInterface({ input, crlfDelay: Infinity });
 	try {
 		for await (const line of lines) {
 			if (!line.startsWith("{")) continue;
 			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
-				incomplete = true;
+				unreadable = true;
 				continue;
 			}
 			let record: unknown;
 			try {
 				record = JSON.parse(line);
 			} catch {
-				incomplete = true;
+				unreadable = true;
 				continue;
 			}
 			if (!record || typeof record !== "object") continue;
@@ -318,7 +319,7 @@ export async function searchStoredHistoryEntries(
 			if (!line.toLowerCase().includes(query)) continue;
 			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
 				candidates.shift();
-				incomplete = true;
+				truncated = true;
 			}
 			candidates.push({
 				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query),
@@ -330,7 +331,7 @@ export async function searchStoredHistoryEntries(
 	}
 	// The latest readable entry is not a safe default when a later branch
 	// record may have been skipped. Never present another branch's matches.
-	if (!request.leafId && incomplete) {
+	if (!request.leafId && unreadable) {
 		return {
 			status: "unavailable", sessionId, query: request.query,
 			source: "stored-jsonl", matches: [],
@@ -347,9 +348,9 @@ export async function searchStoredHistoryEntries(
 	}
 	const matches = candidates.filter(item => onBranch(parents, item.entryId, leafId)).reverse().slice(0, request.limit);
 	return {
-		status: incomplete ? "partial" : "ok", sessionId, leafId, query: request.query,
+		status: unreadable || truncated ? "partial" : "ok", sessionId, leafId, query: request.query,
 		source: "stored-jsonl", matches,
-		detail: incomplete
+		detail: unreadable || truncated
 			? "Not exhaustive: malformed/oversized records or more than 500 candidates; stored text only, blobs not searched"
 			: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
