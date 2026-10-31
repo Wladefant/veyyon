@@ -80,6 +80,7 @@ const FIXTURES: Readonly<Record<string, LoginFixture>> = {
 		approved: { status: 200, body: { status: "approved", token: "access-1" } },
 	},
 	"kimi-code": { waits: "poll", prompts: [""], pending: RFC_PENDING, approved: RFC_APPROVED },
+	"muse-code": { waits: "poll", pending: RFC_PENDING, approved: RFC_APPROVED },
 	"nous-research": { waits: "poll", pending: RFC_PENDING, approved: RFC_APPROVED },
 	"openai-codex": { waits: "redirect" },
 	"openai-codex-device": {

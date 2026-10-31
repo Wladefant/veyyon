@@ -6,6 +6,10 @@
 
 - OpenCode Go uses its API-key login under `opencode-go` again, and the Console device-flow login is removed.
 
+### Fixed
+
+- Stop GitHub Copilot device-login polling when the login is cancelled.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
