@@ -7,10 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
+import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadBuiltinExtension } from "@veyyon/coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import taskRecordContext, {
@@ -24,6 +27,8 @@ import taskRecordContext, {
 import type { LoadedExtension } from "@veyyon/coding-agent/extensibility/extensions/types";
 import type { SessionBeforeCompactEvent } from "@veyyon/coding-agent/extensibility/shared-events";
 import { sessionWorkerAccess } from "@veyyon/coding-agent/native-control/telegram-control-bridge";
+import { initializeExtensions } from "@veyyon/coding-agent/modes/runtime-init";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -311,4 +316,103 @@ describe("the opt-in task record policy preserves execution and evidence", () =>
 		stale.preparation.firstKeptEntryId = "compaction:keep-nothing";
 		await expect(prepareTaskRecordCompaction(stale, manager)).rejects.toThrow("Newly discarded work");
 	});
+
+	for (const enabled of [false, true]) {
+		it(`runs the reachable compaction and continuation path with task-record enabled=${enabled}`, async () => {
+			const store = SessionManager.create(temp.path(), temp.join(`runtime-${enabled}`));
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected local-compaction fixture model");
+			auth.setRuntimeApiKey(model.provider, "fixture-provider-boundary-key");
+			store.appendMessage({
+				role: "user", content: `Verify the pending result without restarting the job. ${"earlier context ".repeat(4096)}`,
+				timestamp: 1,
+			});
+			store.appendMessage({
+				role: "assistant", api: model.api, provider: model.provider, model: model.id,
+				content: [{ type: "toolCall", id: "job-start-runtime", name: "job", arguments: { action: "start" } }],
+				stopReason: "toolUse", usage: USAGE, timestamp: 2,
+			});
+			const evidenceId = store.appendMessage({
+				role: "toolResult", toolName: "job", toolCallId: "job-start-runtime", isError: false,
+				content: [{ type: "text", text: "  original receipt\tΩ\r\njob-runtime-1 running" }],
+				details: { jobId: "job-runtime-1", status: "running" }, timestamp: 3,
+			});
+			await store.flush();
+			const policyRuntime = new ExtensionRuntime();
+			const policyExtension = await loadBuiltinExtension(taskRecordContext, temp.path(), new EventBus(), policyRuntime, "runtime-task-record");
+			if (enabled) policyRuntime.flagValues.set(TASK_RECORD_FLAG, true);
+			const registry = new ModelRegistry(auth);
+			const policyRunner = new ExtensionRunner([policyExtension], policyRuntime, temp.path(), store, registry);
+			let summaryCalls = 0;
+			const continuationInputs: string[] = [];
+			const responseStream = (text: string) => {
+				const response: AssistantMessage = {
+					role: "assistant", api: model.api, provider: model.provider, model: model.id,
+					content: [{ type: "text", text }], stopReason: "stop", usage: USAGE, timestamp: 4,
+				};
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: response });
+					stream.push({ type: "done", reason: "stop", message: response });
+				});
+				return stream;
+			};
+			const agent = new Agent({
+				getApiKey: () => "fixture-provider-boundary-key",
+				initialState: { model, systemPrompt: ["Keep the current execution session."], tools: [], messages: store.buildSessionContext().messages },
+				streamFn: (_model, context) => {
+					continuationInputs.push(JSON.stringify(context.messages));
+					return responseStream("Verified result=42 without restarting the job.");
+				},
+			});
+			const session = new AgentSession({
+				agent, sessionManager: store, modelRegistry: registry, extensionRunner: policyRunner,
+				settings: Settings.isolated({
+					"compaction.enabled": false, "compaction.remote": false, "compaction.keepRecentTokens": 1,
+					"todo.enabled": false, "todo.reminders": false, "retry.enabled": false,
+				}),
+				sideStreamFn: () => { summaryCalls++; return responseStream("Ordinary fixture summary."); },
+			});
+			try {
+				await initializeExtensions(session, {
+					reportSendError: (_action, error) => { throw error; },
+					reportRuntimeError: error => { throw new Error(JSON.stringify(error)); },
+				});
+				const task = JSON.stringify({
+					version: 1, objective: "Verify result=42.", constraints: ["Do not restart the job."], facts: [],
+					completed: [{ id: "job-start-runtime", summary: "Job started once.", evidence: [evidenceId] }],
+					pending: [{ id: "job-runtime-1", kind: "job", ownerSessionId: store.getSessionId() }],
+					nextActions: ["Read the pending result."],
+				});
+				await session.prompt(`/context-record ${task}`);
+				const before = JSON.parse(JSON.stringify(store.getBranch()));
+				const sessionId = store.getSessionId();
+				const file = store.getSessionFile();
+				const compacted = await session.compact();
+				expect(store.getSessionId()).toBe(sessionId);
+				expect(store.getSessionFile()).toBe(file);
+				expect(session.messages.some(message => message.role === "compactionSummary")).toBe(true);
+				expect(summaryCalls).toBe(enabled ? 0 : 1);
+				if (enabled) {
+					const summary = JSON.parse(compacted.summary);
+					expect(summary.task.pending).toEqual(JSON.parse(task).pending);
+					expect(summary.task.constraints).toEqual(["Do not restart the job."]);
+					const path = await store.getArtifactPath(summary.recovery.artifact.slice(11));
+					if (!path) throw new Error("Expected runtime recovery artifact");
+					expect(JSON.parse(await fs.readFile(path, "utf8")).entries).toEqual(before);
+				} else {
+					expect(compacted.summary).toContain("Ordinary fixture summary.");
+				}
+				await session.prompt("The pending job returned result=42. Verify it without restarting the job.");
+				expect(continuationInputs).toHaveLength(1);
+				expect(continuationInputs[0]).toContain("result=42");
+				if (enabled) expect(continuationInputs[0]).toContain("job-runtime-1");
+				expect(store.getSessionId()).toBe(sessionId);
+				expect(store.getEntry(evidenceId)).toEqual(before.find((entry: { id: string }) => entry.id === evidenceId));
+			} finally {
+				await session.dispose();
+				await store.close();
+			}
+		}, 30_000);
+	}
 });

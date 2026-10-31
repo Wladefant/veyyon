@@ -93,6 +93,11 @@ rebuild and artifact storage. Cases cover the disabled/enabled paths, command ca
 exact result recovery after reload, owner and freshness checks, unknown fields and size
 limits, multimodal tail recovery, concurrent history changes, cancellation, and storage
 failures. The only injected failures are at the artifact storage boundary.
+The runtime cases also drive the real `/context-record` command, `AgentSession.compact()`,
+and a continuation prompt with the policy off and on. Only their provider transport is
+stubbed. They verify the ordinary summary call off, no summary call on, exact archived
+entries, execution-session identity and pending-owner data in the next provider request.
+The pending job is supplied trace data, not a running job or ACP continuity proof.
 
 Run the focused regression target through the repository's required kernel sandbox and
 execution policy. These tests do not replace a live end-to-end demo. Keep the feature off
