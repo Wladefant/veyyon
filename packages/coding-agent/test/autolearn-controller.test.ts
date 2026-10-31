@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { AutoLearnController, buildAutoLearnInstructions } from "@veyyon/coding-agent/autolearn/controller";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -262,14 +263,7 @@ describe("AutoLearnController", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "mock",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			timestamp: Date.now(),
 		};

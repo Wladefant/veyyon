@@ -24,6 +24,7 @@ import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
@@ -55,11 +56,6 @@ function createSession(options: { manager?: AsyncJobManager; settings?: Record<s
 	});
 }
 
-function getFirstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const content = result.content.find(part => part.type === "text");
-	return content?.type === "text" ? (content.text ?? "") : "";
-}
-
 function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleResult {
 	return {
 		index: 0,
@@ -77,16 +73,6 @@ function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleRe
 		requests: 1,
 		...overrides,
 	};
-}
-
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
 }
 
 async function pollUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -174,7 +160,9 @@ describe("task spawn routing", () => {
 			task: "Review this.",
 		});
 
-		expect(getFirstText(result)).toContain('Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)');
+		expect(firstToolResultText(result)).toContain(
+			'Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)',
+		);
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
@@ -339,7 +327,7 @@ describe("task spawn routing", () => {
 			agents: [taskAgent],
 			projectAgentsDir: null,
 		});
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			await gate.promise;
 			return makeResult(options.id ?? "?");
@@ -355,7 +343,7 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		// Tool returned while the job body is still gated on the deferred.
-		const text = getFirstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("Spawned agent `Spawnling`");
 		const jobId = result.details?.async?.jobId;
 		expect(jobId).toBeTruthy();
@@ -433,11 +421,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -475,11 +463,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -518,11 +506,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -586,11 +574,11 @@ describe("task spawn routing", () => {
 				projectAgentsDir: null,
 			});
 			const started: string[] = [];
-			const gates = new Map<string, Deferred>();
+			const gates = new Map<string, PromiseWithResolvers<void>>();
 			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 				const id = options.id ?? "?";
 				started.push(id);
-				const gate = deferred();
+				const gate = Promise.withResolvers<void>();
 				gates.set(id, gate);
 				await gate.promise;
 				return makeResult(id);
@@ -624,11 +612,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);
@@ -677,11 +665,11 @@ describe("task spawn routing", () => {
 			projectAgentsDir: null,
 		});
 		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			const id = options.id ?? "?";
 			started.push(id);
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(id, gate);
 			await gate.promise;
 			return makeResult(id);

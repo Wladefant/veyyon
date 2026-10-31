@@ -49,6 +49,7 @@ import type { Context, CyberAccessProgram, FetchImpl, Model, ModelSpec, Provider
 import { fetchCodexAccountModels, fetchCodexModels } from "@veyyon/catalog/discovery/codex";
 import { resolveProviderModels } from "@veyyon/catalog/model-manager";
 import * as piUtils from "@veyyon/utils";
+import { providerSessionStateForTest } from "./helpers";
 
 const DISCOVERY_BASE_URL = "https://codex.example/backend-api";
 const ACCOUNT_ID = "acc_test";

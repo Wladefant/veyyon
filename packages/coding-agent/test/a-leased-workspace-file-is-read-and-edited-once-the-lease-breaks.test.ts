@@ -39,20 +39,32 @@ const ORIGINAL = ["def greet(name):", '    print("Hi")', "", "def farewell(name)
 const GREETED = ORIGINAL.replace('    print("Hi")', '    print("Hello")');
 
 /**
- * Takes the lease, prints `leased`, and on every break releases it, prints `broken` and takes it again as
- * soon as the file is closed, until killed.
+ * Takes the lease, prints `leased`, and on every break prints `broken`, releases the lease and takes it
+ * again as soon as the file is closed, until its stdin closes.
+ *
+ * SIGIO, the break notice, is blocked and taken with `sigtimedwait` in the loop rather than by a handler.
+ * A handler runs at whatever point the interpreter reached: one that printed while the main code was
+ * printing `leased` raised "reentrant call" and killed the holder, so the lease was gone and the count
+ * read zero. The kernel queues the notice before the breaking open returns, even a non-blocking open that
+ * fails with `EAGAIN`, and the holder drains every queued notice before it acts on its closed stdin, so
+ * the count includes every break the caller caused before it released the holder.
  */
 const HOLDER = `
-import fcntl, os, signal, sys
+import fcntl, os, select, signal, sys
 kind = fcntl.F_RDLCK if sys.argv[2] == "read" else fcntl.F_WRLCK
 fd = os.open(sys.argv[1], os.O_RDONLY)
-def on_break(signum, frame):
-    fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
-    print("broken", flush=True)
-signal.signal(signal.SIGIO, on_break)
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGIO})
 fcntl.fcntl(fd, fcntl.F_SETLEASE, kind)
-print("leased", flush=True)
+os.write(1, b"leased\\n")
+def drain():
+    while signal.sigtimedwait([signal.SIGIO], 0) is not None:
+        os.write(1, b"broken\\n")
+        fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
 while True:
+    drain()
+    if select.select([0], [], [], 0)[0]:
+        drain()
+        break
     if fcntl.fcntl(fd, fcntl.F_GETLEASE) == fcntl.F_UNLCK:
         try:
             fcntl.fcntl(fd, fcntl.F_SETLEASE, kind)
@@ -66,10 +78,10 @@ interface Lease {
 }
 
 async function holdLease(file: string, kind: "read" | "write"): Promise<Lease> {
-	const holder: ChildProcess = spawn("python3", ["-c", HOLDER, file, kind], { stdio: ["ignore", "pipe", "pipe"] });
+	const holder: ChildProcess = spawn("python3", ["-c", HOLDER, file, kind], { stdio: ["pipe", "pipe", "pipe"] });
 	let stdout = "";
 	let stderr = "";
-	const exited = Promise.withResolvers<void>();
+	const closed = Promise.withResolvers<number | null>();
 	const leased = Promise.withResolvers<void>();
 	holder.stdout?.on("data", chunk => {
 		stdout += String(chunk);
@@ -79,15 +91,19 @@ async function holdLease(file: string, kind: "read" | "write"): Promise<Lease> {
 		stderr += String(chunk);
 	});
 	holder.on("error", error => leased.reject(error));
-	holder.on("exit", code => {
+	// "close", not "exit": the count reads stdout, and "exit" can fire before the pipe is drained.
+	holder.on("close", code => {
 		leased.reject(new Error(`lease holder exited with ${code} before taking the lease: ${stderr}`));
-		exited.resolve();
+		closed.resolve(code);
 	});
 	await leased.promise;
 	return {
 		async release() {
-			holder.kill("SIGKILL");
-			await exited.promise;
+			holder.stdin?.end();
+			const stuck = setTimeout(() => holder.kill("SIGKILL"), 10_000);
+			const code = await closed.promise;
+			clearTimeout(stuck);
+			if (code !== 0) throw new Error(`lease holder exited with ${code} while holding the lease: ${stderr}`);
 			return stdout.split("\n").filter(line => line === "broken").length;
 		},
 	};

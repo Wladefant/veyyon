@@ -24,6 +24,7 @@ const SUBPROCESS_ENTRY = `${import.meta.dir}/render-stress-subprocess.ts`;
 
 // The randomized render stress sweep spawns many `bun` subprocesses (each
 // compiling Ghostty WASM) and is far too slow/heavy for CI. Run it locally only.
+// The pinned regressions beside it run in-process in milliseconds and run everywhere.
 const SKIP_IN_CI = Boolean(Bun.env.CI);
 
 type StressSubprocess = Subprocess<"ignore", "ignore", "inherit">;
@@ -211,7 +212,7 @@ function scenarioFailureError(message: StressScenarioFailure): Error {
 	return new Error(`TUI stress scenario failed: ${message.scenario} seed=${message.seed}\n${message.error}${stack}`);
 }
 
-describe.skipIf(SKIP_IN_CI)("TUI randomized render stress", () => {
+describe("TUI render stress regressions", () => {
 	it("preserves preexisting shell scrollback during visible structural mutations", async () => {
 		await runPreexistingScrollbackRegression();
 	});
@@ -219,7 +220,9 @@ describe.skipIf(SKIP_IN_CI)("TUI randomized render stress", () => {
 	it("keeps no-reflow resize notifications non-destructive during foreground streaming", async () => {
 		await runNoReflowResizeNotificationRegression();
 	});
+});
 
+describe.skipIf(SKIP_IN_CI)("TUI randomized render stress", () => {
 	const scenarios = buildScenarios();
 	it(
 		`preserves render invariants across ${stressBatchLabel(scenarios)} using ${stressConcurrency(scenarios)} subprocesses`,

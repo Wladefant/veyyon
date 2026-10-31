@@ -20,6 +20,7 @@
  * every cell after it then come out painted.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { TreeSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/tree-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -28,7 +29,6 @@ import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
 import { cardBodyLines } from "../../../helpers/modal-card";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const BG_OPEN = /\x1b\[(?:4[0-7]|10[0-7]|48;(?:2;\d+;\d+;\d+|5;\d+))m/;
 const BG_CLOSE = "\x1b[49m";
 const WIDTH = 100;
@@ -96,11 +96,6 @@ function bandedRow(root: SessionTreeNode, selectedId: string): string {
 	return banded[0] as string;
 }
 
-/** The row with every escape removed, which is what the eye sees as cells. */
-function cells(line: string): string {
-	return line.replace(ANSI_PATTERN, "");
-}
-
 describe("The selected row's band", () => {
 	/** The exact regression: a one-character entry got a one-character band. */
 	test("fills the whole row on the shortest entry in the tree", () => {
@@ -111,7 +106,7 @@ describe("The selected row's band", () => {
 
 		expect(open).toBeGreaterThan(-1);
 		expect(close).toBeGreaterThan(open);
-		expect(visibleWidth(cells(banded.slice(open, close)))).toBeGreaterThan(60);
+		expect(visibleWidth(stripVTControlCharacters(banded.slice(open, close)))).toBeGreaterThan(60);
 	});
 
 	/**
@@ -124,7 +119,7 @@ describe("The selected row's band", () => {
 		const width = (id: string) => {
 			const banded = bandedRow(root, id);
 			const open = banded.search(BG_OPEN);
-			return visibleWidth(cells(banded.slice(open, banded.indexOf(BG_CLOSE))));
+			return visibleWidth(stripVTControlCharacters(banded.slice(open, banded.indexOf(BG_CLOSE))));
 		};
 
 		expect(width(shortId)).toBe(width(longId));

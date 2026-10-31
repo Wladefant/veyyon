@@ -3,6 +3,7 @@ import {
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	gitLabDuoWorkflowModelManagerOptions,
+	openaiCodexCacheProviderId,
 	openaiCodexModelManagerOptions,
 	zaiModelManagerOptions,
 } from "../src/provider-models/special";
@@ -124,6 +125,7 @@ describe("openaiCodexModelManagerOptions", () => {
 		const fallback = await openaiCodexModelManagerOptions({
 			accessToken: "token-blue",
 			accountId: "acc_blue",
+
 		}).fetchDynamicModels?.();
 
 		expect(every?.map(model => [model.id, model.accountAccess])).toEqual([
@@ -133,6 +135,7 @@ describe("openaiCodexModelManagerOptions", () => {
 		expect(fallback?.map(model => model.id)).toEqual(["model-of-acc_blue"]);
 		expect(requested.toSorted()).toEqual(["acc_blue", "acc_blue", "acc_red"]);
 	});
+
 });
 
 describe("cursorModelManagerOptions", () => {

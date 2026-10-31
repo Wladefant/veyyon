@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, prompt } from "@veyyon/utils";
 import { formatDuration } from "@veyyon/utils/format";
 import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -14,7 +15,7 @@ import { isWaitingPollDetails, jobToolView } from "./job-view";
 
 export { isWaitingPollDetails } from "./job-view";
 
-const jobSchema = lazy(() =>
+const jobSchema = toolSchema("job", () =>
 	type({
 		"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
 		"cancel?": type("string[]").describe("job ids to cancel"),
@@ -88,6 +89,9 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 	readonly description: string;
 	get parameters(): typeof jobSchema.value {
 		return jobSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return jobSchema.wire;
 	}
 	readonly strict = true;
 	// Only a polling call blocks. A `list` snapshot and a cancel-only call return

@@ -3,6 +3,7 @@ import { streamBedrock } from "@veyyon/ai/providers/amazon-bedrock";
 import { crc32 } from "@veyyon/ai/providers/aws-eventstream";
 import type { Context, FetchImpl, Model, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { z } from "zod/v4";
 
 const originalSkipAuth = process.env.AWS_BEDROCK_SKIP_AUTH;
@@ -129,14 +130,7 @@ function toolHistoryContext(): Context {
 				api: "bedrock-converse-stream",
 				provider: "amazon-bedrock",
 				model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 0,
 			},
@@ -154,16 +148,10 @@ function toolHistoryContext(): Context {
 	};
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function captureBedrockPayload(context: Context): Promise<BedrockToolConfigPayload> {
 	const { promise, resolve } = Promise.withResolvers<BedrockToolConfigPayload>();
 	void streamBedrock(model(), context, {
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		toolChoice: "none",
 		onPayload: payload => {
 			resolve(isBedrockToolConfigPayload(payload) ? payload : {});

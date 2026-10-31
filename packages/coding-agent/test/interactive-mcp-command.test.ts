@@ -99,7 +99,7 @@ describe("issue #956: interactive /mcp test", () => {
 			},
 		} as never);
 
-		await controller.handle("/mcp test github");
+		await controller.handle("test github");
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(connectToServer).toHaveBeenCalledWith(

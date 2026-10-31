@@ -1,5 +1,9 @@
 import { parseFrontmatter, prompt } from "@veyyon/utils";
-import { appendInlineArgsFallback, templateUsesInlineArgPlaceholders } from "../config/prompt-templates";
+import {
+	appendInlineArgsFallback,
+	firstLineDescription,
+	templateUsesInlineArgPlaceholders,
+} from "../config/prompt-templates";
 import type { SlashCommand } from "../discovery";
 import { loadCapability } from "../discovery";
 import { slashCommandCapability } from "../discovery/capability/slash-command";
@@ -41,18 +45,7 @@ function parseCommandTemplate(
 ): { description: string; body: string } {
 	const { frontmatter, body } = parseFrontmatter(content, options);
 	const frontmatterDesc = typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
-
-	// Get description from frontmatter or first non-empty line
-	let description = frontmatterDesc;
-	if (!description) {
-		const firstLine = body.split("\n").find(line => line.trim());
-		if (firstLine) {
-			description = firstLine.slice(0, 60);
-			if (firstLine.length > 60) description += "...";
-		}
-	}
-
-	return { description, body };
+	return { description: frontmatterDesc || firstLineDescription(body), body };
 }
 
 export interface LoadSlashCommandsOptions {

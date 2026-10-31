@@ -66,16 +66,21 @@ describe("YieldGate.yieldIfDue", () => {
 	// The agent loop yields on every streamed event, after every tool batch and at the top of every
 	// turn, so a due yield that sleeps adds its sleep to every tool round and to every response's
 	// first token. Twenty due yields cost twenty event-loop turns: a sleep of even 1 ms per yield
-	// takes them past the bound.
+	// puts every batch of twenty at or past the bound. A turn has no such floor, but CPU contention
+	// on a shared runner can slow one batch past it, so the fastest of several batches is measured.
 	it("hands the event loop a turn rather than sleeping", async () => {
 		let now = 0;
 		const gate = new YieldGate({ now: () => now });
-		const started = performance.now();
-		for (let i = 0; i < 20; i++) {
-			now += YIELD_INTERVAL_MS;
-			await gate.yieldIfDue();
+		let fastest = Number.POSITIVE_INFINITY;
+		for (let batch = 0; batch < 5 && fastest >= 20; batch++) {
+			const started = performance.now();
+			for (let i = 0; i < 20; i++) {
+				now += YIELD_INTERVAL_MS;
+				await gate.yieldIfDue();
+			}
+			fastest = Math.min(fastest, performance.now() - started);
 		}
-		expect(performance.now() - started).toBeLessThan(20);
+		expect(fastest).toBeLessThan(20);
 	});
 });
 

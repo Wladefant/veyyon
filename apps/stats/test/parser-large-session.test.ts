@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { parseSessionFile } from "@veyyon/stats/parser";
 import { getSessionsDir } from "@veyyon/utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
@@ -31,14 +32,7 @@ async function writeLargeSessionFile(): Promise<string> {
 					api: "openai-responses",
 					provider: "openai",
 					model: "gpt-5.4",
-					usage: {
-						input: 1,
-						output: 2,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 3,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 2, totalTokens: 3 },
 					stopReason: "stop",
 					timestamp: Date.now() + i,
 					duration: 10,

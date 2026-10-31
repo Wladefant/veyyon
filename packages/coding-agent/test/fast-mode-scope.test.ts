@@ -4,12 +4,12 @@ import { Agent } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("/fast targets the current model's service-tier family", () => {
 	let tempDir: TempDir;
@@ -30,10 +30,7 @@ describe("/fast targets the current model's service-tier family", () => {
 	});
 
 	async function createSession(provider: "anthropic" | "openai", modelId: string): Promise<AgentSession> {
-		const model = getBundledModel(provider, modelId);
-		if (!model) {
-			throw new Error(`Expected bundled test model ${provider}/${modelId} to exist`);
-		}
+		const model = requireBundledModel(provider, modelId);
 		return createSessionForModel(model);
 	}
 

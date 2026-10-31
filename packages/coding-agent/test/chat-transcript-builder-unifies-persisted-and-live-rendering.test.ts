@@ -7,6 +7,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
@@ -38,14 +39,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		model: "claude-sonnet-4-5",
 		stopReason: "toolUse",
 		timestamp: 0,
-		usage: {
-			input: 713,
-			output: 127,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 840,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 713, output: 127, totalTokens: 840 },
 	};
 }
 function context(messages: AgentMessage[]): SessionContext {

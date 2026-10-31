@@ -6,7 +6,7 @@ import {
 	buildAnthropicSearchHeaders,
 	buildAnthropicUrl,
 } from "@veyyon/ai/utils/anthropic-auth";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 afterEach(() => {
 	vi.restoreAllMocks();

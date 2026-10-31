@@ -56,7 +56,7 @@ import { mcpManagerInstance, setMcpManagerInstance } from "./manager-instance";
 import {
 	lookupMcpOAuthCredential,
 	type MCPOAuthCredentialLookup,
-	selectMcpOAuthRefreshMaterial,
+	resolveMcpOAuthRefreshTarget,
 } from "./oauth-credentials";
 import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "./runtime-config";
@@ -1328,18 +1328,7 @@ export class MCPManager {
 			this.#serverConfigs.set(name, config);
 
 			// Resolve auth config before connecting, but do so per-server in parallel.
-			const connectionPromise = (async () => {
-				const resolvedConfig = await this.#resolveAuthConfig(config);
-				return connectToServer(name, resolvedConfig, {
-					onNotification: (method, params) => {
-						this.#handleServerNotification(name, method, params);
-					},
-					onRequest: (method, params) => {
-						return this.#handleServerRequest(method, params);
-					},
-					...this.#stdioSpawnHooks(),
-				});
-			})().then(
+			const connectionPromise = this.#openConnection(name, config).then(
 				connection => {
 					// Store original config (without resolved tokens) to keep
 					// cache keys stable and avoid leaking rotating credentials.
@@ -1354,36 +1343,7 @@ export class MCPManager {
 						this.#connections.set(name, connection);
 					}
 
-					// Wire auth refresh for HTTP-like transports so 401s trigger a fresh credential.
-					// Two kinds qualify, and the second used to be missed entirely: a resolvable
-					// managed OAuth credential (definition-only configs get Bearer injection too and
-					// need the same mid-session refresh), and a `!command` header, which is a server
-					// whose token is minted or read on demand. Without the hook, a rotated token
-					// meant 401s until the process restarted, because nothing ever re-ran the
-					// command.
-					if (
-						isAuthRefreshableMCPTransport(connection.transport) &&
-						(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
-					) {
-						connection.transport.onAuthError = async () => {
-							const refreshed = await this.#resolveAuthConfig(config, {
-								forceRefresh: true,
-								refreshCommands: true,
-							});
-							if (refreshed.type === "http" || refreshed.type === "sse") {
-								return refreshed.headers ?? null;
-							}
-							return null;
-						};
-					}
-
-					// Re-establish connection if the transport closes (server restart,
-					// network interruption).
-					connection.transport.onClose = () => {
-						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-						this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
-						void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
-					};
+					this.#wireTransport(name, config, connection);
 
 					return connection;
 				},
@@ -1849,6 +1809,22 @@ export class MCPManager {
 	}
 
 	/**
+	 * Reconnect after the transport of `connection` closed. A close that lands while a
+	 * reconnection is still settling can belong to the connection that reconnection is
+	 * about to return, as when the event stream of a streamable-HTTP server ends while
+	 * the tool list is in flight. Joining the pending reconnection drops that close and
+	 * leaves the closed connection registered as connected, so this waits for the
+	 * reconnection to settle and reconnects only when the closed connection is still the
+	 * registered one. The close of a superseded or torn-down connection starts nothing.
+	 */
+	async #reconnectAfterClose(name: string, connection: MCPServerConnection): Promise<void> {
+		const pending = this.#pendingReconnections.get(name);
+		if (pending) await pending;
+		if (this.#connections.get(name) !== connection) return;
+		await this.reconnectServer(name);
+	}
+
+	/**
 	 * Record a reconnect attempt against the per-server crash window and report
 	 * whether the circuit breaker is now open. Sliding window: entries older
 	 * than {@link RECONNECT_BURST_WINDOW_MS} are pruned before the new
@@ -1994,15 +1970,10 @@ export class MCPManager {
 		return null;
 	}
 
-	/** Establish a new connection to a server, wire handlers, load tools. */
-	async #connectAndWireServer(
-		name: string,
-		config: MCPServerConfig,
-		source: SourceMeta | undefined,
-		reconnectEpoch: number,
-	): Promise<MCPServerConnection> {
+	/** Resolve a server's credentials and open its connection, routing its notifications and requests here. */
+	async #openConnection(name: string, config: MCPServerConfig): Promise<MCPServerConnection> {
 		const resolvedConfig = await this.#resolveAuthConfig(config);
-		const connection = await connectToServer(name, resolvedConfig, {
+		return connectToServer(name, resolvedConfig, {
 			onNotification: (method, params) => {
 				this.#handleServerNotification(name, method, params);
 			},
@@ -2011,6 +1982,44 @@ export class MCPManager {
 			},
 			...this.#stdioSpawnHooks(),
 		});
+	}
+
+	/**
+	 * Wire a live connection's transport, on every path that opens one.
+	 *
+	 * An HTTP-like transport refreshes its credential on a 401 when the server has one to refresh: a
+	 * resolvable managed OAuth credential (definition-only configs get Bearer injection too and need the
+	 * same mid-session refresh), or a `!command` header, which mints or reads its token on demand.
+	 * Without the hook a rotated token meant 401s until the process restarted, because nothing re-ran the
+	 * command. Every transport reconnects when it closes (server restart, network interruption).
+	 */
+	#wireTransport(name: string, config: MCPServerConfig, connection: MCPServerConnection): void {
+		if (
+			isAuthRefreshableMCPTransport(connection.transport) &&
+			(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
+		) {
+			connection.transport.onAuthError = async () => {
+				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true, refreshCommands: true });
+				if (refreshed.type === "http" || refreshed.type === "sse") {
+					return refreshed.headers ?? null;
+				}
+				return null;
+			};
+		}
+		connection.transport.onClose = () => {
+			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
+			void this.#reconnectAfterClose(name, connection);
+		};
+	}
+
+	/** Establish a new connection to a server, wire handlers, load tools. */
+	async #connectAndWireServer(
+		name: string,
+		config: MCPServerConfig,
+		source: SourceMeta | undefined,
+		reconnectEpoch: number,
+	): Promise<MCPServerConnection> {
+		const connection = await this.#openConnection(name, config);
 
 		connection.config = config;
 		if (source) connection._source = source;
@@ -2026,26 +2035,7 @@ export class MCPManager {
 
 		this.#connections.set(name, connection);
 
-		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
-		// Same gate as connectServers: a resolvable managed credential, or a `!command` this
-		// path can re-run.
-		if (
-			isAuthRefreshableMCPTransport(connection.transport) &&
-			(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
-		) {
-			connection.transport.onAuthError = async () => {
-				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true, refreshCommands: true });
-				if (refreshed.type === "http" || refreshed.type === "sse") {
-					return refreshed.headers ?? null;
-				}
-				return null;
-			};
-		}
-		connection.transport.onClose = () => {
-			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
-			this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
-			void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
-		};
+		this.#wireTransport(name, config, connection);
 		try {
 			const serverTools = await listTools(connection);
 			const reconnect = () => this.reconnectServer(name);
@@ -2300,7 +2290,6 @@ export class MCPManager {
 		}
 		let resolved: MCPServerConfig = { ...config };
 
-		const auth = config.auth;
 		const lookup: MCPOAuthCredentialLookup | undefined =
 			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
 		if (lookup && this.#authStorage) {
@@ -2320,51 +2309,41 @@ export class MCPManager {
 						forceRefresh: opts?.forceRefresh,
 						refreshSkewMs: REFRESH_BUFFER_MS,
 						canRefresh: current => {
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							return Boolean(current.refresh && material?.tokenUrl);
+							return Boolean(current.refresh && resolveMcpOAuthRefreshTarget(current, config).tokenUrl);
 						},
 						refresh: (current, signal) => {
 							if (current.refresh === REMOTE_REFRESH_SENTINEL) {
 								throw new MCPBrokerRedactedRefreshError(describeMCPServerTarget(config));
 							}
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							const tokenUrl = material?.tokenUrl;
-							if (!current.refresh || !tokenUrl) {
+							const target = resolveMcpOAuthRefreshTarget(current, config);
+							if (!current.refresh || !target.tokenUrl) {
 								throw new Error(
 									`The stored OAuth credential for ${describeMCPServerTarget(config)} has no refresh token or no token endpoint, so it cannot be refreshed and will stay expired. Fix: run \`/mcp reauth <name>\` to authorize again; \`/mcp list\` gives the server's name.`,
 								);
 							}
-							const clientId = material?.clientId;
-							const clientSecret = material?.clientSecret;
-							const authorizationUrl =
-								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-							const resourceIsFallback =
-								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
-							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
-							return refreshMCPOAuthToken(tokenUrl, current.refresh, clientId, clientSecret, resource, {
-								authorizationUrl,
-								stripSameOriginResource: resourceIsFallback,
-								signal,
-							});
+							return refreshMCPOAuthToken(
+								target.tokenUrl,
+								current.refresh,
+								target.clientId,
+								target.clientSecret,
+								target.resource,
+								{
+									authorizationUrl: target.authorizationUrl,
+									stripSameOriginResource: target.resourceIsFallback,
+									signal,
+								},
+							);
 						},
 						mergeRefreshedCredential: (current, refreshed) => {
-							const material = selectMcpOAuthRefreshMaterial(current, auth);
-							const tokenUrl = material?.tokenUrl;
-							const clientId = material?.clientId;
-							const clientSecret = material?.clientSecret;
-							const authorizationUrl =
-								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-							const resourceIsFallback =
-								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
-							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							const target = resolveMcpOAuthRefreshTarget(current, config);
 							return {
 								...current,
 								...refreshed,
-								tokenUrl,
-								clientId,
-								clientSecret,
-								resource: resourceIsFallback ? undefined : resource,
-								authorizationUrl,
+								tokenUrl: target.tokenUrl,
+								clientId: target.clientId,
+								clientSecret: target.clientSecret,
+								resource: target.resourceIsFallback ? undefined : target.resource,
+								authorizationUrl: target.authorizationUrl,
 							};
 						},
 						isDefinitiveFailure: error => isDefinitiveOAuthFailure(errorMessage(error)),

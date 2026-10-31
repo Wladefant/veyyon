@@ -376,7 +376,6 @@ describe("the wire", () => {
 			}
 		}
 	});
-
 	it("keeps thinking on at the lowest effort and drops a forced tool choice when the caller turns thinking off", async () => {
 		for (const [model] of await laddered()) {
 			const anthropic = await anthropicBody(model, { disableReasoning: true, forceTitle: true });

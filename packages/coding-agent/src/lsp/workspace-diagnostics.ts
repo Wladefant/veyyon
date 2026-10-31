@@ -4,7 +4,7 @@
  */
 
 import path from "node:path";
-import { pathExists, readPipeText, trimTrailingSlashes } from "@veyyon/utils";
+import { pathExists, ptree, trimTrailingSlashes } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 
@@ -55,34 +55,30 @@ function parseGoWorkspaceBuildPatterns(output: string): string[] {
 	return Array.from(patterns);
 }
 
+/**
+ * Runs `command` in `cwd` under the session CPU budget with stdout and all of stderr captured. A non-zero
+ * exit is returned; an abort, during the run or after it, kills the process tree and throws.
+ */
+async function runChecker(command: string[], cwd: string, signal: AbortSignal | undefined): Promise<ptree.ExecResult> {
+	const result = await ptree.exec(command, {
+		cwd,
+		signal,
+		stderr: "full",
+		allowNonZero: true,
+		onSpawnPid: adoptIntoPrimarySessionCpuBudget,
+	});
+	throwIfAborted(signal);
+	return result;
+}
+
 /** Resolve the `go build` command for a `go.work` workspace. */
 async function resolveGoWorkspaceDiagnosticsCommand(cwd: string, signal?: AbortSignal): Promise<string[]> {
 	const fallback = ["go", "build", "./..."];
 	try {
-		const proc = Bun.spawn(["go", "work", "edit", "-json"], {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		adoptIntoPrimarySessionCpuBudget(proc.pid);
-		const abortHandler = () => {
-			proc.kill();
-		};
-		if (signal) {
-			signal.addEventListener("abort", abortHandler, { once: true });
-		}
-
-		try {
-			const [stdout] = await Promise.all([readPipeText(proc.stdout), readPipeText(proc.stderr)]);
-			const exitCode = await proc.exited;
-			throwIfAborted(signal);
-			if (exitCode !== 0) return fallback;
-			const patterns = parseGoWorkspaceBuildPatterns(stdout);
-			return patterns.length > 0 ? ["go", "build", ...patterns] : fallback;
-		} finally {
-			signal?.removeEventListener("abort", abortHandler);
-		}
+		const { stdout, exitCode } = await runChecker(["go", "work", "edit", "-json"], cwd, signal);
+		if (exitCode !== 0) return fallback;
+		const patterns = parseGoWorkspaceBuildPatterns(stdout);
+		return patterns.length > 0 ? ["go", "build", ...patterns] : fallback;
 	} catch {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
@@ -157,37 +153,17 @@ export async function runWorkspaceDiagnostics(
 		};
 	}
 	try {
-		const proc = Bun.spawn(projectType.command, {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		adoptIntoPrimarySessionCpuBudget(proc.pid);
-		const abortHandler = () => {
-			proc.kill();
-		};
-		if (signal) {
-			signal.addEventListener("abort", abortHandler, { once: true });
+		const { stdout, stderr } = await runChecker(projectType.command, cwd, signal);
+		const combined = (stdout + stderr).trim();
+		if (!combined) {
+			return { output: "No issues found", projectType };
 		}
-
-		try {
-			const [stdout, stderr] = await Promise.all([readPipeText(proc.stdout), readPipeText(proc.stderr)]);
-			await proc.exited;
-			throwIfAborted(signal);
-			const combined = (stdout + stderr).trim();
-			if (!combined) {
-				return { output: "No issues found", projectType };
-			}
-			// Limit output length
-			const lines = combined.split("\n");
-			if (lines.length > 50) {
-				return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
-			}
-			return { output: combined, projectType };
-		} finally {
-			signal?.removeEventListener("abort", abortHandler);
+		// Limit output length
+		const lines = combined.split("\n");
+		if (lines.length > 50) {
+			return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
 		}
+		return { output: combined, projectType };
 	} catch (e) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();

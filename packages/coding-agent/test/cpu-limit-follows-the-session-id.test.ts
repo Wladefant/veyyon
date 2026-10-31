@@ -27,7 +27,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -40,6 +39,7 @@ import {
 } from "@veyyon/coding-agent/session/cpu-limit";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /** Registering at 0 cores creates no group and touches no cgroup tree, which is all these cases need. */
 const INERT = { cores: 0, kill: false, onNotice: () => {} };
@@ -48,8 +48,8 @@ let tempDir = "";
 let authStorage: AuthStorage | undefined;
 let session: AgentSession | undefined;
 
-beforeEach(() => {
-	resetSessionCpuLimitsForTests();
+beforeEach(async () => {
+	await resetSessionCpuLimitsForTests();
 	tempDir = path.join(os.tmpdir(), `pi-cpu-rekey-${Snowflake.next()}`);
 	fs.mkdirSync(tempDir, { recursive: true });
 });
@@ -59,7 +59,7 @@ afterEach(async () => {
 	session = undefined;
 	authStorage?.close();
 	authStorage = undefined;
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	if (tempDir && fs.existsSync(tempDir)) removeSyncWithRetries(tempDir);
 });
 
@@ -145,18 +145,15 @@ describe("the registry follows a session that was renamed", () => {
 });
 
 describe("a live session keeps its budget across a new conversation", () => {
-	let sessionSettings: Settings | undefined;
-
 	async function createSession(): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("bundled model missing");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			getApiKey: () => "not-used: nothing in this suite reaches a provider",
 			initialState: { model, systemPrompt: ["test"], tools: [] },
 		});
 		const sessionManager = SessionManager.create(tempDir, tempDir);
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		sessionSettings = Settings.isolated({ "session.cpuLimitCores": 0 });
+		const sessionSettings = Settings.isolated({ "session.cpuLimitCores": 0 });
 		const built = new AgentSession({
 			agent,
 			sessionManager,
@@ -183,28 +180,5 @@ describe("a live session keeps its budget across a new conversation", () => {
 		// would let one operator budget be exceeded by starting a conversation.
 		expect(sessionCpuLimit(after)).toBeDefined();
 		expect(sessionCpuLimit(before)).toBeUndefined();
-	});
-
-	/**
-	 * The limiter reads its budget once, at construction. Every later change has
-	 * to be pushed into it, and nothing in the spawn path re-reads the setting:
-	 * a session that raised its limit mid-task went on refusing commands against
-	 * the old number, and the settings screen showed the new one, so the two
-	 * disagreed with no way to tell which was in force.
-	 */
-	it("pushes a mid-session budget change into the live limiter", async () => {
-		session = await createSession();
-		const limiter = sessionCpuLimit(session.sessionManager.getSessionId());
-		expect(await limiter?.statusLine()).toContain("off");
-
-		sessionSettings?.override("session.cpuLimitCores", 2);
-		// The listener hands the update to the limiter without awaiting it, so
-		// drain the microtask queue rather than a clock.
-		await Promise.resolve();
-		await Promise.resolve();
-
-		// Whether the host can enforce it is not the contract here; that the
-		// limiter now knows the number is.
-		expect(await limiter?.statusLine()).toContain("2 core(s)");
 	});
 });

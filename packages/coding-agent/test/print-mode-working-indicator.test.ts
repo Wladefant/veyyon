@@ -7,17 +7,12 @@ import {
 	runPrintMode,
 } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { emptyUsage } from "@veyyon/catalog/models";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session"
 
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
-	const usage = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = emptyUsage();
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
@@ -63,6 +58,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 			if (!advisorDrainPrepared) throw new Error("advisor catch-up started before headless delivery was armed");
 			return true;
 		},
+		waitForQuiescence: async () => {}
 		dispose: async () => {},
 		// The display seam (agent-session.ts) resolves obfuscated secret
 		// placeholders and argot handles to real values before print-mode writes

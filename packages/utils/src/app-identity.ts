@@ -22,3 +22,13 @@ export const APP_DIRECTORY_SLUG = "veyyon";
  * built-in provider's display name.
  */
 export const APP_DISPLAY_NAME = "Veyyon";
+
+/**
+ * The base name of the per-user private temp directory `privateTempDir()` creates under the system temp
+ * directory: `veyyon-<uid>`, or `veyyon` where the platform has no uid. The test temp-directory janitor loads
+ * before `node:os` may be imported and reads the same name here, so it never removes the directory every
+ * process of the user shares.
+ */
+export function privateTempDirName(uid: number | undefined): string {
+	return uid === undefined ? APP_DIRECTORY_SLUG : `${APP_DIRECTORY_SLUG}-${uid}`;
+}

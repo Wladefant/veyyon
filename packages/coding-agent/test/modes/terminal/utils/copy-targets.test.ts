@@ -9,6 +9,7 @@ import {
 	extractLastCommand,
 	extractQuoteBlocks,
 } from "@veyyon/coding-agent/modes/terminal/utils/copy-targets";
+import { assistantMsg } from "../../../helpers/session-messages";
 
 function source(overrides: Partial<CopySource>): CopySource {
 	return {
@@ -20,10 +21,6 @@ function source(overrides: Partial<CopySource>): CopySource {
 
 function byId(targets: CopyTarget[], id: string): CopyTarget | undefined {
 	return targets.find(t => t.id === id);
-}
-
-function assistantText(text: string): AgentMessage {
-	return { role: "assistant", content: [{ type: "text", text }] } as unknown as AgentMessage;
 }
 
 function assistantCalls(toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>): AgentMessage {
@@ -150,7 +147,7 @@ describe("buildCopyTargets", () => {
 		const newer = "Newer message\n```ts\nconst a = 1;\n```\nand\n```py\nprint(2)\n```";
 		const targets = buildCopyTargets(
 			source({
-				messages: [assistantText("Older message"), assistantText(newer)] as unknown as AgentMessage[],
+				messages: [assistantMsg("Older message"), assistantMsg(newer)],
 			}),
 		);
 
@@ -174,9 +171,7 @@ describe("buildCopyTargets", () => {
 	});
 
 	it("exposes a single-block message as content plus one block child (no 'all')", () => {
-		const targets = buildCopyTargets(
-			source({ messages: [assistantText("Just one\n```js\nfoo();\n```")] as unknown as AgentMessage[] }),
-		);
+		const targets = buildCopyTargets(source({ messages: [assistantMsg("Just one\n```js\nfoo();\n```")] }));
 		const msg = byId(targets, "msg:1");
 		expect(msg?.content).toBe("Just one\n```js\nfoo();\n```");
 		expect(msg?.children?.map(c => c.label)).toEqual(["Block 1"]);
@@ -184,7 +179,7 @@ describe("buildCopyTargets", () => {
 
 	it("drills a quoted message into a de-prefixed quote child", () => {
 		const text = "Copy-paste to the other agent:\n\n> relay this\n> across agents";
-		const targets = buildCopyTargets(source({ messages: [assistantText(text)] as unknown as AgentMessage[] }));
+		const targets = buildCopyTargets(source({ messages: [assistantMsg(text)] }));
 		const msg = byId(targets, "msg:1");
 		// The message node still copies the full markdown (with markers).
 		expect(msg?.content).toBe(text);
@@ -199,7 +194,7 @@ describe("buildCopyTargets", () => {
 
 	it("interleaves code and quote children in document order with combined nodes", () => {
 		const text = "intro\n```ts\na;\n```\n> q one\n```py\nb\n```\n> q two";
-		const targets = buildCopyTargets(source({ messages: [assistantText(text)] as unknown as AgentMessage[] }));
+		const targets = buildCopyTargets(source({ messages: [assistantMsg(text)] }));
 		const msg = byId(targets, "msg:1");
 		expect(msg?.children?.map(c => c.id)).toEqual([
 			"msg:1:code:0",
@@ -217,7 +212,7 @@ describe("buildCopyTargets", () => {
 		const messages = [
 			{ role: "user", content: [{ type: "text", text: "hi" }] },
 			assistantCalls([{ name: "read", arguments: { path: "x" } }]),
-			assistantText("real answer"),
+			assistantMsg("real answer"),
 		] as unknown as AgentMessage[];
 		const targets = buildCopyTargets(source({ messages }));
 		expect(targets.filter(t => t.id.startsWith("msg:")).map(t => t.label)).toEqual(["real answer"]);
@@ -226,7 +221,7 @@ describe("buildCopyTargets", () => {
 	it("falls back to handoff context only when there are no assistant messages", () => {
 		const withMessages = buildCopyTargets(
 			source({
-				messages: [assistantText("answer")] as unknown as AgentMessage[],
+				messages: [assistantMsg("answer")],
 				getLastVisibleHandoffText: () => "<handoff>",
 			}),
 		);
@@ -241,9 +236,9 @@ describe("buildCopyTargets", () => {
 		const targets = buildCopyTargets(
 			source({
 				messages: [
-					assistantText("older answer"),
+					assistantMsg("older answer"),
 					assistantCalls([{ name: "bash", arguments: { command: "echo old" } }]),
-					assistantText("newer answer"),
+					assistantMsg("newer answer"),
 					assistantCalls([{ name: "bash", arguments: { command: "bun check" } }]),
 				] as unknown as AgentMessage[],
 			}),

@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { canRestrictAccess } from "../packages/utils/test/helpers/mode-bits";
 import { readIfPresent } from "./workspace-layout";
 
 const created: string[] = [];
@@ -29,11 +30,6 @@ function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-read-if-present-"));
 	created.push(dir);
 	return dir;
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 afterEach(() => {

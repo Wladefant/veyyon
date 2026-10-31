@@ -1,5 +1,6 @@
 import { type Component, Container, type Input, type SelectList, type SettingsList, Spacer, Text } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
+import { wrapIndex } from "@veyyon/utils/math";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { theme } from "../../../../theme/theme-binding";
 import {
@@ -103,6 +104,8 @@ export abstract class MouseRoutedSubmenu extends Container {
 		title: string;
 		description?: string;
 		headerExtra?: Component;
+		/** Drawn directly above the body with no gap: a column heading for a list body. */
+		bodyLead?: Component;
 		body: Component;
 		footerHint?: string;
 		footerExtra?: Component;
@@ -118,6 +121,7 @@ export abstract class MouseRoutedSubmenu extends Container {
 			this.addChild(options.headerExtra);
 		}
 		this.addChild(new Spacer(1));
+		if (options.bodyLead) this.addChild(options.bodyLead);
 		this.addChild(options.body);
 		if (options.footerExtra) {
 			this.addChild(new Spacer(1));
@@ -286,13 +290,13 @@ export function handleListNavigationKey(data: string, options: ListNavigationOpt
 	}
 
 	if (matchesSelectUp(data)) {
-		const next = selectedIndex === 0 ? (wrap ? totalItems - 1 : 0) : selectedIndex - 1;
+		const next = wrap ? wrapIndex(selectedIndex - 1, totalItems) : Math.max(0, selectedIndex - 1);
 		onMove(next);
 		return true;
 	}
 
 	if (matchesSelectDown(data)) {
-		const next = selectedIndex === totalItems - 1 ? (wrap ? 0 : totalItems - 1) : selectedIndex + 1;
+		const next = wrap ? wrapIndex(selectedIndex + 1, totalItems) : Math.min(totalItems - 1, selectedIndex + 1);
 		onMove(next);
 		return true;
 	}

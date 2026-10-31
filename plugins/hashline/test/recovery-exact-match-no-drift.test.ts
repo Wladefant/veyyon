@@ -1,20 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery when current text still matches the snapshot (no drift).
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/exact.ts";
 
 describe("Recovery exact match no drift", () => {
 	it("applies SWAP when tag matches and text is unchanged", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
+		const v0 = linesText(["A", "B", "C"]);
 		const h0 = store.record(PATH, v0);
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -32,7 +29,7 @@ describe("Recovery exact match no drift", () => {
 
 	it("applies DEL when tag matches and text is unchanged", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
+		const v0 = linesText(["A", "B", "C"]);
 		const h0 = store.record(PATH, v0);
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -41,7 +38,7 @@ describe("Recovery exact match no drift", () => {
 			edits: parsePatch("DEL 2.=2").edits,
 		});
 		if (recovered) {
-			expect(recovered.text).toBe(text(["A", "C"]));
+			expect(recovered.text).toBe(linesText(["A", "C"]));
 		}
 	});
 });

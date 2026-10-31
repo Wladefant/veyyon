@@ -23,7 +23,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -31,6 +30,7 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
 import { ArgotSession, DICT_FILENAME, parseDict } from "argot";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const DICT = `
 version = 1
@@ -70,8 +70,7 @@ describe("AgentSession display expansion", () => {
 	});
 
 	async function runTurn(): Promise<{ events: AgentSessionEvent[]; session: AgentSession }> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const mock = createMockModel({ responses: [{ content: [REPLY] }] });
 		const agent = new Agent({
 			getApiKey: () => "test-key",

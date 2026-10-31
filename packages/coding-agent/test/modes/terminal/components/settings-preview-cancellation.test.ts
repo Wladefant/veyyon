@@ -8,12 +8,8 @@ import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { clickAt } from "../../../helpers/sgr-pointer";
 import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-/** SGR left-button press at a 1-based screen row and column. */
-function leftClick(row: number, col: number): string {
-	return `\x1b[<0;${col};${row}M`;
-}
 
 function lineContaining(frame: readonly string[], needle: string): { row: number; text: string } {
 	const row = frame.findIndex(line => stripVTControlCharacters(line).includes(needle));
@@ -73,7 +69,7 @@ describe("settings preview cancellation", () => {
 		const title = lineContaining(frame, "[x]");
 		expect(title.row).toBeGreaterThanOrEqual(0);
 
-		component.handleInput(leftClick(title.row + 1, title.text.indexOf("[x]") + 2));
+		component.handleInput(clickAt(title.row + 1, title.text.indexOf("[x]") + 2));
 
 		expect(Settings.instance.get("theme.dark")).toBe("titanium");
 		expect(events).toEqual(["preview:light", "preview:titanium", "cancel"]);
@@ -85,7 +81,7 @@ describe("settings preview cancellation", () => {
 		const component = openThemePreview(events);
 		component.render(120);
 
-		component.handleInput(leftClick(1, 1));
+		component.handleInput(clickAt(1, 1));
 
 		expect(Settings.instance.get("theme.dark")).toBe("titanium");
 		expect(events).toEqual(["preview:light", "preview:titanium", "cancel"]);
@@ -99,7 +95,7 @@ describe("settings preview cancellation", () => {
 		const interaction = lineContaining(frame, "Interaction");
 		expect(interaction.row).toBeGreaterThanOrEqual(0);
 
-		component.handleInput(leftClick(interaction.row + 1, interaction.text.indexOf("Interaction") + 1));
+		component.handleInput(clickAt(interaction.row + 1, interaction.text.indexOf("Interaction") + 1));
 
 		expect(Settings.instance.get("theme.dark")).toBe("titanium");
 		expect(events).toEqual(["preview:light", "preview:titanium"]);
@@ -114,7 +110,7 @@ describe("settings preview cancellation", () => {
 		const frame = component.render(120);
 		const title = lineContaining(frame, "[x]");
 
-		component.handleInput(leftClick(title.row + 1, title.text.indexOf("[x]") + 2));
+		component.handleInput(clickAt(title.row + 1, title.text.indexOf("[x]") + 2));
 
 		expect(Settings.instance.get("theme.dark")).toBe("light");
 		expect(events).toEqual(["preview:light", "change:theme.dark:light", "cancel"]);

@@ -7,7 +7,7 @@
  * popup, this module decides whether there are candidates to show.
  */
 
-import type { AutocompleteItem, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
+import type { AppliedCompletion, AutocompleteItem, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
 import { isSubsequenceMatch, subsequenceScore } from "@veyyon/utils/fuzzy";
 import type { Skill } from "../../../extensibility/skills";
 import { InternalUrlRouter } from "../../../internal-urls/router";
@@ -115,7 +115,7 @@ export function applyInternalUrlCompletion(
 	cursorCol: number,
 	item: AutocompleteItem,
 	prefix: string,
-): { lines: string[]; cursorLine: number; cursorCol: number } {
+): AppliedCompletion {
 	const currentLine = lines[cursorLine] || "";
 	const beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
 	const afterCursor = currentLine.slice(cursorCol);

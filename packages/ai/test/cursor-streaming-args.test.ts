@@ -10,6 +10,7 @@ import {
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@veyyon/ai/types";
 import { getStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /** Cursor publishes no pricing, so the zeros here are what a real Cursor model carries. */
 function cursorUsageModel(): Model<"cursor-agent"> {
@@ -35,14 +36,7 @@ function newHarness(): Harness {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-composer-2.5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

@@ -37,6 +37,7 @@ import * as profiles from "@veyyon/coding-agent/tools/web/browser/profiles";
 import { getBrowserProfilesDir, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 import type { Browser } from "puppeteer-core";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let server: http.Server;
@@ -55,12 +56,8 @@ function serve(request: http.IncomingMessage, response: http.ServerResponse): vo
 	response.end(`<!doctype html><title>t</title><pre id="sent">${sent}</pre>`);
 }
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function run(name: string, code: string): Promise<string> {
-	return text(await tool.execute("run", { action: "run", name, code }));
+	return toolResultText(await tool.execute("run", { action: "run", name, code }));
 }
 
 /** Write `who` to the page's localStorage and IndexedDB. */
@@ -147,7 +144,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a named browser profile", () => {
 	});
 
 	it("keeps a cookie, localStorage and IndexedDB after its browser closes and starts again, and shares them with no one else", async () => {
-		const opened = text(
+		const opened = toolResultText(
 			await tool.execute("open", {
 				action: "open",
 				name: "alpha-1",
@@ -249,7 +246,7 @@ return { save: all.credentials_enable_service?.value, breach: all.profile?.passw
 				: `Browser profile "gamma" is in use by pid ${pid} (lock ${path.join(dir, "SingletonLock")}). Close the browser running on it, or open another profile.`,
 		);
 		expect(held.credentials_enable_service).toBeUndefined();
-		const opened = text(
+		const opened = toolResultText(
 			await tool.execute("open", { action: "open", name: "gamma-1", profile: "gamma", url: `${base}/whoami` }),
 		);
 		expect(opened).toContain('Opened tab "gamma-1" on headless browser (hidden, profile "gamma")');
@@ -305,7 +302,7 @@ return { save: all.credentials_enable_service?.value, breach: all.profile?.passw
 			fs.unlinkSync(lock);
 			// The largest pid Linux hands out by default: no process holds it in a test container.
 			fs.symlinkSync(`${os.hostname()}-4194303`, lock);
-			const opened = text(
+			const opened = toolResultText(
 				await tool.execute("open", { action: "open", name: "stale-1", profile: "stale", url: `${base}/whoami` }),
 			);
 			expect(opened).toContain('Opened tab "stale-1" on headless browser (hidden, profile "stale")');

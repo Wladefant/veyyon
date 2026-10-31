@@ -1,16 +1,11 @@
 import { describe, expect, it } from "bun:test";
+
 import { convertMessages } from "@veyyon/ai/providers/google-shared";
-import type { Context, Model, Usage } from "@veyyon/ai/types";
+
+import type { Context, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function createGoogleModel(
 	id: string,
@@ -56,7 +51,7 @@ function contextWithToolResult(toolName = "stale_tool_name"): Context {
 						arguments: { query: "pi" },
 					},
 				],
-				usage: ZERO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 2000,
 			},

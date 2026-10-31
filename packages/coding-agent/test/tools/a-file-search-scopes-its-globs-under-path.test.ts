@@ -19,20 +19,9 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool, type SearchToolInput, scopeFilePatterns } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createTestSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-	};
-}
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * root.ts at the root, src/top.ts one level down, src/nested/deep.ts two down,
@@ -56,7 +45,7 @@ async function withWorkspace<T>(body: (dir: string) => Promise<T>): Promise<T> {
 
 /** The files a search returns, as the tool lists them relative to the session cwd. */
 async function searchFiles(cwd: string, args: SearchToolInput): Promise<string[]> {
-	const tool = new SearchTool(createTestSession(cwd));
+	const tool = new SearchTool(makeToolSessionAt(cwd));
 	const result = await tool.execute(`scope-${JSON.stringify(args)}`, args);
 	if (result.details?.type !== "files") throw new Error("not a file search result");
 	return [...(result.details.result.files ?? [])].sort();
@@ -121,7 +110,7 @@ describe("a file search scopes its globs under path", () => {
 
 	it("reports the scoped directories to the approval boundary, not the bare glob", async () => {
 		await withWorkspace(async dir => {
-			const tool = new SearchTool(createTestSession(dir));
+			const tool = new SearchTool(makeToolSessionAt(dir));
 			// The boundary reads each pattern's literal base: the scope for a glob
 			// under it, and the climb itself for an input that leaves it, which
 			// `resolveToCwd` later places outside the scope.

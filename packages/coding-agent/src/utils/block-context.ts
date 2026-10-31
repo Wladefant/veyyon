@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { enclosingBlockBoundaries } from "@veyyon/natives";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import * as logger from "@veyyon/utils/logger";
@@ -207,6 +208,10 @@ async function nativeBlockContext(
 	const ranges = visibleSetToSpans(visible);
 	if (ranges.length === 0) return new Map();
 	let boundaries: number[] | null | undefined;
+	// The call copies the whole source into a native string on the event loop: 0.8-1.7 ms for
+	// 3.5 MB. A turn of its own keeps that copy from adding to the diff, the row parse or the
+	// other side's line walk that ran before it.
+	await yieldToEventLoop();
 	try {
 		boundaries = await enclosingBlockBoundaries({
 			code: typeof fullLines === "string" ? fullLines : (source.text ?? fullLines.join("\n")),

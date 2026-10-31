@@ -15,10 +15,11 @@
  * What it does not catch: a card sealed without a result and handed new arguments afterwards, which
  * the sealing path stops but does not settle.
  */
-import { afterEach, beforeAll, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, mock, onTestFinished, spyOn } from "bun:test";
 import { setTimeout as nextTask } from "node:timers/promises";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES, type StreamingDiffContext } from "@veyyon/coding-agent/edit/streaming";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
@@ -29,14 +30,7 @@ import type { TUI } from "@veyyon/tui";
 
 const MODES = Object.keys(EDIT_MODE_STRATEGIES) as (keyof typeof EDIT_MODE_STRATEGIES)[];
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 /** The tool a call in `mode` is made to, resolved the way a card resolves it. */
 function toolFor(mode: (typeof MODES)[number]): { toolName: string; tool: AgentTool } {
@@ -113,6 +107,8 @@ function rebuild(mode: (typeof MODES)[number], messages: AgentMessage[], streami
 		isStreaming: () => streaming,
 	});
 	builder.rebuild(messages);
+	// A call rebuilt with no result is a live card whose rail ticks until the transcript is disposed.
+	onTestFinished(() => builder.dispose());
 }
 
 describe("a tool call with its result computes no preview", () => {

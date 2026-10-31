@@ -11,6 +11,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import * as unexpectedStopClassifier from "@veyyon/coding-agent/session/unexpected-stop-classifier";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
+import { stopReply } from "./helpers/mock-turns";
 
 const recordToolSchema = z.object({ value: z.string() });
 
@@ -40,13 +41,6 @@ function recordCall(value: string, id: string): MockResponse {
 	return {
 		content: [{ type: "toolCall", id, name: "record", arguments: { value } }],
 		stopReason: "toolUse",
-	};
-}
-
-function unexpectedStop(text: string): MockResponse {
-	return {
-		content: [{ type: "text", text }],
-		stopReason: "stop",
 	};
 }
 
@@ -133,7 +127,7 @@ describe("AgentSession unexpected stop guard", () => {
 	it("does not classify when the feature is disabled", async () => {
 		const spy = vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(true);
 		const { session, mock } = await createHarness([
-			unexpectedStop("I should apply the same fix to the JS eval worker. Doing that now."),
+			stopReply("I should apply the same fix to the JS eval worker. Doing that now."),
 		]);
 
 		await session.prompt("do the thing");
@@ -152,7 +146,7 @@ describe("AgentSession unexpected stop guard", () => {
 		});
 		const { session, mock } = await createHarness(
 			[
-				unexpectedStop("I should apply the same fix to the JS eval worker. Doing that now."),
+				stopReply("I should apply the same fix to the JS eval worker. Doing that now."),
 				{ content: ["done now"], stopReason: "stop" },
 			],
 			{
@@ -173,7 +167,7 @@ describe("AgentSession unexpected stop guard", () => {
 	it("does not continue when the classifier returns false", async () => {
 		const spy = vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(false);
 		const { session, mock } = await createHarness(
-			[unexpectedStop("I should apply the same fix to the JS eval worker. Doing that now.")],
+			[stopReply("I should apply the same fix to the JS eval worker. Doing that now.")],
 			{
 				"features.unexpectedStopDetection": true,
 				"providers.unexpectedStopModel": "online",
@@ -193,10 +187,10 @@ describe("AgentSession unexpected stop guard", () => {
 		const spy = vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(true);
 		const { session, mock } = await createHarness(
 			[
-				unexpectedStop("I should fix this next."),
-				unexpectedStop("I should fix this next."),
-				unexpectedStop("I should fix this next."),
-				unexpectedStop("I should fix this next."),
+				stopReply("I should fix this next."),
+				stopReply("I should fix this next."),
+				stopReply("I should fix this next."),
+				stopReply("I should fix this next."),
 			],
 			{
 				"features.unexpectedStopDetection": true,
@@ -223,7 +217,7 @@ describe("AgentSession unexpected stop guard", () => {
 		});
 		const { session, mock } = await createHarness(
 			[
-				unexpectedStop("I should fix this next."),
+				stopReply("I should fix this next."),
 				{ content: ["done now"], stopReason: "stop" },
 				{ content: ["a later unrelated answer"], stopReason: "stop" },
 			],

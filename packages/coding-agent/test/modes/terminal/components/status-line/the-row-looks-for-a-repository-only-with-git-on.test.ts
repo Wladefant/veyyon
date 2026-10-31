@@ -24,9 +24,10 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
 import type { StatusLineSegmentId } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import * as git from "@veyyon/coding-agent/utils/git";
 import { stripAnsi } from "@veyyon/utils";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 
 /** Wide enough that nothing on the row is clipped or shed. */
@@ -39,8 +40,7 @@ let childRepo: string;
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 	root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-row-repository-"));
 	workspace = path.join(root, "workspace");

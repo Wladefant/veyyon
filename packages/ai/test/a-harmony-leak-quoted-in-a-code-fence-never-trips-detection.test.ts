@@ -18,6 +18,7 @@ import {
 	type HarmonySignalClass,
 	type HarmonySurface,
 } from "@veyyon/ai/utils/harmony-leak";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 interface Trigger {
 	/** The text that trips detection on its own. */
@@ -101,14 +102,7 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

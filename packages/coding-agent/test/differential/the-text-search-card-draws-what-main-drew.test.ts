@@ -72,38 +72,6 @@ describe("text_search tool differential", () => {
 		const hint = ` ${formatExpandHint(theme, false, true)}`;
 		return lines.map(line => line.replace(hint, ""));
 	}
-	/**
-	 * Every colour sequence that paints nothing, removed.
-	 *
-	 * Main joined pre-coloured strings into one `Text`, so a row carries the runs its neighbours opened
-	 * and closed with no character between them. Nothing on any terminal draws differently for them,
-	 * and a pass over the row is exact where a regex is not: an open followed straight by a reset
-	 * paints nothing, and a reset with no open before it closes nothing.
-	 */
-	function withoutEmptyRuns(lines: readonly string[]): string[] {
-		const sequence = /\u001b\[(?:38;2;\d+;\d+;\d+|39)m/g;
-		return lines.map(line => {
-			let out = "";
-			let cursor = 0;
-			let open: string | undefined;
-			for (const match of line.matchAll(sequence)) {
-				const text = line.slice(cursor, match.index);
-				cursor = match.index + match[0].length;
-				if (text.length > 0) {
-					out += `${open ?? ""}${text}`;
-					open = undefined;
-				}
-				if (match[0] === "\u001b[39m") {
-					if (text.length > 0) out += match[0];
-					open = undefined;
-					continue;
-				}
-				open = match[0];
-			}
-			return `${out}${open ?? ""}${line.slice(cursor)}`;
-		});
-	}
-
 	function viewLines(
 		value: TextSearchViewResult,
 		context: ToolViewContext,
@@ -450,12 +418,11 @@ describe("text_search tool differential", () => {
 				[EXPANDED, HOST_EXPANDED],
 			] as const) {
 				for (const width of [200, WIDTH] as const) {
-					const drawn = withoutEmptyRuns(viewLines(value, context, args, width));
-					const oracle = withoutEmptyRuns(unpad(oracleLines(value, options, args, width)));
+					const drawn = viewLines(value, context, args, width);
+					const oracle = unpad(oracleLines(value, options, args, width));
 					expect(drawn).toHaveLength(oracle.length);
 					// The head row is the same row one column left. Every row under it is the same row
-					// indented two columns under that head, where main left it in column zero behind
-					// the runs its single `Text` had closed.
+					// indented two columns under that head, where main left it in column zero.
 					expect(drawn[0]).toBe(oracle[0]);
 					for (let row = 1; row < oracle.length; row++) expect(drawn[row]).toBe(`  ${oracle[row]}`);
 				}
@@ -598,8 +565,8 @@ describe("text_search tool differential", () => {
 				);
 				// A count on the file axis alone is zero matches, which is the empty card: the head row
 				// one column left, and every row under it two columns in.
-				const drawn = withoutEmptyRuns(viewLines(withFiles, context, args, width));
-				const oracle = withoutEmptyRuns(unpad(oracleLines(withFiles, options, args, width)));
+				const drawn = viewLines(withFiles, context, args, width);
+				const oracle = unpad(oracleLines(withFiles, options, args, width));
 				expect(drawn).toHaveLength(oracle.length);
 				expect(drawn[0]).toBe(oracle[0]);
 				for (let row = 1; row < oracle.length; row++) expect(drawn[row]).toBe(`  ${oracle[row]}`);

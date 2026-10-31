@@ -8,15 +8,14 @@
  */
 import { describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import type { ScopedModel } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { buildSessionOptions } from "@veyyon/coding-agent/main";
+import { requireBundledModel } from "../../agent/test/helpers";
 
-const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("expected bundled Claude Sonnet 4.5");
+const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 const registry = {
 	getAll: () => [model],

@@ -8,6 +8,17 @@
  * Slicing them off here keeps those assertions about the list instead of about
  * where the card happens to sit on screen.
  */
+import {
+	layoutModalCard,
+	type ModalSizing,
+} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
+import {
+	type ModalChromeInput,
+	type ModalShellContent,
+	type ModalShellResult,
+	planModalChrome,
+	renderModalShell,
+} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { theme } from "@veyyon/coding-agent/theme/theme";
 
 /**
@@ -34,4 +45,18 @@ export function cardBodyLines(frame: readonly string[]): string[] {
 		.slice(top + 1, bottom)
 		.filter(line => line[left] === box.vertical)
 		.map(line => line.slice(left + 2, right - 1).trimEnd());
+}
+
+/** One card on one area: its sizing, its chrome and its content. */
+export interface ModalCardInput extends ModalChromeInput, ModalShellContent {
+	sizing: ModalSizing;
+	areaWidth: number;
+	areaHeight: number;
+}
+
+/** Lay out, plan and paint one card the way a component does; throws on an area too small for a card. */
+export function paintCard(input: ModalCardInput): ModalShellResult {
+	const card = layoutModalCard(input.areaWidth, input.areaHeight, input.sizing);
+	if (card === null) throw new Error(`no card fits a ${input.areaWidth}x${input.areaHeight} area`);
+	return renderModalShell(planModalChrome(card, input), input);
 }

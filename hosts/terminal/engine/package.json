@@ -37,6 +37,7 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
+    "@veyyon/host": "catalog:",
     "@veyyon/natives": "catalog:",
     "@veyyon/utils": "catalog:",
     "lru-cache": "catalog:",

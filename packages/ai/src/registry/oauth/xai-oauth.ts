@@ -12,7 +12,7 @@ import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
-import { type OAuthDeviceCodePollResult, pollOAuthDeviceCodeFlow } from "./device-code";
+import { loginStep, type OAuthDeviceCodePollResult, pollOAuthDeviceCodeFlow } from "./device-code";
 import { credentialExpiryFromExpiresIn } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -49,30 +49,36 @@ interface XAIDeviceAuthorization {
  *         either scheme or host validation.
  */
 export function validateXAIEndpoint(url: string, field: string): string {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
-	}
-	if (parsed.protocol !== "https:") {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
-	}
-	const host = parsed.hostname.toLowerCase();
-	if (!host || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
+	const parsed = URL.parse(url);
+	const host = parsed?.hostname.toLowerCase();
+	if (parsed?.protocol !== "https:" || !host || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
 		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
 	}
 	return url;
 }
 
-/** Fetch xAI's OIDC discovery document and validate the token endpoint. */
+/** The parsed body of an xAI response; an unparsable body is a `validation` error naming `operation`. */
+async function responseJson(response: Response, operation: string): Promise<unknown> {
+	try {
+		return await response.json();
+	} catch (error) {
+		throw new AIError.OAuthError(`${operation} returned invalid JSON: ${errorMessage(error)}`, {
+			kind: "validation",
+			provider: "xai",
+			cause: error,
+		});
+	}
+}
+
+/** Fetch xAI's OIDC discovery document and validate the token endpoint. `signal` aborts the request. */
 async function xaiOAuthDiscovery(
 	timeoutMs: number = DISCOVERY_TIMEOUT_MS,
 	fetchOverride?: FetchImpl,
+	signal?: AbortSignal,
 ): Promise<XAIOAuthDiscovery> {
 	// The scoped fence spans the body reads below and its timer is cleared
 	// on settle (a bare AbortSignal.timeout stays armed for the full timeout).
-	const requestTimeout = scopedTimeoutSignal(timeoutMs);
+	const requestTimeout = scopedTimeoutSignal(timeoutMs, signal);
 	try {
 		const fetchImpl = fetchOverride ?? fetch;
 		let response: Response;
@@ -96,16 +102,7 @@ async function xaiOAuthDiscovery(
 				status: response.status,
 			});
 		}
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI OIDC discovery returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI OIDC discovery");
 		if (!isRecord(payload)) {
 			throw new AIError.OAuthError("xAI OIDC discovery response was not a JSON object.", {
 				kind: "validation",
@@ -246,7 +243,6 @@ async function requestXAIDeviceAuthorization(
 				signal: requestTimeout.signal,
 			});
 		} catch (error) {
-			if (signal?.aborted) throw new AIError.LoginCancelledError();
 			throw new AIError.OAuthError(`xAI device-code request failed: ${errorMessage(error)}`, {
 				kind: "device-auth",
 				provider: "xai",
@@ -271,16 +267,7 @@ async function requestXAIDeviceAuthorization(
 			);
 		}
 
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI device-code response returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI device-code response");
 		return parseXAIDeviceAuthorization(payload);
 	} finally {
 		requestTimeout.cancel();
@@ -313,7 +300,6 @@ async function pollXAIDeviceToken(
 				signal: requestTimeout.signal,
 			});
 		} catch (error) {
-			if (signal?.aborted) throw new AIError.LoginCancelledError();
 			throw new AIError.OAuthError(`xAI device-code token polling failed: ${errorMessage(error)}`, {
 				kind: "polling",
 				provider: "xai",
@@ -366,8 +352,10 @@ async function pollXAIDeviceToken(
 /** Log in to xAI Grok with the RFC 8628 device authorization grant. */
 export async function loginXAIOAuth(ctrl: OAuthController): Promise<OAuthCredentials> {
 	const fetchImpl = ctrl.fetch ?? fetch;
-	const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, fetchImpl);
-	const device = await requestXAIDeviceAuthorization(fetchImpl, ctrl.signal);
+	const discovery = await loginStep(ctrl.signal, () =>
+		xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, fetchImpl, ctrl.signal),
+	);
+	const device = await loginStep(ctrl.signal, () => requestXAIDeviceAuthorization(fetchImpl, ctrl.signal));
 	ctrl.onAuth?.({
 		url: device.verificationUriComplete,
 		instructions: `Enter code: ${device.userCode}`,
@@ -379,6 +367,7 @@ export async function loginXAIOAuth(ctrl: OAuthController): Promise<OAuthCredent
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 		signal: ctrl.signal,
+		provider: "xai",
 	});
 	// Device-code flows get no browser redirect of their own; bring up the
 	// branded success page so grok ends on the same screen as callback providers.
@@ -402,7 +391,7 @@ export async function refreshXAIOAuthToken(
 		throw new AIError.OAuthError("missing refresh_token", { kind: "validation", provider: "xai" });
 	}
 
-	const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, fetchImpl);
+	const discovery = await xaiOAuthDiscovery(DISCOVERY_TIMEOUT_MS, fetchImpl, signal);
 	const tokenEndpoint = validateXAIEndpoint(discovery.token_endpoint, "token_endpoint");
 
 	const body = new URLSearchParams({
@@ -440,16 +429,7 @@ export async function refreshXAIOAuthToken(
 			});
 		}
 
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			throw new AIError.OAuthError(`xAI token refresh returned invalid JSON: ${errorMessage(error)}`, {
-				kind: "validation",
-				provider: "xai",
-				cause: error,
-			});
-		}
+		const payload = await responseJson(response, "xAI token refresh");
 		return parseXAITokenResponse(payload, "xAI token refresh response", refreshToken);
 	} finally {
 		requestTimeout.cancel();

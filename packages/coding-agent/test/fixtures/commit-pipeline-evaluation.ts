@@ -12,7 +12,7 @@ import type { Api, AssistantMessage, Model, ModelSpec } from "@veyyon/ai";
 import { registerCustomApi } from "@veyyon/ai/api-registry";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem } from "@veyyon/utils";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -47,14 +47,7 @@ function probeMessage(): AssistantMessage {
 		api: PROBE_API,
 		provider: "probe",
 		model: "probe-helper",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	} as AssistantMessage;

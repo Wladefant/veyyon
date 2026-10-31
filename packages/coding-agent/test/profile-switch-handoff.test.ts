@@ -197,7 +197,7 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 		});
 
 		await createdMode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(createdMode.ui);
 
 		const harness: HandoffHarness = {
 			mode: createdMode,
@@ -261,7 +261,7 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 		// so if shutdown leaves frame producers connected, the dying session
 		// keeps painting through the whole teardown window.
 		h.mode.ensureLoadingAnimation();
-		await h.terminal.waitForRender();
+		await h.terminal.waitForRender(h.mode.ui);
 
 		// The real dispatch: /profile other -> registry port -> requestRelaunch
 		// + requestShutdown -> InteractiveMode.shutdown().
@@ -269,12 +269,12 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 		await h.disposeEntered;
 		// Let the "Switching to profile…" / "Closing session…" paints settle so
 		// every write observed below happens strictly inside the teardown window.
-		await h.terminal.waitForRender();
+		await h.terminal.waitForRender(h.mode.ui);
 
 		const writesBeforeInput = h.writes.length;
 		h.terminal.sendInput("h");
 		h.terminal.sendInput("i");
-		await h.terminal.waitForRender();
+		await h.terminal.waitForRender(h.mode.ui);
 		// Wait out two full spinner cadences (~80ms each at 12.5fps) so a loader
 		// left running by a missing frame freeze has definitely ticked. Real
 		// wall-clock wait, deliberately: the Loader owns a real setInterval that
@@ -316,7 +316,7 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 		// is deterministically in force wherever the fast dispose has got to.
 		await h.disposeEntered;
 		h.terminal.sendInput("x");
-		await h.terminal.waitForRender();
+		await h.terminal.waitForRender(h.mode.ui);
 		h.finishChild(0);
 		await h.quitCalled;
 

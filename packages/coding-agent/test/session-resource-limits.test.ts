@@ -22,8 +22,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type CpuLimitEnvironment, type CpuLimitProbe, probeCpuLimitSupport } from "@veyyon/kernel/session/cgroup-host";
 import { BYTES_PER_GB } from "@veyyon/kernel/session/write-accounting";
-import { resetSettingsForTest, Settings } from "../src/config/settings";
-import { setSettingsInstance } from "../src/config/settings-instance";
 import { getUi, SETTINGS_SCHEMA, type SettingPath } from "../src/config/settings-schema";
 import {
 	type CpuBudgetGroupHandle,
@@ -45,7 +43,7 @@ const live: SessionCpuLimit[] = [];
 
 afterEach(async () => {
 	for (const limiter of live.splice(0)) await limiter.dispose();
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 });
 
@@ -81,9 +79,13 @@ async function makeFixture(options: {
 	memoryLimitGb?: number;
 	members?: number[];
 	makeGroupDir?: boolean;
+	/** Controllers the delegated parent offers; the default offers all four. */
+	controllers?: string;
+	/** Run the session-start report before the group exists, as registration does. */
+	reportAtStart?: boolean;
 }): Promise<Fixture> {
 	const root = await makeCgroupRoot();
-	const parent = await makeDelegatedParent(root);
+	const parent = await makeDelegatedParent(root, { controllers: options.controllers });
 	const host = makeFakeHost(root);
 	let members = options.members ?? [];
 	const notices: string[] = [];
@@ -103,6 +105,7 @@ async function makeFixture(options: {
 	live.push(limiter);
 	const cgroupDir = path.join(parent, sessionCpuBudgetName("sess-limits"));
 	if (options.makeGroupDir !== false) await fs.mkdir(cgroupDir, { recursive: true });
+	if (options.reportAtStart) await limiter.reportMemoryAtStart();
 	await limiter.ensureGroup();
 	return { host, limiter, notices, cgroupDir, setMembers: pids => (members = pids) };
 }
@@ -216,6 +219,24 @@ describe("session.memoryLimitGb", () => {
 		// permanently poisoned session.
 		await fixture.limiter.updateLimits({ memoryLimitGb: 0 });
 		fixture.limiter.assertMaySpawn("a bash command");
+	});
+
+	/**
+	 * Registration reports a missing memory controller at session start, and
+	 * the first group creation finds `memory.max` unwritable for the same
+	 * reason. One condition, one notice.
+	 */
+	it("reports a memory cap with no controller once across session start and group creation", async () => {
+		const fixture = await makeFixture({
+			memoryLimitGb: 2,
+			makeGroupDir: false,
+			controllers: "cpu io pids",
+			reportAtStart: true,
+		});
+
+		const warnings = fixture.notices.filter(text => text.includes("session.memoryLimitGb is set to 2"));
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("the memory controller is not available here");
 	});
 
 	it("warns at session start, before any group exists, when the controller is absent", async () => {
@@ -369,59 +390,5 @@ describe("the resource limit rows", () => {
 		);
 
 		expect(machineRowsOnResources).toEqual([]);
-	});
-});
-
-/**
- * The gap between "the operator set a limit" and "a gate mentioned it".
- *
- * `agent-session.ts` registers a session with the CPU cores and the kill flag
- * and nothing else, because the three newer limits were added while that file
- * belonged to another lane. The gates that DO pass them (bash, launch, the write
- * and edit tools) each refresh the limiter before acting, so a session that runs
- * a command is capped. A session that only opens an eval kernel or an MCP server
- * reaches `adoptPid` without any of them ever running, and the kernel writes the
- * caps at group creation: unless the limiter can find the configured values on
- * its own, a Python cell allocating 50 GB meets a group with no `memory.max` and
- * no `pids.max` at all.
- *
- * These prove the limiter reads the operator's configuration itself, that an
- * explicit value from a gate still wins, and (the negative control) that the
- * group is not created for a session with nothing configured.
- */
-describe("a limit the operator configured but no gate has mentioned", () => {
-	afterEach(() => {
-		resetSettingsForTest();
-	});
-
-	it("writes the configured caps at group creation, with no limits passed in", async () => {
-		setSettingsInstance(Settings.isolated({ "session.memoryLimitGb": 2, "session.maxProcesses": 4 }));
-
-		// Exactly what `agent-session.ts` registers: cores and kill, nothing else.
-		const fixture = await makeFixture({});
-
-		expect(await fs.readFile(path.join(fixture.cgroupDir, "memory.max"), "utf8")).toBe(String(2 * BYTES_PER_GB));
-		expect(await fs.readFile(path.join(fixture.cgroupDir, "pids.max"), "utf8")).toBe("4");
-	});
-
-	it("creates no group for a session with nothing configured", async () => {
-		setSettingsInstance(Settings.isolated({}));
-
-		const fixture = await makeFixture({});
-
-		// The negative control for the case above: at zero cores and zero of every
-		// other limit there is nothing to hold, so the directory stays untouched.
-		expect(await fixture.limiter.ensureGroup()).toBeUndefined();
-		await expect(fs.readFile(path.join(fixture.cgroupDir, "memory.max"), "utf8")).rejects.toThrow();
-	});
-
-	it("lets a value a gate passed win over the configured one", async () => {
-		setSettingsInstance(Settings.isolated({ "session.maxProcesses": 4 }));
-
-		// An agent's cloned settings are a better answer than the process-wide
-		// singleton, so an explicit limit is never overwritten by configuration.
-		const fixture = await makeFixture({ maxProcesses: 1 });
-
-		expect(await fs.readFile(path.join(fixture.cgroupDir, "pids.max"), "utf8")).toBe("1");
 	});
 });

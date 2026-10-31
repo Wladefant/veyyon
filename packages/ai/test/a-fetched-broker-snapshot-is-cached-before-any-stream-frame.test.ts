@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { discoverAuthStorage, readAuthBrokerSnapshotCache } from "@veyyon/ai/auth-broker";
 import { removeWithRetries } from "@veyyon/utils";
 import { guardDestructivePath } from "../../utils/test/helpers/destructive-guard";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 const BROKER_URL = "https://broker.invalid.test";
 const TOKEN = "cache-test-token";

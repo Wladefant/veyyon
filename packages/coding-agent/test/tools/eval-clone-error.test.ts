@@ -1,28 +1,8 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
-import { makeToolSession } from "../helpers/tool-session";
-
-function makeSession(): ToolSession {
-	return makeToolSession({
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
-	});
-}
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(
-			(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
-		)
-		.map(block => block.text)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * Tool-call args cross the worker boundary by structured clone, and functions
@@ -36,13 +16,13 @@ describe("EvalTool non-serializable tool args", () => {
 	});
 
 	it("fails the tool call inside the cell and keeps kernel state alive", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 
 		const seed = await tool.execute("call-clone-seed", {
 			language: "js",
 			code: "globalThis.__cloneProbe = 41; console.log('seeded');",
 		});
-		expect(textOf(seed)).toContain("seeded");
+		expect(toolResultText(seed)).toContain("seeded");
 
 		const bad = await tool.execute("call-clone-bad", {
 			language: "js",
@@ -55,7 +35,7 @@ describe("EvalTool non-serializable tool args", () => {
 				"}",
 			].join("\n"),
 		});
-		const badText = textOf(bad);
+		const badText = toolResultText(bad);
 		expect(badText).toContain("caught DataCloneError");
 		expect(badText).not.toContain("JS eval worker exited");
 
@@ -63,6 +43,6 @@ describe("EvalTool non-serializable tool args", () => {
 			language: "js",
 			code: "console.log('probe=' + (globalThis.__cloneProbe + 1));",
 		});
-		expect(textOf(after)).toContain("probe=42");
+		expect(toolResultText(after)).toContain("probe=42");
 	});
 });

@@ -12,10 +12,34 @@ Use the interactive slash commands inside a session:
 
 - `/login`: opens the OAuth/key selector.
 - `/login <provider>`: jumps straight to one provider, e.g. `/login anthropic`, `/login github-copilot`.
-- `/login <redirect-url>`: completes an OAuth flow that needs a pasted callback URL.
+- `/login <redirect-url>`: completes an MCP server's OAuth flow that needs a pasted callback URL. A
+  provider login takes the pasted address in its own login card (see
+  [Signing in over SSH](#signing-in-over-ssh)).
 - `/logout`: opens the provider selector to remove stored credentials.
 
 On first run, the first-run setup (`veyyon setup`, or `/setup` later) walks the same flow.
+
+## Signing in over SSH
+
+A browser login opens a browser on the machine Veyyon runs on. Over SSH that is the remote host, so
+open the link on your own machine:
+
+1. The login card sends the link to your clipboard when it appears. Inside tmux the copy goes
+   through `tmux load-buffer -w`, which forwards it to the terminal you are attached from; outside
+   tmux it is an OSC 52 escape, which your terminal must allow. Press `c` to send it again, or
+   `alt+c` while the card's field holds typed text.
+2. Paste the link into your local browser and sign in.
+3. The provider sends the browser back to a `localhost` address, which nothing on your machine
+   answers. Copy the full address from the browser's address bar and paste it into the card's
+   field, then press `enter`. The field's placeholder shows the shape of that address. An address
+   that does not complete the sign-in is asked for again.
+
+To have the browser reach Veyyon directly, forward the callback port before you sign in. The port
+is in the `redirect_uri` of the link; for `openai-codex` it is 1455:
+
+```console
+$ ssh -L 1455:localhost:1455 <host>
+```
 
 ## Using several accounts for one provider
 
@@ -30,9 +54,12 @@ The sidebar lists your providers and the body lists that provider's accounts, on
 email, the plan, how the credential was supplied, and how much of its quota is spent. A row marked
 `this session` is the one serving your current session.
 
-From that card you press `enter` to use the selected account, `n` to name it, `r` to re-check its
-health, `u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
-provider. `/account manager` opens the same card.
+From that card you press `enter` to use the selected account, `n` to name it, `r` to re-check it,
+`u` to open its usage, `x` twice to log it out, and `a` to add another account for the same
+provider. `r` on the `+ add another … account` row re-checks every account of that provider and no
+other. Each key reports its result on the line above the key chips; `r` shows `Checking …` at once,
+then whether the provider accepted the login, and updates the usage bars from the same request.
+`/account manager` opens the same card.
 
 When `accounts.loadBalancing` is on, pressing `enter` on an account row or running
 `/account use <provider> <account>` selects that account for your current session only. Global provider
@@ -41,14 +68,17 @@ load balancing is off, selecting an account saves it machine-wide as the default
 profiles and sessions on this machine.
 
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
-arrow down past your last account to land on it, and press `enter` there to start a login. The
-mouse works on the card as well. Click an account to select it, click that last row to start the
+arrow down past your last account to land on it, and press `enter` there to start a login. A
+provider with a second way to sign in lists it beneath, as `+ add with <method>`: OpenCode Go offers
+`+ add with API key (legacy)`, Nous Research `+ add with API key`, and ChatGPT `+ add with device code`.
+Each stores the account under the same provider. `a` always starts the provider's default login.
+The mouse works on the card as well. Click an account to select it, click an add row to start that
 login, and click any key chip in the footer to run what it names.
 
 The provider list filters. Press `ctrl+s`, type part of a provider's name or id, and the sidebar
-keeps the providers that match; the arrows move within them and `enter` still switches to the
-selected account. Press `esc` to leave the filter and get the full list back, and `esc` again to
-close the card.
+keeps the providers that match; the arrows move within them and `enter` switches to the selected
+account, or starts a login on a provider with no accounts. Press `esc` to leave the filter and get
+the full list back, and `esc` again to close the card.
 
 Switching is **per provider**. Choosing another Anthropic account changes Anthropic and nothing else,
 because several providers serve one session at the same time: your main model, your agent roles,

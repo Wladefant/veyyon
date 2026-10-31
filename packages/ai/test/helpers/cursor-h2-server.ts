@@ -150,6 +150,15 @@ export function startCursorH2Server(
 	return promise;
 }
 
+/** A server that answers every turn with the same frames, in order, then ends the stream. */
+export function replayCursorScript(script: readonly Buffer[]): Promise<CursorH2Server> {
+	return startCursorH2Server(({ stream }) => {
+		respondConnect(stream);
+		for (const frame of script) stream.write(frame);
+		stream.end();
+	});
+}
+
 export function cursorTestModel(baseUrl: string): Model<"cursor-agent"> {
 	return buildModel({
 		id: "cursor-composer-2.5",

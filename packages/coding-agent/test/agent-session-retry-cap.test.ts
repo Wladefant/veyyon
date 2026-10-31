@@ -9,13 +9,14 @@ import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
@@ -97,10 +98,7 @@ describe("AgentSession retry delay cap", () => {
 	}
 
 	it("bails immediately when retry-after exceeds retry.maxDelayMs", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// 11.18M ms == ~3.1 hours, matching the report on the original incident.
 		const rateLimitError =
@@ -154,8 +152,9 @@ describe("AgentSession retry delay cap", () => {
 		expect(retryStartEvents).toHaveLength(0);
 		expect(retryEndEvents).toHaveLength(1);
 		expect(retryEndEvents[0]).toMatchObject({ success: false });
-		expect(retryEndEvents[0].finalError).toContain("exceeds retry.maxDelayMs");
-		expect(retryEndEvents[0].finalError).toContain("11180000");
+		expect(retryEndEvents[0].finalError).toContain(
+			"Provider requested a 3h6m wait, longer than retry.maxDelayMs (100ms)",
+		);
 		// No multi-hour (or any) sleep — the cap path skips scheduler.wait entirely.
 		for (const call of waitSpy.mock.calls) {
 			expect(call[0]).toBeLessThanOrEqual(100);
@@ -170,10 +169,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("auto-retries OpenAI Responses stream_read_error instead of stopping the conversation", async () => {
-		const model = getBundledModel("openai", "gpt-5");
-		if (!model) {
-			throw new Error("Expected bundled OpenAI test model to exist");
-		}
+		const model = requireBundledModel("openai", "gpt-5");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 
 		const mock = createMockModel({
@@ -418,10 +414,7 @@ describe("AgentSession retry delay cap", () => {
 		// the fail-fast cap ("gave up after 1 attempt") — even though a sibling
 		// would have been usable seconds later. The retry delay must track the
 		// earliest sibling unblock, not the provider window.
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		authStorage.removeRuntimeApiKey("anthropic");
 		await authStorage.set("anthropic", [
@@ -500,10 +493,7 @@ describe("AgentSession retry delay cap", () => {
 	it("still retries normally when the delay is under retry.maxDelayMs", async () => {
 		// Sanity check: a small retry-after MUST still go through the retry
 		// loop so we don't regress the existing transient-error recovery.
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -568,10 +558,7 @@ describe("AgentSession retry delay cap", () => {
 	 * the write.
 	 */
 	it("retries a timeout that killed a complete write tool call before it ran", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		let streamCalls = 0;
 		const requestContexts: Context[] = [];
@@ -594,14 +581,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
@@ -687,10 +667,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("continues, rather than replays, a timeout whose tool call already carries a real result", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		let streamCalls = 0;
 		const requestContexts: Context[] = [];
@@ -713,14 +690,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
@@ -816,10 +786,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("retries a transient socket close after partial text and thinking", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		let streamCalls = 0;
 		const agent = new Agent({
@@ -840,14 +807,7 @@ describe("AgentSession retry delay cap", () => {
 						api: requestedModel.api,
 						provider: requestedModel.provider,
 						model: requestedModel.id,
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
@@ -951,10 +911,7 @@ describe("AgentSession retry delay cap", () => {
 		// message contains no "503", "overloaded", or "network error" hooks, so without the
 		// dedicated HTTP2(StreamReset|RefusedStream|EnhanceYourCalm) carveout the assistant
 		// turn fails terminally even though the underlying condition is transient.
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -1007,10 +964,7 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.stopReason).toBe("stop");
 	});
 	it("retries generic upstream_error gateway failures", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -1064,10 +1018,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("retries empty reasonless aborted turns", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -1125,10 +1076,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("does not retry reasonless aborted turns that have partial content", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [{ content: ["partial"], stopReason: "aborted", errorMessage: "Request was aborted" }],
@@ -1175,10 +1123,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("does not auto-retry empty reasonless aborts once the session is disposing", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// A dispose-driven abort produces the same empty/reason-less shape as a
 		// transient provider abort. It MUST settle the turn instead of entering
@@ -1236,10 +1181,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("defaults 502 auto-retry to ten capped backoff attempts", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel();
 		let attempts = 0;

@@ -9,10 +9,11 @@ import { clearClaudePluginRootsCache } from "../discovery/helpers";
 export default class Trust extends Command {
 	static description = "Approve, refuse or review the project code veyyon is allowed to load";
 
-	static strict = false;
-
 	static args = {
-		path: Args.string({ description: "File to decide about (defaults to everything discovered)" }),
+		paths: Args.string({
+			description: "Files to decide about (defaults to everything discovered)",
+			multiple: true,
+		}),
 	};
 
 	static flags = {
@@ -23,7 +24,7 @@ export default class Trust extends Command {
 	};
 
 	async run(): Promise<void> {
-		const { argv, flags } = await this.parse(Trust);
+		const { args, flags } = await this.parse(Trust);
 		const chosen: TrustAction[] = [];
 		if (flags.deny) chosen.push("deny");
 		if (flags.forget) chosen.push("forget");
@@ -38,7 +39,7 @@ export default class Trust extends Command {
 			cwd: process.cwd(),
 			agentDir: getAgentDir(),
 			action: chosen[0] ?? "approve",
-			paths: argv.filter((value): value is string => typeof value === "string"),
+			paths: args.paths ?? [],
 		});
 		// A decision changes what discovery is allowed to read, and plugin roots are cached per
 		// process. Harmless here (the command exits) and required when this logic is reached from a

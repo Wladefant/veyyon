@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
+import { viewportRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -73,10 +74,6 @@ async function setup(transcriptRows: number, height = 10): Promise<Rig> {
 	return { term, tui, scheduler, transcript, editor };
 }
 
-function viewportText(term: VirtualTerminal): string[] {
-	return term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-}
-
 /**
  * Viewport rows with the last column dropped. A frozen transcript region draws
  * the scroll position in that column, so a case about CONTENT reads it here and
@@ -101,7 +98,7 @@ describe("scroll isolation", () => {
 		const { term, tui, scheduler } = await setup(30);
 		try {
 			// Frame is 31 rows in a 10-row viewport: the live tail top is 21.
-			expect(viewportText(term)[9]).toBe(">");
+			expect(viewportRows(term)[9]).toBe(">");
 			term.sendInput(WHEEL_UP);
 			await scheduler.drain(term);
 
@@ -109,7 +106,7 @@ describe("scroll isolation", () => {
 			const view = contentText(term);
 			expect(view[0]).toBe("hist-18"); // 21 - 3 (one wheel step)
 			expect(view[8]).toBe("hist-26");
-			expect(viewportText(term)[9]).toBe(">"); // footer never moved, track-free
+			expect(viewportRows(term)[9]).toBe(">"); // footer never moved, track-free
 		} finally {
 			tui.stop();
 			await term.flush();
@@ -128,7 +125,7 @@ describe("scroll isolation", () => {
 			await scheduler.drain(term);
 
 			expect(contentText(term)[0]).toBe("hist-18"); // transcript still frozen
-			expect(viewportText(term)[9]).toBe("> draft"); // footer live and track-free
+			expect(viewportRows(term)[9]).toBe("> draft"); // footer live and track-free
 		} finally {
 			tui.stop();
 			await term.flush();
@@ -160,7 +157,7 @@ describe("scroll isolation", () => {
 				await scheduler.drain(term);
 			}
 			expect(tui.virtualScrollActive).toBe(false);
-			const view = viewportText(term);
+			const view = viewportRows(term);
 			expect(view[0]).toBe("hist-26"); // live tail of the 36-row frame
 			expect(view[9]).toBe(">");
 
@@ -185,7 +182,7 @@ describe("scroll isolation", () => {
 			tui.scrollToLiveTail();
 			await scheduler.drain(term);
 			expect(tui.virtualScrollActive).toBe(false);
-			const view = viewportText(term);
+			const view = viewportRows(term);
 			expect(view[0]).toBe("hist-21");
 			expect(view[9]).toBe(">");
 		} finally {

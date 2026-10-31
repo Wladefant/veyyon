@@ -15,8 +15,9 @@
  *
  * The relay never sees plaintext: payloads stay sealed end to end.
  */
+
+import { rewriteEnvelopePeer, unpackEnvelope } from "@veyyon/wire";
 import { RELAY_FATAL_CLOSE_REASONS } from "@veyyon/wire/relay";
-import { rewriteEnvelopePeer, unpackEnvelope } from "../src/lib/link";
 
 const ROOM_PATH_RE = /^\/r\/([A-Za-z0-9_-]{10,64})$/;
 

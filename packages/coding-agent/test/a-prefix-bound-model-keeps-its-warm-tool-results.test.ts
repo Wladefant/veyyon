@@ -6,6 +6,7 @@ import type { AssistantMessage, Model, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -32,15 +33,6 @@ import { TempDir } from "@veyyon/utils";
 
 const OLD_RESULT = "old file contents\n".repeat(200);
 const NEW_RESULT = "new file contents\n".repeat(200);
-
-const ZERO_USAGE: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 function claudeModel(id: string): Model<"anthropic-messages"> {
 	return buildModel({
@@ -88,7 +80,7 @@ describe("a prefix-bound model's warm tool results", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: ZERO_USAGE,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp,
 		});
@@ -128,7 +120,7 @@ describe("a prefix-bound model's warm tool results", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: ZERO_USAGE,
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

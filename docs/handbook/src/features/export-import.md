@@ -3,10 +3,13 @@
 ## Session export
 
 `/export [path]` writes the current session transcript as a standalone offline HTML file. With no
-argument it writes `veyyon-session-<session>.html` in the working directory.
+argument it writes `veyyon-session-<session>.html` in the session's working directory, and prints
+the absolute path it wrote.
 
-The path is used as given (relative paths resolve against the process working directory). There is no
-`~` expansion or directory fallback, so pass a full file path ending in `.html`.
+A relative path resolves against the session's working directory, `~` expands to the home
+directory, and outer double quotes are stripped, as for `/move` and `/cwd`, so
+`/export "my session.html"` writes one file whose name holds a space. There is no directory
+fallback, so pass a full file path ending in `.html`.
 
 The export draws every tool card from the same view the terminal draws, with the plain Unicode
 glyph set. A `task` card shows each spawned agent as a chip that opens the agent's own transcript.

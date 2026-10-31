@@ -16,13 +16,12 @@
  *
  * THE DIFFERENCES ARE HOST DECISIONS, AND EACH IS ONE NAMED FUNCTION. Main's renderer WAS the
  * terminal, so it made every layout and colour decision itself; a view states meaning and the host
- * decides. Nine of those decisions differ, each undone by one function below and asserted nowhere
+ * decides. Eight of those decisions differ, each undone by one function below and asserted nowhere
  * else: the settled rail colour (`settledRail`), the space after a state mark
  * (`marks`), ordinary body text main coloured explicitly (`bodyText`), the section label
  * (`label`), the failed-log header's nested colour runs (`nestedLogHeader`), the held-back note
- * (`note`), the two columns a headed block indents its lines by (`unindent`), the empty colour runs
- * the wrap of a two-row `Text` reopened (`emptyRuns`), and the separator and colour of a status row's
- * trailing metadata (`callMeta`). One difference cannot be undone and is asserted as its own cell:
+ * (`note`), the two columns a headed block indents its lines by (`unindent`), and the separator and
+ * colour of a status row's trailing metadata (`callMeta`). One difference cannot be undone and is asserted as its own cell:
  * main cut an over-wide row with an ellipsis, and the host cuts a clipped row without one.
  *
  * WHAT IT DOES NOT CATCH. Nothing here proves the tool's own decisions — which runs it polls, which
@@ -189,17 +188,6 @@ describe("github tool differential", () => {
 	}
 
 	/**
-	 * The empty colour runs main's second row opened and closed.
-	 *
-	 * Main drew a two-row card as one `Text`, and the wrap reopens whatever styles were active at the
-	 * break before closing them again, so its second row starts with the header's colours around no
-	 * text at all. A headed block is rows rather than one string, so nothing is reopened.
-	 */
-	function emptyRuns(lines: readonly string[]): string[] {
-		return lines.map(line => line.replace(/(?:\u001b\[(?:38;2;\d+;\d+;\d+|39)m\u001b\[39m)+/g, ""));
-	}
-
-	/**
 	 * A status row's trailing metadata, which main's hand-built watch row separated with two spaces and
 	 * coloured itself.
 	 *
@@ -349,7 +337,7 @@ describe("github tool differential", () => {
 		];
 		for (const [args, token, color] of cases) {
 			for (const options of [HOST_COLLAPSED, HOST_RUNNING]) {
-				expect(callMeta(token, color, unindent(newCall(args, options)))).toEqual(emptyRuns(oldCall(args, options)));
+				expect(callMeta(token, color, unindent(newCall(args, options)))).toEqual(oldCall(args, options));
 			}
 		}
 		// Anti-vacuity: the row is the pending one, and it says what it is waiting for.
@@ -465,7 +453,7 @@ describe("github tool differential", () => {
 		];
 		for (const [result] of twoRow) {
 			for (const options of [HOST_COLLAPSED, HOST_EXPANDED]) {
-				expect(unindent(newResult(result, options, args))).toEqual(emptyRuns(oldResult(result, options, args)));
+				expect(unindent(newResult(result, options, args))).toEqual(oldResult(result, options, args));
 			}
 		}
 		// A body whose every line is blank leaves the row alone, in both arms.

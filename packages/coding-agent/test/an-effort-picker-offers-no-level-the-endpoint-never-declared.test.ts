@@ -36,6 +36,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
 import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { formatModelString } from "@veyyon/coding-agent/config/model-resolver";
 import * as thinking from "@veyyon/coding-agent/thinking";
 
 const VOCABULARY: readonly string[] = thinking.CONFIGURED_THINKING_LEVELS.map(String);
@@ -45,10 +46,6 @@ function bundledModels(): Model<Api>[] {
 }
 
 const MODELS: Model<Api>[] = bundledModels();
-
-function selectorOf(model: Model<Api>): string {
-	return `${model.provider}/${model.id}`;
-}
 
 /** The levels a model's own catalog row declares, as plain words. The answer every surface owes. */
 function declared(model: Model<Api>): string[] {
@@ -61,7 +58,7 @@ function declared(model: Model<Api>): string[] {
  * publishing suffixed ids is swept the day the catalog carries them.
  */
 const EFFORT_IN_ID: Model<Api>[] = MODELS.filter(model =>
-	VOCABULARY.some(word => new RegExp(`\\b${word}\\b`).test(selectorOf(model))),
+	VOCABULARY.some(word => new RegExp(`\\b${word}\\b`).test(formatModelString(model))),
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,10 +67,10 @@ const EFFORT_IN_ID: Model<Api>[] = MODELS.filter(model =>
 
 describe("the corpus this suite sweeps", () => {
 	it("carries the K3 rows this defect was reported on, and none of them declares minimal", () => {
-		const k3 = MODELS.filter(model => /kimi-?k3/i.test(selectorOf(model)));
+		const k3 = MODELS.filter(model => /kimi-?k3/i.test(formatModelString(model)));
 
 		expect(k3.length).toBeGreaterThan(0);
-		expect(k3.filter(model => declared(model).includes("minimal")).map(selectorOf)).toEqual([]);
+		expect(k3.filter(model => declared(model).includes("minimal")).map(formatModelString)).toEqual([]);
 		// The other half: these rows are not simply empty. `max` is declared, and `max` is precisely
 		// the level a hardcoded low/medium/high ladder omits.
 		expect(k3.some(model => declared(model).includes("max"))).toBe(true);
@@ -122,7 +119,7 @@ describe("every bundled model is offered exactly what it declares", () => {
 		it(`${surface} matches the catalog row for all ${MODELS.length} models`, () => {
 			const wrong = MODELS.filter(model => offered(model).join(",") !== declared(model).join(","));
 
-			expect(wrong.map(selectorOf)).toEqual([]);
+			expect(wrong.map(formatModelString)).toEqual([]);
 		});
 
 		it(`${surface} offers no level outside the vocabulary`, () => {
@@ -146,7 +143,7 @@ describe("every bundled model is offered exactly what it declares", () => {
 				model => offered(model).includes("minimal") !== declared(model).includes("minimal"),
 			);
 
-			expect(wrong.map(selectorOf), surface).toEqual([]);
+			expect(wrong.map(formatModelString), surface).toEqual([]);
 		}
 	});
 });
@@ -170,7 +167,7 @@ describe("a model id that embeds an effort gets no ladder read out of it", () =>
 			return rows.join(",") !== declared(model).join(",");
 		});
 
-		expect(invented.map(selectorOf)).toEqual([]);
+		expect(invented.map(formatModelString)).toEqual([]);
 	});
 
 	/**
@@ -183,11 +180,11 @@ describe("a model id that embeds an effort gets no ladder read out of it", () =>
 
 		expect(silent.length).toBeGreaterThan(0);
 		for (const model of silent) {
-			expect(thinking.thinkingLevelArgHint(model), selectorOf(model)).toBeUndefined();
-			expect(thinking.hasConfigurableThinkingEffort(model), selectorOf(model)).toBe(false);
+			expect(thinking.thinkingLevelArgHint(model), formatModelString(model)).toBeUndefined();
+			expect(thinking.hasConfigurableThinkingEffort(model), formatModelString(model)).toBe(false);
 			expect(
 				thinking.configuredThinkingLevelOptions({ model }).map(option => option.value),
-				selectorOf(model),
+				formatModelString(model),
 			).toEqual([thinking.INHERIT_EFFORT_OPTION_VALUE]);
 		}
 	});
@@ -222,7 +219,7 @@ describe("a surface with no model invents nothing", () => {
 
 		expect(union).toEqual(VOCABULARY.filter(level => everyDeclared.has(level)));
 		for (const model of MODELS) {
-			expect(thinking.configuredThinkingLevelsInScope([model]).map(String), selectorOf(model)).toEqual(
+			expect(thinking.configuredThinkingLevelsInScope([model]).map(String), formatModelString(model)).toEqual(
 				declared(model),
 			);
 		}
@@ -233,7 +230,7 @@ describe("a surface with no model invents nothing", () => {
 	 * appear, and `max` must, or the fix has traded one wrong answer for another.
 	 */
 	it("offers a K3-only session no minimal and a real max", () => {
-		const k3 = MODELS.filter(model => /kimi-?k3/i.test(selectorOf(model)));
+		const k3 = MODELS.filter(model => /kimi-?k3/i.test(formatModelString(model)));
 		const union = thinking.configuredThinkingLevelsInScope(k3).map(String);
 
 		expect(union).not.toContain("minimal");
@@ -246,7 +243,7 @@ describe("a surface with no model invents nothing", () => {
 	 * on the screen, in prose, for a session where nothing accepts it.
 	 */
 	it("names no undeclared level in a row description either", () => {
-		const k3 = MODELS.filter(model => /kimi-?k3/i.test(selectorOf(model)));
+		const k3 = MODELS.filter(model => /kimi-?k3/i.test(formatModelString(model)));
 		const text = thinking
 			.configuredThinkingLevelOptions({ scope: k3 })
 			.map(option => `${option.label} ${option.description}`)

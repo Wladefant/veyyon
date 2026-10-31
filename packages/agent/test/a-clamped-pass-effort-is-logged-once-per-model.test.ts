@@ -3,11 +3,11 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { generateHandoff } from "@veyyon/agent-core/compaction";
 import { clampPassEffort } from "@veyyon/agent-core/effort-clamp";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { logger } from "@veyyon/utils";
+import { createAssistantText, requireBundledModel } from "./helpers";
 
 /**
  * WHY: an internal pass that requests a fixed effort the model does not accept logs the move, and it
@@ -41,8 +41,7 @@ function captureWarnings(): Logged[] {
 }
 
 function freshRow(provider: string, id: string): Model {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected bundled ${provider}/${id}`);
+	const model = requireBundledModel(provider, id);
 	return { ...model, id: `${id}-${crypto.randomUUID()}` };
 }
 
@@ -51,27 +50,7 @@ function noEffortRow(): Model {
 	return freshRow("xai-oauth", "grok-4.20-0309-reasoning");
 }
 
-function reply(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
-
-const history: AgentMessage[] = [{ role: "user", content: "start work", timestamp: 1 }, reply("started")];
+const history: AgentMessage[] = [{ role: "user", content: "start work", timestamp: 1 }, createAssistantText("started")];
 
 function moved(pass: string, model: Model, requested: Effort): Logged {
 	return {
@@ -87,7 +66,7 @@ afterEach(() => {
 describe("a pass effort the model does not accept", () => {
 	it("is logged once across every request a compaction pass sends, and every request sends the clamp", async () => {
 		const logged = captureWarnings();
-		const send = vi.spyOn(ai, "completeSimple").mockResolvedValue(reply("handoff"));
+		const send = vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("handoff"));
 		const model = noEffortRow();
 
 		for (let request = 0; request < 3; request++) {

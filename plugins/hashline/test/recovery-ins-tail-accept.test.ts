@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery INS.TAIL with late drift.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/it.ts";
 
 describe("Recovery INS.TAIL accept", () => {
 	it("appends with late drift preserved", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B"]);
-		const v1 = text(["A", "B-DRIFT"]);
+		const v0 = linesText(["A", "B"]);
+		const v1 = linesText(["A", "B-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({

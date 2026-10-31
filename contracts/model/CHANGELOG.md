@@ -33,6 +33,17 @@
 - Added `Model.maxContextWindow` and `Model.serviceTierCost` for Codex subscription models (Refs #107).
 - Added specialist model-kind vocabulary (`MODEL_KINDS`, `ModelKind`, `RUNNER_APIS`, `WebSearchGrounding`, and `modelKind` helper) and `Model.kind`/`Model.webSearch` capability attributes (Refs #107).
 - `Model.accessPrograms` lists the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) model discovery offers the signed-in account for a model.
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- `ModelReasoningOptions.defaultLevel` and `ModelReasoningOptions.requiresEffort` state a model's default effort and that it has no off state; they become `thinking.defaultLevel` and `thinking.requiresEffort`.
+
+## [1.5.9] - 2026-10-22
+
+### Added
+
+- `Model.accountAccess` records, for every ChatGPT account model discovery listed, whether the account's listing includes the model and the cyber access programs (`standard`, `daybreak_blue`, `daybreak_red`) the account is offered for it.
 
 ### Fixed
 

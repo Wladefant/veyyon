@@ -14,20 +14,15 @@ import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
-import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { AssistantMessage, AssistantMessageEvent, FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
 
 const completionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
 const responsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 /** SSE response that delivers `events` and then holds the connection open forever. */
 function createNeverClosingSseResponse(events: unknown[]): Response {
@@ -83,7 +78,7 @@ async function collectClosingCompletion(events: unknown[]): Promise<{
 	events: AssistantMessageEvent[];
 	result: AssistantMessage;
 }> {
-	const stream = streamOpenAICompletions(completionsModel, baseContext(), {
+	const stream = streamOpenAICompletions(completionsModel, sayHelloContext(), {
 		apiKey: "test-key",
 		fetch: createClosingFetch(events),
 	});
@@ -402,7 +397,7 @@ describe("terminal frame without connection close", () => {
 		]);
 
 		const startedAt = Date.now();
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -440,7 +435,7 @@ describe("terminal frame without connection close", () => {
 		]);
 
 		const startedAt = Date.now();
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -460,7 +455,7 @@ describe("terminal frame without connection close", () => {
 			completionChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -507,7 +502,7 @@ describe("terminal frame without connection close", () => {
 		]);
 
 		const startedAt = Date.now();
-		const result = await streamOpenAIResponses(responsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(responsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();

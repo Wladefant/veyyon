@@ -52,6 +52,51 @@
 - Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 - Removed redundant `grok-composer-2.5-fast` OAuth contract test from `xai-oauth-bundle.test.ts` as curated seed parity loops already verify its properties ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+### Changed
+
+- `resolveBundledModelReference` in a compiled build stores each answer, a bundled model or none, in the profile's `cache/model-references.json` under the build's id, and a later launch of that build reads the answer instead of indexing the catalog's model ids.
+- `bundledCatalogDigest` returns `process.env.VEYYON_CATALOG_DIGEST` when it is set, which the compiled binary defines at build time, instead of reading and hashing `models.json`.
+- The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
+- `writeModelCache` takes `{ skipUnchanged }`, and a model manager created with `failureRestartsBackoff: false` rewrites a cache row after a failed dynamic fetch only when the row's content changes.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- Ollama Cloud reports a failed, non-JSON or malformed `/api/tags` response through the discovery failure hook as a `request`, `status`, `body` or `payload` failure instead of throwing.
+- Local Ollama discovery takes a model's context window from the `num_ctx` in its `/api/show` parameters ahead of the trained length in `model_info`, as a configured `discovery.type: ollama` endpoint already did, and caps the model's output tokens at that window.
+- Both Ollama providers read capability names case-insensitively, accept a capability map as well as a list, and treat `image` as `vision`.
+- The local Ollama provider and its URL helpers moved from `provider-models/openai-compat` to `provider-models/ollama`; import `ollamaModelManagerOptions`, `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl` from there or from `@veyyon/catalog/provider-models`.
+
+### Fixed
+
+- Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
+- Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
+- GitLab Duo namespace discovery stops at the first request that throws and reports that error, instead of trying every remaining candidate against the same unreachable host and concluding that `GITLAB_DUO_NAMESPACE_ID` should be set.
+
+### Removed
+
+- Removed `derive-tmp.js`, a scratch probe that printed effort-variant collapses; nothing imported it and no entry point exposed it.
+
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
+
+### Changed
+
+- OpenCode Go discovery sends no Authorization for a Console login, whose token the public listing rejects, and keys its model cache by the credential it sends, so a refreshed login token keeps its cached models.
+
+### Fixed
+
+- Kimi Code bundles K3.1 Pro, K3.1 Pro Highspeed and the K2.8 Preview name of `kimi-for-coding`, read from the `kimi-code-plan-cn` key models.dev now lists Kimi Code under.
+- Kimi Code models offer Low, High and Max with no Off, and discovery takes each model's effort ladder, default effort and off state from the account's `/models` listing.
+- A Kimi Code model that cannot stop thinking keeps thinking on and sends no forced tool choice on both wires, including the K3 rows whose ids carry no `kimi` prefix.
+
+## [1.5.9] - 2026-10-22
+
+### Added
+
+- `@veyyon/catalog/discovery/cursor-gen/agent_pb` defines Cursor's `McpStateExecArgs` and `McpStateExecResult` exec messages (field 36) and the `McpStateSuccess`, `McpStateServer`, `McpStateError` and `McpStateRejected` messages they carry.
+- Codex discovery lists every signed-in ChatGPT account, so the catalog holds the models of every account tier, records in `Model.accountAccess` which accounts' listings include each model and the `available_access_programs` each account is offered, and caches the list per account set, so a login or logout lists the accounts again; the bundled catalog never contains the field, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
 
 ### Changed
 
@@ -62,6 +107,37 @@
 - OpenCode gateway model discovery now sends the `x-opencode-session` header derived from the install id alongside the Veyyon user agent ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi d383a75cc0).
 - Regenerated the bundled catalog for 19 providers: it gains `claude-sonnet-5-5`, `gemini-3.8-flash` and about 340 OpenRouter, Kilo, Vercel, ZenMux, Venice, OpenCode Zen and Copilot rows, and drops retired Bedrock and Novita rows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Switched the paid 'xai' provider (using 'XAI_API_KEY') from Chat Completions to the Responses API ('/v1/responses'), and defaulted both 'xai' and 'xai-oauth' to 'grok-4.5'.
+
+### Fixed
+
+- Claude Opus and Sonnet 5.5 and later default to `supportsForcedToolChoice: false`, as Fable and Mythos already did, so a forced tool choice goes out as `auto` instead of drawing `400 tool_choice: type "tool" and "any" are not supported for this model.`; `rejectsForcedToolChoice` in `@veyyon/catalog/identity` states the rule.
+- Moonshot-hosted Kimi K2.7 Code ids spelled with underscores (`kimi_k2_7_code`) force thinking on through the OpenAI-compatible path, as they already did through the Anthropic-compatible one.
+
+### Removed
+
+- Removed the `ANTIGRAVITY_PRIMARY_ENDPOINT` and `ANTIGRAVITY_SANDBOX_ENDPOINT` re-exports from `@veyyon/catalog/discovery/antigravity`; import them from `@veyyon/catalog/provider-endpoints` or `@veyyon/catalog/discovery`.
+
+## [1.5.7] - 2026-10-15
+
+### Added
+
+- `@veyyon/catalog/model-thinking` exports `googleThinkingLevelWhenOff(model)`, the Google thinking level a request names when thinking is off: the model's lowest declared effort level.
+
+### Changed
+
+- Google Antigravity lists Claude Opus 5.5 and Claude Sonnet 5.5 as one model each (`claude-opus-5-5`, `claude-sonnet-5-5`) with low, medium and high routed to the `-low`, `-medium` and `-high` deployments, instead of three rows per model.
+- Comments in the xAI OAuth resolver and the model generator name the `defaultModel` setting instead of the removed model roles; no user-visible change.
+
+## [1.5.6] - 2026-10-13
+
+### Added
+
+- `@veyyon/catalog/wire/kimi-code` exports `KIMI_CODE_REGIONS`, the display name, site, OAuth host and API hosts of the global (kimi.ai) and mainland China (kimi.com) Kimi Code deployments in the order the login lists them, with `kimiCodeApiKey`, which encodes a credential's deployment into its API key, and `resolveKimiCodeEndpoint`, which reads the token and API bases a request uses from that key.
+- `@veyyon/catalog/wire/codex` exports `getCodexPlanType`, which reads the lowercased ChatGPT plan (`chatgpt_plan_type`) out of a Codex access token.
+- Gemini 4 Argon (`gemini-4-argon`) is bundled for the Google provider with a 1,048,576-token context and the low, medium and high thinking levels, and for Google Antigravity with the same context, a 65,536-token output cap, and low, medium and high routed to the `gemini-4-argon-low`, `-medium` and `-high` deployments.
+
+### Changed
+
 - `COMMAND_CODE_COSTS` and the Command Code effort table use plain string keys instead of computed ones; every rate and ladder is unchanged.
 - `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.

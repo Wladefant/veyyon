@@ -14,6 +14,12 @@ const MCP_DEFAULT_TIMEOUT_MS = 60_000;
 
 const SENSITIVE_QUERY_PARAM = /key|token|secret|auth/i;
 
+/** The content headers of a JSON-RPC POST, which the server may answer as JSON or as an SSE stream. */
+export const JSON_RPC_POST_HEADERS: Readonly<Record<string, string>> = {
+	"Content-Type": "application/json",
+	Accept: "application/json, text/event-stream",
+};
+
 /**
  * Redact credential-bearing query params (e.g. `exaApiKey`) so failed
  * requests never write secrets to the persistent log file.
@@ -93,10 +99,7 @@ export async function callMCP<T = unknown>(
 	try {
 		const response = await fetch(url, {
 			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Accept: "application/json, text/event-stream",
-			},
+			headers: JSON_RPC_POST_HEADERS,
 			body: JSON.stringify(body),
 			signal: options?.signal ?? requestTimeout?.signal,
 		});

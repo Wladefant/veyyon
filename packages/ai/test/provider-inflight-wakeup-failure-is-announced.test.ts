@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __providerInFlightForTesting } from "@veyyon/ai/stream";
 import { logger } from "@veyyon/utils";
+import { canRestrictAccess } from "../../utils/test/helpers/mode-bits";
 
 const WAKEUP_MESSAGE =
 	"Provider in-flight wakeup could not be written; queued requests will wait for the fallback timer";
@@ -27,9 +28,6 @@ const WAKEUP_MESSAGE =
 let limiterRoot: string;
 const restoreModeOn: string[] = [];
 let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
-
-/** Mode bits do not restrict root, and Windows does not honour them at all. */
-const canRestrictAccess = process.platform !== "win32" && process.getuid?.() !== 0;
 
 beforeEach(async () => {
 	limiterRoot = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-inflight-wakeup-"));
@@ -64,7 +62,7 @@ async function leaseWithUnwritableProviderDir(provider: string) {
 
 describe("a provider in-flight wakeup that cannot be written", () => {
 	it("warns with the directory and the reason", async () => {
-		if (!canRestrictAccess) return;
+		if (!canRestrictAccess()) return;
 		const { lease, providerDir } = await leaseWithUnwritableProviderDir("anthropic");
 
 		await lease?.release();
@@ -77,7 +75,7 @@ describe("a provider in-flight wakeup that cannot be written", () => {
 
 	/** The release itself must still complete: visibility, not fragility. */
 	it("does not fail the release", async () => {
-		if (!canRestrictAccess) return;
+		if (!canRestrictAccess()) return;
 		const { lease } = await leaseWithUnwritableProviderDir("anthropic");
 
 		await expect(lease?.release()).resolves.toBeUndefined();

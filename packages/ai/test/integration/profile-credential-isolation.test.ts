@@ -3,16 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import { getSharedAuthDir } from "@veyyon/utils/config-root";
 import {
 	__resetDirsFromEnvForTests,
 	getActiveAuthDbPath,
 	getAgentDbPath,
 	getAgentDir,
-	getSharedAuthDir,
 	getSharedAuthStoreDirIfEnabled,
-	MAIN_CONFIG_FILENAMES,
-	PROFILE_SHARING_CONFIG_KEY,
 } from "@veyyon/utils/dirs";
+import { MAIN_CONFIG_FILENAMES, PROFILE_SHARING_CONFIG_KEY } from "@veyyon/utils/global-config";
 import { removeWithRetries } from "../../../utils/src/temp";
 import { assertIsolatedAppPath, guardDestructivePath } from "../../../utils/test/helpers/destructive-guard";
 

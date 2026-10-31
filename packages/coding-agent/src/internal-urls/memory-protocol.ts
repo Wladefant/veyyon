@@ -11,7 +11,7 @@ import { getMnemopiSessionState, type MnemopiScopedMemoryHit, type MnemopiSessio
 // to summarise a session, and `getMemoryRoot` is a path join. `../memory/paths` is 76.
 import { getMemoryRoot } from "../memory/paths";
 import { AgentRegistry } from "../registry/agent-registry";
-import { buildDirectoryResource, ensureWithinRoot as ensureWithinRootShared } from "./filesystem-resource";
+import { buildDirectoryResource, realPathWithinRoot } from "./filesystem-resource";
 import { validateRelativePath } from "./relative-path";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
@@ -56,10 +56,6 @@ function memoryRootsForContext(context?: ResolveContext): string[] {
 		);
 	}
 	return roots;
-}
-
-function ensureWithinRoot(targetPath: string, rootPath: string): void {
-	ensureWithinRootShared(targetPath, rootPath, "memory");
 }
 
 function toMemoryValidationError(error: unknown): Error {
@@ -111,25 +107,8 @@ async function tryResolveInRoot(url: InternalUrl, memoryRoot: string): Promise<I
 	}
 
 	const targetPath = resolveMemoryUrlToPath(url, resolvedRoot);
-	ensureWithinRoot(targetPath, resolvedRoot);
-
-	const parentDir = path.dirname(targetPath);
-	try {
-		const realParent = await fs.realpath(parentDir);
-		ensureWithinRoot(realParent, resolvedRoot);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-	}
-
-	let realTargetPath: string;
-	try {
-		realTargetPath = await fs.realpath(targetPath);
-	} catch (error) {
-		if (isEnoent(error)) return undefined;
-		throw error;
-	}
-
-	ensureWithinRoot(realTargetPath, resolvedRoot);
+	const realTargetPath = await realPathWithinRoot(targetPath, resolvedRoot, "memory");
+	if (realTargetPath === null) return undefined;
 
 	const stat = await fs.stat(realTargetPath);
 	if (stat.isDirectory()) {

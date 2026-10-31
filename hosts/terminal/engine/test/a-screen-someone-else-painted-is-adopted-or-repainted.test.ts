@@ -25,6 +25,7 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, TUI } from "@veyyon/tui";
 import type { AdoptedScreen } from "@veyyon/tui/tui";
+import { plainRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -48,10 +49,6 @@ class Block implements Component {
 	render(_width: number): readonly string[] {
 		return this.#lines;
 	}
-}
-
-function strip(rows: readonly string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
 }
 
 function rowsOf(label: string, count: number): string[] {
@@ -102,7 +99,7 @@ async function coldViewport(lines: readonly string[]): Promise<string[]> {
 		tui.start();
 		tui.requestRender();
 		await scheduler.drain(term);
-		return strip(term.getViewport());
+		return plainRows(term.getViewport());
 	} finally {
 		tui.stop();
 		await term.flush();
@@ -145,7 +142,7 @@ async function replay(recording: Recording, lines: readonly string[]): Promise<R
 		tui.requestRender();
 		await scheduler.drain(term);
 		term.write = passThrough;
-		return { viewport: strip(term.getViewport()), written, frameRowsAtAdoption };
+		return { viewport: plainRows(term.getViewport()), written, frameRowsAtAdoption };
 	} finally {
 		tui.stop();
 		await term.flush();

@@ -27,13 +27,7 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as natives from "@veyyon/natives";
 import { removeWithRetries } from "@veyyon/utils";
 import * as scopedTimeout from "@veyyon/utils/scoped-timeout";
-
-function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 describe("a read waits out the suffix-search limit once", () => {
 	let tmpDir: string;
@@ -88,7 +82,7 @@ describe("a read waits out the suffix-search limit once", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated({ "read.summarize.enabled": false }),
 		};
-		return new ReadTool(session).execute("call", { path: target }).then(resultText);
+		return new ReadTool(session).execute("call", { path: target }).then(toolResultText);
 	}
 
 	it("searches once for a list of missing paths when the first search reaches the limit", async () => {

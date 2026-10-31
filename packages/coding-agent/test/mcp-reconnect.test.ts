@@ -358,6 +358,132 @@ describe("DeferredMCPTool.execute provider boundary", () => {
 	});
 });
 
+describe("DeferredMCPTool.execute retry", () => {
+	const noCtx = {} as Parameters<DeferredMCPTool["execute"]>[3];
+	const SOURCE = { provider: "cached", providerName: "Cached", path: "/cached", level: "user" as const };
+	const notConnected = async (): Promise<MCPServerConnection> => {
+		throw new Error("MCP server not connected");
+	};
+
+	it("reconnects when the server has no connection yet, though that error names no transport failure", async () => {
+		let reconnects = 0;
+		// The precondition the name states: a failed call with this error would not reconnect.
+		expect(mcpFailureWarrantsReconnect(new Error("MCP server not connected"))).toBe(false);
+
+		const fresh = makeConnection(mockTransport(async () => toolCallResult("ok")));
+		fresh._source = { provider: "fresh", providerName: "Fresh", path: "/fresh", level: "user" };
+		const tool = new DeferredMCPTool("test-server", TOOL_DEF, notConnected, SOURCE, async () => {
+			reconnects++;
+			return fresh;
+		});
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(reconnects).toBe(1);
+		expect(result.content[0]).toEqual({ type: "text", text: "ok" });
+		expect(result.details?.provider).toBe("fresh");
+		expect(result.details?.providerName).toBe("Fresh");
+	});
+
+	it("reports the connection failure under the tool's own source when no connection comes back", async () => {
+		const tool = new DeferredMCPTool("test-server", TOOL_DEF, notConnected, SOURCE, async () => null);
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toEqual({ type: "text", text: modelFacingFailure("MCP server not connected") });
+		expect(result.details).toEqual({
+			serverName: "test-server",
+			mcpToolName: TOOL_DEF.name,
+			isError: true,
+			provider: "cached",
+			providerName: "Cached",
+		});
+	});
+
+	it("reports the connection failure when it has no reconnect", async () => {
+		const tool = new DeferredMCPTool("test-server", TOOL_DEF, notConnected, SOURCE);
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toEqual({ type: "text", text: modelFacingFailure("MCP server not connected") });
+	});
+
+	it("reports the second send's failure, attributed to the connection it failed on", async () => {
+		const fresh = makeConnection(
+			mockTransport(async () => {
+				throw new Error("HTTP 503: Service Unavailable");
+			}),
+		);
+		fresh._source = { provider: "fresh", providerName: "Fresh", path: "/fresh", level: "user" };
+		const tool = new DeferredMCPTool("test-server", TOOL_DEF, notConnected, SOURCE, async () => fresh);
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: modelFacingFailure("HTTP 503: Service Unavailable"),
+		});
+		expect(result.details?.provider).toBe("fresh");
+	});
+
+	it("resends a call that failed on a dead socket over a reconnected connection", async () => {
+		let reconnects = 0;
+		const dead = makeConnection(
+			mockTransport(async () => {
+				throw new Error("ECONNRESET");
+			}),
+		);
+		const fresh = makeConnection(mockTransport(async () => toolCallResult("ok")));
+		const tool = new DeferredMCPTool(
+			"test-server",
+			TOOL_DEF,
+			async () => dead,
+			SOURCE,
+			async () => {
+				reconnects++;
+				return fresh;
+			},
+		);
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(reconnects).toBe(1);
+		expect(result.content[0]).toEqual({ type: "text", text: "ok" });
+		expect(result.details?.provider).toBe("cached");
+	});
+
+	it("does not reconnect when the call fails with a server error", async () => {
+		let reconnects = 0;
+		const failing = makeConnection(
+			mockTransport(async () => {
+				throw new Error("MCP error -32603: Internal error");
+			}),
+		);
+		const tool = new DeferredMCPTool(
+			"test-server",
+			TOOL_DEF,
+			async () => failing,
+			SOURCE,
+			async () => {
+				reconnects++;
+				return null;
+			},
+		);
+
+		const result = await tool.execute("call-1", {}, undefined, noCtx);
+
+		expect(reconnects).toBe(0);
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: modelFacingFailure("MCP error -32603: Internal error"),
+		});
+	});
+});
+
 describe("reconnect abort propagation", () => {
 	const noop = () => {};
 	const noCtx = {} as Parameters<MCPTool["execute"]>[3];

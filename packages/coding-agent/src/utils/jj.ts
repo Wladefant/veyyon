@@ -1,23 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { $which, readPipeText } from "@veyyon/utils";
 import { LRUCache } from "lru-cache/raw";
-import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 import * as git from "./git";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
 // ════════════════════════════════════════════════════════════════════════════
-
-/** Result from a completed `jj` subprocess invocation. */
-export interface JjCommandResult {
-	/** Process exit code reported by `jj`. */
-	exitCode: number;
-	/** Captured standard output as UTF-8 text. */
-	stdout: string;
-	/** Captured standard error as UTF-8 text. */
-	stderr: string;
-}
 
 /** Resolved Jujutsu workspace metadata. */
 export interface JjRepository {
@@ -41,6 +29,9 @@ interface CommandOptions {
 	readonly signal?: AbortSignal;
 }
 
+/** `jj` flags every run takes ahead of its own arguments. */
+const JJ_COMMON_ARGS = ["--no-pager", "--color=never"] as const;
+
 // ════════════════════════════════════════════════════════════════════════════
 // Error
 // ════════════════════════════════════════════════════════════════════════════
@@ -50,11 +41,11 @@ export class JjCommandError extends Error {
 	/** Arguments passed after the common `jj --no-pager --color=never` prefix. */
 	readonly args: readonly string[];
 	/** Captured command result that caused the failure. */
-	readonly result: JjCommandResult;
+	readonly result: git.CommandResult;
 
 	/** Create an error for a failed checked `jj` command. */
-	constructor(args: readonly string[], result: JjCommandResult) {
-		super(formatCommandFailure(args, result));
+	constructor(args: readonly string[], result: git.CommandResult) {
+		super(git.formatCommandFailure("jj", args, result));
 		this.name = "JjCommandError";
 		this.args = args.slice();
 		this.result = result;
@@ -65,54 +56,13 @@ export class JjCommandError extends Error {
 // Internal: Core execution
 // ════════════════════════════════════════════════════════════════════════════
 
-function ensureAvailable(): void {
-	if (!$which("jj")) {
-		throw new Error("jj is not installed.");
-	}
-}
-
-function formatCommandFailure(
-	args: readonly string[],
-	result: Pick<JjCommandResult, "exitCode" | "stdout" | "stderr">,
-): string {
-	const stderr = result.stderr.trim();
-	if (stderr) return stderr;
-	const stdout = result.stdout.trim();
-	if (stdout) return stdout;
-	return `jj ${args.join(" ")} failed with exit code ${result.exitCode}`;
-}
-
-async function jj(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<JjCommandResult> {
-	const child = Bun.spawn(["jj", "--no-pager", "--color=never", ...args], {
-		cwd,
-		signal: options.signal,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	adoptIntoPrimarySessionCpuBudget(child.pid);
-
-	if (!child.stdout || !child.stderr) {
-		throw new Error("Failed to capture jj command output.");
-	}
-
-	const [stdout, stderr, exitCode] = await Promise.all([
-		readPipeText(child.stdout),
-		readPipeText(child.stderr),
-		child.exited,
-	]);
-
-	return { exitCode: exitCode ?? 0, stdout, stderr };
-}
-
 async function runChecked(
 	cwd: string,
 	args: readonly string[],
 	options: CommandOptions = {},
-): Promise<JjCommandResult> {
-	ensureAvailable();
-	const result = await jj(cwd, args, options);
+): Promise<git.CommandResult> {
+	git.ensureInstalled("jj");
+	const result = await git.runCommand("jj", [...JJ_COMMON_ARGS, ...args], cwd, { signal: options.signal });
 	if (result.exitCode !== 0) {
 		throw new JjCommandError(args, result);
 	}

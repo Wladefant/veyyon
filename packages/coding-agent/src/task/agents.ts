@@ -3,7 +3,7 @@
  *
  * Agents are embedded at build time via Bun's import with { type: "text" }.
  */
-import { parseFrontmatter, prompt } from "@veyyon/utils";
+import { parseFrontmatter, prompt, SourcedParseError } from "@veyyon/utils";
 import { parseAgentFields } from "../discovery/helpers";
 import { agentsPrompts } from "../prompts/agents/rows";
 // Embed agent markdown files at build time
@@ -60,26 +60,10 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 
 // Computed lazily on first loadBundledAgents() call to avoid eager prompt.render at module load.
 
-export class AgentParsingError extends Error {
-	constructor(
-		error: Error,
-		readonly source?: unknown,
-	) {
-		super(`Failed to parse agent: ${error.message}`, { cause: error });
+export class AgentParsingError extends SourcedParseError {
+	constructor(error: Error, source?: unknown) {
+		super(`Failed to parse agent: ${error.message}`, error, source);
 		this.name = "AgentParsingError";
-	}
-
-	toString(): string {
-		const details: string[] = [this.message];
-		if (this.source !== undefined) {
-			details.push(`Source: ${JSON.stringify(this.source)}`);
-		}
-		if (this.cause && typeof this.cause === "object" && "stack" in this.cause && this.cause.stack) {
-			details.push(`Stack:\n${this.cause.stack}`);
-		} else if (this.stack) {
-			details.push(`Stack:\n${this.stack}`);
-		}
-		return details.join("\n\n");
 	}
 }
 

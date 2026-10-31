@@ -38,6 +38,8 @@ import { getLinterClient } from "./clients";
 import { getServersForFile, type LspConfig, loadConfig } from "./config";
 import {
 	BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS,
+	type FlycheckOutcome,
+	runFlycheck,
 	SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	waitForDiagnostics,
 } from "./diagnostics";
@@ -100,8 +102,8 @@ import {
 	readLocationContext,
 	resolveDiagnosticTargets,
 	resolveSymbolColumn,
-	sortDiagnostics,
 	symbolKindToIcon,
+	uniqueSortedDiagnostics,
 	uriToFile,
 } from "./utils";
 import { lspToolView } from "./view";
@@ -218,6 +220,18 @@ export async function warmupLspServers(cwd: string, options?: LspWarmupOptions):
  */
 export function getLspStatus(): LspServerStatus[] {
 	return getActiveClients();
+}
+
+/** What a compiler check that did not finish leaves out of a diagnostics report; nothing for one that did. */
+function flycheckNote(outcome: FlycheckOutcome, timeoutSec: number): string | undefined {
+	switch (outcome.status) {
+		case "finished":
+			return undefined;
+		case "not-started":
+			return "no compiler check started; only the server's own analysis is reported";
+		case "unfinished":
+			return `${outcome.title} was still running at the ${timeoutSec}s timeout, so its errors are not reported; raise \`timeout\` to wait for it`;
+	}
 }
 
 const MAX_GLOB_DIAGNOSTIC_TARGETS = 20;
@@ -644,6 +658,9 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 	get parameters(): typeof lspSchema.value {
 		return lspSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return lspSchema.wire;
+	}
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {
@@ -894,6 +911,10 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 		const diagnosticsWaitTimeoutMs = detailed
 			? Math.min(BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS, timeoutSec * 1000)
 			: Math.min(SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS, timeoutSec * 1000);
+		// A compiler check ends early enough to report what it found before the operation's own timeout
+		// aborts the call. One check per server covers the target, or every workspace for a batch.
+		const checkDeadline = Date.now() + timeoutSec * 1000 - diagnosticsWaitTimeoutMs;
+		const checks = new Map<LspClient, Promise<FlycheckOutcome>>();
 		const results: string[] = [];
 		const allServerNames = new Set<string>();
 		if (truncatedGlobTargets) {
@@ -914,6 +935,9 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 			const uri = fileToUri(resolved);
 			const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
 			const allDiagnostics: Diagnostic[] = [];
+			// A server that failed is named with its error, so a file no checker could read is not reported clean.
+			const answered: string[] = [];
+			const serverNotes: string[] = [];
 
 			// Query all applicable servers for this file
 			for (const [serverName, serverConfig] of servers) {
@@ -924,15 +948,27 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 						const linterClient = getLinterClient(serverName, serverConfig, this.session.cwd);
 						const diagnostics = await linterClient.lint(resolved);
 						for (let di = 0; di < diagnostics.length; di++) allDiagnostics.push(diagnostics[di]!);
+						answered.push(serverName);
 						continue;
 					}
 					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
+					const minVersion = client.diagnosticsVersion;
+					// Opened before the project-load wait: tsserver loads no project, and reports no
+					// progress, until one of its files is open.
+					await refreshFile(client, resolved, signal);
 					if (isProjectAwareLspServer(serverConfig)) {
 						await waitForProjectLoaded(client, signal);
 						throwIfAborted(signal);
 					}
-					const minVersion = client.diagnosticsVersion;
-					await refreshFile(client, resolved, signal);
+					if (serverConfig.capabilities?.flycheck) {
+						let check = checks.get(client);
+						if (!check) {
+							check = runFlycheck(client, detailed ? undefined : uri, checkDeadline, signal);
+							checks.set(client, check);
+						}
+						const note = flycheckNote(await check, timeoutSec);
+						if (note) serverNotes.push(`  ${serverName}: ${note}`);
+					}
 					const expectedDocumentVersion = client.openFiles.get(uri)?.version;
 					const diagnostics = await waitForDiagnostics(client, uri, {
 						timeoutMs: diagnosticsWaitTimeoutMs,
@@ -941,52 +977,50 @@ export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails
 						expectedDocumentVersion,
 					});
 					for (let di = 0; di < diagnostics.length; di++) allDiagnostics.push(diagnostics[di]!);
+					answered.push(serverName);
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
 						throw err;
 					}
-					// Server failed, continue with others
+					serverNotes.push(`  ${serverName}: ${errorMessage(err)}`);
 				}
 			}
 
-			// Deduplicate diagnostics
-			const seen = new Set<string>();
-			const uniqueDiagnostics: Diagnostic[] = [];
-			for (const d of allDiagnostics) {
-				const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
-				if (!seen.has(key)) {
-					seen.add(key);
-					uniqueDiagnostics.push(d);
-				}
-			}
-
-			sortDiagnostics(uniqueDiagnostics);
+			const uniqueDiagnostics = uniqueSortedDiagnostics(allDiagnostics);
+			const notes = serverNotes.length > 0 ? ["  Server notes:", ...serverNotes] : [];
+			const from = notes.length > 0 ? ` from ${answered.join(", ")}` : "";
 
 			if (!detailed && targets.length === 1) {
-				if (uniqueDiagnostics.length === 0) {
-					return {
-						content: [{ type: "text", text: "OK" }],
-						details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
-					};
+				let text: string;
+				if (uniqueDiagnostics.length > 0) {
+					const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
+					text = `${formatDiagnosticsSummary(uniqueDiagnostics)}:\n${formatGroupedDiagnosticMessages(formatted)}`;
+				} else if (answered.length === 0) {
+					text = "No server checked the file";
+				} else {
+					text = notes.length === 0 ? "OK" : `No issues${from}`;
 				}
-
-				const summary = formatDiagnosticsSummary(uniqueDiagnostics);
-				const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
-				const output = `${summary}:\n${formatGroupedDiagnosticMessages(formatted)}`;
 				return {
-					content: [{ type: "text", text: output }],
-					details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
+					content: [{ type: "text", text: [text, ...notes].join("\n") }],
+					details: {
+						action,
+						serverName: Array.from(allServerNames).join(", "),
+						success: answered.length > 0,
+					},
 				};
 			}
 
-			if (uniqueDiagnostics.length === 0) {
-				results.push(`${theme.status.success} ${relPath}: no issues`);
-			} else {
+			if (uniqueDiagnostics.length > 0) {
 				const summary = formatDiagnosticsSummary(uniqueDiagnostics);
 				results.push(`${theme.status.error} ${relPath}: ${summary}`);
 				const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
 				results.push(formatGroupedDiagnosticMessages(formatted));
+			} else if (answered.length === 0) {
+				results.push(`${theme.status.error} ${relPath}: no server checked the file`);
+			} else {
+				results.push(`${theme.status.success} ${relPath}: no issues${from}`);
 			}
+			results.push(...notes);
 		}
 
 		return {

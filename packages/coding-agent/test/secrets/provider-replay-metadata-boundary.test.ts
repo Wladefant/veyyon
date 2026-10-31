@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	deobfuscateAssistantContent,
 	obfuscateMessages,
@@ -8,14 +9,7 @@ import {
 
 const SECRET = "provider-replay-metadata-secret";
 const PLACEHOLDER = "#REPLAY_SECRET#";
-const usage: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: AssistantMessage["usage"] = emptyUsage();
 
 function obfuscator(): SecretObfuscator {
 	return new SecretObfuscator([{ type: "plain", origin: "config", content: SECRET, name: "REPLAY_SECRET" }], {

@@ -83,7 +83,7 @@ describe("InteractiveMode theme scrollback refresh", () => {
 	});
 
 	it("emits a full scrollback replay when the active theme changes", async () => {
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		const writes: string[] = [];
 		const realWrite = terminal.write.bind(terminal);
 		vi.spyOn(terminal, "write").mockImplementation(data => {
@@ -92,13 +92,13 @@ describe("InteractiveMode theme scrollback refresh", () => {
 		});
 
 		await setTheme("light");
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(writes.join("")).toContain("\x1b[3J");
 	});
 
 	it("keeps theme previews as non-destructive viewport repaints", async () => {
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		const fullRedraws = mode.ui.fullRedraws;
 		const writes: string[] = [];
 		const realWrite = terminal.write.bind(terminal);
@@ -108,14 +108,14 @@ describe("InteractiveMode theme scrollback refresh", () => {
 		});
 
 		await previewTheme("light");
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.ui.fullRedraws).toBe(fullRedraws);
 		expect(writes.join("")).not.toContain("\x1b[3J");
 	});
 
 	it("emits a full scrollback replay when a previewed theme is committed", async () => {
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		const writes: string[] = [];
 		const realWrite = terminal.write.bind(terminal);
 		vi.spyOn(terminal, "write").mockImplementation(data => {
@@ -124,13 +124,13 @@ describe("InteractiveMode theme scrollback refresh", () => {
 		});
 
 		await previewTheme("light", { ephemeral: false });
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(writes.join("")).toContain("\x1b[3J");
 	});
 
 	it("keeps auto-theme previews as non-destructive viewport repaints", async () => {
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		const originalColorFgBg = Bun.env.COLORFGBG;
 		Bun.env.COLORFGBG = "0;15";
 		const fullRedraws = mode.ui.fullRedraws;
@@ -143,7 +143,7 @@ describe("InteractiveMode theme scrollback refresh", () => {
 
 		try {
 			enableAutoTheme({ ephemeral: true });
-			await terminal.waitForRender();
+			await terminal.waitForRender(mode.ui);
 		} finally {
 			if (originalColorFgBg === undefined) {
 				delete Bun.env.COLORFGBG;
@@ -157,7 +157,7 @@ describe("InteractiveMode theme scrollback refresh", () => {
 	});
 
 	it("keeps theme changes as viewport repaints inside terminal multiplexers", async () => {
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
 		const fullRedraws = mode.ui.fullRedraws;
 		const writes: string[] = [];
@@ -168,7 +168,7 @@ describe("InteractiveMode theme scrollback refresh", () => {
 		});
 
 		await setTheme("light");
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.ui.fullRedraws).toBe(fullRedraws);
 		expect(writes.join("")).not.toContain("\x1b[3J");

@@ -1,7 +1,7 @@
 // WHY: a hidden continuation (`sendCustomMessage` with `deliverAs: "nextTurn"`
 // and `triggerTurn: true`) sent from an `agent_end` handler reaches
-// `#promptWithMessage` while the turn it reacts to is still unwinding, so its
-// first `agent.prompt` is refused as busy and it waits for the agent to go idle.
+// `#promptWithMessage` while the turn it reacts to is still unwinding, so the
+// agent is still busy and the continuation waits for it to go idle.
 // A user interrupt is one way the agent goes idle. The wait woke on that settle
 // and prompted the continuation into the session the user had just stopped:
 // the autoresearch stall nudge restarted the loop three milliseconds after
@@ -12,13 +12,13 @@
 // `AgentSession` and asserts on the provider calls it makes, so a retry that
 // re-prompts after the wait, whatever queued it, turns the suite red.
 //
-// Not caught: a continuation that reaches `agent.prompt` the first time without
-// being refused (the agent already idle) races the interrupt on its own, and a
+// Not caught: a continuation that reaches `agent.prompt` without waiting (the
+// agent already idle) races the interrupt on its own, and a
 // continuation queued AFTER the interrupt settled is a new cycle by design.
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent, AgentBusyError, type AgentMessage, type AgentPromptOptions } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -28,6 +28,7 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { QueuedMessages } from "@veyyon/coding-agent/session/runtime/queued-messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -118,31 +119,24 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 
 	/**
 	 * Start a turn, queue a triggering continuation while it streams, and hold
-	 * until that continuation has been refused as busy once -- the point where
-	 * it is waiting on idle. Returns the in-flight prompt and the refusal count.
+	 * until that continuation waits for the agent to go idle. Returns the
+	 * in-flight prompt and the number of idle waits the session entered.
 	 */
 	async function queueContinuationWaitingOnIdle(): Promise<{
 		firstPrompt: Promise<unknown>;
-		busyRefusals: () => number;
+		idleWaits: () => number;
 	}> {
 		const firstPrompt = session.prompt("First message");
 		await waitFor(() => session.isStreaming && openStream !== undefined && providerCalls.length === 1);
 
-		let refusals = 0;
-		// The session prompts with a message array; the spy keeps that overload and counts
-		// the busy refusal that puts the continuation into its idle wait.
-		const realPrompt: (messages: AgentMessage[], options?: AgentPromptOptions) => Promise<void> =
-			agent.prompt.bind(agent);
-		vi.spyOn(agent, "prompt").mockImplementation(async (input, options) => {
-			if (typeof input === "string" || !Array.isArray(input) || Array.isArray(options)) {
-				throw new Error("the session prompts the agent with a message array");
-			}
-			try {
-				await realPrompt(input, options);
-			} catch (error) {
-				if (error instanceof AgentBusyError) refusals += 1;
-				throw error;
-			}
+		let waits = 0;
+		const waitOnIdle = QueuedMessages.prototype.whileWaitingOnIdle;
+		vi.spyOn(QueuedMessages.prototype, "whileWaitingOnIdle").mockImplementation(function (
+			this: QueuedMessages,
+			wait: () => Promise<void>,
+		) {
+			waits += 1;
+			return waitOnIdle.call(this, wait);
 		});
 
 		const startedTurn = await session.sendCustomMessage(
@@ -150,12 +144,12 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 			{ deliverAs: "nextTurn", triggerTurn: true },
 		);
 		expect(startedTurn).toBe(false);
-		await waitFor(() => refusals === 1);
-		return { firstPrompt, busyRefusals: () => refusals };
+		await waitFor(() => waits === 1);
+		return { firstPrompt, idleWaits: () => waits };
 	}
 
 	it("drops the waiting continuation when Escape ends the turn", async () => {
-		const { firstPrompt, busyRefusals } = await queueContinuationWaitingOnIdle();
+		const { firstPrompt, idleWaits } = await queueContinuationWaitingOnIdle();
 
 		await session.abort({ reason: USER_INTERRUPT_LABEL });
 		await firstPrompt;
@@ -165,7 +159,7 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 		await originalSchedulerWait(50);
 
 		expect(providerCalls).toHaveLength(1);
-		expect(busyRefusals()).toBe(1);
+		expect(idleWaits()).toBe(1);
 		expect(session.isStreaming).toBe(false);
 		expect(session.messages.at(-1)?.role).toBe("assistant");
 		expect(

@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { Process, ProcessStatus } from "@veyyon/natives";
+import { parse } from "yaml";
 import { extractInstalledNatives, ptyWrapper, recordFrame, timeRun } from "./bench-startup";
 
 const exec = promisify(execFile);
@@ -289,8 +290,12 @@ describe("benchmark seed copy warm vs cold semantics", () => {
 		expect(report.samples.filter(s => s.arm === "version").length).toBe(2);
 		expect(report.samples.filter(s => s.arm === "help").length).toBe(2);
 
-		const warmedConfig = await readFile(path.join(scratchDir, "config", "config.yml"), "utf8");
-		expect(warmedConfig).toContain("checkUpdate: false");
+		// Settings read the update controls from the profile config; the global config.yml ignores
+		// `startup.*`, so the seed's global copy keeps its own value and the profile copy is overridden.
+		const warmedProfileConfig = parse(
+			await readFile(path.join(scratchDir, "config", "profiles", "default", "agent", "config.yml"), "utf8"),
+		);
+		expect(warmedProfileConfig).toEqual({ startup: { autoUpdate: false, checkUpdate: false } });
 		expect(await readFile(path.join(directory, "observations.jsonl"), "utf8")).toBe("0\n1\n2\n3\n");
 		expect(await readFile(path.join(seedDir, "state.txt"), "utf8")).toBe("0");
 	});

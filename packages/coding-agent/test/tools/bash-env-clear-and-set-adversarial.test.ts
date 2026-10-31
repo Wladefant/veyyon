@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,13 +42,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool env set/unset adversarial", () => {
 	let tmpDir: string;
 
@@ -65,7 +59,7 @@ describe("BashTool env set/unset adversarial", () => {
 			command: "export FOO=bar; printf '%s\\n' \"$FOO\"",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("bar");
+		expect(toolResultText(result, "")).toContain("bar");
 	});
 
 	it("unset removes a previously exported variable in the same shell", async () => {
@@ -75,7 +69,7 @@ describe("BashTool env set/unset adversarial", () => {
 			command: "export FOO=bar; unset FOO; printf '<%s>\\n' \"${FOO-missing}\"",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("missing");
+		expect(toolResultText(result, "")).toContain("missing");
 	});
 
 	/**
@@ -85,7 +79,7 @@ describe("BashTool env set/unset adversarial", () => {
 	 * makes `cd`, `~` expansion and every dotfile lookup resolve against `/`.
 	 *
 	 * WHY IT WAS REWRITTEN. The previous assertion was
-	 * `expect(textOf(result).trim().length).toBeGreaterThan(0)`, which cannot fail on
+	 * `expect(toolResultText(result, "").trim().length).toBeGreaterThan(0)`, which cannot fail on
 	 * either half of that. A shell that printed a diagnostic, a wrong path, or any other
 	 * non-empty byte satisfied it, and the test's own name ("HOME is non-empty") was the
 	 * strongest thing it checked. It is also exactly the assertion that survives the
@@ -105,7 +99,7 @@ describe("BashTool env set/unset adversarial", () => {
 		// force a substring check, which is the weaker assertion this test is replacing.
 		// `os.homedir()` is what every other home-touching code path in the process
 		// reads, so equality here is the contract.
-		expect(textOf(result).trim().split("\n")[0]).toBe(os.homedir());
+		expect(toolResultText(result, "").trim().split("\n")[0]).toBe(os.homedir());
 		// And it is a real absolute path, so an `os.homedir()` that itself went empty
 		// cannot make the line above pass by comparing "" to "".
 		expect(path.isAbsolute(os.homedir())).toBe(true);

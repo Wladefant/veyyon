@@ -482,13 +482,23 @@ fn resolve_pipeline<'a>(
 
 const BUILTIN_FILTERS_TOML: &str = include_str!(concat!(env!("OUT_DIR"), "/builtin_filters.toml"));
 
+/// The built-in pipelines, compiled when the first command is resolved. Only
+/// their command matchers compile then; a pipeline's output stages compile
+/// when it first claims a command, so the first command compiles the stages of
+/// at most one pipeline rather than all of them.
 static BUILTIN_PIPELINES: LazyLock<PipelineRegistry> =
-	LazyLock::new(|| match pipeline::parse_file(BUILTIN_FILTERS_TOML, "builtin") {
-		Ok((pipelines, tests)) => PipelineRegistry { pipelines, tests },
-		Err(err) => {
-			eprintln!("[veyyon-natives minimizer] failed to load built-in filters: {err}");
-			PipelineRegistry::default()
-		},
+	LazyLock::new(|| {
+		match pipeline::parse_file(
+			BUILTIN_FILTERS_TOML,
+			"builtin",
+			pipeline::StageCompilation::OnFirstUse,
+		) {
+			Ok((pipelines, tests)) => PipelineRegistry { pipelines, tests },
+			Err(err) => {
+				eprintln!("[veyyon-natives minimizer] failed to load built-in filters: {err}");
+				PipelineRegistry::default()
+			},
+		}
 	});
 
 fn builtin_pipelines() -> &'static PipelineRegistry {
@@ -1179,6 +1189,18 @@ mod pipeline_integration_tests {
 				.join("\n")
 		);
 		assert!(!outcomes.is_empty(), "expected built-in inline tests");
+	}
+
+	/// The built-in registry compiles a pipeline's output stages on first use,
+	/// so a bad built-in stage regex would otherwise show only when a command
+	/// reached that pipeline, as unminimized output. Compiling the file eagerly
+	/// here keeps it a test failure.
+	#[test]
+	fn every_builtin_filter_compiles_eagerly() {
+		let (pipelines, _) =
+			pipeline::parse_file(BUILTIN_FILTERS_TOML, "builtin", pipeline::StageCompilation::Eager)
+				.unwrap_or_else(|err| panic!("built-in filters must compile: {err}"));
+		assert_eq!(pipelines.len(), builtin_pipelines().pipelines.len());
 	}
 
 	#[test]

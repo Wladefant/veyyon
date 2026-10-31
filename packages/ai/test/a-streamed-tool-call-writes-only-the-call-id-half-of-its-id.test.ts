@@ -20,6 +20,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@veyyon/ai";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { encodeResponse } from "../src/providers/openai-responses-server-output";
 import { encodeStream } from "../src/providers/openai-responses-server-stream";
 
@@ -74,14 +75,7 @@ function message(call: ToolCall): AssistantMessage {
 		provider: "openai",
 		model: "gpt-5",
 		content: [call],
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "toolUse",
 		timestamp: 1_700_000_000_000,
 	};

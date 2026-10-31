@@ -33,15 +33,11 @@
 
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message, ToolResultMessage } from "@veyyon/ai";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
+import type { ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
+import { createUserMessage, identityConverter } from "./helpers";
 
 const schema = type({ path: "string" });
 

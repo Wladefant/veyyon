@@ -232,13 +232,13 @@ describe("Markdown tree-guide hanging wrap", () => {
 			}
 		});
 
-		it("replays SGR state opened on an earlier line onto a later hung line's continuation rows", () => {
+		it("does not replay a style closed on an earlier line onto a later hung line's continuation rows", () => {
 			// With a default text style, the renderer re-opens the default color
 			// after `**bold**` (the style prefix) and the soft break leaves that
 			// re-open unclosed — a style opened on line 1 that is still active
-			// when line 2 hangs. Line 1's bold open/close pair exists nowhere on
-			// line 2, so finding it ahead of the continuation text proves the
-			// carry was re-played rather than line 2's own codes.
+			// when line 2 hangs. Line 1's bold is closed on line 1 by its own off
+			// code, so it is dead state: like a style before a full reset, it must
+			// not replay ahead of line 2's continuation text.
 			const chalk = new Chalk({ level: 3 });
 			const raw = new Markdown(
 				"aaa **bold**\n├── alpha bravo charlie delta echo foxtrot golf hotel india",
@@ -258,17 +258,17 @@ describe("Markdown tree-guide hanging wrap", () => {
 			const row0Codes = raw[0]!.trimEnd().match(SGR_RE)!;
 			expect(row0Codes[row0Codes.length - 1]).toBe("\x1b[31m");
 
-			// The continuation row starts with a zero-width SGR run that replays
-			// line 1's history (the carried bold pair) and nets out to the
-			// default color being open ahead of the visible text.
+			// The continuation row starts with a zero-width SGR run that leaves
+			// the default color open and bold off ahead of the visible text.
 			const continuation = raw[2]!;
 			const hangAt = continuation.indexOf("│   ");
 			expect(hangAt).toBeGreaterThan(0);
 			const replayed = continuation.slice(0, hangAt);
 			expect(replayed.replace(SGR_RE, "")).toBe("");
-			expect(replayed).toContain("\x1b[1m");
+			expect(replayed).not.toContain("\x1b[1m");
 			const replayedCodes = replayed.match(SGR_RE)!;
 			expect(replayedCodes[replayedCodes.length - 1]).toBe("\x1b[31m");
+			for (const row of raw.slice(1)) expect(row).not.toContain("\x1b[1m");
 		});
 
 		it("re-renders byte-identically after a width round-trip (44 → 80 → 44)", () => {

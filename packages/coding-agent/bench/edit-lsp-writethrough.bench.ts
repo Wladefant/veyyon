@@ -8,7 +8,7 @@
  *
  *   runLspWritethrough -> getDiagnosticsForFile -> waitForDiagnostics
  *
- * `waitForDiagnostics` polls every 100ms. Servers that echo the edited
+ * `waitForDiagnostics` wakes on each `publishDiagnostics`. Servers that echo the edited
  * document version are accepted immediately; servers that omit or mismatch it
  * (typescript-language-server) settle on the latest publish after a 250ms quiet
  * window so stale in-flight publishes can be superseded without burning the

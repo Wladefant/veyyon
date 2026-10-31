@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { once } from "node:events";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -26,9 +28,57 @@ import { replaceBinaryForUpdate } from "../src/cli/update-cli";
  * `update-killed-mid-swap.test.ts`.
  */
 
-/** Sleeps long enough to still be running through the swap, then reports its version. */
+/**
+ * Comment lines between the wait and the version line, 16 KiB of them. dash and bash read a script
+ * in blocks of at most 8 KiB, so the version line is read from the script's open descriptor after
+ * the wait, not from a buffer filled at startup. That descriptor is how the running process sees
+ * the swap: after a rename it still reads the old inode, and after a rewrite in place it reads the
+ * new bytes at the same offset and prints the new version.
+ */
+const PAST_THE_READ_BUFFER = `${"#".repeat(63)}\n`.repeat(256);
+
+/**
+ * With `--wait` it reports `ready` on stderr once executing and blocks on stdin, so it is still
+ * running through the swap for exactly as long as the test holds stdin open; then it reports its
+ * version.
+ */
 function longRunningBinary(version: string): string {
-	return `#!/bin/sh\nif [ "\${1:-}" = "--wait" ]; then sleep 2; fi\necho "veyyon/${version}"\n`;
+	return `#!/bin/sh\nif [ "\${1:-}" = "--wait" ]; then echo ready >&2; read -r _; fi\n${PAST_THE_READ_BUFFER}echo "veyyon/${version}"\n`;
+}
+
+interface Running {
+	/** Close stdin so the process runs to completion; resolves to its exit code and stdout. */
+	finish(): Promise<{ code: number | null; stdout: string }>;
+	/** Kill the process if it is still running; for cleanup after a failed assertion. */
+	kill(): void;
+}
+
+/** Start `target --wait` and resolve once it is executing, not merely spawned. */
+async function startRunning(target: string): Promise<Running> {
+	const child: ChildProcessWithoutNullStreams = spawn(target, ["--wait"], { stdio: "pipe" });
+	const closed = once(child, "close");
+	let stdout = "";
+	let stderr = "";
+	child.stdout.setEncoding("utf8").on("data", chunk => {
+		stdout += chunk;
+	});
+	const ready = Promise.withResolvers<void>();
+	child.stderr.setEncoding("utf8").on("data", chunk => {
+		stderr += chunk;
+		if (stderr.includes("ready")) ready.resolve();
+	});
+	child.once("close", code => ready.reject(new Error(`exited with ${code} before it was ready: ${stderr}`)));
+	await ready.promise;
+	return {
+		async finish() {
+			child.stdin.end();
+			const [code] = await closed;
+			return { code, stdout };
+		},
+		kill() {
+			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		},
+	};
 }
 
 const OLD_VERSION = "1.0.0";
@@ -71,16 +121,17 @@ describe("replacing the binary that is currently running", () => {
 	 */
 	it("lets the already-running process finish normally", async () => {
 		const layout = await makeLayout();
+		let running: Running | undefined;
 		try {
-			const running = Bun.spawn([layout.target, "--wait"], { stdout: "pipe", stderr: "pipe" });
-			// Give it a moment to be executing rather than merely spawned.
-			await Bun.sleep(200);
+			running = await startRunning(layout.target);
 
 			await swap(layout);
 
-			expect(await running.exited).toBe(0);
-			expect((await new Response(running.stdout).text()).trim()).toBe(`veyyon/${OLD_VERSION}`);
+			const { code, stdout } = await running.finish();
+			expect(code).toBe(0);
+			expect(stdout.trim()).toBe(`veyyon/${OLD_VERSION}`);
 		} finally {
+			running?.kill();
 			await fs.rm(layout.dir, { recursive: true, force: true });
 		}
 	}, 20_000);
@@ -92,9 +143,9 @@ describe("replacing the binary that is currently running", () => {
 	 */
 	it("serves the new version to the very next invocation", async () => {
 		const layout = await makeLayout();
+		let running: Running | undefined;
 		try {
-			const running = Bun.spawn([layout.target, "--wait"], { stdout: "pipe", stderr: "pipe" });
-			await Bun.sleep(200);
+			running = await startRunning(layout.target);
 
 			await swap(layout);
 
@@ -102,8 +153,9 @@ describe("replacing the binary that is currently running", () => {
 			expect(next.exitCode).toBe(0);
 			expect(next.stdout.toString().trim()).toBe(`veyyon/${NEW_VERSION}`);
 
-			await running.exited;
+			await running.finish();
 		} finally {
+			running?.kill();
 			await fs.rm(layout.dir, { recursive: true, force: true });
 		}
 	}, 20_000);
@@ -115,16 +167,17 @@ describe("replacing the binary that is currently running", () => {
 	 */
 	it("leaves the new binary whole and executable at the same path", async () => {
 		const layout = await makeLayout();
+		let running: Running | undefined;
 		try {
-			const running = Bun.spawn([layout.target, "--wait"], { stdout: "pipe", stderr: "pipe" });
-			await Bun.sleep(200);
+			running = await startRunning(layout.target);
 
 			await swap(layout);
 
 			expect(await fs.readFile(layout.target, "utf8")).toBe(longRunningBinary(NEW_VERSION));
 			expect(((await fs.stat(layout.target)).mode & 0o111) !== 0).toBe(true);
-			await running.exited;
+			await running.finish();
 		} finally {
+			running?.kill();
 			await fs.rm(layout.dir, { recursive: true, force: true });
 		}
 	}, 20_000);
@@ -139,9 +192,9 @@ describe("replacing the binary that is currently running", () => {
 	 */
 	it("leaves no backup or staged download in the install directory", async () => {
 		const layout = await makeLayout();
+		let running: Running | undefined;
 		try {
-			const running = Bun.spawn([layout.target, "--wait"], { stdout: "pipe", stderr: "pipe" });
-			await Bun.sleep(200);
+			running = await startRunning(layout.target);
 
 			await swap(layout);
 
@@ -151,8 +204,9 @@ describe("replacing the binary that is currently running", () => {
 			// would be the bug, not the clean result this test used to expect.
 			expect((await fs.readdir(layout.dir)).sort()).toEqual([".veyyon.veyyon-owner", "veyyon"]);
 			// The still-running process is unaffected by losing the backup's name.
-			expect(await running.exited).toBe(0);
+			expect((await running.finish()).code).toBe(0);
 		} finally {
+			running?.kill();
 			await fs.rm(layout.dir, { recursive: true, force: true });
 		}
 	}, 20_000);

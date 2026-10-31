@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Usage } from "@veyyon/ai/types";
-import { calculateCost, getBundledModel } from "@veyyon/catalog/models";
+import { calculateCost, emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 
 describe("calculateCost", () => {
 	it("keeps token-based calculation for GitHub Copilot models", () => {
@@ -48,18 +48,12 @@ describe("calculateCost", () => {
 			},
 		};
 		const usage: Usage = {
+			...emptyUsage(),
 			input: 1000,
 			output: 500,
 			cacheRead: 200,
 			cacheWrite: 100,
 			totalTokens: 1800,
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				total: 0,
-			},
 		};
 
 		calculateCost(model, usage);
@@ -82,13 +76,13 @@ describe("calculateCost", () => {
 			},
 		};
 		const usage: Usage = {
+			...emptyUsage(),
 			input: 100,
 			output: 20,
 			cacheRead: 50,
 			cacheWrite: 10,
 			totalTokens: 250,
 			orchestration: { input: 25, output: 40, cacheRead: 5 },
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		};
 
 		calculateCost(model, usage);
@@ -106,14 +100,7 @@ describe("calculateCost", () => {
 	it("prices OpenAI Codex GPT models from the matching OpenAI catalog entry", () => {
 		const openAIModel = getBundledModel("openai", "gpt-5.4");
 		const codexModel = getBundledModel("openai-codex", "gpt-5.4");
-		const usage: Usage = {
-			input: 1000,
-			output: 500,
-			cacheRead: 200,
-			cacheWrite: 0,
-			totalTokens: 1700,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
+		const usage: Usage = { ...emptyUsage(), input: 1000, output: 500, cacheRead: 200, totalTokens: 1700 };
 
 		expect(codexModel.cost).toEqual(openAIModel.cost);
 

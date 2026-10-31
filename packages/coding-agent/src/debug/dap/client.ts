@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
-import { errorMessage, isEnoent, logger, ptree, settleWithin } from "@veyyon/utils";
+import * as path from "node:path";
+import { errorMessage, isEnoent, logger, privateTempDir, ptree, Snowflake, settleWithin } from "@veyyon/utils";
 import { NON_INTERACTIVE_ENV } from "../../exec/non-interactive-env";
 import { primarySessionCpuAdoption } from "../../session/cpu-limit";
 import { ToolAbortError } from "../../tools/core/tool-errors";
@@ -96,102 +97,77 @@ export class DapClient {
 
 	static async spawn({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
 		if (adapter.connectMode === "socket") {
-			return DapClient.#spawnSocket({ adapter, cwd, socketReadyTimeoutMs });
+			const timeoutMs = socketReadyTimeoutMs ?? SOCKET_READY_TIMEOUT_MS;
+			return process.platform === "linux"
+				? DapClient.#spawnSocketUnix(adapter, cwd, timeoutMs)
+				: DapClient.#spawnSocketClientAddr(adapter, cwd, timeoutMs);
 		}
-		// Merge non-interactive env and start in a new session (detached → setsid)
-		// so the adapter process tree has no controlling terminal. Without this,
-		// debuggee children can reach /dev/tty and trigger SIGTTIN, suspending
-		// the parent harness under shell job control.
-		const env = {
-			...Bun.env,
-			...NON_INTERACTIVE_ENV,
-		};
-		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args], {
+		return DapClient.#start(adapter, cwd, DapClient.#spawnAdapter(adapter, cwd, []));
+	}
+
+	/**
+	 * Starts the adapter with the non-interactive environment in a session of its own (detached →
+	 * setsid), so the adapter process tree has no controlling terminal. Without this, debuggee
+	 * children can reach /dev/tty and trigger SIGTTIN, suspending the parent harness under shell job
+	 * control.
+	 */
+	static #spawnAdapter(
+		adapter: DapResolvedAdapter,
+		cwd: string,
+		extraArgs: readonly string[],
+	): DapClientState["proc"] {
+		return ptree.spawn([adapter.resolvedCommand, ...adapter.args, ...extraArgs], {
 			cwd,
 			stdin: "pipe",
-			env,
+			env: { ...Bun.env, ...NON_INTERACTIVE_ENV },
 			detached: true,
 			onSpawnPid: primarySessionCpuAdoption(),
 		});
-		const client = new DapClient(adapter, cwd, proc);
-		proc.exited.then(() => {
-			client.#handleProcessExit();
-		});
+	}
+
+	/** A client reading the adapter's messages from `transport`, or from its stdio when absent. */
+	static #start(
+		adapter: DapResolvedAdapter,
+		cwd: string,
+		proc: DapClientState["proc"],
+		transport?: SocketTransport,
+	): DapClient {
+		const client = new DapClient(adapter, cwd, proc, transport);
+		proc.exited.then(() => client.#handleProcessExit());
 		void client.#startMessageReader();
 		return client;
 	}
 
-	/**
-	 * Spawn a socket-mode adapter (e.g. dlv).
-	 * Linux: connect to a unix domain socket via --listen=unix:<path>
-	 * macOS/other: the adapter dials into our TCP listener via --client-addr
-	 */
-	static async #spawnSocket({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
-		const env = {
-			...Bun.env,
-			...NON_INTERACTIVE_ENV,
-		};
-		const timeoutMs = socketReadyTimeoutMs ?? SOCKET_READY_TIMEOUT_MS;
-		const isLinux = process.platform === "linux";
-
-		if (isLinux) {
-			return DapClient.#spawnSocketUnix({ adapter, cwd, env, timeoutMs });
+	/** Kills an adapter that never connected, so the detached process is not orphaned. */
+	static #killUnconnected(proc: DapClientState["proc"]): void {
+		try {
+			proc.kill();
+		} catch {
+			/* proc may already be dead */
 		}
-		return DapClient.#spawnSocketClientAddr({ adapter, cwd, env, timeoutMs });
 	}
 
 	/** Linux: spawn adapter with --listen=unix:<path>, then connect to the socket. */
-	static async #spawnSocketUnix({
-		adapter,
-		cwd,
-		env,
-		timeoutMs,
-	}: {
-		adapter: DapResolvedAdapter;
-		cwd: string;
-		env: Record<string, string | undefined>;
-		timeoutMs: number;
-	}): Promise<DapClient> {
-		const socketPath = `/tmp/dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`;
-		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--listen=unix:${socketPath}`], {
-			cwd,
-			stdin: "pipe",
-			env,
-			detached: true,
-			onSpawnPid: primarySessionCpuAdoption(),
-		});
-
-		// If waitForCondition throws (timeout, or adapter exited early) or the
-		// socket connect fails, we must not leak the detached adapter process.
+	static async #spawnSocketUnix(adapter: DapResolvedAdapter, cwd: string, timeoutMs: number): Promise<DapClient> {
+		// In the user's private temp directory: the adapter accepts debug requests on this socket, which evaluate
+		// code as this user. The name stays short so the path fits the 104-byte socket limit of macOS.
+		const socketPath = path.join(privateTempDir(), `dap-${Snowflake.next()}.sock`);
+		const proc = DapClient.#spawnAdapter(adapter, cwd, [`--listen=unix:${socketPath}`]);
 		try {
 			await waitForCondition(() => isUnixSocketReady(socketPath), timeoutMs, proc);
-			const { readable, writeSink, socket } = await connectSocket({ unix: socketPath });
-			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
-			proc.exited.then(() => client.#handleProcessExit());
-			void client.#startMessageReader();
-			return client;
+			return DapClient.#start(adapter, cwd, proc, await connectSocket({ unix: socketPath }));
 		} catch (error) {
-			try {
-				proc.kill();
-			} catch {
-				/* proc may already be dead */
-			}
+			DapClient.#killUnconnected(proc);
 			throw error;
 		}
 	}
 
 	/** macOS/other: listen on a random TCP port, spawn adapter with --client-addr, accept connection. */
-	static async #spawnSocketClientAddr({
-		adapter,
-		cwd,
-		env,
-		timeoutMs,
-	}: {
-		adapter: DapResolvedAdapter;
-		cwd: string;
-		env: Record<string, string | undefined>;
-		timeoutMs: number;
-	}): Promise<DapClient> {
+	static async #spawnSocketClientAddr(
+		adapter: DapResolvedAdapter,
+		cwd: string,
+		timeoutMs: number,
+	): Promise<DapClient> {
 		const { promise: connPromise, resolve: resolveConn } = Promise.withResolvers<Bun.Socket<undefined>>();
 
 		// Listen on port 0 (OS picks a free port)
@@ -208,14 +184,7 @@ export class DapClient {
 			},
 		});
 
-		const port = server.port;
-		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--client-addr=127.0.0.1:${port}`], {
-			cwd,
-			stdin: "pipe",
-			env,
-			detached: true,
-			onSpawnPid: primarySessionCpuAdoption(),
-		});
+		const proc = DapClient.#spawnAdapter(adapter, cwd, [`--client-addr=127.0.0.1:${server.port}`]);
 
 		// Wait for the adapter to dial back. On timeout (or any other failure
 		// before we've wired up the client) kill `proc` — otherwise the detached
@@ -225,19 +194,20 @@ export class DapClient {
 			() => rejectTimeout(new Error(`${adapter.name} did not connect within ${timeoutMs}ms`)),
 			timeoutMs,
 		);
+		// An adapter that dies before dialing back fails the spawn with its own exit
+		// as soon as the exit lands, instead of waiting out the readiness timeout.
+		const exitedFirst = proc.exited.then(
+			() => Promise.reject(adapterExitedError(proc)),
+			() => Promise.reject(adapterExitedError(proc)),
+		);
+		// The race may settle on the connection; the adapter's later exit is then
+		// the client's to report, not this race's.
+		exitedFirst.catch(() => {});
 		try {
-			const rawSocket = await Promise.race([connPromise, timeoutPromise]);
-			const { readable, writeSink, socket } = wrapBunSocket(rawSocket);
-			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket });
-			proc.exited.then(() => client.#handleProcessExit());
-			void client.#startMessageReader();
-			return client;
+			const rawSocket = await Promise.race([connPromise, timeoutPromise, exitedFirst]);
+			return DapClient.#start(adapter, cwd, proc, wrapBunSocket(rawSocket));
 		} catch (error) {
-			try {
-				proc.kill();
-			} catch {
-				/* proc may already be dead */
-			}
+			DapClient.#killUnconnected(proc);
 			throw error;
 		} finally {
 			clearTimeout(connectTimeout);
@@ -448,7 +418,7 @@ export class DapClient {
 		if (!(flushResult instanceof Promise)) return;
 
 		if (this.#adapterExited) {
-			throw this.#exitedError();
+			throw adapterExitedError(this.proc);
 		}
 
 		const { promise: guardPromise, reject: guardReject, resolve: guardResolve } = Promise.withResolvers<void>();
@@ -460,7 +430,7 @@ export class DapClient {
 			WRITE_MESSAGE_TIMEOUT_MS,
 		);
 		const rejectOnExit = () => {
-			guardReject(this.#exitedError());
+			guardReject(adapterExitedError(this.proc));
 		};
 		this.#pendingWriteExitRejectors.add(rejectOnExit);
 
@@ -504,7 +474,7 @@ export class DapClient {
 			reason ??
 				(this.proc.exitCode === null
 					? new Error(`DAP adapter ${this.adapter.name} disposed`)
-					: this.#exitedError()),
+					: adapterExitedError(this.proc)),
 		);
 		try {
 			this.#socket?.end();
@@ -654,26 +624,11 @@ export class DapClient {
 	#handleProcessExit(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		this.#rejectPendingRequests(this.#exitedError());
+		this.#rejectPendingRequests(adapterExitedError(this.proc));
 	}
 
 	/**
-	 * What the adapter's exit says, from the adapter's own stderr. One sentence
-	 * for every route that discovers the exit: the exit handler, and a write that
-	 * hit the closed pipe first.
-	 */
-	#exitedError(): Error {
-		const stderr = this.proc.peekStderr().trim();
-		const exitCode = this.proc.exitCode;
-		return new Error(
-			stderr
-				? `DAP adapter exited (code ${exitCode}): ${stderr}`
-				: `DAP adapter exited unexpectedly (code ${exitCode})`,
-		);
-	}
-
-	/**
-	 * The same sentence, once the exit that closed the pipe has actually landed.
+	 * The {@link adapterExitedError} sentence, once the exit that closed the pipe has landed.
 	 * A write can lose the race with the exit handler by a tick, and reporting
 	 * `code null` with empty stderr would throw away the reason. Bounded, because
 	 * a pipe can also break while the process lives, and then there is nothing to
@@ -692,7 +647,7 @@ export class DapClient {
 		if (this.proc.exitCode === null) {
 			return new Error(`DAP adapter ${this.adapter.name} write failed: ${errorMessage(writeError)}`);
 		}
-		return this.#exitedError();
+		return adapterExitedError(this.proc);
 	}
 
 	#rejectPendingRequests(error: Error): void {
@@ -701,6 +656,21 @@ export class DapClient {
 		}
 		this.#pendingRequests.clear();
 	}
+}
+
+/**
+ * What an adapter's exit says, from the adapter's own stderr. One sentence for
+ * every route that discovers the exit: the exit handler, a write that hit the
+ * closed pipe first, and a socket adapter that died before it was reachable.
+ */
+function adapterExitedError(proc: DapClientState["proc"]): Error {
+	const stderr = proc.peekStderr().trim();
+	const exitCode = proc.exitCode;
+	return new Error(
+		stderr
+			? `DAP adapter exited (code ${exitCode}): ${stderr}`
+			: `DAP adapter exited unexpectedly (code ${exitCode})`,
+	);
 }
 
 async function isUnixSocketReady(socketPath: string): Promise<boolean> {
@@ -712,17 +682,26 @@ async function isUnixSocketReady(socketPath: string): Promise<boolean> {
 	}
 }
 
-/** Poll a condition until it returns true, or timeout/process exit. */
+/**
+ * Poll a condition until it returns true. An adapter that exits first fails the
+ * wait with its own exit, read once `exited` has settled: a failed adapter's
+ * stderr is drained by then. That settle is bounded by `EXIT_REASON_GRACE_MS`.
+ */
 async function waitForCondition(
 	check: () => boolean | Promise<boolean>,
 	timeoutMs: number,
-	proc: { exitCode: number | null },
+	proc: DapClientState["proc"],
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (await check()) return;
 		if (proc.exitCode !== null) {
-			throw new Error("Adapter process exited before socket was ready");
+			await settleWithin(
+				proc.exited.catch(() => {}),
+				EXIT_REASON_GRACE_MS,
+				undefined,
+			);
+			throw adapterExitedError(proc);
 		}
 		await Bun.sleep(50);
 	}

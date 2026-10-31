@@ -169,7 +169,8 @@ export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner 
 	return false;
 }
 
-const noOpUIContext: ExtensionUIContext = {
+/** The UI context of a session with no UI attached: every prompt resolves empty and every setter is ignored. */
+export const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
 	input: async (_title, _placeholder, _dialogOptions) => undefined,
@@ -349,9 +350,11 @@ export class ExtensionRunner {
 		this.#hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.#shutdownHandler = contextActions.shutdown;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
-		this.#obfuscateProviderTextFn = contextActions.obfuscateProviderText ?? (text => text);
+		this.#obfuscateProviderTextFn = contextActions.obfuscateProviderText;
+		this.#getContextUsageFn = contextActions.getContextUsage;
+		this.#compactFn = contextActions.compact;
 
-		// Command context actions (optional, only for interactive mode)
+		// Command context actions (optional: a spawned agent passes none)
 		if (commandContextActions) {
 			this.#waitForIdleFn = commandContextActions.waitForIdle;
 			this.#newSessionHandler = commandContextActions.newSession;
@@ -359,8 +362,6 @@ export class ExtensionRunner {
 			this.#navigateTreeHandler = commandContextActions.navigateTree;
 			this.#switchSessionHandler = commandContextActions.switchSession;
 			this.#reloadHandler = commandContextActions.reload;
-			this.#getContextUsageFn = commandContextActions.getContextUsage;
-			this.#compactFn = commandContextActions.compact;
 		}
 
 		this.#uiContext = uiContext ?? noOpUIContext;

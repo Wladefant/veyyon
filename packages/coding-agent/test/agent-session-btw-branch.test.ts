@@ -7,7 +7,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockHandler } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
@@ -39,14 +39,7 @@ function createBtwAssistant(): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 2,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 3,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 2, totalTokens: 3 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 		providerPayload: { type: "openaiResponsesHistory", items: [{ id: "side-channel" }] },
@@ -123,14 +116,7 @@ describe("AgentSession.branchFromBtw", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now() - 1,
 		});
@@ -319,8 +305,11 @@ describe("AgentSession.branchFromBtw", () => {
 		activeSession.sessionManager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
 		await activeSession.sessionManager.flush();
 		const abortController = new AbortController();
-		const execution = Promise.withResolvers<void>().promise;
-		activeSession.trackEvalExecution(execution, abortController).catch(() => undefined);
+		// A run that ends when aborted, as a kernel run does. One that never settled would hold the
+		// session's dispose for its whole eval settle window.
+		const execution = Promise.withResolvers<void>();
+		abortController.signal.addEventListener("abort", () => execution.resolve(), { once: true });
+		activeSession.trackEvalExecution(execution.promise, abortController).catch(() => undefined);
 		expect(activeSession.isEvalRunning).toBe(true);
 
 		await expect(

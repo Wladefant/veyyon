@@ -43,7 +43,7 @@ import type { ConfiguredThinkingLevel } from "../thinking";
 import type { EventBus } from "../utils/event-bus";
 import type { WorkspaceTree } from "../workspace-tree";
 import type { AgentSession } from "./agent-session";
-import type { PlanYolo, Prewalk } from "./agent-session-types";
+import type { PlanYolo, Prewalk, SessionScopedModel } from "./agent-session-types";
 import { discoverContextFiles } from "./factory-extensions";
 
 export interface CreateAgentSessionOptions {
@@ -83,12 +83,7 @@ export interface CreateAgentSessionOptions {
 	/** Internal precedence source for the initial effort selection. */
 	thinkingSource?: EffortSource;
 	/** Models available for cycling (Ctrl+P in interactive mode). */
-	scopedModels?: Array<{
-		model: Model;
-		thinkingLevel?: ConfiguredThinkingLevel;
-		/** True only when this entry carried an explicit `:effort` suffix. */
-		explicitThinkingLevel?: boolean;
-	}>;
+	scopedModels?: SessionScopedModel[];
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */

@@ -1,8 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import type { Api, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -10,12 +8,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { estimateToolSchemaTokens } from "@veyyon/coding-agent/session/non-message-tokens";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { estimateTokensFromText, TempDir } from "@veyyon/utils";
-
-function bundledModel(provider: string, id: string): Model<Api> {
-	const model = getBundledModel(provider as Parameters<typeof getBundledModel>[0], id);
-	if (!model) throw new Error(`Missing bundled test model ${provider}/${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("session descriptor placement across model switches", () => {
 	let dir: TempDir;
@@ -39,8 +32,8 @@ describe("session descriptor placement across model switches", () => {
 
 	/** Locks out a Gemini-start session retaining inline descriptors after switching to a native OpenAI model. */
 	it("moves descriptors from the prompt into native schemas as one synchronized transition", async () => {
-		const gemini = bundledModel("google-antigravity", "gemini-3.8-flash");
-		const openai = bundledModel("openai-codex", "gpt-5.6-sol");
+		const gemini = requireBundledModel("google-antigravity", "gemini-3.8-flash");
+		const openai = requireBundledModel("openai-codex", "gpt-5.6-sol");
 		const created = await createAgentSession({
 			cwd: dir.path(),
 			agentDir: dir.path(),

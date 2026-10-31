@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * End-to-end encoder contract for #2851. GitHub Copilot's `anthropic-messages`
@@ -37,15 +38,6 @@ function copilotSigningModel(): Model<"anthropic-messages"> {
 	} as ModelSpec<"anthropic-messages">);
 }
 
-const emptyUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 type WireBlock = { type: string; signature?: string; thinking?: string; text?: string; id?: string };
 interface WireParam {
 	role: string;
@@ -62,7 +54,7 @@ function copilotAssistant(
 		api: "anthropic-messages",
 		provider: "github-copilot",
 		model: "claude-opus-4.8",
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 		...overrides,

@@ -79,17 +79,6 @@ export function textFromContent(content: unknown): string {
 	return contentText(content, { separator: "\n\n", trimBlocks: true });
 }
 
-export function thinkingFromContent(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	const parts: string[] = [];
-	for (const block of content) {
-		if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") continue;
-		const thinking = block.thinking.trim();
-		if (thinking) parts.push(thinking);
-	}
-	return parts.join("\n\n");
-}
-
 export function toolCallOpFromMessage(message: AgentMessage, toolCallId: string): string | undefined {
 	if (message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
 	for (const block of message.content) {
@@ -99,12 +88,12 @@ export function toolCallOpFromMessage(message: AgentMessage, toolCallId: string)
 	return undefined;
 }
 
+/** The visible text of a user or assistant turn, for title refresh. A provider rejects a request that hands
+ *  one model's hidden reasoning to another, so the reasoning blocks never leave this turn. */
 export function titleConversationTurnFromMessage(message: AgentMessage): TitleConversationTurn | undefined {
 	if (message.role !== "user" && message.role !== "assistant") return undefined;
 	const text = textFromContent(message.content);
-	const thinking = message.role === "assistant" ? thinkingFromContent(message.content) : undefined;
-	if (!text && !thinking) return undefined;
-	return { role: message.role, ...(text ? { text } : {}), ...(thinking ? { thinking } : {}) };
+	return text ? { role: message.role, text } : undefined;
 }
 
 /** The last assistant message in `messages`, aborted ones included. */

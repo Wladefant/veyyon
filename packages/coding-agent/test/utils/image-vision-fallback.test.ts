@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, completeSimple, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	type DescribeAttachedImagesDeps,
@@ -39,14 +40,7 @@ function makeCompleteStub(text: string): { calls: unknown[][]; fn: typeof comple
 			api: visionModel.api,
 			provider: visionModel.provider,
 			model: visionModel.id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: Date.now(),
 			content: [{ type: "text", text }],

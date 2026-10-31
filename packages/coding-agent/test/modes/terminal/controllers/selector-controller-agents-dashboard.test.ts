@@ -22,6 +22,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
@@ -36,8 +37,6 @@ import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 const TEST_CWD = path.resolve("agents-dashboard-cwd");
 /** The conversation the harness's session manager reports; the card's roster scope. */
 const TEST_SESSION_ID = "session-under-test";
-/** Rendered rows carry colour; the assertions are about the names, not the escapes. */
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 interface Harness {
 	controller: SelectorController;
@@ -173,7 +172,7 @@ describe("The requireContent gate on the double-left gesture", () => {
 
 		const dashboard = h.shown();
 		if (!dashboard) throw new Error("the card was not mounted");
-		expect(dashboard.render(80).join("\n").replace(ANSI_PATTERN, "")).toContain("reviewer");
+		expect(stripVTControlCharacters(dashboard.render(80).join("\n"))).toContain("reviewer");
 		dashboard.dispose();
 	});
 
@@ -218,7 +217,7 @@ describe("The requireContent gate on the double-left gesture", () => {
 
 		const dashboard = h.shown();
 		if (!dashboard) throw new Error("the card was not mounted");
-		const body = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
+		const body = stripVTControlCharacters(dashboard.render(80).join("\n"));
 		expect(body).toContain("Agent Dashboard");
 		expect(body).toContain("Live (1)");
 		expect(body).toContain("Main");
@@ -357,7 +356,7 @@ describe("The roster scope the controller hands the card", () => {
 		const dashboard = h.shown();
 		if (!dashboard) throw new Error("the card was not mounted");
 
-		const rendered = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const rendered = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(rendered).toContain("reviewer");
 		expect(rendered).not.toContain("scout");

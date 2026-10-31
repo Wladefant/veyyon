@@ -8,6 +8,7 @@ import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@veyyon/ai/u
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { INTENT_FIELD } from "@veyyon/wire";
+import { sseResponse } from "./helpers/fetch-mock";
 
 interface SseToolCallDelta {
 	index: number;
@@ -32,16 +33,6 @@ interface SseChunk {
 		delta: SseChoiceDelta;
 		finish_reason?: "stop" | "tool_calls" | "length" | "content_filter" | null;
 	}>;
-}
-
-function sseResponse(events: ReadonlyArray<unknown | "[DONE]">): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
 }
 
 function mockFetch(events: ReadonlyArray<unknown | "[DONE]">): FetchImpl {

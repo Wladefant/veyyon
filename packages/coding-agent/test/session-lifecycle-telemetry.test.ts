@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -8,15 +8,9 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
+const makeTempDir = useTempDirs();
 
 function readJsonl(file: string): Array<Record<string, unknown>> {
 	return fs
@@ -27,10 +21,6 @@ function readJsonl(file: string): Array<Record<string, unknown>> {
 		.map(line => JSON.parse(line) as Record<string, unknown>)
 		.filter(entry => entry.type !== "title");
 }
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
 
 describe("session lifecycle telemetry persistence", () => {
 	it.each(["off", "basic", "rich", "ultra"] as const)(

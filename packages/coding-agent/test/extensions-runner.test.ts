@@ -8,11 +8,13 @@ import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
+	noOpUIContext,
 	testSetExtensionHandlerTimeoutMs,
 } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { APPROVAL_SELECT_OPTIONS, ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
@@ -20,6 +22,8 @@ import { sessionWorkerAccess } from "@veyyon/coding-agent/native-control/telegra
 import { Type } from "@veyyon/kernel/registry/typebox";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { attachFaultSink, type Fault, getProjectAgentDir, logger, TempDir } from "@veyyon/utils";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
+import { idleContextActions, idleExtensionActions } from "./helpers/idle-extension-actions";
 
 /**
  * Execution context for a test whose subject is NOT approval.
@@ -124,33 +128,8 @@ describe("ExtensionRunner", () => {
 		);
 		let replacement = "#FIRST_RUNTIME#";
 		runner.initialize(
-			{
-				sendMessage: () => {},
-				sendUserMessage: () => {},
-				appendEntry: () => {},
-				setLabel: () => {},
-				getActiveTools: () => [],
-				getAllTools: () => [],
-				setActiveTools: async () => {},
-				getCommands: () => [],
-				setModel: async () => false,
-				getThinkingLevel: () => undefined,
-				setThinkingLevel: () => {},
-				getSessionName: () => undefined,
-				setSessionName: async () => {},
-				...sessionWorkerAccess(() => undefined),
-			},
-			{
-				getModel: () => undefined,
-				isIdle: () => true,
-				abort: () => {},
-				hasPendingMessages: () => false,
-				shutdown: () => {},
-				getContextUsage: () => undefined,
-				compact: async () => {},
-				getSystemPrompt: () => [],
-				obfuscateProviderText: text => text.replaceAll("RUNNER_SECRET", replacement),
-			},
+			idleExtensionActions(),
+			idleContextActions({ obfuscateProviderText: text => text.replaceAll("RUNNER_SECRET", replacement) }),
 		);
 
 		const context = runner.createContext();
@@ -828,14 +807,7 @@ describe("ExtensionRunner", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 123,
 			};
@@ -892,14 +864,7 @@ describe("ExtensionRunner", () => {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 123,
 			};
@@ -1276,34 +1241,7 @@ describe("ExtensionRunner", () => {
 					save: async () => ({ backend: "mnemopi", stored: 1 }),
 				}),
 			);
-			runner.initialize(
-				{
-					sendMessage: () => {},
-					sendUserMessage: () => {},
-					appendEntry: () => {},
-					setLabel: () => {},
-					getActiveTools: () => [],
-					getAllTools: () => [],
-					setActiveTools: async () => {},
-					getCommands: () => [],
-					setModel: async () => false,
-					getThinkingLevel: () => undefined,
-					setThinkingLevel: () => {},
-					getSessionName: () => undefined,
-					setSessionName: async () => {},
-					...sessionWorkerAccess(() => undefined),
-				},
-				{
-					getModel: () => undefined,
-					isIdle: () => true,
-					abort: () => {},
-					hasPendingMessages: () => false,
-					shutdown: () => {},
-					getContextUsage: () => undefined,
-					compact: async () => {},
-					getSystemPrompt: () => [],
-				},
-			);
+			runner.initialize(idleExtensionActions(), idleContextActions());
 
 			await runner.emit({ type: "session_start" });
 
@@ -1340,34 +1278,13 @@ describe("ExtensionRunner", () => {
 				modelRegistry,
 			);
 			runner.initialize(
-				{
-					sendMessage: () => {},
-					sendUserMessage: () => {},
-					appendEntry: () => {},
-					setLabel: () => {},
-					getActiveTools: () => [],
-					getAllTools: () => [],
-					setActiveTools: async () => {},
-					getCommands: () => [],
-					setModel: async () => false,
-					getThinkingLevel: () => undefined,
-					setThinkingLevel: () => {},
+				idleExtensionActions({
 					getSessionName: () => sessionManager.getSessionName(),
 					setSessionName: async name => {
 						await sessionManager.setSessionName(name);
 					},
-					...sessionWorkerAccess(() => undefined),
-				},
-				{
-					getModel: () => undefined,
-					isIdle: () => true,
-					abort: () => {},
-					hasPendingMessages: () => false,
-					shutdown: () => {},
-					getContextUsage: () => undefined,
-					compact: async () => {},
-					getSystemPrompt: () => [],
-				},
+				}),
+				idleContextActions(),
 			);
 
 			await runner.emit({ type: "session_start" });
@@ -1400,59 +1317,7 @@ describe("ExtensionRunner", () => {
 			runner: ExtensionRunner,
 			select: (title: string, options: string[]) => Promise<string | undefined>,
 		) => {
-			runner.initialize(
-				{
-					sendMessage: () => {},
-					sendUserMessage: () => {},
-					appendEntry: () => {},
-					setLabel: () => {},
-					getActiveTools: () => [],
-					getAllTools: () => [],
-					setActiveTools: async () => {},
-					getCommands: () => [],
-					setModel: async () => false,
-					getThinkingLevel: () => undefined,
-					setThinkingLevel: () => {},
-					getSessionName: () => undefined,
-					setSessionName: async () => {},
-					...sessionWorkerAccess(() => undefined),
-				},
-				{
-					getModel: () => undefined,
-					isIdle: () => true,
-					abort: () => {},
-					hasPendingMessages: () => false,
-					shutdown: () => {},
-					getContextUsage: () => undefined,
-					compact: async () => {},
-					getSystemPrompt: () => [],
-				},
-				undefined,
-				{
-					select,
-					confirm: async () => false,
-					input: async () => undefined,
-					notify: () => {},
-					onTerminalInput: () => () => {},
-					setStatus: () => {},
-					setWorkingMessage: () => {},
-					setWidget: () => {},
-					setTitle: () => {},
-					pasteToEditor: () => {},
-					setEditorText: () => {},
-					getEditorText: () => "",
-					editor: async () => undefined,
-					addAutocompleteProvider: () => {},
-					get theme() {
-						return {} as never;
-					},
-					getAllThemes: async () => [],
-					getTheme: async () => undefined,
-					setTheme: async () => ({ success: false, error: "not implemented" }),
-					getToolsExpanded: () => false,
-					setToolsExpanded: () => {},
-				},
-			);
+			runner.initialize(idleExtensionActions(), idleContextActions(), undefined, { ...noOpUIContext, select });
 		};
 
 		const approvalTool = {
@@ -2097,36 +1962,12 @@ describe("ExtensionRunner", () => {
 			}
 
 			runner.initialize(
-				{
-					sendMessage: () => {},
-					sendUserMessage: () => {},
-					appendEntry: () => {},
-					setLabel: () => {},
-					getActiveTools: () => [],
-					getAllTools: () => [],
-					setActiveTools: async () => {},
-					getCommands: () => [],
-					setModel: async () => false,
-					getThinkingLevel: () => undefined,
-					setThinkingLevel: () => {},
-					getSessionName: () => sessionManager.getSessionName(),
-					setSessionName: async () => {},
-					...sessionWorkerAccess(() => undefined),
-				},
-				{
-					getModel: () => undefined,
-					isIdle: () => true,
-					abort: () => {},
-					hasPendingMessages: () => false,
-					shutdown: () => {},
-					getContextUsage: () => undefined,
-					compact: async () => {},
-					getSystemPrompt: () => [],
-				},
+				idleExtensionActions({ getSessionName: () => sessionManager.getSessionName() }),
+				idleContextActions(),
 			);
 
 			// Drain microtasks so the fire-and-forget emit() calls inside initialize() complete.
-			for (let i = 0; i < 5; i++) await Promise.resolve();
+			await drainMicrotasks(5);
 
 			const events = fs
 				.readFileSync(eventsPath, "utf8")

@@ -5,8 +5,10 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	SUMMARIZATION_SYSTEM_PROMPT,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Context, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import type { AssistantMessage, Context, Message, Model, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 /**
  * The positive half of cache-aligned compaction: when every precondition holds, the
@@ -20,16 +22,6 @@ import { getBundledModel } from "@veyyon/catalog/models";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix", "# Project\nlocal rules"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
 const HUGE_TOOL_OUTPUT = "T".repeat(9000);
-
-function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic compaction model");
-	return model;
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
-}
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
 	return {
@@ -51,34 +43,16 @@ function assistantToolCall(id: string, timestamp = 3): AssistantMessage {
 		api: "anthropic-messages",
 		content: [{ type: "toolCall", id, name: "read", arguments: { path: id } }],
 		stopReason: "toolUse",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp,
 	} as AssistantMessage;
-}
-
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp,
-	};
 }
 
 function liveConversation(): Message[] {
 	return [
 		user("first question"),
 		assistantToolCall("call-1"),
-		toolResult("call-1", HUGE_TOOL_OUTPUT),
+		readResult("call-1", HUGE_TOOL_OUTPUT),
 		assistantText("here is the answer"),
 	];
 }
@@ -89,7 +63,7 @@ function preparation(): CompactionPreparation {
 		messagesToSummarize: [
 			user("first question"),
 			assistantToolCall("call-1"),
-			toolResult("call-1", HUGE_TOOL_OUTPUT),
+			readResult("call-1", HUGE_TOOL_OUTPUT),
 		],
 		turnPrefixMessages: [],
 		recentMessages: [assistantText("here is the answer")],

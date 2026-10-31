@@ -1,8 +1,8 @@
+import type { HostNotification } from "@veyyon/host/notification";
 import { encodeSixel } from "@veyyon/natives";
 import { APP_DISPLAY_NAME } from "@veyyon/utils/app-identity";
 import { setAnsiColorFormat } from "@veyyon/utils/color-format";
 import { $env, isBunTestRuntime, isTerminalHeadless } from "@veyyon/utils/env";
-import type { HostNotification } from "@veyyon/utils/host-notification";
 import type { ImageFallbackReason } from "@veyyon/utils/image-fallback";
 import {
 	detectKittyUnicodePlaceholdersSupport,

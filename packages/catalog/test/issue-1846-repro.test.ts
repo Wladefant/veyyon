@@ -9,6 +9,7 @@ import type { AssistantMessage, ThinkingContent, ToolCall } from "@veyyon/ai/typ
 import { buildModel } from "@veyyon/catalog/build";
 import { xiaomiModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
 import type { FetchImpl, Model } from "@veyyon/catalog/types";
+import { emptyUsage } from "../src/models";
 
 const TP_KEY = "tp-ci1p8t1w4e1sbxgyc8v65tnrjbzro287igmvyf25van9mt76";
 const SGP_BASE_URL = "https://token-plan-sgp.xiaomimimo.com/v1";
@@ -47,14 +48,7 @@ function assistantToolCall(model: Model<"openai-completions">, content: Assistan
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1_700_000_000_000,
 	};

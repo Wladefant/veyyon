@@ -66,7 +66,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import type { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
 import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
 import { fitLocation } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
 import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
@@ -75,14 +75,17 @@ import type {
 	StatusLinePreset,
 	StatusLineSegmentId,
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
 import { NO_SESSION_FACTS } from "../../../../../src/modes/terminal/components/status-line/session-facts";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
+import { useStatusRowsInARepo } from "../../../../helpers/status-rows-in-a-repo";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirs("veyyon-statusline-terminal-safety-");
+const statusRow = useStatusRowsInARepo();
 
 /** Read from the registry, so a preset added later is swept without editing this file. */
 const PRESETS = Object.keys(STATUS_LINE_PRESETS) as StatusLinePreset[];
@@ -109,9 +112,6 @@ function given(columns: number): number {
  * filesystem. A model name is provider text; a session name is a generated title.
  */
 function stubSession(cwd: string, modelName = "claude\x1b[31m-3-7-sonnet") {
-	// Hostile by default: the model name is provider text and the session name is
-	// a generated title, so the row sweep reaches every segment printing text
-	// this process did not author, not only the two that read the filesystem.
 	return makeStatusLineProducer({
 		cwd: () => cwd,
 		modelName,
@@ -172,7 +172,7 @@ function* rows(widths: readonly number[] = WIDTHS): Generator<{
 	for (const fixture of FIXTURES) {
 		for (const preset of PRESETS) {
 			for (const arm of ARMS) {
-				const component = new StatusLineComponent(stubSession(cwds.get(fixture.name) ?? ""));
+				const component = statusRow(stubSession(cwds.get(fixture.name) ?? ""));
 				component.updateSettings({ preset });
 				for (const columns of widths) {
 					// Render first, so the toggle acts on a laid-out row the way a click does.
@@ -189,8 +189,7 @@ function* rows(widths: readonly number[] = WIDTHS): Generator<{
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 	for (const fixture of FIXTURES) {
 		const dir = path.join(makeTempDir(), ...fixture.dirs);

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
+
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
-import type { AssistantMessage, Context, ImageContent, Model, TextContent, Usage } from "@veyyon/ai/types";
+
+import type { AssistantMessage, Context, ImageContent, Model, TextContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const RED_1X1_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
@@ -18,15 +22,6 @@ const model: Model<"anthropic-messages"> = buildModel({
 	contextWindow: 200_000,
 	maxTokens: 8_192,
 });
-
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 type AnthropicImageBlock = {
 	type: "image";
@@ -45,12 +40,6 @@ type AnthropicPayload = {
 	}>;
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 async function makeRedPng(width: number, height: number): Promise<string> {
 	const seed = Buffer.from(RED_1X1_PNG_BASE64, "base64");
 	const upscaled = await new Bun.Image(seed).resize(width, height, { filter: "nearest" }).png().bytes();
@@ -64,7 +53,7 @@ function makeToolResultContext(images: ImageContent[]): Context {
 		provider: "anthropic",
 		model: model.id,
 		content: [{ type: "toolCall", id: "toolu_test", name: "plot", arguments: {} }],
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 2,
 	};
@@ -89,7 +78,7 @@ function capturePayload(context: Context): Promise<AnthropicPayload> {
 	void streamAnthropic(model, context, {
 		apiKey: "sk-ant-test",
 		isOAuth: false,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => {
 			resolve(payload as AnthropicPayload);
 			return undefined;

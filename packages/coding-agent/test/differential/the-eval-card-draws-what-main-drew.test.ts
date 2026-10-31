@@ -151,20 +151,9 @@ describe("eval tool differential", () => {
 		return stripVTControlCharacters(line).replaceAll(theme.symbol("block.rail"), "").trim();
 	}
 
-	/**
-	 * Rows with a colour run that wraps no text at all dropped.
-	 *
-	 * Main's collapse helper closed a run it had opened for a marker it did not draw, which leaves
-	 * `ESC[38;…mESC[39m` in front of the row that follows a condensed one. Nothing is drawn from it and
-	 * no terminal shows it, so it is off both arms rather than pinned as a difference.
-	 */
-	function withoutEmptyRuns(rows: readonly string[]): string[] {
-		return rows.map(row => row.replace(/\x1b\[[0-9;:]*m\x1b\[39m/g, ""));
-	}
-
 	/** The card past its head row, which is the one row every arm below differs on. */
 	function body(lines: readonly string[]): string[] {
-		return withoutEmptyRuns(sameRailColour(fitted(lines.slice(1))));
+		return sameRailColour(fitted(lines.slice(1)));
 	}
 
 	const COLLAPSED: ToolViewContext = { expanded: false, partial: false };

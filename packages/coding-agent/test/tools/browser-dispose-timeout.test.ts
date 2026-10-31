@@ -9,11 +9,19 @@
  * known Windows failure mode) left that await pending forever, freezing
  * cleanup. The dispose must now cap the wait and force-kill the process tree
  * on timeout so cleanup always completes.
+ *
+ * The bound runs on fake timers, so each case asserts the release is still
+ * pending one millisecond before the bound and settled at it, without spending
+ * the five seconds the bound is.
  */
 
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as attach from "@veyyon/coding-agent/tools/web/browser/attach";
 import { type BrowserHandle, releaseBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
+
+/** How long a release waits on a wedged `browser.close()` before killing the process tree. */
+const CLOSE_BOUND_MS = 5_000;
 
 /** Build a headless handle whose `browser.close()` never resolves. */
 function makeHangingHeadlessHandle(pid: number | undefined): {
@@ -37,35 +45,64 @@ function makeHangingHeadlessHandle(pid: number | undefined): {
 	return { handle, closeCalls: () => closeCalls };
 }
 
+/** Let the promise callbacks an advanced timer queued run to completion. */
+async function flush(): Promise<void> {
+	await drainMicrotasks(20);
+}
+
+/** Release `handle` on fake timers, recording each force-kill, and report whether it settled before and at the bound. */
+async function releaseAcrossTheBound(
+	handle: BrowserHandle,
+): Promise<{ settledBefore: boolean; settledAt: boolean; kills: number[] }> {
+	const kills: number[] = [];
+	const killSpy = spyOn(attach, "gracefulKillTreeOnce").mockImplementation(async pid => {
+		kills.push(pid);
+	});
+	try {
+		vi.useFakeTimers();
+		let settled = false;
+		const release = releaseBrowser(handle, { kill: false }).then(() => {
+			settled = true;
+		});
+		await flush();
+		vi.advanceTimersByTime(CLOSE_BOUND_MS - 1);
+		await flush();
+		const settledBefore = settled;
+		vi.advanceTimersByTime(1);
+		await flush();
+		const settledAt = settled;
+		await release;
+		return { settledBefore, settledAt, kills };
+	} finally {
+		killSpy.mockRestore();
+	}
+}
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
 describe("browser dispose — headless close must not hang forever (issue #5260)", () => {
 	it("bounds a wedged browser.close() and force-kills the process tree", async () => {
-		const killSpy = spyOn(attach, "gracefulKillTreeOnce").mockResolvedValue(undefined);
-		try {
-			const { handle, closeCalls } = makeHangingHeadlessHandle(4242);
-			const start = Date.now();
-			await releaseBrowser(handle, { kill: false });
-			const elapsed = Date.now() - start;
+		const { handle, closeCalls } = makeHangingHeadlessHandle(4242);
 
-			// close() was attempted, but the release still returned rather than
-			// hanging on the never-resolving promise.
-			expect(closeCalls()).toBe(1);
-			expect(elapsed).toBeLessThan(15_000);
-			// On timeout, the Chromium process tree is force-killed by pid.
-			expect(killSpy).toHaveBeenCalledTimes(1);
-			expect(killSpy.mock.calls[0]?.[0]).toBe(4242);
-		} finally {
-			killSpy.mockRestore();
-		}
-	}, 20_000);
+		const result = await releaseAcrossTheBound(handle);
+
+		// close() was attempted, and the release returned at the bound rather than
+		// hanging on the never-resolving promise.
+		expect(closeCalls()).toBe(1);
+		expect(result.settledBefore).toBe(false);
+		expect(result.settledAt).toBe(true);
+		// On timeout, the Chromium process tree is force-killed by pid.
+		expect(result.kills).toEqual([4242]);
+	});
 
 	it("does not attempt a force-kill when no process handle is available", async () => {
-		const killSpy = spyOn(attach, "gracefulKillTreeOnce").mockResolvedValue(undefined);
-		try {
-			const { handle } = makeHangingHeadlessHandle(undefined);
-			await releaseBrowser(handle, { kill: false });
-			expect(killSpy).not.toHaveBeenCalled();
-		} finally {
-			killSpy.mockRestore();
-		}
-	}, 20_000);
+		const { handle } = makeHangingHeadlessHandle(undefined);
+
+		const result = await releaseAcrossTheBound(handle);
+
+		expect(result.settledAt).toBe(true);
+		expect(result.kills).toEqual([]);
+	});
 });

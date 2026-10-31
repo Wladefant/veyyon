@@ -5,6 +5,7 @@ import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import { TUI } from "@veyyon/tui";
 import { StressRenderScheduler } from "../../../../../../hosts/terminal/engine/test/render-stress-scheduler";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { drainMicrotasks } from "../../../../../utils/test/helpers/drain-microtasks";
 
 beforeAll(() => {
 	initTheme();
@@ -58,7 +59,7 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			await scheduler.drain(term);
 			selector.handleInput("\n");
 			// onDelete is async; let its microtasks flush before draining renders.
-			for (let i = 0; i < 8; i++) await Promise.resolve();
+			await drainMicrotasks(8);
 			await scheduler.drain(term);
 			const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
 			const headerRowAfter = viewport.findIndex(row => row.includes("Resume Session"));

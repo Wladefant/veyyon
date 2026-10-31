@@ -5,10 +5,6 @@ import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/c
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 beforeAll(async () => {
 	await initTheme();
 });
@@ -60,7 +56,7 @@ describe("Settings → Plugins tab body", () => {
 		// The plugin list mounts asynchronously (npm + marketplace listing).
 		let rendered = "";
 		for (let i = 0; i < 200; i++) {
-			rendered = strip(comp.render(120).join("\n"));
+			rendered = stripVTControlCharacters(comp.render(120).join("\n"));
 			// Wait for the async npm+marketplace listing to mount the plugin view
 			// itself, not just the always-present "Plugins" tab-bar label or the
 			// card's own "[x]" close glyph (present from the very first render).

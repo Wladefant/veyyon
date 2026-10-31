@@ -47,6 +47,7 @@ export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
 export const LIVE_OUTPUT_INTERVAL_MS = 50;
 
 const NL = "\n";
+const NL_CODE = 0x0a;
 const ELLIPSIS = "…";
 
 // =============================================================================
@@ -66,6 +67,14 @@ export interface OutputSummary {
 	elidedBytes?: number;
 	/** Lines elided from the middle when head-retain mode is active. */
 	elidedLines?: number;
+	/**
+	 * Lines the head window kept, set with {@link elidedLines}. The windows are cut by bytes, so the
+	 * head and tail hold different numbers of lines and a range derived by splitting the kept lines
+	 * in half states lines the output does not show.
+	 */
+	headLines?: number;
+	/** Lines the tail window kept, set with {@link elidedLines}. See {@link headLines}. */
+	tailLines?: number;
 	/** Bytes dropped by the per-line column cap (sum across all lines). */
 	columnDroppedBytes?: number;
 	/** Number of distinct lines that hit the per-line column cap. */
@@ -466,6 +475,17 @@ export function formatMiddleElisionMarker(elidedLines: number, elidedBytes: numb
 }
 
 /**
+ * The most bytes a middle elision adds to a body: the longest marker {@link formatMiddleElisionMarker}
+ * writes and a line break on each side of it. A head and tail window sized to fit a budget leave
+ * this much of it for the marker.
+ */
+export const MIDDLE_ELISION_MAX_BYTES =
+	Math.max(
+		Buffer.byteLength(formatMiddleElisionMarker(Number.MAX_SAFE_INTEGER, 0), "utf-8"),
+		Buffer.byteLength(formatMiddleElisionMarker(0, Number.MAX_SAFE_INTEGER), "utf-8"),
+	) + 2;
+
+/**
  * Truncate content keeping a head window and a tail window, eliding the middle.
  *
  * The combined output is `<head>\n<marker>\n<tail>` when truncation is needed.
@@ -828,6 +848,13 @@ export class OutputSink {
 	 * {@link #cutTailToWindow} cuts the rest before the buffer is read.
 	 */
 	#bufferOverWindow = false;
+	/**
+	 * `#buffer` starts at the start of a line. A cut that drops the front of the buffer inside a line
+	 * clears it, and `dump()` then drops the fragment before the buffer's first line break.
+	 */
+	#tailStartsLine = true;
+	/** Bytes cut from the front of `#buffer`: the middle a head window elides. */
+	#tailDroppedBytes = 0;
 	#head = "";
 	#headBytes = 0;
 	#headLines = 0; // newline count inside #head
@@ -1005,8 +1032,11 @@ export class OutputSink {
 				this.#headLines += countNewlines(capped);
 				return;
 			}
-			// Split: head takes a UTF-8-safe prefix; remainder flows to tail.
+			// Split: head takes a UTF-8-safe prefix; remainder flows to tail. The head is closed from here on:
+			// room left by a character that did not fit would otherwise take a later, smaller chunk, placing
+			// it ahead of the output that went to the tail first.
 			const headSlice = truncateHeadBytes(capped, room);
+			this.#headRetentionDisabled = true;
 			if (headSlice.bytes > 0) {
 				this.#head += headSlice.text;
 				this.#headBytes += headSlice.bytes;
@@ -1098,6 +1128,14 @@ export class OutputSink {
 		// Avoid creating a giant intermediate string when chunk alone dominates.
 		if (dataBytes >= threshold) {
 			const { text, bytes } = truncateTailBytes(chunk, threshold);
+			const cut = chunk.length - text.length;
+			// A chunk of exactly the window drops only the buffer before it, so its own first character
+			// starts a line when the buffer ended one.
+			this.#tailStartsLine =
+				cut > 0
+					? chunk.charCodeAt(cut - 1) === NL_CODE
+					: this.#buffer.length === 0 || this.#buffer.charCodeAt(this.#buffer.length - 1) === NL_CODE;
+			this.#tailDroppedBytes += this.#bufferBytes + dataBytes - bytes;
 			this.#buffer = text;
 			this.#bufferBytes = bytes;
 			this.#bufferOverWindow = false;
@@ -1112,7 +1150,11 @@ export class OutputSink {
 	/** Cut `#buffer` to the last spill window of bytes, which is what every per-chunk cut would have kept. */
 	#cutTailToWindow(): void {
 		if (!this.#bufferOverWindow) return;
-		const { text, bytes } = truncateTailBytes(this.#buffer, this.#spillThreshold);
+		const buffer = this.#buffer;
+		const { text, bytes } = truncateTailBytes(buffer, this.#spillThreshold);
+		const cut = buffer.length - text.length;
+		if (cut > 0) this.#tailStartsLine = buffer.charCodeAt(cut - 1) === NL_CODE;
+		this.#tailDroppedBytes += this.#bufferBytes - bytes;
 		this.#buffer = text;
 		this.#bufferBytes = bytes;
 		this.#bufferOverWindow = false;
@@ -1306,6 +1348,8 @@ export class OutputSink {
 		this.#buffer = text;
 		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
 		this.#bufferOverWindow = false;
+		this.#tailStartsLine = true;
+		this.#tailDroppedBytes = 0;
 		this.#head = "";
 		this.#headBytes = 0;
 		this.#headLines = 0;
@@ -1482,46 +1526,66 @@ export class OutputSink {
 		// Compose the visible output. With head retention, splice head + marker
 		// + tail when content was elided. Otherwise return the rolling buffer.
 		this.#cutTailToWindow();
-		const headBytes = this.#headBytes;
-		const tailBuf = this.#buffer;
-		const tailBytes = this.#bufferBytes;
-		const headLines = this.#headLines + (headBytes > 0 && !this.#head.endsWith("\n") ? 1 : 0);
-		const tailLines = tailBuf.length > 0 ? countNewlines(tailBuf) + 1 : 0;
+		let head = this.#head;
+		let headBytes = this.#headBytes;
+		let tail = this.#buffer;
+		let tailBytes = this.#bufferBytes;
+		const elided = headBytes > 0 && this.#tailDroppedBytes > 0;
+		let fragmentBytes = 0;
 
-		// Bytes that survived the column cap. Middle elision operates on these,
-		// so column-dropped bytes don't inflate the "elided from middle" count.
-		const effectiveTotalBytes = Math.max(0, this.#totalBytes - this.#columnDroppedBytes);
+		// A window cut on a byte boundary starts or ends inside a line. That fragment is not a line of the
+		// output, and a line range that counts it states a line the result does not show whole, so it is
+		// dropped with the elided bytes. A window that holds no whole line after the fragment (no line
+		// break, or only the one ending the fragment) is part of one line longer than the window and is
+		// kept: it is all of that line there is to show.
+		if (!this.#tailStartsLine) {
+			const start = tail.indexOf(NL) + 1;
+			if (start > 0 && start < tail.length) {
+				const n = Buffer.byteLength(tail.slice(0, start), "utf-8");
+				tail = tail.slice(start);
+				tailBytes -= n;
+				fragmentBytes += n;
+			}
+		}
+		if (elided && !head.endsWith(NL)) {
+			const end = head.lastIndexOf(NL) + 1;
+			if (end > 0) {
+				const n = Buffer.byteLength(head.slice(end), "utf-8");
+				head = head.slice(0, end);
+				headBytes -= n;
+				fragmentBytes += n;
+			}
+		}
+		const tailLines = tail.length > 0 ? countNewlines(tail) + 1 : 0;
 
 		let body: string;
 		let outputBytes: number;
 		let outputLines: number;
 		let elidedBytes: number | undefined;
 		let elidedLines: number | undefined;
+		let headLines: number | undefined;
+		let keptTailLines: number | undefined;
 
-		if (headBytes > 0 && effectiveTotalBytes > headBytes + tailBytes) {
-			// Middle was elided. Emit head + marker + tail.
-			elidedBytes = Math.max(0, effectiveTotalBytes - headBytes - tailBytes);
+		if (elided) {
+			// The trimmed head ends at a line break unless it holds none, when its one line is partial.
+			headLines = this.#headLines + (head.endsWith(NL) ? 0 : 1);
+			keptTailLines = tailLines;
+			elidedBytes = this.#tailDroppedBytes + fragmentBytes;
 			elidedLines = Math.max(0, totalLines - headLines - tailLines);
 			const marker = formatMiddleElisionMarker(elidedLines, elidedBytes);
-			const markerBytes = Buffer.byteLength(marker, "utf-8");
-			const headSep = this.#head.endsWith("\n") ? "" : "\n";
-			const tailSep = tailBuf.startsWith("\n") ? "" : "\n";
-			body = `${this.#head}${headSep}${marker}${tailSep}${tailBuf}`;
-			outputBytes =
-				headBytes +
-				markerBytes +
-				tailBytes +
-				Buffer.byteLength(headSep, "utf-8") +
-				Buffer.byteLength(tailSep, "utf-8");
+			const headSep = head.endsWith(NL) ? "" : NL;
+			const tailSep = tail.length > 0 ? NL : "";
+			body = `${head}${headSep}${marker}${tailSep}${tail}`;
+			outputBytes = headBytes + headSep.length + Buffer.byteLength(marker, "utf-8") + tailSep.length + tailBytes;
 			outputLines = headLines + 1 + tailLines;
 			this.#truncated = true;
 		} else if (headBytes > 0) {
 			// Head + tail combine into the full buffered output (no overlap or elision).
-			body = `${this.#head}${tailBuf}`;
+			body = `${head}${tail}`;
 			outputBytes = headBytes + tailBytes;
 			outputLines = body.length > 0 ? countNewlines(body) + 1 : 0;
 		} else {
-			body = tailBuf;
+			body = tail;
 			outputBytes = tailBytes;
 			outputLines = tailLines;
 		}
@@ -1541,6 +1605,8 @@ export class OutputSink {
 			outputBytes,
 			elidedBytes,
 			elidedLines,
+			headLines,
+			tailLines: keptTailLines,
 			columnDroppedBytes: this.#columnDroppedBytes > 0 ? this.#columnDroppedBytes : undefined,
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,

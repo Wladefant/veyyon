@@ -20,12 +20,13 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 // Subpath import, not the `@veyyon/utils` barrel: this module is in cli.ts's
 // static import graph (via discovery/builtin.ts), and the barrel eagerly parses
 // dotenv at import time, which must not happen before setProfile runs (see
 // profile-cli.test.ts "loads no agent .env before setProfile"). dirs.ts pulls no
 // env.ts, so it is safe to import eagerly.
-import { getAgentDir, getGlobalConfigRootDir } from "@veyyon/utils/dirs";
+import { getAgentDir } from "@veyyon/utils/dirs";
 // Subpath imports (not the barrel) for the same dotenv reason noted above:
 // fs-error and logger pull no env.ts, so they are safe in cli.ts's eager graph.
 import { isEexist } from "@veyyon/utils/fs-error";

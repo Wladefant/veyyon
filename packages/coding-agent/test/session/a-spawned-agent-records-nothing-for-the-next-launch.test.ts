@@ -24,7 +24,6 @@ import * as path from "node:path";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { readLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -35,6 +34,7 @@ import { type CreateAgentSessionOptions, isSubagentSession } from "@veyyon/codin
 import { takeHeldAtRestReading } from "@veyyon/coding-agent/session/non-message-tokens";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 
 const PROVIDER = "anthropic";
@@ -48,8 +48,7 @@ const SPAWNED: Record<string, Partial<CreateAgentSessionOptions>> = {
 };
 
 function bundledModel(): Model {
-	const model = getBundledModel(PROVIDER, MODEL_ID);
-	if (!model) throw new Error(`missing bundled model ${PROVIDER}/${MODEL_ID}`);
+	const model = requireBundledModel(PROVIDER, MODEL_ID);
 	return model as Model;
 }
 

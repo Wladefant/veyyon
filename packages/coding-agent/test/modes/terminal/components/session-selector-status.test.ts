@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo, SessionStatus } from "@veyyon/kernel/session/session-listing";
@@ -39,10 +40,7 @@ function renderPlain(sessions: SessionInfo[]): string {
 		{ getTerminalRows: () => 100 },
 	);
 	// Strip ANSI so assertions target the visible glyph/label, not theme colors.
-	return selector
-		.render(120)
-		.join("\n")
-		.replace(/\x1b\[[0-9;]*m/g, "");
+	return stripVTControlCharacters(selector.render(120).join("\n"));
 }
 
 describe("SessionSelectorComponent status labels", () => {

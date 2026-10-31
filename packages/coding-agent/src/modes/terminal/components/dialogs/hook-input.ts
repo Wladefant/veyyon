@@ -5,13 +5,13 @@
 import { Ellipsis } from "@veyyon/natives";
 import { Container, Input, Markdown, Spacer, type TUI } from "@veyyon/tui";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { matchesAppInterrupt } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
 import {
-	computeModalDims,
+	emptyModalArea,
+	layoutModalCard,
 	MODAL_SIZING_MEDIUM,
 	type ModalSizing,
 	modalWidthForContent,
@@ -203,7 +203,7 @@ export class HookInputComponent extends Container {
 	 * a masked prompt whose wording is truncated is the misread it was written to prevent — so the
 	 * card's floor rises to fit them instead. Only the floor moves, so a card whose text already
 	 * fits keeps the shared proportions, and a terminal too narrow for the sentence still clamps
-	 * (`computeModalDims` caps the floor at the area) rather than overflowing the screen.
+	 * (`layoutModalCard` caps the floor at the area) rather than overflowing the screen.
 	 */
 	#sizing(height: number): ModalSizing {
 		const base = sizingForArea(MODAL_SIZING_MEDIUM, height);
@@ -220,38 +220,31 @@ export class HookInputComponent extends Container {
 		const renderWidth = Math.max(1, width);
 		const height = process.stdout.rows || 40;
 		const sizing = this.#sizing(height);
-		const dims = computeModalDims(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(renderWidth));
+			return emptyModalArea(renderWidth, height);
 		}
 
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-		});
-
 		const body: string[] = [];
 		for (const child of this.children) {
 			if (child === this.#input) this.#inputBodyLine = body.length;
 			for (const line of child.render(dims.contentWidth)) body.push(line);
 		}
 
-		const shell = renderModalShell({
-			title: truncateToWidth(this.#cardTitle + this.#countdownSuffix, dims.contentWidth, Ellipsis.Unicode),
-			sizing,
-			areaWidth: renderWidth,
-			areaHeight: height,
-			body: body.slice(0, chrome.maxBodyRows),
-			preferredBodyRows: body.length,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: truncateToWidth(this.#cardTitle + this.#countdownSuffix, dims.contentWidth, Ellipsis.Unicode),
+				body,
+				preferredBodyRows: body.length,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		return shell.lines;
 	}

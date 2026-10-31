@@ -519,11 +519,14 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("7");
 	});
-	it("falls back to text display when the final expression value is not structured-cloneable", async () => {
-		const result = await executeJs("({ fn: () => 1 });", { sessionId, session, sessionFile });
+	it("states a final value structuredClone cannot copy as text, with its functions and symbols marked in place", async () => {
+		const result = await executeJs("({ name: 'probe', run() { return 1; }, tag: Symbol('marker') });", {
+			sessionId,
+			session,
+			sessionFile,
+		});
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain("[object Object]");
-		// No JSON display because structuredClone fails on the embedded function.
+		expect(result.output).toBe('{\n  "name": "probe",\n  "run": "[Function: run]",\n  "tag": "Symbol(marker)"\n}\n');
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 

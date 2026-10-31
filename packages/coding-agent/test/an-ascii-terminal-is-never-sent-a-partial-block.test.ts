@@ -32,7 +32,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { renderAsciiBar } from "@veyyon/coding-agent/slash-commands/helpers/format";
 import { BAR_RAMPS, SYMBOL_PRESETS } from "@veyyon/coding-agent/theme/symbols";
-import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
 import {
 	captureDirOverrides,
 	getCustomThemesDir,
@@ -41,6 +41,7 @@ import {
 	setAgentDir,
 } from "@veyyon/utils";
 import { EIGHTH_BLOCKS, subCellBar } from "@veyyon/utils/bar";
+import { requireTheme } from "./helpers/require-theme";
 
 const DARK_THEME_PATH = path.join(import.meta.dir, "..", "src", "theme", "dark.json");
 const dirOverrides = captureDirOverrides();
@@ -57,8 +58,7 @@ let darkTheme: Theme;
 describe("an ascii terminal is never sent a partial block", () => {
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true });
-		const loaded = await getThemeByName("dark");
-		if (!loaded) throw new Error("theme unavailable");
+		const loaded = await requireTheme("dark");
 		darkTheme = loaded;
 		setThemeInstance(darkTheme);
 	});
@@ -123,8 +123,7 @@ describe("an ascii terminal is never sent a partial block", () => {
 				JSON.stringify({ ...dark, name: "ascii-bars", symbols: { ...base, preset: "ascii" } }, null, 2),
 			);
 
-			const asciiTheme = await getThemeByName("ascii-bars");
-			if (!asciiTheme) throw new Error("ascii theme unavailable");
+			const asciiTheme = await requireTheme("ascii-bars");
 			expect(asciiTheme.getSymbolPreset()).toBe("ascii");
 			expect(asciiTheme.getBarRamp()).toEqual(BAR_RAMPS.ascii);
 

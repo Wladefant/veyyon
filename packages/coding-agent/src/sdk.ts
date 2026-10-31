@@ -83,7 +83,7 @@ import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
 	type BuildSystemPromptResult,
-	buildSystemPrompt as buildSystemPromptInternal,
+	buildSessionSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 } from "./system-prompt";
 import { resolveGateInputs, resolveIntentField } from "./system-prompt-builder/gate-inputs";
@@ -1789,8 +1789,7 @@ class SessionStartup {
 			modelRegistry: this.#modelRegistry,
 			sessionId: this.#providerSessionId,
 			preferWebsockets: this.#preferWebsockets,
-			providerSessionState: session.providerSessionState,
-			serviceTier: prewarmModel ? session.agent.serviceTierResolver?.(prewarmModel) : undefined,
+			session,
 		});
 		// A print or script invocation (no UI) lists no language servers: it draws no warmup status and
 		// usually finishes before a server stabilizes. The lsp barrel is imported lazily because it pulls

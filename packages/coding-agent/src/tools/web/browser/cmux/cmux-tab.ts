@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { logger, postmortem, Snowflake, untilAborted } from "@veyyon/utils";
+import { logger, postmortem, privateTempDir, Snowflake, untilAborted } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { JsRuntime, type RuntimeHooks } from "../../../../eval/js/shared/runtime";
 import { callSessionTool } from "../../../../eval/js/tool-bridge";
@@ -649,7 +648,7 @@ export class CmuxTab {
 						context.session.browserScreenshotDir,
 						`screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.${ext}`,
 					)
-				: (returnedPath ?? path.join(os.tmpdir(), `veyyon-sshots-${Snowflake.next()}.${ext}`)));
+				: (returnedPath ?? path.join(privateTempDir(), `veyyon-sshots-${Snowflake.next()}.${ext}`)));
 		await fs.promises.mkdir(path.dirname(dest), { recursive: true });
 		await fs.promises.writeFile(dest, savedBuffer);
 		const info: ScreenshotResult = {

@@ -5,6 +5,75 @@
 ## [Unreleased]
 
 ## [1.7.0] - 2026-10-31
+### Added
+
+- `AppliedCompletion` in `@veyyon/utils/autocomplete` is the draft and cursor that `AutocompleteProvider.applyCompletion` and `applyAutocompleteCompletion` return.
+- `wrapIndex(index, count)` in `@veyyon/utils/math` maps `index` onto a ring of `count` slots, so a step past either end of a list lands on the other end.
+- `packageModuleReach(repoRoot, src, namesRelativeTo?)` in `@veyyon/utils/module-reach-workspace` returns one package's `reach`, `reachedNames` and `runtimeImportsOf` over the workspace resolution with one shared memo; no user-facing change.
+- `nonRegularKind` in `@veyyon/utils/fs-error` returns the phrase a refusal uses for an entry that is not a regular file, such as `a named pipe (FIFO)`.
+- `getKernelRunnerDir(language)` returns the directory an eval kernel caches its runner script in, `cache/<language>-runner` under the config root or `$XDG_CACHE_HOME/veyyon`.
+- `getToolWireSchemaCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/tool-wire-schemas.json`.
+- `getModelReferenceCachePath()` in `@veyyon/utils/dirs` returns the profile's `cache/model-references.json`, and `BuildStore` in `@veyyon/utils/build-store` persists values one compiled build computed in one JSON file that only that build reads.
+- `privateTempDir()` returns `<tmpdir>/veyyon-<uid>`, created at mode 700, and throws when that entry is a symbolic link, not a directory, owned by another uid or open to group or other.
+- `ansi256ToRgb(index)` and `ansi256ToHex(index)` in `@veyyon/utils/color` return the RGB and `#rrggbb` of an xterm 256-color palette index, or `undefined` when the index is not an integer from 0 to 255.
+- `CIRCULAR_MARKER` in `@veyyon/utils/json` is the `"[Circular]"` text that `stringifyJsonSafe` and session persistence write where a value loops back to one of its own ancestors.
+
+### Changed
+
+- The log file and the postmortem handlers coerce a thrown value with `toError` from `type-guards` instead of a private `asError` and four inline copies; no user-facing change.
+- `sgrCarryAfter` reads SGR parameters in place instead of through a regular expression and a split; no user-facing change.
+- `SourcedParseError` is the base of `FrontmatterError` and prints a parse failure with its source and the cause's stack.
+- The file lock validates a candidate's owner record and an owner's release through one lease check for the async and synchronous paths; no user-facing change.
+- `sgrEnd` is exported from `@veyyon/utils/ansi` and is the single definition `wrap` and `width` use; no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- `privateTempDirName(uid)` in `@veyyon/utils/app-identity` is the single definition of the `veyyon-<uid>` name `privateTempDir()` creates; no user-facing change.
+- A subcommand's unknown flag is reported as `Unknown flag: --jsno` followed by the declared flag it resembles (``Did you mean `--json`?``), instead of node:util's advice about positionals that start with `-`.
+- The config root, the global `config.yml` reader and its writer moved out of `@veyyon/utils/dirs` into `@veyyon/utils/config-root`, `@veyyon/utils/global-config` and `@veyyon/utils/global-config-write`, the path-comparison helpers into `@veyyon/utils/path` and `pickProcessEnv` into `@veyyon/utils/dir-env-keys`; the `@veyyon/utils` entry point exports every moved name, and a deep import of one from `@veyyon/utils/dirs` imports it from its new module instead.
+
+### Fixed
+
+- `sgrCarryAfter` returns only the styles still set at the end of the text, as one SGR sequence, so a multi-line `Text` streamed one styled line at a time no longer grows every replayed row by each colour an earlier line closed (2000 lines: 17238 ms to 217 ms) and no longer opens a row with empty colour runs.
+- The command runner checks a subcommand's flags and arguments against its declarations before running it, so `veyyon licenses nosuch` and `veyyon licenses --zzzz` exit 2 instead of printing the notices at exit 0.
+- A missing argument that takes one of a fixed set of values lists the set, such as `Missing required argument: shell (one of: bash, zsh, fish, powershell)`.
+- Cancelling or finishing an animation drops it from the motion clock at once, and the clock clears its frame interval when that was the last live animation, instead of holding both until its next frame.
+
+### Removed
+
+- Removed `@veyyon/utils/host-notification`, which re-exported `HostNotification` and `HostNotifier`; import both from `@veyyon/host/notification`. `@veyyon/utils` no longer depends on `@veyyon/host`.
+
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- `parseYaml` in `@veyyon/utils/yaml-sync` parses YAML and throws a `SyntaxError` stating the line and column of a syntax error, such as `Nested mappings are not allowed in compact mappings at line 2, column 13`, instead of Bun's `YAML Parse error: Unexpected token`.
+
+### Changed
+
+- `QuarantinedFile` holds the `reason` its file did not parse.
+
+### Fixed
+
+- `extractRetryHint` reads a reset window stated in prose in any unit or combination of units, such as `Your limit will reset in 17 minutes`, `Resets in 20m45s` and `Resets in 1hr 39min`, after the machine-readable fields a body states.
+
+## [1.5.9] - 2026-10-22
+
+### Breaking Changes
+
+- `withTimeoutSignal` is removed; use `withScopedTimeoutSignal(timeoutMs, fn, parent?)` or `scopedTimeoutSignal`, whose timer is cleared when the operation settles.
+
+### Added
+
+- `getBrowserProfilesDir()` returns the persistent browser profiles directory under the agent directory.
+- `withScopedTimeoutSignal` accepts an optional parent signal, combined with its deadline.
+- `settleWithin(promise, timeoutMs, fallback)` resolves with the promise's value, or with `fallback` once the deadline passes, and clears its timer when the promise settles.
+- `@veyyon/utils/keys` exports `KITTY_CSI_U_PATTERN`, the Kitty CSI-u key-sequence pattern its keypad fast path matches.
+- `estimateTokensFromBytes(bytes)` returns the token estimate `estimateTokensFromText` gives a text of that many UTF-8 bytes.
+- `@veyyon/utils/fs-io` exports `readFileText`, `readFileRange` and `writeFileCreatingParents`, which read and write like `Bun.file().text()`, `Bun.file().slice().bytes()` and `Bun.write` but open through `node:fs`, so the open waits out a lease another process holds instead of failing with `EAGAIN`; the package root does not re-export them.
+- `TimeSlice` and `TIME_SLICE_MS` let a long synchronous loop yield to the event loop once every 8 ms.
+
+### Changed
+
+- `levenshteinDistance` computes the distance bit-parallel, 32 rows per step, and returns the same values 4 to 8 times faster on strings of 32 to 100 characters.
 
 ### Fixed
 

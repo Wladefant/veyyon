@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { KEEP_NOTHING_ENTRY_ID, resolveCompactionBoundaryIndex } from "@veyyon/agent-core/compaction/entries";
 import type { TextContent } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext, type StrippedToolCallsMarker } from "@veyyon/kernel/session/session-context";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import * as logger from "@veyyon/utils/logger";
@@ -115,14 +116,7 @@ const danglingToolCallEntries = [
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: 2,
 		},

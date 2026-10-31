@@ -18,15 +18,10 @@
 
 import { describe, expect, it, vi } from "bun:test";
 import { AgentPauseGate, agentLoop } from "@veyyon/agent-core";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
+import { createUserMessage, identityConverter } from "./helpers";
 
 function makeEchoTool(onExecute?: () => void): AgentTool {
 	const toolSchema = type({ msg: "string" });

@@ -21,14 +21,14 @@
 
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { ARGOT_LOAD_TOOL, ARGOT_UNLOAD_TOOL, type ArgotSession } from "argot";
 import { type ArgotLoadResult, loadArgotFolder, unloadArgotFolder } from "../../argot-cache";
 import type { ToolSession } from "..";
 import { resolveToCwd } from "../core/path-utils";
 import { ToolError, toolFailure } from "../core/tool-errors";
 
-const folderSchema = lazy(() =>
+const folderSchema = toolSchema("argot:folder", () =>
 	type({
 		folder_path: type("string").describe(
 			"Absolute (preferred) or session-relative path to the folder to load. Argot resolves it to the nearest project it belongs to (its .git or .argot marker), never a parent that contains many projects.",
@@ -83,6 +83,9 @@ export class ArgotLoadTool implements AgentTool<typeof folderSchema.value, Argot
 		"Load a folder's Argot shorthand so you can write its long paths and identifiers as short `§handle` tokens. Resolves the folder to its own project (nearest .git or .argot), reads or builds that project's dictionary, and teaches you its handles. Load the narrowest folder that is your work unit, not a parent holding many projects. Every handle expands losslessly, so this only saves tokens.";
 	get parameters(): typeof folderSchema.value {
 		return folderSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return folderSchema.wire;
 	}
 	readonly strict = true;
 	// Always active (not discoverable): loading is the canonical arming flow, and
@@ -162,6 +165,9 @@ export class ArgotUnloadTool implements AgentTool<typeof folderSchema.value, Arg
 		"Stop teaching a folder's Argot shorthand: you are no longer shown its handles, so you write its paths in full again. Handles you already wrote keep expanding, so this is always safe. Use it when you are done with a folder loaded earlier and want to keep the taught handle table small.";
 	get parameters(): typeof folderSchema.value {
 		return folderSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return folderSchema.wire;
 	}
 	readonly strict = true;
 	readonly summary = "Stop being taught a folder's Argot shorthand; handles already written keep expanding";

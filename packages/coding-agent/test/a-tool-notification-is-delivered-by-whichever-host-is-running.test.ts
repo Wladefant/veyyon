@@ -28,7 +28,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AgentToolContext } from "@veyyon/agent-core";
-import type { HostNotification } from "@veyyon/utils/host-notification";
+import type { HostNotification } from "@veyyon/host/notification";
 import type { ToolSession } from "../src/tools";
 import { AskTool } from "../src/tools/agent/ask";
 import { makeToolSession } from "./helpers/tool-session";

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Process } from "@veyyon/natives";
 import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
@@ -201,37 +200,33 @@ export function kernelIpcTraceEnvVar(language: string): string {
 }
 
 /**
- * Where one language's kernel caches its generated runner script, `<tmpdir>/veyyon-<language>-runner`.
+ * Creates a runner-script publisher for a language kernel. Each call returns the path of
+ * `runner-<hash>.<extension>` in {@link getKernelRunnerDir}, writing the script there first when the file
+ * is not present. `language` is the lowercase name in the directory (`python`, `ruby`, `julia`).
  *
- * Same reasoning as {@link kernelIpcTraceEnvVar}: three kernels each joined this path themselves, so the
- * layout under the temp directory was a coincidence rather than a rule, and a stale-runner cleanup that
- * wanted to find all of them had nothing to ask. `language` is the lowercase name in the directory
- * (`python`, `ruby`, `julia`).
- */
-export function kernelRunnerCacheDir(tmpDir: string, language: string): string {
-	return path.join(tmpDir, `veyyon-${language}-runner`);
-}
-
-/**
- * Creates a cached runner-script publisher for a language kernel.
- * Writes the runner script once to `<tmpdir>/veyyon-<language>-runner/runner-<hash>.<extension>`.
+ * The directory is under the user's config or cache root, not the shared temp directory, where another
+ * account could create the hash-named file first or replace it, and every kernel would run that file.
+ * The presence check runs on every kernel start, not once per process, so a cache the user cleared while
+ * the process ran is written again rather than leaving every later kernel to exit before its first frame.
+ * The script is written with `atomicWriteFile`, so another process that finds the target never runs a
+ * partly written script.
  */
 export function createRunnerScriptPublisher(
 	language: string,
 	script: string,
 	extension: string,
 ): () => Promise<string> {
-	let cachedPath: string | null = null;
-	const cacheDir = kernelRunnerCacheDir(os.tmpdir(), language);
+	const name = `runner-${Bun.hash(script).toString(36)}.${extension}`;
 	return async () => {
-		if (cachedPath) return cachedPath;
-		await fs.promises.mkdir(cacheDir, { recursive: true });
-		const hash = Bun.hash(script).toString(36);
-		const target = path.join(cacheDir, `runner-${hash}.${extension}`);
-		if (!fs.existsSync(target)) {
-			await Bun.write(target, script);
+		const target = path.join(getKernelRunnerDir(language), name);
+		if (fs.existsSync(target)) return target;
+		try {
+			await atomicWriteFile(target, script);
+		} catch (error) {
+			// Windows refuses to replace a script another process's interpreter holds open; that file is
+			// the same script, written by a concurrent publisher.
+			if (!fs.existsSync(target)) throw error;
 		}
-		cachedPath = target;
 		return target;
 	};
 }
@@ -679,9 +674,8 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		if (ownedProcess) this.#ownedTree.set(ownedProcess.pid, ownedProcess);
 		void this.#exitedPromise.then(code => {
 			this.#alive = false;
-			this.#abortPendingExecutions(`${this.#options.languageName} kernel exited with code ${code}`, {
-				kernelKilled: true,
-			});
+			this.#stopReason = `${this.#options.languageName} kernel exited with code ${code}`;
+			this.#abortPendingExecutions(this.#stopReason, { kernelKilled: true });
 		});
 
 		this.#startReader(proc.stdout as ReadableStream<Uint8Array>);
@@ -796,6 +790,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		try {
 			await this.#writeLine(payload);
 		} catch (err) {
+			// A write breaks when the runner closed its stdin, which it does by exiting. The exit states why
+			// and the broken pipe does not, and the write can lose the race to the exit observer, so the
+			// failure waits for the exit within the shutdown grace: an exit in that window settles this
+			// execution with its exit code before the broken pipe is reported.
+			await this.#waitForExitWithTimeout(this.#options.shutdownGraceMs);
 			pending.cancelled = true;
 			pending.error = {
 				name: "TransportError",
@@ -967,10 +966,10 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 					await this.#handleLine(decoder.decode(line));
 				}
 			} catch (err) {
-				const reason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
-				logger.warn(reason);
+				this.#stopReason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
+				logger.warn(this.#stopReason);
 				// No later frame can arrive, so nothing pending can finish and nothing new can run.
-				this.#abortPendingExecutions(reason, { kernelKilled: true });
+				this.#abortPendingExecutions(this.#stopReason, { kernelKilled: true });
 				void this.shutdown();
 			}
 		};
@@ -1113,6 +1112,14 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				storeHistory: false,
 			} as TExecuteOptions);
 			if (result.cancelled) {
+				// Only this start's own abort, the caller's signal or the startup budget, cancels it. A run that
+				// ended any other way is a failed start; reported as a cancellation, it reached the cell as an
+				// empty cancelled result with nothing stating why.
+				if (!controller.signal.aborted) {
+					const why =
+						this.#stopReason ?? result.error?.value ?? `the ${this.#options.languageName} runner cancelled it`;
+					throw new Error(`${label} failed: ${why}`);
+				}
 				throw createAbortError(result.timedOut ? "TimeoutError" : "AbortError", `${label} cancelled`);
 			}
 			if (result.status === "error") {

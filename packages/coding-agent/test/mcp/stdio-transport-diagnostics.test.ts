@@ -103,11 +103,11 @@ describe("StdioTransport surfaces what an MCP server tells it", () => {
 	});
 
 	it("reports a message it could not handle instead of silently skipping it", async () => {
-		// THE first regression. A JSON line that parses but whose handling throws is
-		// what `catch {}` swallowed; the transport must keep running AND say so.
-		// A bare JSON string is valid JSON and parses fine, then `"method" in
-		// message` throws because `in` rejects a primitive. That is the realistic
-		// shape of the "malformed line" the old catch swallowed.
+		// THE first regression. A JSON line that parses but is no JSON-RPC message
+		// is what `catch {}` swallowed; the transport must keep running AND say so.
+		// A bare JSON string is valid JSON and parses fine, and no route can act on
+		// it. That is the realistic shape of the "malformed line" the old catch
+		// swallowed.
 		await connected('process.stdout.write(JSON.stringify("not an object")+"\\n"); await Bun.sleep(2000);');
 		await settle();
 

@@ -5,6 +5,7 @@ import type { SlashCommand } from "@veyyon/utils/autocomplete";
 import { PASTE_END, PASTE_START } from "@veyyon/utils/bracketed-paste";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { visibleWidth } from "@veyyon/utils/width";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { PromptActionAutocompleteProvider } from "../src/modes/terminal/autocomplete/prompt-action-autocomplete";
 import {
@@ -121,13 +122,13 @@ describe("Systematic UX Audit: Composer, Footline, Warning, HUD", () => {
 
 				// Type "/he" -> trigger autocomplete
 				editor.handleInput("/");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				editor.handleInput("h");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				editor.handleInput("e");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				vi.advanceTimersByTime(150);
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				expect(editor.isShowingAutocomplete()).toBe(true);
 				// Render at width 60, 100, 160 to ensure popup renders cleanly
 				for (const width of [60, 100, 160]) {
@@ -144,19 +145,19 @@ describe("Systematic UX Audit: Composer, Footline, Warning, HUD", () => {
 				editor.handleInput("9");
 				editor.handleInput("9");
 				vi.advanceTimersByTime(150);
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				expect(editor.isShowingAutocomplete()).toBe(false);
 
 				// Reset and re-open with "/he"
 				editor.setText("");
 				editor.handleInput("/");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				editor.handleInput("h");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				editor.handleInput("e");
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				vi.advanceTimersByTime(150);
-				for (let i = 0; i < 10; i++) await Promise.resolve();
+				await drainMicrotasks(10);
 				expect(editor.isShowingAutocomplete()).toBe(true);
 
 				// Press ESC once: should dismiss autocomplete, NOT call onEscape
@@ -181,7 +182,7 @@ describe("Systematic UX Audit: Composer, Footline, Warning, HUD", () => {
 			// Paste an image path inside bracketed paste
 			const imagePaste = `${PASTE_START}/tmp/screenshot.png${PASTE_END}`;
 			editor.handleInput(imagePaste);
-			for (let i = 0; i < 5; i++) await Promise.resolve();
+			await drainMicrotasks(5);
 			expect(pastedImagePaths).toEqual(["/tmp/screenshot.png"]);
 			// Editor text should not have literal path because it was routed to image handler
 			expect(editor.getText()).toBe("");
@@ -189,7 +190,7 @@ describe("Systematic UX Audit: Composer, Footline, Warning, HUD", () => {
 			// Paste plain text inside bracketed paste
 			const textPaste = `${PASTE_START}some regular text${PASTE_END}`;
 			editor.handleInput(textPaste);
-			for (let i = 0; i < 5; i++) await Promise.resolve();
+			await drainMicrotasks(5);
 			expect(editor.getText()).toBe("some regular text");
 		});
 		it("deletes atomic placeholder tokens as a single unit on backspace", () => {

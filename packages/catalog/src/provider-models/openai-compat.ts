@@ -23,7 +23,6 @@ import {
 	isReasoningGlmModelId,
 } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
-import { OLLAMA_WIRE_EFFORTS } from "../model-thinking";
 import { getBundledModels } from "../models";
 import type {
 	Api,
@@ -55,21 +54,22 @@ import {
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
 import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
+import { isOpenCodeGoLoginApiKey } from "../wire/opencode-go";
 import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
-import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
+import { createBundledReferenceMap, createReferenceResolver, mapWithBundledReference, toModelSpec } from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completions">(
 	options: FetchOpenAICompatibleModelsOptions<TApi>,
 ): Promise<ModelSpec<TApi>[] | null> {
-	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+	// Deferred import keeps discovery out of the provider-models startup graph.
 	const mod = await import("../discovery/openai-compatible");
 	return mod.fetchOpenAICompatibleModels<TApi>(options);
 }
 
 async function readDiscoveryJson(response: Response, report: DiscoveryReport): Promise<unknown> {
-	// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+	// Deferred import keeps discovery out of the provider-models startup graph.
 	const mod = await import("../discovery/failure");
 	return mod.readDiscoveryJson(response, report);
 }
@@ -403,30 +403,6 @@ export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-me
 	},
 ];
 
-function mapWithBundledReference<TApi extends Api>(
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<TApi>,
-	reference: ModelSpec<TApi> | undefined,
-): ModelSpec<TApi> {
-	const name = toModelName(entry.name, reference?.name ?? defaults.name);
-	if (!reference) {
-		return {
-			...defaults,
-			name,
-		};
-	}
-	return {
-		...reference,
-		id: defaults.id,
-		name,
-		api: defaults.api,
-		provider: defaults.provider,
-		baseUrl: defaults.baseUrl,
-		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
-		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
-	};
-}
-
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
@@ -439,230 +415,6 @@ function toAnthropicDiscoveryBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 }
 
-/**
- * The OpenAI-compatible base URL for an Ollama endpoint: the configured origin AND PATH, with
- * exactly one `/v1` on the end.
- *
- * The path is the part worth stating. An Ollama reached through a reverse proxy is mounted at a
- * subpath (`http://gateway:11434/ollama`), and a normalizer that keeps only the origin sends every
- * request to the proxy's root, where nothing answers.
- */
-export function normalizeOllamaBaseUrl(baseUrl?: string): string {
-	const value = baseUrl?.trim();
-	if (!value) {
-		return "http://127.0.0.1:11434/v1";
-	}
-	const trimmed = trimTrailingSlashes(value);
-	return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
-}
-
-/** The same endpoint addressed by Ollama's own API, which is the OpenAI-compatible one without `/v1`. */
-export function toOllamaNativeBaseUrl(baseUrl: string): string {
-	return baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl;
-}
-
-async function fetchOllamaNativeModels(
-	baseUrl: string,
-	resolveMetadata: (modelId: string, onFailure?: DiscoveryHooks["onFailure"]) => Promise<OllamaResolvedMetadata>,
-	fetchImpl: FetchImpl = discoveryFetch(),
-	onFailure?: DiscoveryHooks["onFailure"],
-): Promise<ModelSpec<"openai-responses">[] | null> {
-	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
-	const url = `${nativeBaseUrl}/api/tags`;
-	const report = (stage: DiscoveryFailure["stage"], detail: string): void => onFailure?.({ stage, url, detail });
-	let response: Response;
-	try {
-		response = await fetchImpl(url, {
-			method: "GET",
-			headers: { Accept: "application/json" },
-		});
-	} catch (error) {
-		// Null is 'this resolver produced no catalog', which the caller distinguishes from the `[]` an endpoint
-		// with no models returns. This is the last step before an empty picker, so the reason for the `null`
-		// travels back with it: a refused connection to a local daemon and a 403 from a proxy in front of it
-		// were the same silence, and they call for entirely different things from whoever is looking.
-		report("request", errorMessage(error));
-		return null;
-	}
-	// A captive portal or an HTML proxy page is a `body` failure answered with `null`, not an `unhandled`
-	// stage thrown out of the whole fetcher and blamed on this reader.
-	const payload = (await readDiscoveryJson(response, report)) as
-		| { models?: Array<{ name?: string; model?: string }> }
-		| undefined;
-	if (payload === undefined) return null;
-	const entries = payload.models ?? [];
-	const resolved = await Promise.all(
-		entries.map(async (entry): Promise<ModelSpec<"openai-responses"> | null> => {
-			const id = entry.model ?? entry.name;
-			if (!id) return null;
-			const metadata = await resolveMetadata(id, onFailure);
-			return {
-				id,
-				name: entry.name ?? id,
-				api: "openai-responses",
-				provider: "ollama",
-				baseUrl,
-				reasoning: metadata.reasoning ?? false,
-				thinking: metadata.thinking,
-				input: metadata.input ?? ["text"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: metadata.contextWindow,
-				maxTokens: metadata.maxTokens,
-			};
-		}),
-	);
-	const models: ModelSpec<"openai-responses">[] = resolved.filter(
-		(m): m is ModelSpec<"openai-responses"> => m !== null,
-	);
-	return models.sort((left, right) => left.id.localeCompare(right.id));
-}
-
-/**
- * Fallback context window for Ollama models when `/api/show` is unavailable
- * or omits a `model_info.<arch>.context_length` field. Matches the size
- * Ollama's cloud catalog reports for stock models.
- */
-const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
-/** Cap max output tokens at a value that matches Veyyon's other openai-responses defaults. */
-const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-
-interface OllamaResolvedMetadata {
-	contextWindow: number;
-	maxTokens: number;
-	capabilities?: string[];
-	reasoning?: boolean;
-	thinking?: ThinkingConfig;
-	input?: ("text" | "image")[];
-}
-
-interface OllamaShowMetadata {
-	contextWindow?: number;
-	maxTokens?: number;
-	capabilities?: string[];
-	reasoning?: boolean;
-	thinking?: ThinkingConfig;
-	input?: ("text" | "image")[];
-}
-
-function getOllamaContextWindow(modelInfo: Record<string, unknown> | undefined): number | undefined {
-	if (!modelInfo) {
-		return undefined;
-	}
-	for (const [key, value] of Object.entries(modelInfo)) {
-		if (typeof value !== "number" || value <= 0) {
-			continue;
-		}
-		if (key.endsWith(".context_length") || key.endsWith(".num_ctx") || key.endsWith(".context_window")) {
-			return value;
-		}
-	}
-}
-
-function getOllamaCapabilities(value: unknown): string[] | undefined {
-	if (!Array.isArray(value)) {
-		return undefined;
-	}
-	return value.filter((item): item is string => typeof item === "string");
-}
-
-function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingConfig | undefined {
-	if (!capabilities?.includes("thinking")) {
-		return undefined;
-	}
-	return { mode: "effort", efforts: OLLAMA_WIRE_EFFORTS.slice() };
-}
-
-/**
- * Query Ollama's `/api/show` endpoint for a single model and pull native
- * context and capability metadata from the response. Returns `undefined` when
- * the endpoint is unavailable so callers can layer their own fallback.
- *
- * The fallback is not neutral, which is why every branch reports. The caller
- * OVERWRITES the model's context window with it, so a `/api/show` that fails
- * does not leave the bundled figure in place: it replaces a real 32k with a
- * hardcoded 128k, prompts get packed to the larger size, and Ollama drops the
- * front of the context to make them fit. The agent then loses its system
- * prompt mid-session and looks like it forgot rather than like it failed.
- */
-async function fetchOllamaShowMetadata(
-	nativeBaseUrl: string,
-	modelId: string,
-	fetchImpl: FetchImpl = discoveryFetch(),
-	onFailure?: DiscoveryHooks["onFailure"],
-): Promise<OllamaShowMetadata | undefined> {
-	const url = `${nativeBaseUrl}/api/show`;
-	// The model id is in every detail: this runs once per model, and "one of them lost its metadata" is not
-	// something an operator with a long `ollama list` can act on.
-	const report = (stage: DiscoveryFailure["stage"], detail: string): void =>
-		onFailure?.({ stage, url, detail: `${modelId}: ${detail}` });
-	let response: Response;
-	try {
-		response = await fetchImpl(url, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Accept: "application/json",
-			},
-			body: JSON.stringify({ model: modelId }),
-		});
-	} catch (error) {
-		report("request", errorMessage(error));
-		return undefined;
-	}
-	const payload = (await readDiscoveryJson(response, report)) as
-		| { capabilities?: unknown; model_info?: Record<string, unknown> }
-		| undefined;
-	if (payload === undefined) return undefined;
-	const capabilities = getOllamaCapabilities(payload.capabilities);
-	const contextWindow = getOllamaContextWindow(payload.model_info);
-	return {
-		contextWindow,
-		maxTokens: contextWindow ? OLLAMA_DEFAULT_MAX_TOKENS : undefined,
-		capabilities,
-		reasoning: capabilities ? capabilities.includes("thinking") : undefined,
-		thinking: getOllamaThinkingConfig(capabilities),
-		input: capabilities
-			? capabilities.includes("vision")
-				? (["text", "image"] as Array<"text" | "image">)
-				: (["text"] as Array<"text">)
-			: undefined,
-	};
-}
-
-/**
- * Build a resolver that fetches `/api/show` metadata per model id and caches
- * the result in-memory for the lifetime of the manager. Successful lookups are
- * cached so repeated `fetchDynamicModels` calls do not refetch; failed
- * lookups stay uncached so a later refresh can recover.
- */
-function createOllamaMetadataResolver(
-	nativeBaseUrl: string,
-	fetchImpl?: FetchImpl,
-): (modelId: string, onFailure?: DiscoveryHooks["onFailure"]) => Promise<OllamaResolvedMetadata> {
-	const cache = new Map<string, Promise<OllamaResolvedMetadata>>();
-	return (modelId, onFailure) => {
-		const cached = cache.get(modelId);
-		if (cached) return cached;
-		const pending = (async () => {
-			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId, fetchImpl, onFailure);
-			if (!metadata) {
-				cache.delete(modelId);
-				return {
-					contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
-					maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-				};
-			}
-			return {
-				...metadata,
-				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
-				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
-			};
-		})();
-		cache.set(modelId, pending);
-		void pending.catch(() => cache.delete(modelId));
-		return pending;
-	};
-}
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
 	"text-embedding",
@@ -2799,13 +2551,25 @@ function resolveOpenCodeDiscoveryBaseUrl(baseUrl: string | undefined, defaultBas
 	return openCodeBaseUrlForApi("openai-completions", basePath);
 }
 
+/**
+ * The key OpenCode discovery sends. The Go listing is public. A Console login token is accepted only by
+ * its account's inference endpoint and the public gateway rejects it, so a login lists without it.
+ */
+function openCodeDiscoveryApiKey(
+	providerId: "opencode-go" | "opencode-zen",
+	apiKey: string | undefined,
+): string | undefined {
+	return providerId === "opencode-go" && isOpenCodeGoLoginApiKey(apiKey) ? undefined : apiKey;
+}
+
 function openCodeModelCacheProviderId(
 	providerId: "opencode-go" | "opencode-zen",
 	apiKey: string | undefined,
 	discoveryBaseUrl: string,
 ): string {
-	// OpenCode catalogs are entitlement-scoped; isolate authoritative rows by credential and endpoint.
-	const scope = `${apiKey ?? ""}\u0000${discoveryBaseUrl}`;
+	// OpenCode catalogs are entitlement-scoped; isolate authoritative rows by the credential discovery
+	// sends and the endpoint. A Console login sends none, so a refreshed token keeps its cached rows.
+	const scope = `${openCodeDiscoveryApiKey(providerId, apiKey) ?? ""}\u0000${discoveryBaseUrl}`;
 	return `${providerId}:models-v1:${Bun.hash(scope).toString(36)}`;
 }
 
@@ -2894,7 +2658,7 @@ function openCodeModelManagerOptions(
 					api: "openai-completions",
 					provider: providerId,
 					baseUrl: discoveryBaseUrl,
-					apiKey,
+					apiKey: openCodeDiscoveryApiKey(providerId, apiKey),
 					// The gateway flags traffic with no client user agent, and discovery
 					// reads it with the same key as a completion request. Discovery runs
 					// outside any conversation, so the session header carries the stable
@@ -2951,76 +2715,7 @@ export function opencodeGoModelManagerOptions(config?: OpenCodeModelManagerConfi
 }
 
 // ---------------------------------------------------------------------------
-// 9. Ollama
-// ---------------------------------------------------------------------------
-
-export interface OllamaModelManagerConfig {
-	apiKey?: string;
-	baseUrl?: string;
-	fetch?: FetchImpl;
-}
-
-export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = normalizeOllamaBaseUrl(config?.baseUrl);
-	const nativeBaseUrl = toOllamaNativeBaseUrl(baseUrl);
-	const references = createBundledReferenceMap<"openai-responses">("ollama" as Parameters<typeof getBundledModels>[0]);
-	const resolveMetadata = createOllamaMetadataResolver(nativeBaseUrl, config?.fetch);
-	return {
-		providerId: "ollama",
-		fetchDynamicModels: async hooks => {
-			const openAiCompatible = await fetchOpenAICompatibleModels({
-				onFailure: hooks?.onFailure,
-				api: "openai-responses",
-				provider: "ollama",
-				baseUrl,
-				apiKey,
-				mapModel: (entry, defaults) => {
-					const reference = references.get(defaults.id);
-					if (!reference) {
-						return {
-							...defaults,
-							name: toModelName(entry.name, defaults.name),
-							contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
-							maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-						};
-					}
-					return mapWithBundledReference(entry, defaults, reference);
-				},
-				fetch: config?.fetch,
-			});
-			if (openAiCompatible && openAiCompatible.length > 0) {
-				await Promise.all(
-					openAiCompatible.map(async model => {
-						const metadata = await resolveMetadata(model.id, hooks?.onFailure);
-						model.contextWindow = metadata.contextWindow;
-						if (metadata.reasoning !== undefined) {
-							model.reasoning = metadata.reasoning;
-							model.thinking = metadata.thinking;
-						}
-						if (metadata.input) {
-							model.input = metadata.input;
-						}
-					}),
-				);
-				return openAiCompatible;
-			}
-			const nativeFallback = await fetchOllamaNativeModels(
-				baseUrl,
-				resolveMetadata,
-				config?.fetch,
-				hooks?.onFailure,
-			);
-			if (nativeFallback && nativeFallback.length > 0) {
-				return nativeFallback;
-			}
-			return openAiCompatible;
-		},
-	};
-}
-
-// ---------------------------------------------------------------------------
-// 10. OpenRouter
+// 9. OpenRouter
 // ---------------------------------------------------------------------------
 
 export interface OpenRouterModelManagerConfig {
@@ -3276,7 +2971,7 @@ export function alibabaCodingPlanModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 11. Vercel AI Gateway
+// 10. Vercel AI Gateway
 // ---------------------------------------------------------------------------
 
 export interface VercelAiGatewayModelManagerConfig {
@@ -3346,7 +3041,7 @@ export function vercelAiGatewayModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 12. Kimi Code
+// 11. Kimi Code
 // ---------------------------------------------------------------------------
 
 export interface KimiCodeModelManagerConfig {
@@ -3632,7 +3327,7 @@ export function lmStudioModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 13. Synthetic
+// 12. Synthetic
 // ---------------------------------------------------------------------------
 
 export interface SyntheticModelManagerConfig {
@@ -3693,7 +3388,7 @@ export function syntheticModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 14. Venice
+// 13. Venice
 // ---------------------------------------------------------------------------
 
 export interface VeniceModelManagerConfig {
@@ -3831,7 +3526,7 @@ export function basetenModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 15. Together
+// 14. Together
 // ---------------------------------------------------------------------------
 
 export interface TogetherModelManagerConfig {
@@ -4003,7 +3698,7 @@ export function nousResearchModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 16. Moonshot
+// 15. Moonshot
 // ---------------------------------------------------------------------------
 
 export interface MoonshotModelManagerConfig {
@@ -4448,7 +4143,7 @@ export function qwenPortalModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 18. Qianfan
+// 17. Qianfan
 // ---------------------------------------------------------------------------
 
 export interface QianfanModelManagerConfig {
@@ -4464,7 +4159,7 @@ export function qianfanModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 19. Cloudflare AI Gateway
+// 18. Cloudflare AI Gateway
 // ---------------------------------------------------------------------------
 
 export interface CloudflareAiGatewayModelManagerConfig {
@@ -4484,7 +4179,7 @@ export function cloudflareAiGatewayModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 20. Xiaomi
+// 19. Xiaomi
 // ---------------------------------------------------------------------------
 
 /** Region codes for Xiaomi Token Plan clusters exposed as separate login providers. */
@@ -4570,7 +4265,7 @@ export function xiaomiModelManagerOptions(
 	};
 }
 // ---------------------------------------------------------------------------
-// 21. LiteLLM
+// 20. LiteLLM
 // ---------------------------------------------------------------------------
 
 export interface LiteLLMModelManagerConfig {
@@ -5050,7 +4745,7 @@ export function litellmModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 22. vLLM
+// 21. vLLM
 // ---------------------------------------------------------------------------
 
 const VLLM_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -5103,7 +4798,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 }
 
 // ---------------------------------------------------------------------------
-// 23. NanoGPT
+// 22. NanoGPT
 // ---------------------------------------------------------------------------
 
 export interface NanoGptModelManagerConfig {
@@ -5165,7 +4860,7 @@ export function nanoGptModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 24. GitHub Copilot
+// 23. GitHub Copilot
 // ---------------------------------------------------------------------------
 
 export interface GithubCopilotModelManagerConfig {

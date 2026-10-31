@@ -1623,6 +1623,15 @@ export class TUI extends Container {
 		this.#executeRender();
 	}
 
+	/**
+	 * Holds the next frame one cadence interval. A handler that arms a double-press window (Ctrl+C to
+	 * exit, Esc to discard a draft) calls this so the second press, already queued on stdin, is read
+	 * before a repaint that could take longer than the window. A press that arms nothing paints at once.
+	 */
+	holdFrameForInput(): void {
+		this.#pacer.holdForInput(this.#renderScheduler.now());
+	}
+
 	requestRender(force = false, options?: RenderRequestOptions): void {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
@@ -2135,16 +2144,18 @@ export class TUI extends Container {
 	}
 
 	#dispatchInput(data: string): void {
-		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
-		// frame to drain queued input before an ordinary repaint; delaying every
-		// key would make idle navigation pay a full frame of latency.
-		const c0 = data.charCodeAt(0);
-		if ((c0 === 3 || c0 === 27) && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
-			this.#pacer.holdForInput(this.#renderScheduler.now());
-		}
 		const input = this.#filterInput(data);
 		// Consume terminal cell size responses without blocking unrelated input.
 		if (input === null || this.#consumeCellSizeResponse(input)) return;
+		// The frames answering a key press skip the cadence. A pointer report keeps it: wheel and
+		// hover arrive at a rate the cadence exists to cap. A release answers nothing.
+		const keyPress = !input.startsWith("\x1b[<") && !isKeyRelease(input);
+		if (keyPress) this.#pacer.keyPressed();
+		this.#routeInput(input);
+		if (keyPress) this.#expediteWaitingFrame();
+	}
+
+	#routeInput(input: string): void {
 		if (this.#consumeIsolationMouse(input) || this.#consumeAltArrowScroll(input)) return;
 
 		// Global debug key handler (Shift+Ctrl+D)
@@ -2153,6 +2164,17 @@ export class TUI extends Container {
 			return;
 		}
 		this.#deliverToFocused(input);
+	}
+
+	/**
+	 * Reschedule a frame that was waiting out the cadence when the key arrived, so it paints the press.
+	 * After the handler, so a double-press window the press armed holds the rescheduled frame too.
+	 */
+	#expediteWaitingFrame(): void {
+		if (this.#renderTimer === undefined) return;
+		this.#renderTimer.cancel();
+		this.#renderTimer = undefined;
+		this.#scheduleRender();
 	}
 
 	/** Run the input listeners over `data` in order; null when one consumed it or they reduced it to nothing. */
@@ -2796,10 +2818,16 @@ export class TUI extends Container {
 			this.#committedPrefixAuditRows = newlyFinalEnd;
 		}
 		const hasNewlyFinalRows = newlyFinalEnd > this.#committedPrefixAuditRows;
+		// A frame shorter than the committed rows collapsed into recorded content (a live suffix collapsing on
+		// abort/result). Only the rebase below judges it: the audit's one-edit tolerance would write a replaced
+		// row into the record, the rebase would then keep it counted as committed, and it would never reach history.
+		const frameLength = rawFrame.length;
+		const collapsed = !geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows;
 		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
+			!collapsed &&
 			(this.#renderStablePrefixRows < this.#committedPrefixAuditRows || hasNewlyFinalRows);
 		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
@@ -2809,18 +2837,14 @@ export class TUI extends Container {
 		// True when this frame is a strict, byte-identical PREFIX of the committed
 		// record — the viewport squeezed the transcript, history did not change.
 		let frameSqueezed = false;
-		// A frame that shrank below the committed row count collapsed content
-		// that was already recorded (a live suffix collapsing on abort/result).
 		// Re-base the commit index at the first divergence against the recorded
 		// prefix — frozen snapshots included; a collapse is precisely when the
 		// record and the frame part ways — so the surviving exact prefix stays
 		// recognized and is never re-shown or re-committed. Only genuinely new
 		// content repaints below it.
-		const frameLength = rawFrame.length;
-		if (!geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows) {
-			const limit = Math.min(this.#committedRows, frameLength);
-			const firstDiff = firstRowDivergence(rawFrame, this.#committedPrefix, limit);
-			const diverged = firstDiff >= 0 ? firstDiff : limit;
+		if (collapsed) {
+			const firstDiff = firstRowDivergence(rawFrame, this.#committedPrefix, frameLength);
+			const diverged = firstDiff >= 0 ? firstDiff : frameLength;
 			// A frame the viewport SQUEEZED is not a frame that diverged. When the
 			// pinned chrome (HUD rows plus footer) grows past the viewport the
 			// transcript is left no room, the frame collapses to a strict PREFIX of
@@ -2835,12 +2859,10 @@ export class TUI extends Container {
 			// repair exists for.
 			const contentDiverged = firstDiff >= 0;
 			frameSqueezed = !contentDiverged;
-			if (diverged < this.#committedRows) {
-				this.#committedRows = diverged;
-				this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, diverged);
-				this.#committedPrefix.length = diverged;
-				if (contentDiverged) committedRowsResynced = true;
-			}
+			this.#committedRows = diverged;
+			this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, diverged);
+			this.#committedPrefix.length = diverged;
+			if (contentDiverged) committedRowsResynced = true;
 		}
 		// Committed-prefix state this frame's commit math extends from
 		// (post-audit): drives the audit-mark advance after the emit.

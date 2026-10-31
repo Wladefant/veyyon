@@ -3,6 +3,7 @@ import type { DiscoverableTool } from "@veyyon/coding-agent/discovery/tool-index
 import {
 	buildDiscoverableToolSearchIndex,
 	collectDiscoverableTools,
+	collectMCPTools,
 	filterBySource,
 	formatDiscoverableToolServerSummary,
 	getDiscoverableTool,
@@ -168,6 +169,36 @@ describe("filterBySource", () => {
 	});
 	it("filters by extension", () => {
 		expect(filterBySource(mixed, "extension").map(t => t.name)).toEqual(["ext_foo"]);
+	});
+});
+
+// ─── collectMCPTools ──────────────────────────────────────────────────────────
+
+describe("collectMCPTools", () => {
+	it("describes the MCP tools of a registry in order, and reads no other tool", () => {
+		const unreadable = makeAgentTool("read");
+		Object.defineProperty(unreadable, "description", {
+			get() {
+				throw new Error("a non-MCP tool was described");
+			},
+		});
+		const registry = [
+			makeAgentTool("mcp__gh_issue", { mcpServerName: "gh", mcpToolName: "issue" }),
+			unreadable,
+			makeAgentTool("ext_foo"),
+			makeAgentTool("mcp__fs_list", { mcpServerName: "fs", mcpToolName: "list" }),
+		];
+		expect(
+			collectMCPTools(registry).map(({ name, source, serverName, mcpToolName }) => ({
+				name,
+				source,
+				serverName,
+				mcpToolName,
+			})),
+		).toEqual([
+			{ name: "mcp__gh_issue", source: "mcp", serverName: "gh", mcpToolName: "issue" },
+			{ name: "mcp__fs_list", source: "mcp", serverName: "fs", mcpToolName: "list" },
+		]);
 	});
 });
 

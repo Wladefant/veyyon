@@ -332,6 +332,8 @@ export interface InteractiveModeContext {
 	updatePendingMessagesDisplay(): void;
 	/** Recompute the composer's contextual shortcut chips from current draft/busy/queue state and repaint. */
 	refreshComposerShortcuts(): void;
+	/** The composer's draft changed: goal mode re-arms a continuation the draft was holding once it is empty. */
+	noteComposerChanged(): void;
 	/**
 	 * The first real keystroke: remove the startup welcome card, and take the at-rest reading the
 	 * launch held once the frame that draws the edit is committed. Idempotent.
@@ -397,7 +399,7 @@ export interface InteractiveModeContext {
 	toggleTodoExpansion(): void;
 
 	// Command handling
-	handleExportCommand(text: string): Promise<void>;
+	handleExportCommand(outputPath: string | undefined): Promise<void>;
 	handleShareCommand(): Promise<void>;
 	handleTodoCommand(args: string): Promise<void>;
 	handleSessionCommand(): Promise<void>;
@@ -417,8 +419,10 @@ export interface InteractiveModeContext {
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
-	handleMCPCommand(text: string): Promise<void>;
-	handleSSHCommand(text: string): Promise<void>;
+	/** `args` is the text after `/mcp`, as the dispatcher parsed it. */
+	handleMCPCommand(args: string): Promise<void>;
+	/** `args` is the text after `/ssh`, as the dispatcher parsed it. */
+	handleSSHCommand(args: string): Promise<void>;
 	handleCompactCommand(
 		customInstructions?: string,
 		mode?: CompactMode,
@@ -429,7 +433,8 @@ export interface InteractiveModeContext {
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath?: string): Promise<void>;
 	handleRenameCommand(title: string): Promise<void>;
-	handleMemoryCommand(text: string): Promise<void>;
+	/** `args` is the text after `/memory`, as the dispatcher parsed it. */
+	handleMemoryCommand(args: string): Promise<void>;
 	handleRephraseCommand(): void;
 	handleSTTToggle(): Promise<void>;
 	executeCompaction(
@@ -452,7 +457,8 @@ export interface InteractiveModeContext {
 	showAgentsDashboard(options?: { requireContent?: boolean }): void;
 	/** Prints `/secret list`, which is what the footline's secrets chip is a handle for. */
 	showSecretList(): void;
-	showModelSelector(options?: { temporaryOnly?: boolean }): void;
+	/** `query` seeds the picker's search: `/model <query>`. */
+	showModelSelector(options?: { temporaryOnly?: boolean; query?: string }): void;
 	showThinkingSelector(): void;
 	/**
 	 * The card a bare `/cmd` opens when the command declares subcommands.
@@ -551,10 +557,6 @@ export interface InteractiveModeContext {
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;
-	emitCustomToolSessionEvent(
-		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
-		previousSessionFile?: string,
-	): Promise<void>;
 	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
@@ -601,5 +603,4 @@ export interface InteractiveModeContext {
 		options?: { overlay?: boolean | OverlayOptions },
 	): Promise<T>;
 	showExtensionError(extensionPath: string, error: string): void;
-	showToolError(toolName: string, error: string): void;
 }

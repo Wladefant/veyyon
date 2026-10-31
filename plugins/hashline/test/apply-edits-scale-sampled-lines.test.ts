@@ -16,8 +16,8 @@
  * files, including every boundary — is fully preserved at a runtime the
  * suite can actually deliver.
  */
-import { describe, expect, it, setDefaultTimeout } from "bun:test";
-import { applyEdits, parsePatch } from "@veyyon/hashline";
+import { afterAll, beforeAll, describe, it, setDefaultTimeout } from "bun:test";
+import { expectLineDeleted, expectLineReplaced, numberedLines } from "./support/numbered-base";
 
 setDefaultTimeout(120_000);
 
@@ -50,32 +50,22 @@ function sampledPositions(n: number): number[] {
 
 for (const n of SIZES) {
 	describe(`applyEdits scale n=${n} (sampled positions)`, () => {
-		const lines = Array.from({ length: n }, (_, i) => `L${i + 1}`);
-		const base = lines.join("\n");
+		// Built per size and released after it, so one multi-million-line base is
+		// resident at a time rather than every size's base for the whole file.
+		let base = "";
+		beforeAll(() => {
+			base = numberedLines(n).join("\n");
+		});
+		afterAll(() => {
+			base = "";
+		});
 
 		it("DEL at every sampled position removes exactly that line", () => {
-			for (const i of sampledPositions(n)) {
-				const { text, firstChangedLine } = applyEdits(base, parsePatch(`DEL ${i}`).edits);
-				expect(firstChangedLine).toBe(i);
-				const out = text.split("\n");
-				expect(out.length).toBe(n - 1);
-				// The neighbors close over the gap: position i now holds old line i+1
-				// (or the file ends there when i was the last line).
-				if (i < n) expect(out[i - 1]).toBe(`L${i + 1}`);
-				if (i > 1) expect(out[i - 2]).toBe(`L${i - 1}`);
-			}
+			for (const i of sampledPositions(n)) expectLineDeleted(base, n, i, `DEL ${i}`);
 		});
 
 		it("single-line replace at every sampled position rewrites exactly that line", () => {
-			for (const i of sampledPositions(n)) {
-				const { text, firstChangedLine } = applyEdits(base, parsePatch(`SWAP ${i}.=${i}:\n+X${i}`).edits);
-				expect(firstChangedLine).toBe(i);
-				const out = text.split("\n");
-				expect(out.length).toBe(n);
-				expect(out[i - 1]).toBe(`X${i}`);
-				if (i > 1) expect(out[i - 2]).toBe(`L${i - 1}`);
-				if (i < n) expect(out[i]).toBe(`L${i + 1}`);
-			}
+			for (const i of sampledPositions(n)) expectLineReplaced(base, i, `SWAP ${i}.=${i}:\n+X${i}`, `X${i}`);
 		});
 	});
 }

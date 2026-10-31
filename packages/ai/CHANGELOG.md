@@ -152,6 +152,65 @@
 - Removed read-subsumption detection and the `readSubsumptionThreshold` option from `ToolCallLoopGuard`, which detects consecutive identical tool calls only.
 
 ## [1.5.6] - 2026-10-10
+### Added
+
+- `toolSchema(id, build)` in `@veyyon/ai/utils/schema/tool-schema` holds a tool parameter schema with its wire form, which a compiled build stores per build in the profile's `cache/tool-wire-schemas.json`, and `Tool.wireParameters` supplies that wire form to a request without building `parameters`.
+
+### Changed
+
+- No user-visible change: Claude and OpenAI Codex usage build a percent-used amount through one `usageAmountFromUsedPercent` in `usage/shared`.
+- The tool wire-schema store is a `BuildStore` from `@veyyon/utils/build-store`, created with `createToolWireSchemaStore(build, filePath)`, and a `cache/tool-wire-schemas.json` in the earlier layout is ignored and rewritten; no user-facing change.
+- SQLite auth storage, the Cursor and Codex Responses providers and the Xiaomi OAuth flow coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of five inline copies; no user-facing change.
+- Azure Responses turns and Azure chat-completions turns resolve `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` through one helper in `providers/azure-deployment-names`; no user-facing change.
+- Tool-argument coercion matches a JSON Schema `type` keyword through the validator's matcher instead of a copy of it; no user-facing change.
+- Cursor and GitLab Duo tool results, GitLab Duo goal prompts and the Antigravity and Google Cloud token refreshes each run through one shared implementation; no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The auth-broker discovery imports the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- The OpenAI Responses wire drops its second copy of the six types it shared with the Chat Completions wire and imports the five it uses, the Kimi Code and Synthetic shim builds one set of forwarded options and one stream pipe for both wires, and Cursor's buffered shell output is sent by one function; no user-facing change.
+- The auth gateway's Anthropic Messages, OpenAI Chat, OpenAI Responses and pi-native streaming encoders write through one response body, `gatewayResponseStream` in `@veyyon/ai/auth-gateway/response-stream`, instead of four copies of its abort, cancel and error handling; no user-facing change.
+- `mapAnthropicToolChoice` moved from `stream.ts` to `providers/anthropic-tool-choice.ts` and `OUTPUT_FALLBACK_BUFFER` to `providers/anthropic.ts`, so the Anthropic, GitLab Duo and Kimi Code/Synthetic providers no longer import the stream dispatcher; both names stay exported from `@veyyon/ai`; no user-facing change.
+- `providerFinishErrorMessage` and `PROVIDER_FINISH_ERROR_PATTERN` moved from `error/provider.ts` to `error/classes.ts`, so the turn error domain no longer closes an import cycle through the error classifier; both stay exported from `@veyyon/ai/error`; no user-facing change.
+- xAI OIDC discovery, device-code and token-refresh responses parse their JSON body through one helper; no user-facing change.
+- The Kimi Code request headers moved from the Kimi login module to `@veyyon/ai/utils/kimi-headers`, so a launch and a Kimi chat or usage request no longer load the Kimi login flow.
+
+### Fixed
+
+- An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.
+- A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
+- A provider request whose dial was refused, found no route or got no resolver answer is dialed once and handed to the turn, whose visible countdown retries it, instead of being redialed by every provider's hidden retry loop inside each turn attempt.
+- A provider request that fails with an error the registry does not classify as transient (a host that does not resolve, a certificate that does not verify) is no longer redialed by the shared provider fetch.
+- An Anthropic connection failure reports the underlying error (`ECONNREFUSED: Unable to connect…`, `getaddrinfo ENOTFOUND …`) instead of `Connection error.`, and a host that does not resolve is no longer retried by the Anthropic stream and the turn.
+- A GitLab Duo turn whose host cannot be reached reports the connection error and is retried by the turn, instead of failing with a request to set `GITLAB_DUO_NAMESPACE_ID`.
+- A cancelled Cursor, GitHub Copilot, OpenAI Codex device, Kilo, Kimi, xAI, Perplexity, Nous Research or OpenCode login stops its pending request or poll wait, sends no further request and stores no approval that arrives after the cancel, instead of waiting out the poll interval or a hung request.
+
+## [1.5.10] - 2026-10-25
+
+### Changed
+
+- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
+- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
+- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
+- A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
+- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
+- The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
+
+### Fixed
+
+- Cursor's "You're out of usage" answer parks the account for the quota window instead of a 45 to 75 second capacity backoff, so a turn on a spent plan ends on the first failure instead of retrying it every minute.
+- The notice that an account is out of quota while load balancing leaves other accounts idle appears once per exhausted window instead of once for every request layer and retry that re-entered it.
+- Codex requests send `x-codex-routing-hint` stating the wire model and service tier of the body sent, on HTTP turns, the websocket upgrade and the startup prewarm, as codex-rs does.
+- ChatGPT Codex browser login sends `prompt=login`, `reauth=password` and `max_age=0`, so auth.openai.com runs a fresh re-authentication and an individual Daybreak account receives a token with the cyber program active instead of one refused with `cyber_policy` for `individual_blue_security_signin_required`.
+- A credential health check attributes the usage report it returns to the credential's organization, as a usage fetch does, so the report matches its account when one email holds logins to two organizations.
+- Kimi Code's Anthropic wire sends adaptive thinking with `output_config.effort` and a summarized display, as Kimi Code's own client does, so Low, High and Max each reach the model as that effort.
+- A Kimi Code request with thinking turned off sends the model's lowest effort on both wires, and the chat wire sends `thinking: {type: "enabled"}` beside the effort for a model that cannot stop thinking.
+- The OpenCode Go API-key login prompt names OpenCode Go instead of OpenCode Zen.
+- An error from an OpenAI-compatible provider whose body carries `type`, `param` or `code` states the provider's sentence once, as `401 This API key has expired. … (type=authentication_error code=api_key_expired)`, instead of repeating it on a second line with the fields.
+- A captured error body that replaces a status-only `status code (no body)` message keeps the `retry-after-ms=` wait the response stated.
+- The Devin provider reads Cascade's stated reset window through the shared `extractRetryHint` instead of a parser of its own; no user-facing change.
+- An Anthropic Messages reply that ends before `message_start` (an empty `200` body, preamble events only, or events out of order) is retried once and then ends the provider's retry ladder, instead of running all ten provider retries under every session retry: a dead endpoint costs 22 requests over 53 s instead of up to 121 over minutes.
+- A `200` whose body is an HTML page or a JSON document instead of an event stream fails on the first request with `200 from <endpoint> is an HTML page titled "…", not an event stream. Check the provider's baseUrl.`, or the provider's own error sentence, on the OpenAI-compatible, Anthropic Messages, Google Generative AI, Vertex, Gemini CLI, Codex and pi-native wires, instead of being retried as a truncated stream: 11 requests over about 47 s on an OpenAI-compatible or Google endpoint, 22 over about 55 s on Anthropic Messages.
+
+## [1.5.9] - 2026-10-22
 
 ### Changed
 
@@ -220,7 +279,8 @@
 
 ### Fixed
 
-- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program discovery offers for the model, `daybreak_blue` before `daybreak_red`, so security work is no longer refused with `cyber_policy` for lack of the field.
+- A ChatGPT Codex turn, each of its websocket frames and its server-side compaction send `access_programs.cyber` set to the Daybreak program the signing account is offered for the model, `daybreak_blue` before `daybreak_red`, read from that account's entry in the model's discovery listing, or from its own listing when discovery did not list it (a compaction reads the listing its turn fetched and fetches none), so security work is no longer refused with `cyber_policy` for lack of the field and a pooled or switched account never sends a program it is not offered.
+- OAuth account selection sends a model's request from an account whose model listing includes the model before one whose listing leaves it out, with load balancing on or off, so a model only a Daybreak account's listing includes is no longer sent from a standard account.
 - A Gemini, Vertex, Gemini CLI or Antigravity turn that decodes a large function call, such as a `write` of more than about 45 KB, waits up to 660 s for the call instead of ending at 120 s with `Provider stream stalled while waiting for the next event` and decoding the same call again on every retry.
 - Cursor's MCP state request (`mcp_state_exec_args`, exec field 36), sent before a call to a tool reached over MCP, is answered with the `pi-agent` server and the tools the turn advertised, instead of failed with `This client does not run Cursor exec field 36.` and a logged warning.
 - An OpenCode request sent without a session id, such as a session title or a task label, carries a process-stable `x-opencode-session` header instead of none, so the gateway no longer rejects it with `400 Request is missing x-opencode-session (type=MissingSessionID)`.

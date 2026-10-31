@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -9,14 +10,7 @@ function message(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "error",
 		timestamp: Date.now(),
 		...overrides,

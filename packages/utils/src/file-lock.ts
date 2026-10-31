@@ -623,6 +623,17 @@ function settleTransitionSync(lockPath: string, staleMs: number): void {
 	restoreTransitionSync(lockPath, transition);
 }
 
+/**
+ * The lease `observation` grants the holder of `token`, or undefined unless it is a valid lock whose
+ * owner record holds that token.
+ */
+function leaseFor(observation: LockObservation | null, token: string): LockLease | undefined {
+	if (observation?.kind !== "valid" || observation.infoIdentity === undefined || observation.info?.token !== token) {
+		return undefined;
+	}
+	return { token, directoryIdentity: observation.directoryIdentity, infoIdentity: observation.infoIdentity };
+}
+
 async function prepareCandidate(lockPath: string): Promise<{
 	path: string;
 	observation: LockObservation;
@@ -644,19 +655,11 @@ async function prepareCandidate(lockPath: string): Promise<{
 		}
 		await assertParentIdentity(lockPath, parentIdentity);
 		const observation = await inspectLockDirectory(candidatePath);
-		if (
-			observation?.kind !== "valid" ||
-			observation.infoIdentity === undefined ||
-			observation.info?.token !== token
-		) {
+		const lease = leaseFor(observation, token);
+		if (observation === null || lease === undefined) {
 			throw new Error("file-lock: candidate owner record failed validation");
 		}
-		return {
-			path: candidatePath,
-			observation,
-			lease: { token, directoryIdentity: observation.directoryIdentity, infoIdentity: observation.infoIdentity },
-			parentIdentity,
-		};
+		return { path: candidatePath, observation, lease, parentIdentity };
 	} catch (error) {
 		const observation = await inspectLockDirectory(candidatePath).catch(() => null);
 		if (observation && observation.kind !== "unsafe") {
@@ -687,19 +690,11 @@ function prepareCandidateSync(lockPath: string): {
 		}
 		assertParentIdentitySync(lockPath, parentIdentity);
 		const observation = inspectLockDirectorySync(candidatePath);
-		if (
-			observation?.kind !== "valid" ||
-			observation.infoIdentity === undefined ||
-			observation.info?.token !== token
-		) {
+		const lease = leaseFor(observation, token);
+		if (observation === null || lease === undefined) {
 			throw new Error("file-lock: candidate owner record failed validation");
 		}
-		return {
-			path: candidatePath,
-			observation,
-			lease: { token, directoryIdentity: observation.directoryIdentity, infoIdentity: observation.infoIdentity },
-			parentIdentity,
-		};
+		return { path: candidatePath, observation, lease, parentIdentity };
 	} catch (error) {
 		try {
 			const observation = inspectLockDirectorySync(candidatePath);
@@ -837,22 +832,12 @@ async function releaseLock(lockPath: string, expected: LockLease | string): Prom
 	try {
 		const observation = await inspectLockDirectory(lockPath);
 		const expectedToken = typeof expected === "string" ? expected : expected.token;
-		if (
-			observation?.kind !== "valid" ||
-			observation.infoIdentity === undefined ||
-			observation.info?.token !== expectedToken
-		) {
+		const observed = leaseFor(observation, expectedToken);
+		if (observation === null || observed === undefined) {
 			reportLostLockOwnership(lockPath, expectedToken, observation?.info?.token);
 			return;
 		}
-		const lease: LockLease =
-			typeof expected === "string"
-				? {
-						token: expected,
-						directoryIdentity: observation.directoryIdentity,
-						infoIdentity: observation.infoIdentity,
-					}
-				: expected;
+		const lease = typeof expected === "string" ? observed : expected;
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const result = await retireObservedLock(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;
@@ -873,22 +858,12 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
 	try {
 		const observation = inspectLockDirectorySync(lockPath);
 		const expectedToken = typeof expected === "string" ? expected : expected.token;
-		if (
-			observation?.kind !== "valid" ||
-			observation.infoIdentity === undefined ||
-			observation.info?.token !== expectedToken
-		) {
+		const observed = leaseFor(observation, expectedToken);
+		if (observation === null || observed === undefined) {
 			reportLostLockOwnership(lockPath, expectedToken, observation?.info?.token);
 			return;
 		}
-		const lease: LockLease =
-			typeof expected === "string"
-				? {
-						token: expected,
-						directoryIdentity: observation.directoryIdentity,
-						infoIdentity: observation.infoIdentity,
-					}
-				: expected;
+		const lease = typeof expected === "string" ? observed : expected;
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const result = retireObservedLockSync(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;

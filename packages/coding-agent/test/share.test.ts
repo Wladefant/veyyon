@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { SUPPORTED_IMAGE_MIME_TYPES } from "@veyyon/utils/mime";
@@ -224,14 +225,7 @@ describe("buildShareSnapshot", () => {
 		const secret = "asst-secret-ABCDE";
 		const replaySentinel = "REPLAY_BLOB_SENTINEL_XYZ";
 		const ts = "2026-06-12T00:00:00.000Z";
-		const usage = {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
+		const usage = emptyUsage();
 		const entries: SessionEntry[] = [
 			{
 				type: "message",

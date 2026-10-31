@@ -12,9 +12,11 @@
  * since a recorded value drawn back is not a measurement.
  *
  * THE CLASS: every read the real status row and the real interactive host make while the session is
- * at rest builds no tool schema, observed as reads of each active tool's `parameters` through the
- * same objects the estimate walks. The suite renders the real `StatusLineComponent` and commits real
- * frames of a real `InteractiveMode` over a real session, so a new read either grows is covered by
+ * at rest builds no tool schema, observed as reads of each active tool's `parameters` and
+ * `wireParameters` through the same objects the estimate walks. A run from source has no wire-schema
+ * cache, so a `wireParameters` read builds the schema it describes. The suite renders the real
+ * `StatusLineComponent` and commits real frames of a real `InteractiveMode` over a real session, so
+ * a new read either grows is covered by
  * the render rather than by a list of paths. The release arms are the positive control: the same
  * instrumentation sees the reads once the session leaves rest, so zero reads under the hold is the
  * guard and not a blind probe. Around it: creation files nothing, a session's first turn files the
@@ -45,7 +47,7 @@ import * as path from "node:path";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { measureContextGauge } from "@veyyon/coding-agent/config/compaction-strategy";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -63,12 +65,15 @@ import {
 	isAtRestReadingDeferred,
 	takeHeldAtRestReading,
 } from "@veyyon/coding-agent/session/non-message-tokens";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
+import { requireTheme } from "../helpers/require-theme";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../helpers/stdout-geometry";
 
 const PROVIDER = "anthropic";
 const MODEL_ID = "claude-sonnet-4-5";
@@ -76,9 +81,8 @@ const MODEL_ID = "claude-sonnet-4-5";
 const RECORDED_PERCENT = 70;
 
 function bundledModel(id = MODEL_ID): Model {
-	const model = getBundledModel(PROVIDER, id);
-	if (!model) throw new Error(`missing bundled model ${PROVIDER}/${id}`);
-	return model as Model;
+	const model = requireBundledModel(PROVIDER, id);
+	return model;
 }
 
 const sessions: AgentSession[] = [];
@@ -115,30 +119,35 @@ async function create(extra: Partial<CreateAgentSessionOptions>): Promise<AgentS
 }
 
 /**
- * Count every read of `parameters` on the session's active tools, the objects the tool-schema
- * estimate iterates, and pass each read's tool name to `onRead`. Each tool keeps its own getter or
- * value; the counter wraps it on the instance.
+ * Count every read of `parameters` or `wireParameters` on the session's active tools, the objects
+ * the tool-schema estimate iterates, and pass each read's tool name to `onRead`. Each tool keeps its
+ * own getter or value; the counter wraps it on the instance.
  */
 function countSchemaReads(session: AgentSession, onRead?: (tool: string) => void): { count: number } {
 	const reads = { count: 0 };
 	for (const tool of session.agent.state.tools) {
-		let owner: object | null = tool;
-		let descriptor: PropertyDescriptor | undefined;
-		while (owner !== null && descriptor === undefined) {
-			descriptor = Object.getOwnPropertyDescriptor(owner, "parameters");
-			owner = Object.getPrototypeOf(owner);
+		for (const key of ["parameters", "wireParameters"] as const) {
+			let owner: object | null = tool;
+			let descriptor: PropertyDescriptor | undefined;
+			while (owner !== null && descriptor === undefined) {
+				descriptor = Object.getOwnPropertyDescriptor(owner, key);
+				owner = Object.getPrototypeOf(owner);
+			}
+			if (!descriptor) {
+				if (key === "parameters") throw new Error(`tool ${tool.name} has no parameters`);
+				continue;
+			}
+			const found = descriptor;
+			Object.defineProperty(tool, key, {
+				configurable: true,
+				enumerable: true,
+				get(): unknown {
+					reads.count++;
+					onRead?.(tool.name);
+					return found.get ? found.get.call(tool) : found.value;
+				},
+			});
 		}
-		if (!descriptor) throw new Error(`tool ${tool.name} has no parameters`);
-		const found = descriptor;
-		Object.defineProperty(tool, "parameters", {
-			configurable: true,
-			enumerable: true,
-			get(): unknown {
-				reads.count++;
-				onRead?.(tool.name);
-				return found.get ? found.get.call(tool) : found.value;
-			},
-		});
 	}
 	return reads;
 }
@@ -181,14 +190,7 @@ async function resumeHeld(stamp: (nonMessageTokens: number) => number | null): P
 		provider: model.provider,
 		model: model.id,
 		stopReason: "stop",
-		usage: {
-			input: promptTokens,
-			output: 20,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 20, totalTokens: promptTokens + 20 },
 		...(recorded === null ? {} : { contextSnapshot: { promptTokens, nonMessageTokens: recorded } }),
 		timestamp: 2_000,
 	});
@@ -209,8 +211,7 @@ beforeAll(async () => {
 	authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
 	authStorage.setRuntimeApiKey(PROVIDER, "anthropic-test-key");
 	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("theme unavailable");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 
@@ -325,14 +326,7 @@ describe("a session takes its held reading when its first turn leaves rest", () 
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 			timestamp: Date.now(),
 		};
 		const stream = new AssistantMessageEventStream();
@@ -417,17 +411,12 @@ describe("a resumed session's held reading states its resting usage without buil
 
 describe("the interactive host holds the reading until the session leaves rest", () => {
 	const modes: InteractiveMode[] = [];
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(() => {
 		// The host draws into a mocked terminal of fixed geometry; frames still compose and commit.
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
-		Object.defineProperty(process.stdout, "columns", { value: 100, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 40, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 100, rows: 40 });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
@@ -438,11 +427,7 @@ describe("the interactive host holds the reading until the session leaves rest",
 
 	afterEach(() => {
 		for (const mode of modes.splice(0)) mode.stop();
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		vi.restoreAllMocks();
 	});
 

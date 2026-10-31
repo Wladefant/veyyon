@@ -25,6 +25,7 @@ import { describe, expect, it } from "bun:test";
 import { convertResponsesAssistantMessage } from "@veyyon/ai/providers/openai-shared";
 import type { AssistantMessage, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const TURNS_PER_ARM = 600;
 
@@ -40,15 +41,6 @@ const MODEL: Model<"openai-responses"> = buildModel({
 	contextWindow: 400000,
 	maxTokens: 128000,
 } satisfies ModelSpec<"openai-responses">);
-
-const USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 /** Thinking signatures that hold no reasoning envelope. */
 const NON_ENVELOPES: readonly (string | undefined)[] = [
@@ -124,7 +116,7 @@ function generateTurn(random: () => number, turn: number): GeneratedTurn {
 			api: pick(["openai-responses", "openai-codex-responses"] as const),
 			provider: pick(["openai", "openrouter"]),
 			model: pick(["gpt-5", "gpt-5-mini"]),
-			usage: USAGE,
+			usage: emptyUsage(),
 			stopReason: pick(["toolUse", "stop", "length", "error"] as const),
 			timestamp: turn,
 		},

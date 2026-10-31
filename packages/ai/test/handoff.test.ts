@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { complete } from "@veyyon/ai/stream";
 import type { Api, AssistantMessage, Context, Message, Model, Tool, ToolResultMessage } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { z } from "zod/v4";
 import { e2eApiKey } from "./oauth";
 
@@ -42,14 +42,7 @@ const providerContexts = {
 			],
 			provider: "anthropic",
 			model: "claude-haiku-4-5",
-			usage: {
-				input: 100,
-				output: 50,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 150,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		} satisfies AssistantMessage,
@@ -94,14 +87,7 @@ const providerContexts = {
 			],
 			provider: "google",
 			model: "gemini-2.5-flash",
-			usage: {
-				input: 120,
-				output: 60,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 180,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 120, output: 60, totalTokens: 180 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		} satisfies AssistantMessage,
@@ -145,14 +131,7 @@ const providerContexts = {
 			],
 			provider: "openai",
 			model: "gpt-4o-mini",
-			usage: {
-				input: 110,
-				output: 55,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 165,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 110, output: 55, totalTokens: 165 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		} satisfies AssistantMessage,
@@ -198,14 +177,7 @@ const providerContexts = {
 			],
 			provider: "openai",
 			model: "gpt-5-mini",
-			usage: {
-				input: 115,
-				output: 58,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 173,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 115, output: 58, totalTokens: 173 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		} satisfies AssistantMessage,
@@ -243,14 +215,7 @@ const providerContexts = {
 			],
 			provider: "test",
 			model: "test-model",
-			usage: {
-				input: 50,
-				output: 25,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 75,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 50, output: 25, totalTokens: 75 },
 			stopReason: "error",
 			errorMessage: "Request was aborted",
 			timestamp: Date.now(),

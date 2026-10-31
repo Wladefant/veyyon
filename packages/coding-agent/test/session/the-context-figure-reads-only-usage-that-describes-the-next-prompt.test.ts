@@ -23,6 +23,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { estimateTokens } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ContextAccounting } from "@veyyon/coding-agent/session/runtime/context-accounting";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
@@ -68,14 +69,7 @@ function assistant(text: string, timestamp: number, promptTokens: number): Assis
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: promptTokens,
-			output: 10,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 10,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 10, totalTokens: promptTokens + 10 },
 		stopReason: "stop",
 		timestamp,
 	};

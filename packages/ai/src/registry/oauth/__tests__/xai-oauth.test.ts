@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { isXAIAccessTokenExpiring, loginXAIOAuth, refreshXAIOAuthToken, validateXAIEndpoint } from "../xai-oauth";
 
 afterEach(() => {
@@ -213,7 +214,10 @@ describe("loginXAIOAuth", () => {
 	});
 
 	it("continues through authorization_pending and slow_down responses", async () => {
-		const sleepSpy = vi.spyOn(Bun, "sleep").mockResolvedValue(undefined);
+		const waits: number[] = [];
+		vi.spyOn(scheduler, "wait").mockImplementation(async (ms: number) => {
+			waits.push(ms);
+		});
 		const { fetchMock, requests } = createDeviceFlowFetch([
 			{ status: 400, body: { error: "authorization_pending" } },
 			{ status: 400, body: { error: "slow_down" } },
@@ -247,7 +251,7 @@ describe("loginXAIOAuth", () => {
 				device_code: DEVICE_AUTHORIZATION.device_code,
 			},
 		]);
-		expect(sleepSpy.mock.calls).toEqual([[1000], [6000]]);
+		expect(waits).toEqual([1000, 6000]);
 		expect(credentials.access).toBe("eventual-access-token");
 		expect(credentials.refresh).toBe("eventual-refresh-token");
 	});

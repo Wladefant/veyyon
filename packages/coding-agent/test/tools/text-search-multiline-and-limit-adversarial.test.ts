@@ -5,18 +5,12 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * Grep multi-file, unicode, and word-boundary-ish exact match contracts.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SearchTool (text) multiline and unicode adversarial", () => {
 	let tmpDir: string;
@@ -46,20 +40,22 @@ describe("SearchTool (text) multiline and unicode adversarial", () => {
 
 	it("matches unicode identifier", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g1", { type: "text", input: "名前", path: path.join(tmpDir, "u.ts") }));
+		const text = toolResultText(
+			await tool.execute("g1", { type: "text", input: "名前", path: path.join(tmpDir, "u.ts") }),
+		);
 		expect(text).toContain("名前");
 		expect(text.includes("const name = 2") && !text.includes("名前")).toBe(false);
 	});
 
 	it("finds deep-token under nested path when searching the tree", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g2", { type: "text", input: "deep-token-zzz", path: tmpDir }));
+		const text = toolResultText(await tool.execute("g2", { type: "text", input: "deep-token-zzz", path: tmpDir }));
 		expect(text).toContain("deep-token-zzz");
 	});
 
 	it("reports multiple alpha lines from dup.ts", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(
+		const text = toolResultText(
 			await tool.execute("g3", { type: "text", input: "alpha", path: path.join(tmpDir, "dup.ts") }),
 		);
 		const alphaHits = text.split("\n").filter(l => l.includes("alpha")).length;
@@ -68,7 +64,7 @@ describe("SearchTool (text) multiline and unicode adversarial", () => {
 
 	it("regex alternation matches either branch", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(
+		const text = toolResultText(
 			await tool.execute("g4", { type: "text", input: "alpha|beta", path: path.join(tmpDir, "dup.ts") }),
 		);
 		expect(text).toContain("alpha");
@@ -77,7 +73,7 @@ describe("SearchTool (text) multiline and unicode adversarial", () => {
 
 	it("does not match across files when path is a single file", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(
+		const text = toolResultText(
 			await tool.execute("g5", {
 				type: "text",
 				input: "deep-token-zzz",

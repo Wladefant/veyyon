@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
 import { parseInstalledPluginsRegistry } from "@veyyon/kernel/loader/plugins/installed-registry";
-import { FileType, glob } from "@veyyon/natives";
+import { FileType, type GlobOptions, glob } from "@veyyon/natives";
 import {
 	errorMessage,
 	getAgentDir,
@@ -463,6 +463,27 @@ function surfaceUnreadableDir(dir: string, warnings?: string[]): void {
 }
 
 /**
+ * Run the native glob over one discovery directory, answering [] without it when the directory
+ * is missing, empty or unlistable.
+ *
+ * Most discovery directories a launch scans do not exist or hold nothing, and the first glob loads
+ * the native addon, about 2 ms of a print turn. A `readdir` answers those directories without it.
+ * The listing is read uncached, as the glob reads, so a file added after an earlier scan is found.
+ *
+ * The native glob throws for an absent path or a non-directory and for an unreadable directory;
+ * that throw is an empty result too. A caller with no matches runs `surfaceUnreadableDir`, which
+ * tells an unreadable directory (warn) from a missing one (silent).
+ */
+async function globDiscoveryDir(options: GlobOptions): Promise<Array<{ path: string }>> {
+	try {
+		if ((await fs.promises.readdir(options.path)).length === 0) return [];
+		return (await glob(options)).matches;
+	} catch {
+		return [];
+	}
+}
+
+/**
  * Glob helper for extension discovery.
  *
  * `gitignore: false` is deliberate. Whether a file is tracked by git says nothing
@@ -482,16 +503,7 @@ async function globIf(
 	fileType: FileType,
 	recursive: boolean = true,
 ): Promise<Array<{ path: string }>> {
-	let matches: Array<{ path: string }>;
-	try {
-		matches = (await glob({ pattern, path: dir, gitignore: false, hidden: false, fileType, recursive })).matches;
-	} catch {
-		// The native glob throws for an absent path or a non-directory (benign
-		// probe misses) and, with the walker root readability fix, for an
-		// unreadable directory. Treat the throw as an empty result and let the
-		// readability probe below decide whether it deserves a warning.
-		matches = [];
-	}
+	const matches = await globDiscoveryDir({ pattern, path: dir, gitignore: false, hidden: false, fileType, recursive });
 	if (matches.length === 0) surfaceUnreadableDir(dir);
 	return matches;
 }
@@ -623,27 +635,16 @@ export async function loadFilesFromDir<T>(
 		pattern = recursive ? "**/*" : "*";
 	}
 
-	// Use native glob for fast scanning with gitignore support
-	let matches: Array<{ path: string }>;
-	try {
-		// The native glob matches a simple pattern such as `*.md` at every depth unless told
-		// otherwise, so the non-recursive default has to reach it.
-		const result = await glob({
-			pattern,
-			path: dir,
-			gitignore: true,
-			hidden: false,
-			fileType: FileType.File,
-			recursive,
-		});
-		matches = result.matches;
-	} catch {
-		// Native glob throws for an absent path or a non-directory (benign) and,
-		// with the walker root readability fix, for an unreadable directory. Fall
-		// through with an empty match set so the readability probe below can tell
-		// an unreadable directory (warn) from a missing one (silent).
-		matches = [];
-	}
+	// The native glob matches a simple pattern such as `*.md` at every depth unless told
+	// otherwise, so the non-recursive default has to reach it.
+	const matches = await globDiscoveryDir({
+		pattern,
+		path: dir,
+		gitignore: true,
+		hidden: false,
+		fileType: FileType.File,
+		recursive,
+	});
 	if (matches.length === 0) {
 		// An empty scan of an unreadable directory means its files silently
 		// vanished; record it in the structured warnings channel and log it.

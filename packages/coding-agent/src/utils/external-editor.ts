@@ -3,9 +3,8 @@
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { $env, Snowflake } from "@veyyon/utils";
+import { $env, privateTempDir, Snowflake } from "@veyyon/utils";
 
 /**
  * Returns the user's preferred editor command, or a platform default.
@@ -89,7 +88,7 @@ export async function openInEditor(
 	options?: OpenInEditorOptions,
 ): Promise<string | null> {
 	const ext = options?.extension ?? ".md";
-	const tmpFile = path.join(os.tmpdir(), `veyyon-editor-${Snowflake.next()}${ext}`);
+	const tmpFile = path.join(privateTempDir(), `veyyon-editor-${Snowflake.next()}${ext}`);
 
 	try {
 		await Bun.write(tmpFile, content);

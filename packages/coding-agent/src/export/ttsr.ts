@@ -25,13 +25,15 @@ export interface TtsrMatchContext {
 	streamKey?: string;
 }
 
-interface ToolScope {
+/** A `tool`, `tool:<name>` or `<name>` scope token, with the path glob its `(...)` holds. */
+export interface ToolScope {
 	toolName?: string;
 	pathGlob?: Bun.Glob;
 	pathPattern?: string;
 }
 
-interface TtsrScope {
+/** The streams a rule may match in, compiled from its `scope` tokens. */
+export interface TtsrScope {
 	allowText: boolean;
 	allowThinking: boolean;
 	allowAnyTool: boolean;
@@ -196,32 +198,13 @@ export class TtsrManager {
 		return toolName ? `tool:${toolName}` : "tool";
 	}
 
-	#matchesGlob(glob: Bun.Glob, filePaths: string[] | undefined): boolean {
-		if (!filePaths || filePaths.length === 0) {
-			return false;
-		}
-		for (const filePath of filePaths) {
-			const normalized = normalizePath(filePath);
-			if (glob.match(normalized)) {
-				return true;
-			}
-			const slashIndex = normalized.lastIndexOf("/");
-			const basename = slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
-			if (basename !== normalized && glob.match(basename)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
 	#matchesGlobalPaths(entry: TtsrEntry, context: TtsrMatchContext): boolean {
 		if (!entry.globalPathGlobs || entry.globalPathGlobs.length === 0) {
 			return true;
 		}
 
 		for (const glob of entry.globalPathGlobs) {
-			if (this.#matchesGlob(glob, context.filePaths)) {
+			if (matchesPathGlob(glob, context.filePaths)) {
 				return true;
 			}
 		}
@@ -247,7 +230,7 @@ export class TtsrManager {
 			if (toolScope.toolName && toolScope.toolName !== toolName) {
 				continue;
 			}
-			if (toolScope.pathGlob && !this.#matchesGlob(toolScope.pathGlob, context.filePaths)) {
+			if (toolScope.pathGlob && !matchesPathGlob(toolScope.pathGlob, context.filePaths)) {
 				continue;
 			}
 			return true;
@@ -317,7 +300,7 @@ export class TtsrManager {
 			return false;
 		}
 
-		const scope = buildScope(rule);
+		const scope = compileRuleScope(rule);
 		if (!hasReachableScope(scope)) {
 			logger.warn("TTSR scope excludes all streams, skipping rule", {
 				ruleName: rule.name,
@@ -375,7 +358,7 @@ export class TtsrManager {
 	/** Derive an ast-grep language alias from candidate paths (bare extension, e.g. "ts"), if any. */
 	#deriveLang(filePaths: string[] | undefined): string | undefined {
 		for (const filePath of filePaths ?? []) {
-			const ext = path.extname(normalizePath(filePath));
+			const ext = path.extname(normalizeGlobPath(filePath));
 			if (ext.length > 1) {
 				return ext.slice(1).toLowerCase();
 			}
@@ -773,29 +756,36 @@ function compileConditions(rule: Rule): RegExp[] {
 	return compiledFor(COMPILED_CONDITIONS, patterns, () => {
 		const compiled: RegExp[] = [];
 		for (const pattern of patterns) {
-			if (pattern.trim().length === 0) {
-				// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
-				// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
-				// which is the loudest possible reading of the quietest possible mistake. `astCondition`
-				// has always filtered blanks; this is the same rule for the same reason, in one place.
-				logger.warn("TTSR condition is blank, skipping condition", { ruleName: rule.name });
-				continue;
-			}
-			try {
-				compiled.push(new RegExp(pattern));
-			} catch (error) {
-				logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
-					ruleName: rule.name,
-					pattern,
-					error: errorMessage(error),
-				});
-			}
+			const regex = compileConditionPattern(rule.name, pattern);
+			if (regex) compiled.push(regex);
 		}
 		return compiled;
 	});
 }
 
-function trimAstConditions(patterns: Rule["astCondition"]): string[] {
+/** One `condition` pattern as a regex, or undefined, logged, when it is blank or does not compile. */
+export function compileConditionPattern(ruleName: string, pattern: string): RegExp | undefined {
+	if (pattern.trim().length === 0) {
+		// `new RegExp("")` matches EVERY stream, so a blank condition compiled into a catch-all:
+		// a rule whose frontmatter said `condition: ""` fired on every delta rather than never,
+		// which is the loudest possible reading of the quietest possible mistake. `astCondition`
+		// has always filtered blanks; this is the same rule for the same reason, in one place.
+		logger.warn("TTSR condition is blank, skipping condition", { ruleName });
+		return undefined;
+	}
+	try {
+		return new RegExp(pattern);
+	} catch (error) {
+		logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
+			ruleName,
+			pattern,
+			error: errorMessage(error),
+		});
+		return undefined;
+	}
+}
+
+export function trimAstConditions(patterns: Rule["astCondition"]): string[] {
 	if (!patterns || patterns.length === 0) {
 		return [];
 	}
@@ -804,7 +794,7 @@ function trimAstConditions(patterns: Rule["astCondition"]): string[] {
 	);
 }
 
-function compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
+export function compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
 	if (!globs || globs.length === 0) {
 		return undefined;
 	}
@@ -820,7 +810,7 @@ function compileGlobalPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
 }
 
 /** The streams a rule may match in, from its `scope` tokens; no tokens is {@link DEFAULT_SCOPE}. */
-function buildScope(rule: Rule): TtsrScope {
+export function compileRuleScope(rule: Rule): TtsrScope {
 	const tokens = rule.scope;
 	if (!tokens || tokens.length === 0) {
 		return DEFAULT_SCOPE;
@@ -902,8 +892,28 @@ function hasReachableScope(scope: TtsrScope): boolean {
 	return scope.allowText || scope.allowThinking || scope.allowAnyTool || scope.toolScopes.length > 0;
 }
 
-function normalizePath(pathValue: string): string {
+/** `pathValue` with `\` separators as `/`, the form a path glob matches. */
+export function normalizeGlobPath(pathValue: string): string {
 	return pathValue.replaceAll("\\", "/");
+}
+
+/** Whether `glob` matches one of `filePaths`, as a whole path or by its basename. */
+export function matchesPathGlob(glob: Bun.Glob, filePaths: readonly string[] | undefined): boolean {
+	if (!filePaths || filePaths.length === 0) {
+		return false;
+	}
+	for (const filePath of filePaths) {
+		const normalized = normalizeGlobPath(filePath);
+		if (glob.match(normalized)) {
+			return true;
+		}
+		const slashIndex = normalized.lastIndexOf("/");
+		const basename = slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
+		if (basename !== normalized && glob.match(basename)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**

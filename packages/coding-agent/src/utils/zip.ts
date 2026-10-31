@@ -470,38 +470,55 @@ async function readZip64CentralDirectoryInfo(
 	return parseZip64EndOfCentralDirectory(await source.read(zip64EocdOffset, zip64EocdOffset + 56));
 }
 
-async function readZipCentralDirectoryInfo(source: ByteSource): Promise<ZipCentralDirectoryInfo> {
-	const fileSize = source.size;
+/** Where the tail that must hold the end-of-central-directory record starts in an archive of `fileSize` bytes. */
+function endOfCentralDirectoryTailStart(fileSize: number): number {
 	if (fileSize < ZIP_EOCD_MIN_LENGTH) {
 		throw new ToolError("Invalid ZIP archive: missing end of central directory");
 	}
+	return fileSize - Math.min(fileSize, ZIP_EOCD_MIN_LENGTH + ZIP_EOCD_MAX_COMMENT_LENGTH);
+}
 
-	const tailLength = Math.min(fileSize, ZIP_EOCD_MIN_LENGTH + ZIP_EOCD_MAX_COMMENT_LENGTH);
-	const tailStart = fileSize - tailLength;
-	const tail = await source.read(tailStart, fileSize);
-	const eocdIndex = findEndOfCentralDirectory(tail);
-	const eocdOffset = tailStart + eocdIndex;
-
+/** The entry count, size and offset the classic end-of-central-directory record at `eocdIndex` states. */
+function readEndOfCentralDirectory(tail: Uint8Array, eocdIndex: number): ZipCentralDirectoryInfo {
 	if (readUInt16LE(tail, eocdIndex + 4) !== 0 || readUInt16LE(tail, eocdIndex + 6) !== 0) {
 		throw new ToolError("Multi-disk ZIP archives are not supported");
 	}
+	return {
+		entries: readUInt16LE(tail, eocdIndex + 10),
+		size: readUInt32LE(tail, eocdIndex + 12),
+		offset: readUInt32LE(tail, eocdIndex + 16),
+	};
+}
 
-	let entries = readUInt16LE(tail, eocdIndex + 10);
-	let size = readUInt32LE(tail, eocdIndex + 12);
-	let offset = readUInt32LE(tail, eocdIndex + 16);
-	const needsZip64 = entries === ZIP_UINT16_MAX || size === ZIP_UINT32_MAX || offset === ZIP_UINT32_MAX;
-	const zip64Info = await readZip64CentralDirectoryInfo(source, tail, tailStart, eocdOffset);
-	if (zip64Info) {
-		({ entries, size, offset } = zip64Info);
-	} else if (needsZip64) {
+/**
+ * The central directory to read: the ZIP64 record when there is one, else the classic record, which
+ * must not hold a ZIP64 placeholder. Either must end inside the archive.
+ */
+function resolveCentralDirectory(
+	classic: ZipCentralDirectoryInfo,
+	zip64Info: ZipCentralDirectoryInfo | undefined,
+	fileSize: number,
+): ZipCentralDirectoryInfo {
+	const needsZip64 =
+		classic.entries === ZIP_UINT16_MAX || classic.size === ZIP_UINT32_MAX || classic.offset === ZIP_UINT32_MAX;
+	if (!zip64Info && needsZip64) {
 		throw new ToolError("Invalid ZIP archive: missing ZIP64 central directory metadata");
 	}
-
+	const { entries, offset, size } = zip64Info ?? classic;
 	if (offset + size > fileSize) {
 		throw new ToolError("Invalid ZIP archive: central directory exceeds file size");
 	}
-
 	return { entries, offset, size };
+}
+
+async function readZipCentralDirectoryInfo(source: ByteSource): Promise<ZipCentralDirectoryInfo> {
+	const fileSize = source.size;
+	const tailStart = endOfCentralDirectoryTailStart(fileSize);
+	const tail = await source.read(tailStart, fileSize);
+	const eocdIndex = findEndOfCentralDirectory(tail);
+	const classic = readEndOfCentralDirectory(tail, eocdIndex);
+	const zip64Info = await readZip64CentralDirectoryInfo(source, tail, tailStart, tailStart + eocdIndex);
+	return resolveCentralDirectory(classic, zip64Info, fileSize);
 }
 
 function readZip64EntryValues(
@@ -1122,35 +1139,11 @@ function readZip64CentralDirectoryInfoSync(bytes: Uint8Array, eocdOffset: number
 
 function readCentralDirectoryInfoSync(bytes: Uint8Array): ZipCentralDirectoryInfo {
 	const fileSize = bytes.byteLength;
-	if (fileSize < ZIP_EOCD_MIN_LENGTH) {
-		throw new ToolError("Invalid ZIP archive: missing end of central directory");
-	}
-
-	const tailLength = Math.min(fileSize, ZIP_EOCD_MIN_LENGTH + ZIP_EOCD_MAX_COMMENT_LENGTH);
-	const tailStart = fileSize - tailLength;
+	const tailStart = endOfCentralDirectoryTailStart(fileSize);
 	const tail = readMemoryRange(bytes, tailStart, fileSize);
 	const eocdIndex = findEndOfCentralDirectory(tail);
-
-	if (readUInt16LE(tail, eocdIndex + 4) !== 0 || readUInt16LE(tail, eocdIndex + 6) !== 0) {
-		throw new ToolError("Multi-disk ZIP archives are not supported");
-	}
-
-	let entries = readUInt16LE(tail, eocdIndex + 10);
-	let size = readUInt32LE(tail, eocdIndex + 12);
-	let offset = readUInt32LE(tail, eocdIndex + 16);
-	const needsZip64 = entries === ZIP_UINT16_MAX || size === ZIP_UINT32_MAX || offset === ZIP_UINT32_MAX;
-	const zip64Info = readZip64CentralDirectoryInfoSync(bytes, tailStart + eocdIndex);
-	if (zip64Info) {
-		({ entries, size, offset } = zip64Info);
-	} else if (needsZip64) {
-		throw new ToolError("Invalid ZIP archive: missing ZIP64 central directory metadata");
-	}
-
-	if (offset + size > fileSize) {
-		throw new ToolError("Invalid ZIP archive: central directory exceeds file size");
-	}
-
-	return { entries, offset, size };
+	const classic = readEndOfCentralDirectory(tail, eocdIndex);
+	return resolveCentralDirectory(classic, readZip64CentralDirectoryInfoSync(bytes, tailStart + eocdIndex), fileSize);
 }
 
 function extractZipMember(bytes: Uint8Array, storage: ZipStorage, uncompressedSize: number): Uint8Array {

@@ -1,14 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleReachCount } from "@veyyon/utils/module-reach";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 /**
  * Contracts: the two cuts that took the credential store off the streaming engine stay cut.
@@ -51,36 +44,10 @@ const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
 /**
- * The whole workspace resolved to source, derived from every package's `exports` field.
- *
- * `@veyyon/catalog` is reached for real, 120 modules of it through `env-api-key.ts`, so a resolution that
- * skipped it would report that leaf at 84 instead of 204 and every ceiling here would be measuring a graph
- * a third smaller than the one that ships. This gate used to list `@veyyon/utils` and `@veyyon/catalog` by
- * hand for exactly that reason, and listing is the problem: three other gates did the same and each listed
- * a different subset, one of them naming a package that does not exist. Every assertion here is an upper
- * bound or an absence, so a specifier the table does not know lowers the number and passes.
- * `@veyyon/utils/module-reach-workspace` derives the table instead, and
- * `packages/utils/test/module-reach-workspace.test.ts` holds the completeness check.
+ * The walks resolve the whole workspace from every package's `exports` field. `@veyyon/catalog` alone puts
+ * 120 modules behind `env-api-key.ts`, which a hand-listed resolution once left out of every ceiling here.
  */
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-
-/** One memo for the whole gate: every entry below walks the same shared graph. See `ModuleReachCache`. */
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-/** The runtime specifiers one module names, which is what a "does not import X" claim is about. */
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const { resolution: RESOLUTION, reach, reachedNames, runtimeImportsOf } = packageModuleReach(REPO_ROOT, SRC);
 
 /**
  * Measured 2026-07-26 at 212, down from 277. The remaining graph is the credential store's real job:
@@ -401,20 +368,23 @@ describe("the walk really happened", () => {
 	 * to Anthropic. That reasoning was wrong. The usage client calls one OAuth endpoint with plain `fetch`
 	 * and never touches the streaming engine; it reached `stream.ts` only because it imported a version
 	 * string from the Anthropic provider, and when that string moved to a leaf the control went false while
-	 * nothing was broken. A control has to be a module whose edge is INHERENT, so it is now the Anthropic
-	 * provider itself, which cannot stream a completion without the engine.
+	 * nothing was broken. The Anthropic provider that replaced it had the same flaw: it reached the engine
+	 * only through `mapAnthropicToolChoice`, which the engine declared, and went false when that function
+	 * moved to `providers/anthropic-tool-choice.ts`. A control has to be a module whose edge is INHERENT,
+	 * so it is now the auth gateway server, which answers every request it proxies by calling
+	 * `streamSimple` and `completeSimple`.
 	 */
 	it("still finds stream.ts from a module that legitimately uses it", () => {
-		const reached = reachedNames("providers/anthropic.ts");
+		const reached = reachedNames("auth-gateway/server.ts");
 
 		expect(reached.some(file => file.endsWith("packages/ai/src/stream.ts"))).toBe(true);
 		// The size half of this control used to be `> AUTH_STORAGE_CEILING`, a frozen 227
 		// that described a DIFFERENT module's budget. It went false on 2026-07-27 for the
 		// best possible reason: every barrel import in `packages/ai/src` was repointed at
-		// the module that declares the name, and this provider fell from 253 to 191 without
-		// losing a single edge it needs. A control that fails when the tree gets better is
-		// not measuring what it meant to, so it compares against the module it is a control
-		// FOR: the provider streams and the store does not, so the provider reaches strictly
+		// the module that declares the name, and the Anthropic provider, then the control, fell
+		// from 253 to 191 without losing a single edge it needs. A control that fails when the
+		// tree gets better is not measuring what it meant to, so it compares against the module
+		// it is a control FOR: the gateway streams and the store does not, so the gateway reaches strictly
 		// more, and both numbers are read from the same walk rather than from a constant
 		// that has to be renegotiated every time something is cut.
 		//

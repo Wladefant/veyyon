@@ -13,6 +13,7 @@ import {
 	instrumentationRank,
 	type ToolCallMetricsInput,
 } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const textBlock = (text: string): TextContent => ({ type: "text", text });
 const imageBlock = (): ImageContent => ({ type: "image", data: "AAAA", mimeType: "image/png" });
@@ -180,13 +181,13 @@ describe("captureToolCallMetrics gating", () => {
  * mapping and the throughput arithmetic against silent regression.
  */
 const usage = (over: Partial<Usage> = {}): Usage => ({
+	...emptyUsage(),
 	input: 100,
 	output: 300,
 	cacheRead: 20,
 	cacheWrite: 10,
 	totalTokens: 430,
 	reasoningTokens: 40,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	...over,
 });
 

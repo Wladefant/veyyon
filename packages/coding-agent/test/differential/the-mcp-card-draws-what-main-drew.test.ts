@@ -42,29 +42,9 @@ useDifferentialTheme();
 const LABEL = "sentry/search_events";
 const view = createMCPToolView(LABEL);
 
-/**
- * A row without the colour runs that draw nothing.
- *
- * Main drew the whole card as ONE string inside a `WidthAwareText`, so every row after the first
- * opens with the style state the rows above it left behind: a colour immediately followed by its
- * reset, drawing zero columns. A view is a list of rows, and the host draws each one on its own.
- * Dropping the empty pairs compares what a reader sees rather than which component concatenated it.
- */
-function withoutEmptyRuns(row: string): string {
-	let out = row;
-	let previous = "";
-	while (out !== previous) {
-		previous = out;
-		out = out.replace(/\x1b\[[0-9;]*m\x1b\[39m/g, "");
-	}
-	return out;
-}
-
 /** The rows main drew, with the two columns the host now indents a frameless card's body by. */
 function indented(rows: readonly string[]): string[] {
-	return rows.map((row, index) =>
-		index === 0 || row === "" ? withoutEmptyRuns(row) : `  ${withoutEmptyRuns(row)}`.trimEnd(),
-	);
+	return rows.map((row, index) => (index === 0 || row === "" ? row : `  ${row}`.trimEnd()));
 }
 
 /**

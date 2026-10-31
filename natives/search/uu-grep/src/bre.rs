@@ -55,6 +55,10 @@ const BAD_INTERVAL: &str = r"Invalid content of \{\}";
 const UNMATCHED_BRACKET: &str = "Unmatched [, [^, [:, [., or [=";
 /// GNU's message for a `[` with nothing after it at all.
 const INVALID_EXPRESSION: &str = "Invalid regular expression";
+/// GNU's message for a `\(` that never closes.
+const UNMATCHED_OPEN_GROUP: &str = r"Unmatched ( or \(";
+/// GNU's message for a `\)` with no open `\(` before it.
+const UNMATCHED_CLOSE_GROUP: &str = r"Unmatched ) or \)";
 
 /// Translate a POSIX basic regular expression.
 ///
@@ -68,6 +72,10 @@ pub(crate) fn translate(bre: &str) -> Result<Translated, String> {
 	// Where an operator has nothing to repeat: the start of the pattern, and the
 	// start of any group or alternative. A `*` is literal here and a `^` anchors.
 	let mut at_start = true;
+	// Open `\(` groups. Checked here because the engines wrap a pattern in
+	// `(?:…)`, where a `\)` with no group open would close the wrapper instead
+	// of failing: `\)\(` would compile as `(?:)()` and match every line.
+	let mut depth = 0usize;
 	let mut index = 0usize;
 
 	while index < chars.len() {
@@ -81,6 +89,7 @@ pub(crate) fn translate(bre: &str) -> Result<Translated, String> {
 				match next {
 					'(' => {
 						out.push('(');
+						depth += 1;
 						at_start = true;
 					},
 					'|' => {
@@ -88,6 +97,10 @@ pub(crate) fn translate(bre: &str) -> Result<Translated, String> {
 						at_start = true;
 					},
 					')' => {
+						let Some(open) = depth.checked_sub(1) else {
+							return Err(UNMATCHED_CLOSE_GROUP.to_string());
+						};
+						depth = open;
 						out.push(')');
 						at_start = false;
 					},
@@ -168,6 +181,9 @@ pub(crate) fn translate(bre: &str) -> Result<Translated, String> {
 		}
 	}
 
+	if depth > 0 {
+		return Err(UNMATCHED_OPEN_GROUP.to_string());
+	}
 	Ok(Translated { pattern: out, back_reference })
 }
 

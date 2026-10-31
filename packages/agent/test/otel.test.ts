@@ -29,11 +29,11 @@ import {
 	type TelemetryHookContext,
 } from "@veyyon/agent-core/telemetry";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import type { EventStream } from "@veyyon/ai/utils/event-stream";
-import { createUserMessage } from "./helpers";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { createUserMessage, identityConverter } from "./helpers";
 
 const MOCK_IDENT = { id: "mock-model", provider: "mock-provider" } as const;
 
@@ -59,10 +59,6 @@ afterAll(async () => {
 	context.disable();
 	trace.disable();
 });
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 async function runAndDrain(stream: EventStream<AgentEvent, AgentMessage[]>): Promise<AgentEvent[]> {
 	const events: AgentEvent[] = [];
@@ -635,14 +631,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		await recordManualChatTelemetry(telemetry, {
 			model: mock.model,
 			responseModel: "manual-model",
-			usage: {
-				input: 7,
-				output: 3,
-				totalTokens: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 7, output: 3, totalTokens: 10 },
 			stepNumber: 1,
 		});
 		expect(events).toHaveLength(1);
@@ -740,14 +729,7 @@ describe("agent-loop OTEL instrumentation", () => {
 		const mock = createMockModel({ ...MOCK_IDENT });
 		await recordManualChatTelemetry(telemetry, {
 			model: mock.model,
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 2,
-				cacheWrite: 0,
-				totalTokens: 17,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, cacheRead: 2, totalTokens: 17 },
 			finishReason: "stop",
 			responseText: "manual ok",
 			stepNumber: 7,

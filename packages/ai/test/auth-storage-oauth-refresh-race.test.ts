@@ -12,7 +12,7 @@ import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import { removeWithRetries } from "../../utils/src/temp";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 const SUPPRESS_ANTHROPIC_ENV = {
 	ANTHROPIC_API_KEY: undefined,

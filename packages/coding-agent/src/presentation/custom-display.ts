@@ -5,6 +5,7 @@
  */
 
 import type { AgentMessage } from "@veyyon/agent-core";
+import { contentText } from "@veyyon/utils/content-text";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type {
 	AdvisorCustomDisplay,
@@ -27,7 +28,6 @@ import {
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
 	SKILL_PROMPT_MESSAGE_TYPE,
 } from "../session/messages";
-import { contentToText } from "./content-text";
 import { toHandoffSummaryView } from "./summary-builder";
 
 export function readCustomLevel(message: unknown): "info" | "warning" | "error" {
@@ -70,7 +70,7 @@ function projectLateDiagnosticsDisplay(details: unknown): LateDiagnosticsCustomD
 
 function projectCollabPromptDisplay(details: unknown, content: unknown): CollabPromptCustomDisplay {
 	const from = isRecord(details) && typeof details.from === "string" ? details.from.trim() : "guest";
-	return { variant: "collab-prompt", from: from || "guest", text: contentToText(content, "") };
+	return { variant: "collab-prompt", from: from || "guest", text: contentText(content, { separator: "" }) };
 }
 
 function projectSkillPromptDisplay(details: unknown, content: unknown): SkillPromptCustomDisplay {
@@ -82,7 +82,7 @@ function projectSkillPromptDisplay(details: unknown, content: unknown): SkillPro
 		args: typeof d.args === "string" ? d.args : undefined,
 		lineCount: typeof d.lineCount === "number" ? d.lineCount : undefined,
 		promptBytes: typeof d.promptBytes === "number" ? d.promptBytes : undefined,
-		text: contentToText(content, "\n", true),
+		text: contentText(content),
 	};
 }
 

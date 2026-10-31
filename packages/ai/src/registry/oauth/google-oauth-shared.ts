@@ -11,6 +11,7 @@ import * as AIError from "../../error";
 import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../../utils/google-validation";
 import { OAuthCallbackFlow } from "./callback-server";
 import { credentialExpiryFromExpiresIn } from "./expiry";
+import { requireTokenResponseObject } from "./token-response";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 /**
@@ -38,6 +39,61 @@ export interface GoogleOAuthFlowConfig {
 	callbackPort: number;
 	callbackPath: string;
 	discoverProject: (accessToken: string, onProgress?: (message: string) => void) => Promise<string>;
+}
+
+/** What differs between the Google providers' token refreshes. */
+export interface GoogleTokenRefreshConfig {
+	clientId: string;
+	clientSecret: string;
+	tokenUrl: string;
+	/** Provider id recorded on a refresh error and on an invalid expiry. */
+	provider: string;
+	/** The provider as a refresh failure message names it, as in `Antigravity token refresh failed`. */
+	label: string;
+}
+
+/** Exchange `refreshToken` for a new access token. `signal` aborts the token request. */
+export async function refreshGoogleOAuthToken(
+	config: GoogleTokenRefreshConfig,
+	refreshToken: string,
+	projectId: string,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	const response = await fetch(config.tokenUrl, {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			client_id: config.clientId,
+			client_secret: config.clientSecret,
+			refresh_token: refreshToken,
+			grant_type: "refresh_token",
+		}),
+		signal,
+	});
+
+	if (!response.ok) {
+		// A refresh endpoint's error body can echo the credential it refused, so it is read
+		// through the shared bounded reader and its redactor.
+		const error = await AIError.readProviderErrorDetail(response);
+		throw new AIError.OAuthError(`${config.label} token refresh failed: ${response.status} ${error}`, {
+			kind: "token-refresh",
+			provider: config.provider,
+			status: response.status,
+		});
+	}
+
+	const data = requireTokenResponseObject<{
+		access_token: string;
+		expires_in: number;
+		refresh_token?: string;
+	}>(await response.json(), config.provider, "token refresh");
+
+	return {
+		refresh: data.refresh_token || refreshToken,
+		access: data.access_token,
+		expires: credentialExpiryFromExpiresIn(data.expires_in, { provider: config.provider }),
+		projectId,
+	};
 }
 
 /**

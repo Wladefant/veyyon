@@ -26,7 +26,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { readRecordedGoal } from "@veyyon/coding-agent/goals/goal-record";
@@ -35,6 +34,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** What an active goal looks like after the method ran. */
 type Fate =
@@ -69,7 +69,10 @@ const RUNTIME_PATHS: Record<string, Classified> = {
 	onAgentEnd: { fate: "keeps driving", invoke: session => session.goalRuntime.onAgentEnd() },
 	flushUsage: { fate: "keeps driving", invoke: session => session.goalRuntime.flushUsage("suppressed") },
 	buildActivePrompt: { fate: "keeps driving", invoke: session => session.goalRuntime.buildActivePrompt() },
-	buildContinuationPrompt: { fate: "keeps driving", invoke: session => session.goalRuntime.buildContinuationPrompt() },
+	buildContinuationPrompt: {
+		fate: "keeps driving",
+		invoke: session => session.goalRuntime.buildContinuationPrompt(0),
+	},
 	// Reached only through `AgentSession#abort`, which always names a reason; driven here through
 	// that caller so the sweep sees the pause a real interrupt produces.
 	onTaskAborted: { fate: "pauses", persists: "goal_paused", invoke: session => session.abort() },
@@ -121,8 +124,7 @@ describe("no goal runtime path clears a goal in silence", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic test model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		session = new AgentSession({
 			agent: new Agent({
 				getApiKey: () => "anthropic-test-key",

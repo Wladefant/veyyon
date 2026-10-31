@@ -12,7 +12,8 @@
 import { shutdownMnemopiEmbedClient } from "../memory/mnemopi/embed-client";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
-import { type AgentSession, RESCOPE_TERMINATE_REASON } from "./agent-session";
+import type { AgentSession } from "./agent-session";
+import { RESCOPE_TERMINATE_REASON } from "./agent-session-types";
 
 const live = new Set<object>();
 

@@ -8,9 +8,9 @@ import {
 	generateHandoff,
 } from "@veyyon/agent-core/compaction";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { anthropicModel, createAssistantMessage, createUserMessage, requireBundledModel } from "./helpers";
 
 // Pins fix #1 of the compaction effort-override bug. Before this fix,
 // `generateHandoff` (and the three other compaction summarizers) hardcoded
@@ -32,36 +32,8 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // (`resolveCompactionEffort`) is shared across all three call sites in
 // `packages/agent/src/compaction/compaction.ts`.
 
-function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
-
-function getAnthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
-}
-
 function getGrokBuildModel(): Model {
-	const model = getBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
-	if (!model) throw new Error("Expected built-in xai-oauth/grok-4.20-0309-reasoning to exist");
-	return model;
+	return requireBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
 }
 
 const messages: AgentMessage[] = [
@@ -78,7 +50,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			// thinkingLevel omitted — must default to high
@@ -92,7 +64,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Off,
@@ -107,7 +79,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Low,
@@ -139,7 +111,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getAnthropicModel(), "test-key", {
+		await generateHandoff(messages, anthropicModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			thinkingLevel: ThinkingLevel.Inherit,
@@ -167,19 +139,15 @@ describe("compaction thinking-level resolution (regression)", () => {
 // SAME resolved effort as a single handoff call would.
 // ============================================================================
 
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
-
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
 		messagesToSummarize: [
-			makeUserMessage("history msg"),
+			createUserMessage("history msg"),
 			createAssistantMessage([{ type: "text", text: "history reply" }]),
 		],
-		turnPrefixMessages: [makeUserMessage("turn prefix msg")],
-		recentMessages: [makeUserMessage("recent msg")],
+		turnPrefixMessages: [createUserMessage("turn prefix msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: true,
 		tokensBefore: 12_345,
 		fileOps: createFileOps(),
@@ -195,7 +163,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined, {
 			thinkingLevel: ThinkingLevel.Off,
 		});
 
@@ -212,7 +180,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined, {
 			thinkingLevel: ThinkingLevel.Low,
 		});
 
@@ -228,7 +196,7 @@ describe("compact() propagates thinkingLevel to every durable summarizer", () =>
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
 
-		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined);
+		await compact(makePreparation(), anthropicModel(), "test-key", undefined, undefined);
 
 		expect(spy).toHaveBeenCalledTimes(2);
 		for (const [, , opts] of spy.mock.calls) {

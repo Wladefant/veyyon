@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { handleGitLab } from "../../src/scrapers/gitlab";
 import * as scraperTypes from "../../src/scrapers/types";
+import { requireRender } from "../helpers/scrapers";
 
 /**
  * WHY: a gitlab.com URL renders through the reader its classified type selects, each addressing the
@@ -36,13 +37,6 @@ function servePages(pages: Record<string, unknown>): string[] {
 		return { content, contentType: "text/plain", finalUrl: url, ok: true, status: 200 };
 	});
 	return requested;
-}
-
-function render(result: scraperTypes.RenderResult | scraperTypes.ScraperDegrade | null): scraperTypes.RenderResult {
-	if (result === null || scraperTypes.isScraperDegrade(result)) {
-		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
-	}
-	return result;
 }
 
 const WORK_ITEM = {
@@ -109,7 +103,7 @@ describe("a GitLab file and tree URL render the file and the listing", () => {
 			[`${API}/g%2Fp/repository/files/empty.ts/raw?ref=main`]: "",
 		});
 
-		const result = render(await handleGitLab("https://gitlab.com/g/p/-/blob/main/a.ts", 10));
+		const result = requireRender(await handleGitLab("https://gitlab.com/g/p/-/blob/main/a.ts", 10));
 
 		expect(result).toMatchObject({
 			method: "gitlab-raw",
@@ -117,7 +111,7 @@ describe("a GitLab file and tree URL render the file and the listing", () => {
 			notes: ["Fetched raw file via GitLab API"],
 			content: "export const a = 1;",
 		});
-		expect(render(await handleGitLab("https://gitlab.com/g/p/-/blob/main/empty.ts", 10))).toMatchObject({
+		expect(requireRender(await handleGitLab("https://gitlab.com/g/p/-/blob/main/empty.ts", 10))).toMatchObject({
 			method: "gitlab-raw",
 			content: "",
 		});
@@ -138,9 +132,9 @@ describe("a GitLab file and tree URL render the file and the listing", () => {
 			],
 		});
 
-		const nested = render(await handleGitLab("https://gitlab.com/g/p/-/tree/main/src", 10));
-		const root = render(await handleGitLab("https://gitlab.com/g/p/-/tree/main", 10));
-		const dirsOnly = render(await handleGitLab("https://gitlab.com/g/p/-/tree/main/src/lib", 10));
+		const nested = requireRender(await handleGitLab("https://gitlab.com/g/p/-/tree/main/src", 10));
+		const root = requireRender(await handleGitLab("https://gitlab.com/g/p/-/tree/main", 10));
+		const dirsOnly = requireRender(await handleGitLab("https://gitlab.com/g/p/-/tree/main/src/lib", 10));
 
 		expect({ method: nested.method, notes: nested.notes }).toEqual({
 			method: "gitlab-tree",
@@ -184,7 +178,7 @@ describe("a GitLab repository URL renders its summary and README", () => {
 			"https://gitlab.com/g/p/-/raw/main/README.md": "Read me.",
 		});
 
-		const result = render(await handleGitLab("https://gitlab.com/g/p", 10));
+		const result = requireRender(await handleGitLab("https://gitlab.com/g/p", 10));
 
 		expect(requested).toEqual([`${API}/g%2Fp`, "https://gitlab.com/g/p/-/raw/main/README.md"]);
 		expect({ method: result.method, notes: result.notes }).toEqual({
@@ -203,7 +197,7 @@ describe("a GitLab repository URL renders its summary and README", () => {
 		});
 
 		for (const url of ["https://gitlab.com/g/blank", "https://gitlab.com/g/none", "https://gitlab.com/g/page"]) {
-			expect(render(await handleGitLab(url, 10)).content).toBe(summary);
+			expect(requireRender(await handleGitLab(url, 10)).content).toBe(summary);
 		}
 		expect(requested).toEqual([
 			`${API}/g%2Fblank`,
@@ -228,7 +222,7 @@ describe("a GitLab issue and merge request render their markdown description ver
 			},
 		});
 
-		const result = render(await handleGitLab("https://gitlab.com/g/p/-/issues/5", 10));
+		const result = requireRender(await handleGitLab("https://gitlab.com/g/p/-/issues/5", 10));
 
 		expect({ method: result.method, notes: result.notes }).toEqual({
 			method: "gitlab-issue",
@@ -268,7 +262,7 @@ describe("a GitLab issue and merge request render their markdown description ver
 			},
 		});
 
-		const result = render(await handleGitLab("https://gitlab.com/g/p/-/merge_requests/8", 10));
+		const result = requireRender(await handleGitLab("https://gitlab.com/g/p/-/merge_requests/8", 10));
 
 		expect({ method: result.method, notes: result.notes }).toEqual({
 			method: "gitlab-mr",
@@ -307,8 +301,8 @@ describe("a GitLab issue and merge request render their markdown description ver
 			},
 		});
 
-		const issue = render(await handleGitLab("https://gitlab.com/g/p/-/issues/1", 10));
-		const mr = render(await handleGitLab("https://gitlab.com/g/p/-/merge_requests/2", 10));
+		const issue = requireRender(await handleGitLab("https://gitlab.com/g/p/-/issues/1", 10));
+		const mr = requireRender(await handleGitLab("https://gitlab.com/g/p/-/merge_requests/2", 10));
 
 		expect(issue.content.endsWith("## Description\n\n*No description*")).toBe(true);
 		expect(mr.content.startsWith("# MR !2: Blank\n\n**State:**")).toBe(true);

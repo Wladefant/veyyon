@@ -5,14 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 /**
  * Bodies of the match rows only. A search result also carries context rows,
@@ -52,13 +46,17 @@ describe("SearchTool (text) word-boundary style adversarial", () => {
 
 	it("pattern foo matches every line that contains it as a substring", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g1", { type: "text", input: "foo", path: path.join(tmpDir, "w.ts") }));
+		const text = toolResultText(
+			await tool.execute("g1", { type: "text", input: "foo", path: path.join(tmpDir, "w.ts") }),
+		);
 		expect(matchRows(text)).toEqual(["foo", "foobar", "barfoo", "food"]);
 	});
 
 	it("anchored ^foo$ matches the exact line and nothing else", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g2", { type: "text", input: "^foo$", path: path.join(tmpDir, "w.ts") }));
+		const text = toolResultText(
+			await tool.execute("g2", { type: "text", input: "^foo$", path: path.join(tmpDir, "w.ts") }),
+		);
 		expect(matchRows(text)).toEqual(["foo"]);
 	});
 });

@@ -1,18 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { applyEdits, parsePatch } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Many disjoint single-line SWAPs in one patch.
  */
 
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
-
 describe("many disjoint SWAPs", () => {
 	it("swaps every other line in a 20-line file", () => {
 		const lines = Array.from({ length: 20 }, (_, i) => `L${i + 1}`);
-		const src = text(lines);
+		const src = linesText(lines);
 		const hunks = Array.from({ length: 10 }, (_, i) => {
 			const n = i * 2 + 1;
 			return `SWAP ${n}.=${n}:\n+X${n}`;

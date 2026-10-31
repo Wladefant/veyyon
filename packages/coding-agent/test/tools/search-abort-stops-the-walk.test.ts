@@ -87,13 +87,6 @@ function session() {
 	});
 }
 
-/** An already-spent signal: the exact input that used to be ignored. */
-function spentSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function textOf(result: { content?: { type: string; text?: string }[] }): string {
 	return result.content?.find(c => c.type === "text")?.text ?? "";
 }
@@ -120,7 +113,7 @@ describe("the natives refuse work under a signal that has already fired", () => 
 				contextAfter: 0,
 				maxColumns: 200,
 				mode: GrepOutputMode.Content,
-				signal: spentSignal(),
+				signal: AbortSignal.abort(),
 			},
 			undefined,
 		);
@@ -136,7 +129,7 @@ describe("the natives refuse work under a signal that has already fired", () => 
 	 * second cancellation path rather than a second bug.
 	 */
 	it("glob rejects instead of walking the whole tree", async () => {
-		const signal = spentSignal();
+		const signal = AbortSignal.abort();
 
 		// `glob` reports the abort by REJECTING the promise it returns, so that
 		// promise has to be awaited. Watching only the `onMatch` callback left the
@@ -168,7 +161,7 @@ describe("the natives refuse work under a signal that has already fired", () => 
 			patterns: ["export const id = $A"],
 			path: tmpDir,
 			includeMeta: true,
-			signal: spentSignal(),
+			signal: AbortSignal.abort(),
 		});
 
 		await expect(call).rejects.toThrow();
@@ -230,7 +223,7 @@ describe("search (files)", () => {
 		// absence claim from a cancelled search is a lie.
 		let error: Error | undefined;
 		try {
-			await new SearchTool(session()).execute("g-pre", globArgs, spentSignal());
+			await new SearchTool(session()).execute("g-pre", globArgs, AbortSignal.abort());
 		} catch (err) {
 			error = err as Error;
 		}
@@ -256,7 +249,7 @@ describe("search (text)", () => {
 		// agent uses to decide a symbol is unused.
 		let error: Error | undefined;
 		try {
-			await new SearchTool(session()).execute("s-pre", grepArgs, spentSignal());
+			await new SearchTool(session()).execute("s-pre", grepArgs, AbortSignal.abort());
 		} catch (err) {
 			error = err as Error;
 		}

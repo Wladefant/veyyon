@@ -31,6 +31,7 @@ import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
 import type { DaemonSpec } from "../../src/launch/protocol";
+import { waitUntil } from "../helpers/daemon-broker";
 
 const GRACE_MS = 300;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-broker-retirement");
@@ -57,17 +58,6 @@ afterEach(() => {
 afterAll(async () => {
 	await fs.rm(testRoot, { recursive: true, force: true });
 });
-
-// Cross-process integration: the broker and its processes run outside this process, so fake timers
-// cannot advance them and progress is observed by polling.
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await delay(25);
-	}
-	return condition();
-}
 
 interface Broker {
 	projectDir: string;
@@ -114,7 +104,7 @@ describe("a broker with nothing to supervise retires while clients stay connecte
 		const { runtimeDir, client } = await connect();
 		const first = await brokerPid(runtimeDir);
 
-		expect(await waitUntil(() => !isProcessAlive(first), 5_000)).toBeTrue();
+		expect(await waitUntil(() => !isProcessAlive(first), 5_000, 25)).toBeTrue();
 
 		const pinged = await client.request({ op: "ping" });
 		expect(pinged.op).toBe("ping");
@@ -135,7 +125,7 @@ describe("a broker with nothing to supervise retires while clients stay connecte
 		expect(await brokerPid(runtimeDir)).toBe(pid);
 
 		await client.request({ op: "stop", name: "held", timeoutMs: 5_000 });
-		expect(await waitUntil(() => !isProcessAlive(pid), 5_000)).toBeTrue();
+		expect(await waitUntil(() => !isProcessAlive(pid), 5_000, 25)).toBeTrue();
 	}, 20_000);
 
 	it("retires once the last process it supervised ends on its own while the client is idle", async () => {
@@ -146,7 +136,7 @@ describe("a broker with nothing to supervise retires while clients stay connecte
 			spec: spec(projectDir, "brief", "setTimeout(() => process.exit(0), 600)"),
 		});
 
-		expect(await waitUntil(() => !isProcessAlive(pid), 6_000)).toBeTrue();
+		expect(await waitUntil(() => !isProcessAlive(pid), 6_000, 25)).toBeTrue();
 	}, 20_000);
 
 	it("does not retire while it is answering a request, whatever it supervises", async () => {

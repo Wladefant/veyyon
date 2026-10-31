@@ -120,7 +120,7 @@ describe("a turn that ends short never paints a blank band over the conversation
 	);
 
 	for (const shape of arms) {
-		test(
+		test.concurrent(
 			label(shape),
 			async () => {
 				const report = await paintSim(shape);
@@ -184,7 +184,7 @@ describe("a turn that ends short never paints a blank band over the conversation
 	const young: PaintShape = { ...SCROLLED, turns: 1, streamFrames: 0, hudRows: 0, headerRows: 0 };
 
 	for (const shrink of SHRINKS) {
-		test(
+		test.concurrent(
 			`a young conversation still hugs the composer to the bottom (shrink=${shrink})`,
 			async () => {
 				const report = await paintSim({ ...young, shrink });

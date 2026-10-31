@@ -1,13 +1,14 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, logger, untilAborted } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { logger, toError, untilAborted } from "@veyyon/utils";
 import { ensureBankExists } from "../../memory/hindsight/bank";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState, servesMemoryTools } from "./memory-session";
 import { reflectToolView } from "./memory-view";
 
-const memoryReflectSchema = lazy(() =>
+const memoryReflectSchema = toolSchema("memory_reflect", () =>
 	type({
 		query: type("string").describe("question to answer"),
 		"context?": type("string").describe("optional context"),
@@ -24,6 +25,9 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 	get parameters(): typeof memoryReflectSchema.value {
 		return memoryReflectSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryReflectSchema.wire;
+	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Synthesize an answer from long-term memory";
@@ -32,9 +36,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryReflectTool | null {
-		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
-		return new MemoryReflectTool(session);
+		return servesMemoryTools(session) ? new MemoryReflectTool(session) : null;
 	}
 
 	async execute(_id: string, params: MemoryReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
@@ -61,14 +63,11 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 					};
 				} catch (err) {
 					logger.warn("reflect failed", { backend: "mnemopi", bank: state.config.bank, error: String(err) });
-					throw err instanceof Error ? err : new Error(String(err));
+					throw toError(err);
 				}
 			}
 
-			const state = this.session.getHindsightSessionState?.();
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+			const state = requireHindsightSessionState(this.session);
 
 			try {
 				await ensureBankExists(state.client, state.bankId, state.config, state.banksSet);
@@ -85,7 +84,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 				};
 			} catch (err) {
 				logger.warn("reflect failed", { bankId: state.bankId, error: String(err) });
-				throw err instanceof Error ? err : new Error(String(err));
+				throw toError(err);
 			}
 		});
 	}

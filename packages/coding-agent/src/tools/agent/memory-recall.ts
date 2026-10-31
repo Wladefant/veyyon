@@ -1,13 +1,14 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, logger, pluralize, untilAborted } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { logger, pluralize, toError, untilAborted } from "@veyyon/utils";
 import { formatCurrentTime, formatMemories } from "../../memory/hindsight/content";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState, servesMemoryTools } from "./memory-session";
 import { recallToolView } from "./memory-view";
 
-const memoryRecallSchema = lazy(() =>
+const memoryRecallSchema = toolSchema("memory_recall", () =>
 	type({
 		query: type("string").describe("natural language search query"),
 	}),
@@ -23,6 +24,9 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 	get parameters(): typeof memoryRecallSchema.value {
 		return memoryRecallSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryRecallSchema.wire;
+	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Search memory for relevant prior context";
@@ -31,9 +35,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryRecallTool | null {
-		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
-		return new MemoryRecallTool(session);
+		return servesMemoryTools(session) ? new MemoryRecallTool(session) : null;
 	}
 
 	async execute(_id: string, params: MemoryRecallParams, signal?: AbortSignal): Promise<AgentToolResult> {
@@ -62,14 +64,11 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 					};
 				} catch (err) {
 					logger.warn("recall failed", { backend: "mnemopi", bank: state.config.bank, error: String(err) });
-					throw err instanceof Error ? err : new Error(String(err));
+					throw toError(err);
 				}
 			}
 
-			const state = this.session.getHindsightSessionState?.();
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+			const state = requireHindsightSessionState(this.session);
 
 			try {
 				const response = await state.client.recall(state.bankId, params.query, {
@@ -99,7 +98,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 				};
 			} catch (err) {
 				logger.warn("recall failed", { bankId: state.bankId, error: String(err) });
-				throw err instanceof Error ? err : new Error(String(err));
+				throw toError(err);
 			}
 		});
 	}

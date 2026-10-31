@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { runCommitAgentSession } from "@veyyon/coding-agent/commit/agentic/agent";
 import * as toolsModule from "@veyyon/coding-agent/commit/agentic/tools";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { PromptOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import type { CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("commit agent prompt attribution", () => {
 	afterEach(() => {
@@ -25,10 +25,7 @@ describe("commit agent prompt attribution", () => {
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({ session } as unknown as CreateAgentSessionResult);
 		vi.spyOn(toolsModule, "createCommitTools").mockReturnValue([]);
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected claude-sonnet-4-5 model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		await runCommitAgentSession({
 			cwd: "/tmp",
@@ -72,10 +69,7 @@ describe("commit agent prompt attribution", () => {
 			return [];
 		});
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected claude-sonnet-4-5 model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		await runCommitAgentSession({
 			cwd: "/tmp",

@@ -2,7 +2,7 @@
  * Component for displaying bash command execution with streaming output.
  */
 
-import { Container, ImageProtocol, type Loader, TERMINAL, Text, type TUI } from "@veyyon/tui";
+import { Container, ImageProtocol, Loader, TERMINAL, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { theme } from "../../../../theme/theme-binding";
 import type { OutputMeta } from "../../../../tools/core/output-meta";
@@ -39,9 +39,7 @@ export class BashExecutionComponent extends Container {
 		ui: TUI,
 		excludeFromContext = false,
 	) {
-		super();
-
-		// Use dim border for excluded-from-context commands (!! prefix)
+		// Dim header for excluded-from-context commands (`!!` prefix).
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
 		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
 		this.#contentContainer = contentContainer;
@@ -77,7 +75,6 @@ export class BashExecutionComponent extends Container {
 	}
 
 	appendOutput(chunk: string): void {
-		// Held until the next draw, so a burst of chunks costs one fold.
 		this.#output.push(chunk);
 		this.#displayDirty = true;
 	}
@@ -94,10 +91,7 @@ export class BashExecutionComponent extends Container {
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
 		}
-
-		// Stop loader
 		this.#loader.stop();
-
 		this.#updateDisplay();
 	}
 
@@ -116,8 +110,6 @@ export class BashExecutionComponent extends Container {
 
 	#updateDisplay(): void {
 		const availableLines = this.#output.lines();
-
-		// Apply preview truncation based on expanded state
 		const previewLogicalLines = availableLines.slice(-EXECUTION_PREVIEW_LINES);
 		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
 		const sixelLineMask =
@@ -125,14 +117,8 @@ export class BashExecutionComponent extends Container {
 				? getSixelLineMask(availableLines)
 				: undefined;
 		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
-
-		// Rebuild content container
 		this.#contentContainer.clear();
-
-		// Command header
 		this.#contentContainer.addChild(this.#headerText);
-
-		// Output
 		if (availableLines.length > 0) {
 			if (this.#expanded || hasSixelOutput) {
 				const displayText = availableLines
@@ -140,13 +126,10 @@ export class BashExecutionComponent extends Container {
 					.join("\n");
 				this.#contentContainer.addChild(new Text(`\n${displayText}`, 2, 0));
 			} else {
-				// Use shared visual truncation utility, recomputed per render width
 				const styledOutput = previewLogicalLines.map(line => theme.fg("muted", line)).join("\n");
 				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, EXECUTION_PREVIEW_LINES));
 			}
 		}
-
-		// Loader or status
 		if (this.#status === "running") {
 			this.#contentContainer.addChild(this.#loader);
 		} else {
@@ -165,11 +148,9 @@ export class BashExecutionComponent extends Container {
 
 	#setOutput(output: string): void {
 		const clean = sanitizeWithOptionalSixelPassthrough(output, sanitizeText);
-		// The authoritative output replaces whatever streaming kept, so nothing is missing any more.
 		this.#output.replace(clean ? clampLinesPreservingSixel(clean.split("\n")) : []);
 	}
 
-	/** The output kept for display: the streamed tail while running, all of it once the final output arrives. */
 	getOutput(): string {
 		return this.#output.lines().join("\n");
 	}

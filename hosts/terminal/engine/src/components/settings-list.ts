@@ -1,7 +1,7 @@
 import { Ellipsis } from "@veyyon/natives";
 import { getKeybindings } from "@veyyon/utils/keybindings";
 import { isLoneLineFeed } from "@veyyon/utils/keys";
-import { clamp, clampLow } from "@veyyon/utils/math";
+import { clamp, clampLow, wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -424,7 +424,7 @@ export class SettingsList implements Component {
 			const next = index + delta;
 			if (next < 0 || next >= len) {
 				if (wrap) {
-					index = (next + len) % len;
+					index = wrapIndex(next, len);
 				} else {
 					return;
 				}
@@ -484,7 +484,7 @@ export class SettingsList implements Component {
 			this.#selectedIndex = clamp(this.#selectedIndex + delta * this.#maxVisible, 0, len - 1);
 			this.#clampSelectedIndex();
 		} else {
-			const next = (this.#activeSectionIndex(sections) + delta + sections.length) % sections.length;
+			const next = wrapIndex(this.#activeSectionIndex(sections) + delta, sections.length);
 			this.#selectedIndex = sections[next].firstItemIndex;
 		}
 		this.#notifySelection();

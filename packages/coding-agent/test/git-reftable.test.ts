@@ -220,4 +220,19 @@ describe.skipIf(!supportsReftable)("git reftable support", () => {
 		if (headState?.kind !== "ref") throw new Error("expected ref head in worktree");
 		expect(headState.branchName).toBe("wt-branch");
 	});
+
+	test("resolves a detached reftable HEAD to its commit, async and sync alike", async () => {
+		const detachedDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-reftable-detached-"));
+		try {
+			await $`git worktree add --detach ${detachedDir} main`.cwd(sharedRepoDir).quiet();
+			const mainSha = (await $`git rev-parse main`.cwd(sharedRepoDir).quiet().text()).trim();
+
+			const detached = { kind: "detached", commit: mainSha, headContent: mainSha };
+			expect(await git.head.resolve(detachedDir)).toMatchObject(detached);
+			expect(git.head.resolveSync(detachedDir)).toMatchObject(detached);
+		} finally {
+			await $`git worktree remove ${detachedDir} -f`.cwd(sharedRepoDir).quiet().nothrow();
+			await removeWithRetries(detachedDir).catch(() => {});
+		}
+	});
 });

@@ -20,10 +20,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { escapeRegExp, removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 const TS_FIXTURE = `${[
@@ -85,8 +86,7 @@ describe("a summarized read numbers each row with the line the model saw", () =>
 		await initTheme();
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("dark theme missing");
+		const dark = await requireTheme("dark");
 		theme = dark;
 	});
 

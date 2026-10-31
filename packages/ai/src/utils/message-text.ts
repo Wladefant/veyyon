@@ -1,4 +1,4 @@
-import type { AssistantMessage, TextContent } from "../types";
+import type { AssistantMessage, ImageContent, TextContent } from "../types";
 
 /** The text blocks of an assistant message, in order (thinking/tool blocks excluded). */
 export function assistantTextBlocks(message: Pick<AssistantMessage, "content">): string[] {
@@ -12,6 +12,15 @@ export function assistantTextBlocks(message: Pick<AssistantMessage, "content">):
  */
 export function assistantText(message: Pick<AssistantMessage, "content">, separator = "\n"): string {
 	return assistantTextBlocks(message).join(separator);
+}
+
+/**
+ * The text of user or tool-result content: a plain string as it is, and blocks joined by `"\n"`
+ * with each image rendered as an `[<mimeType> image]` placeholder.
+ */
+export function messageContentText(content: string | readonly (TextContent | ImageContent)[]): string {
+	if (typeof content === "string") return content;
+	return content.map(block => (block.type === "text" ? block.text : `[${block.mimeType} image]`)).join("\n");
 }
 
 /**

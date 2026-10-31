@@ -3,13 +3,14 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/custom-tools/types";
-import { getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { SearchToolDetails, SearchToolInput } from "@veyyon/coding-agent/tools/search/search";
 import type { TextSearchDetails, TextSearchRenderArgs } from "@veyyon/coding-agent/tools/search/text-search";
 import type { Component } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../helpers/require-theme";
 import { expectNotAccented, useFullColor } from "../helpers/theme-assertions";
 
 /**
@@ -64,9 +65,7 @@ afterAll(() => {
 describe("textSearchRenderer and searchToolRenderer (text)", () => {
 	useFullColor();
 	it("indents inline grep output and avoids accent-colored success headers", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
@@ -99,9 +98,7 @@ describe("textSearchRenderer and searchToolRenderer (text)", () => {
 	});
 
 	it("keeps truncation status in the header without a bottom notice", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const result = {
 			content: [
@@ -139,9 +136,7 @@ describe("textSearchRenderer and searchToolRenderer (text)", () => {
 	});
 
 	it("shows actual matches when one grouped search section is larger than the collapsed budget", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const result = {
 			content: [{ type: "text", text: "" }],
@@ -198,9 +193,7 @@ describe("textSearchRenderer and searchToolRenderer (text)", () => {
 
 	it("links grouped file headers and code-frame lines to filesystem targets", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const projectRoot = path.resolve("/tmp/veyyon-project");
 		const filePath = path.join(projectRoot, "src", "file.ts");
@@ -230,9 +223,7 @@ describe("textSearchRenderer and searchToolRenderer (text)", () => {
 
 	it("links single-file code-frame lines to the searched file", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const filePath = path.resolve("/tmp/veyyon-project/file.ts");
 		const result = {
@@ -257,9 +248,7 @@ describe("textSearchRenderer and searchToolRenderer (text)", () => {
 	});
 
 	it("bounds the expanded single-file view instead of dumping every match", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		// One file's matches collapse into a single blank-line group (no `#`/`##`
 		// headers, `│...` gap separators). Before the fix the expanded renderer
@@ -317,7 +306,7 @@ describe("textSearchRenderer row width", () => {
 	useFullColor();
 
 	it("budgets body width against the block content width so lines do not overflow", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {

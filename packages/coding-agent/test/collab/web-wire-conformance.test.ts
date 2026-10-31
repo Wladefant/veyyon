@@ -29,6 +29,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, DeveloperMessage, ToolResultMessage, UserMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { COLLAB_PROMPT_MESSAGE_TYPE, COLLAB_PROTO } from "@veyyon/coding-agent/collab/protocol";
 import type {
 	BranchSummaryEntry,
@@ -122,14 +123,7 @@ const conformingAssistantMessage: AssistantMessageConforms = {
 	model: "claude-fable-5",
 	stopReason: "stop",
 	timestamp: 0,
-	usage: {
-		input: 10,
-		output: 20,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 30,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	},
+	usage: { ...emptyUsage(), input: 10, output: 20, totalTokens: 30 },
 };
 
 const conformingToolResultMessage: ToolResultMessageConforms = {

@@ -1,22 +1,7 @@
 import type { Usage } from "@veyyon/ai";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { walkBranchPath } from "./session-context";
-import type { SessionEntry, SessionTreeNode, UsageStatistics } from "./session-entries";
-
-export function emptyUsageStatistics(): UsageStatistics {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		orchestrationInput: 0,
-		orchestrationOutput: 0,
-		orchestrationCacheRead: 0,
-		premiumRequests: 0,
-		cost: 0,
-	};
-}
+import { emptyUsageStatistics, type SessionEntry, type SessionTreeNode, type UsageStatistics } from "./session-entries";
 
 /** A task result's `details.usage`, written by the task tool as the child's `Usage`. */
 function taskUsageFrom(maybeUsage: unknown): Usage | undefined {

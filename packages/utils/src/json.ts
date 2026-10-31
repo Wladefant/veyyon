@@ -54,6 +54,9 @@ export function stringifyJson(value: unknown, space?: string | number): string |
 	return JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? item.toString() : item), space);
 }
 
+/** What a rendered or persisted value holds where it loops back to one of its own ancestors. */
+export const CIRCULAR_MARKER = "[Circular]";
+
 /**
  * A replacer that renders in place the values `JSON.stringify` refuses.
  *
@@ -87,7 +90,7 @@ function displayReplacer(): (this: unknown, key: string, value: unknown) => unkn
  */
 function visitObject(ancestors: object[], holder: unknown, value: object): unknown {
 	while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== holder) ancestors.pop();
-	if (ancestors.includes(value)) return "[Circular]";
+	if (ancestors.includes(value)) return CIRCULAR_MARKER;
 	ancestors.push(value);
 	return value;
 }

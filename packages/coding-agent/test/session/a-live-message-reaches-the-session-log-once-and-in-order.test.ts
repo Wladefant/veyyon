@@ -32,6 +32,7 @@ import { promisify } from "node:util";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { PendingContextSnapshot } from "@veyyon/coding-agent/session/agent-session-types";
 import { MessagePersistence } from "@veyyon/coding-agent/session/runtime/message-persistence";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -109,14 +110,7 @@ function assistant(text: string, timestamp: number, overrides: Partial<Assistant
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: 400,
-			output: 20,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 420,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 400, output: 20, totalTokens: 420 },
 		stopReason: "stop",
 		timestamp,
 		...overrides,
@@ -277,6 +271,30 @@ describe("a message offered for the log", () => {
 		persistence.persistIfMissing(assistant("", 3, { stopReason: "error" }));
 		persistence.persistIfMissing(assistant("partial answer", 4, { stopReason: "error" }));
 		expect(labels(store)).toEqual(["assistant:partial answer"]);
+	});
+
+	it("drops a never-ran placeholder for a call of a refusal it dropped, and no other result", () => {
+		const { store, persistence } = harness();
+		const neverRan = { __synthetic: true, source: "assistant_stop_error", executed: false };
+		const calls = (...ids: string[]) =>
+			ids.map(id => ({ type: "toolCall" as const, id, name: "read", arguments: { path: id } }));
+		persistence.persistIfMissing(
+			assistant("", 1, {
+				content: calls("refused-1", "refused-2", "refused-3"),
+				stopReason: "error",
+				stopDetails: { type: "refusal" },
+			}),
+		);
+		persistence.persistIfMissing({ ...toolResult("refused-1", 2), details: neverRan });
+		persistence.persistIfMissing({ ...toolResult("refused-2", 3), details: { __skipped: true, entered: false } });
+		// The tool was entered before the turn ended, so its side effects are real.
+		persistence.persistIfMissing({ ...toolResult("refused-3", 4), details: { __skipped: true, entered: true } });
+		// A placeholder of an error turn the log holds keeps that turn's pairing.
+		persistence.persistIfMissing(
+			assistant("", 5, { content: calls("errored-1"), stopReason: "error", errorMessage: "stream reset" }),
+		);
+		persistence.persistIfMissing({ ...toolResult("errored-1", 6), details: neverRan });
+		expect(labels(store)).toEqual(["tool:refused-3", "assistant:", "tool:errored-1"]);
 	});
 
 	it("skips a rewind result whose rewind already rewrote the branch, and only that one", () => {

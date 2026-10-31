@@ -20,7 +20,7 @@
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input, Markdown, type MarkdownTheme, ScrollView } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
@@ -31,13 +31,8 @@ import {
 	matchesSelectDown,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
-import {
-	type ModalShellGeometry,
-	type ModalShortcut,
-	minModalChromeRows,
-	renderModalShell,
-} from "../chrome/modal-shell";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
+import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
 import { renderSliderLines } from "../chrome/segment-track";
 import type { HookSelectorSlider } from "../selectors/hook-selector";
@@ -47,7 +42,7 @@ import { joinPlanSections, parsePlanSections, sectionDeletionSpan } from "./plan
 
 /** Title shown in the ModalShell chrome. */
 const OVERLAY_TITLE = "Plan Review";
-/** Minimum plan-body rows kept visible even on short terminals. */
+/** Plan-body rows the card asks for on a short terminal; it sheds its padding before it shows fewer. */
 const MIN_BODY_ROWS = 3;
 /** Sidebar gates: enough headings, a wide content column, and a usable body column. */
 const SIDEBAR_MIN_HEADINGS = 2;
@@ -55,12 +50,6 @@ const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
 /** Columns spent on the sidebar/body divider: one space, the glyph, one space. */
 const SIDEBAR_DIVIDER_COLS = 3;
-/** Rows ModalShell reserves outside the body budget. Asked of the shell rather
- *  than restated: the hand-rolled `3 + footerLines + vPad` this replaced went
- *  silently wrong the moment the shell started charging `vPad` on BOTH sides of
- *  the body, which it now does — the overlay then sized its body a vPad too tall
- *  and nothing failed, because the copy could not know the shell had changed. */
-const CHROME_ROWS = minModalChromeRows(MODAL_SIZING_LARGE);
 
 type Focus = "toc" | "body" | "actions";
 
@@ -350,21 +339,17 @@ export class PlanReviewOverlay implements Component {
 	}
 
 	/**
-	 * Hit-test an SGR mouse report (`\x1b[<b;x;yM/m`) against the click maps the
-	 * last render recorded. Returns true when consumed. The fullscreen overlay
-	 * paints from screen row 0, so a 1-based mouse row maps directly to the
-	 * rendered-line index. Wheel scrolls the body; pointer motion lights up the
-	 * hovered option row; a left click on an option activates it (select +
-	 * confirm), on a ToC row jumps to that section, and on the body column focuses
-	 * the body.
-	 */
-	/**
 	 * Hit-test an SGR mouse report against ModalShell chrome first (close glyph,
 	 * click-outside, footer chips), then fall back to the click maps the last
 	 * render recorded for the sidebar/body/options region. Those maps are keyed
 	 * by row-within-the-composed-body-content, so incoming screen rows are
 	 * translated via `#bodyRowOffset` (the shell's `bodyRowStart`) before
 	 * consulting them.
+	 *
+	 * Returns true when consumed. Wheel scrolls the body; pointer motion lights up the
+	 * hovered option row; a left click on an option activates it (select +
+	 * confirm), on a ToC row jumps to that section, and on the body column focuses
+	 * the body.
 	 */
 	#handleMouse(data: string): boolean {
 		return routeSgrMouseInput(data, event => {
@@ -436,7 +421,7 @@ export class PlanReviewOverlay implements Component {
 		const regions: Focus[] = this.#sidebarShown ? ["toc", "body", "actions"] : ["body", "actions"];
 		const current = regions.indexOf(this.#focus);
 		const base = current < 0 ? regions.length - 1 : current;
-		this.#setFocus(regions[(base + direction + regions.length) % regions.length]!);
+		this.#setFocus(regions[wrapIndex(base + direction, regions.length)]!);
 	}
 
 	#setFocus(focus: Focus): void {
@@ -832,9 +817,12 @@ export class PlanReviewOverlay implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
-		const sizing = MODAL_SIZING_LARGE;
-		const dims = computeModalDims(width, termHeight, sizing);
-		const contentWidth = dims?.contentWidth ?? Math.max(1, width - 4);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE);
+		if (!dims) {
+			this.#shellGeometry = null;
+			return emptyModalArea(width, termHeight);
+		}
+		const contentWidth = dims.contentWidth;
 
 		const sidebarShown = this.#sidebarVisible(contentWidth);
 		this.#sidebarShown = sidebarShown;
@@ -846,11 +834,19 @@ export class PlanReviewOverlay implements Component {
 		const promptLines = this.#promptTitle ? [theme.bold(theme.fg("accent", this.#promptTitle))] : [];
 		const annotateLines = this.#renderAnnotateLines(contentWidth);
 
-		// Region rows: everything below the sidebar/body block (the region rule,
-		// prompt, slider, options, and the annotate mini-editor) plus ModalShell's
-		// own fixed chrome (see CHROME_ROWS).
+		// Region rows: everything the card shows below its chrome, less the rows
+		// under the sidebar/body block (the region rule, prompt, slider, options,
+		// and the annotate mini-editor). The plan is the one painted below, so a
+		// footer whose chips wrap past `footerLines` shortens the region instead of
+		// pushing the options off the end of the card, and a card too short for
+		// MIN_BODY_ROWS of plan shrinks the region before it loses an option.
 		const belowRegionRows = 1 + promptLines.length + sliderLines.length + optionLines.length + annotateLines.length;
-		const regionRows = Math.max(MIN_BODY_ROWS, (dims?.modalHeight ?? termHeight) - CHROME_ROWS - belowRegionRows);
+		const chrome = planModalChrome(dims, {
+			shortcuts: this.#buildShortcuts(),
+			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: belowRegionRows + MIN_BODY_ROWS,
+		});
+		const regionRows = Math.max(1, chrome.maxBodyRows - belowRegionRows);
 
 		const bodyLines = this.#buildBody(bodyContentWidth);
 		this.#scrollView.setLines(bodyLines);
@@ -890,14 +886,9 @@ export class PlanReviewOverlay implements Component {
 		}
 		for (const line of annotateLines) content.push(line);
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: OVERLAY_TITLE,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body: content,
-			shortcuts: this.#buildShortcuts(),
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

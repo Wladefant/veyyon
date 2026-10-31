@@ -7,11 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
-import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery, Usage } from "@veyyon/ai";
+import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveAssistantErrorPresentation } from "@veyyon/coding-agent/presentation/transcript-builder";
@@ -21,6 +21,7 @@ import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 
@@ -34,23 +35,6 @@ type RecoveryRun = {
 const RATE_LIMIT_ERROR =
 	'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
 const RETRIABLE_SERVER_ERROR = "503 service unavailable: overloaded_error";
-
-function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			total: 0,
-		},
-	};
-}
 
 function assistantMessage(overrides: Partial<AssistantMessage>): AssistantMessage {
 	return {
@@ -152,10 +136,7 @@ describe("AgentSession retry recovery", () => {
 	});
 
 	async function runCredentialRecovery(): Promise<RecoveryRun> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// This run is ABOUT moving between two credentials of one provider, which is
 		// `accounts.loadBalancing`, and that ships OFF: the account selected is the account that
@@ -287,10 +268,7 @@ describe("AgentSession retry recovery", () => {
 	});
 
 	it("leaves exhausted retries as terminal errors without recovery presentation", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 
 		const mock = createMockModel({

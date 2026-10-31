@@ -6,11 +6,11 @@ import {
 	LOAD_OLDER_LABEL,
 	SESSION_BOUNDARY_WARNING,
 } from "@veyyon/coding-agent/debug/log-viewer";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../helpers/require-theme";
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("Expected dark theme");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 

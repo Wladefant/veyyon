@@ -23,18 +23,10 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { moduleReach, moduleReachCount } from "@veyyon/utils/module-reach";
+import { CACHE, RESOLUTION, SRC } from "../../helpers/module-reach-gate";
 
-const SRC = path.join(import.meta.dirname, "..", "..", "..", "src");
 const REPO_ROOT = path.resolve(SRC, "..", "..", "..");
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
 
 /** The CLI entry a launch runs, and the assembler that used to hold the edge. */
 const LAUNCH = path.join(SRC, "main.ts");
@@ -390,7 +382,188 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * the Codex discovery reader and the abort and timeout helpers, are already here. Measured
  * 2026-10-21 at 1496.
  *
-
+ * 1496 to 1498: `ai/src/registry/opencode-go-api-key.ts`, the OpenCode Go API-key login, which
+ * `ai/src/registry/registry.ts`, already here, lists beside the OpenCode Console login, and
+ * `catalog/src/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the envelope a Console login's
+ * key is carried in, which `catalog/src/provider-models/openai-compat.ts` and
+ * `ai/src/registry/oauth/index.ts`, both already here, read. Their runtime imports, the shared API-key
+ * login builder and `@veyyon/utils/url`, are already here. The Console device flow stays behind
+ * the registry's lazy `await import`. Measured 2026-10-24 at 1498.
+ *
+ * 1498 to 1501: `ai/src/prompts/tool-choice/any.md` and `ai/src/prompts/tool-choice/named.md`, the
+ * request text that asks for a tool call a wire cannot force, which `ai/src/prompts/registry.ts`,
+ * already here, registers, and `ai/src/utils/tool-choice.ts`, which `agent/src/agent-loop.ts`,
+ * already here, imports to put that text into an in-band dialect's turn. Its runtime import is the
+ * prompt registry, already here. Measured 2026-10-25 at 1501.
+ *
+ * 1501 to 1502: `coding-agent/src/session/runtime/irc-delivery.ts`, the session collaborator that
+ * routes an arriving IRC message and sends the auto-reply. It left `session/agent-session.ts`,
+ * already here, and its runtime imports (the IRC bus, the agent registry, the IRC inbox and the
+ * side-channel and steering prompt rows) are already here. Measured 2026-10-26 at 1502.
+ *
+ * 1502 to 1504: `coding-agent/src/session/runtime/session-stop-hook.ts`, the session collaborator
+ * that runs the `session_stop` hook pass and queues its continuation, and
+ * `coding-agent/src/session/runtime/next-turn-messages.ts`, the collaborator that holds the hidden
+ * messages queued for the next turn. Both left `session/agent-session.ts`, already here. The first
+ * imports `@veyyon/utils` and `session/nudges.ts`, both already here; the second has only type
+ * imports. Measured 2026-10-26 at 1504.
+ *
+ * 1504 to 1505: `coding-agent/src/session/runtime/model-selection.ts`, the session collaborator
+ * that makes the saved switch, the session-only switch and the Ctrl+P cycle. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (the model equality check, the
+ * agent storage, the session entry roles, the credential message and the model resolver) are
+ * already here. Measured 2026-10-26 at 1505.
+ *
+ * 1505 to 1508: `coding-agent/src/tools/core/repair/tool-repairs.ts`, the tool-specific repairs the
+ * cascade in `tools/core/repair/schema-repair.ts`, already here, runs before validation;
+ * `coding-agent/src/task/repair-args.ts`, the task prose decoder its `task` entry calls, which only
+ * the task tool and its renderer reached before; and `coding-agent/src/tools/core/repair/limits.ts`,
+ * the zero-import leaf holding the size bound all three share. The repairs ran inside the `task` and
+ * `yield` tools before; they run once on the call now, so approval and the tool receive the same
+ * arguments. Their other runtime imports (`@veyyon/utils`, `@veyyon/utils/json-parse` and
+ * `tools/core/builtin-names`) are already here. Measured 2026-10-27 at 1508.
+ *
+ * 1508 to 1509: `coding-agent/src/session/runtime/owned-async-jobs.ts`, the session collaborator
+ * that delivers, lists and cancels the background jobs a session owns and holds the wake they keep
+ * over a settle. It left `session/agent-session.ts`, already here, and its runtime imports (the
+ * agent registry and `session/agent-session-types.ts`) are already here. Measured 2026-10-27 at
+ * 1509.
+ *
+ * 1509 to 1510: `coding-agent/src/session/runtime/conversation-release.ts`, the session
+ * collaborator that releases what a conversation ends with on `/new`, `/resume` and a handoff:
+ * its spawned agents, registry scope, IRC traffic, standing grants and eval kernels. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (the agent lifecycle and
+ * registry, the IRC bus, the owned-resource registry and `session/agent-session-types.ts`) are
+ * already here. Measured 2026-10-27 at 1510.
+ *
+ * 1510 to 1511: `coding-agent/src/session/runtime/stop-settlement.ts`, the session collaborator
+ * that routes a run that ended before extensions see its `agent_end`: the yield short-circuit,
+ * stop recovery, the compaction check, the stop-time continuation passes and the `session_stop`
+ * hooks. It left `session/agent-session.ts`, already here, and its runtime imports (the replay
+ * policy, the error registry, the settle-continuation rules and `@veyyon/utils`) are already here.
+ * Measured 2026-10-27 at 1511.
+ *
+ * 1511 to 1512: `coding-agent/src/session/runtime/queued-messages.ts`, the session collaborator
+ * that queues steers and follow-ups on the agent, drains them into a turn on a resting session,
+ * and counts, lists, clears and pops them. It left `session/agent-session.ts`, already here, and
+ * its one runtime import (`session/agent-session-queue.ts`) is already here. Measured 2026-10-27
+ * at 1512.
+ *
+ * 1512 to 1513: `coding-agent/src/session/runtime/turn-preludes.ts`, the session collaborator that
+ * builds the session-state block and the eager delegate reminders a turn carries ahead of its
+ * message. It left `session/agent-session.ts`, already here, and its runtime imports (the session and
+ * turn-control prompt rows, `task/agent-settings.ts`, `utils/prompt-path.ts` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1513.
+ *
+ * 1513 to 1514: `coding-agent/src/session/runtime/service-tiers.ts`, the session collaborator that
+ * holds the per-family service tiers `/fast` and `tier.*` set and resolves the tier each request
+ * carries. It left `session/agent-session.ts`, already here, and its runtime imports (the catalog's
+ * service-tier and Fireworks model-id modules, the Anthropic session state and `config/service-tier.ts`)
+ * are already here. Measured 2026-10-27 at 1514.
+ *
+ * 1514 to 1515: `coding-agent/src/session/runtime/prompt-commands.ts`, the session collaborator that
+ * holds the command registries and resolves a typed prompt through extension, custom and file-based
+ * commands and the prompt templates. It left `session/agent-session.ts`, already here, and its
+ * runtime imports (`config/prompt-templates.ts`, `extensibility/slash-commands.ts`,
+ * `slash-commands/helpers/parse.ts`, `session/agent-session-commands.ts` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1515.
+ *
+ * 1515 to 1516: `coding-agent/src/session/runtime/display-copy.ts`, the session collaborator that
+ * turns assistant content, tool intents, streamed deltas and rebuilt transcripts into the copy a
+ * person sees, and holds the stream decoder a streamed reply runs through. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (`argot-wire.ts` and
+ * `secrets/obfuscator.ts`) are already here. Measured 2026-10-27 at 1516.
+ *
+ * 1516 to 1517: `coding-agent/src/session/runtime/image-attachments.ts`, the session collaborator
+ * that normalizes a message's images for the active model, has a vision model describe them for a
+ * text-only one, and lists the latest images a tool addresses. It left `session/agent-session.ts`,
+ * already here, and its runtime imports (`utils/image-loading.ts`, `utils/image-vision-fallback.ts`,
+ * `config/model-resolver.ts`, `session/agent-session-queue.ts` and `@veyyon/utils`) are already
+ * here. Measured 2026-10-27 at 1517.
+ *
+ * 1517 to 1518: `coding-agent/src/session/runtime/provider-transport.ts`, the session collaborator
+ * that installs the response and raw SSE interceptors on the agent, holds the raw SSE capture and
+ * the side stream function, and prepares the options of a side request. It left
+ * `session/agent-session.ts`, already here, and its runtime imports (`@veyyon/ai/stream`,
+ * `config/settings.ts` and `debug/raw-sse-buffer.ts`) are already here. Measured 2026-10-27 at 1518.
+ *
+ * 1518 to 1519: `coding-agent/src/session/runtime/exit-record.ts`, the session collaborator that
+ * writes the redacted tool start markers and the one `session_exit` entry, and registers the process
+ * teardown callback that writes it when no dispose runs. It left `session/agent-session.ts`, already
+ * here, and its runtime imports (`@veyyon/kernel/session/exit-diagnostics` and `@veyyon/utils`) are
+ * already here. Measured 2026-10-27 at 1519.
+ *
+ * 1519 to 1520: `coding-agent/src/session/runtime/session-events.ts`, the session collaborator that
+ * holds the subscribers, the extension event forwarder and the wire-level `agent_end` held while a
+ * prompt unwinds. It left `session/agent-session.ts`, already here, and its runtime imports
+ * (`@veyyon/utils` and `runtime/extension-event-forwarder.ts`) are already here. Measured 2026-10-27
+ * at 1520.
+ *
+ * 1520 to 1521: `coding-agent/src/session/runtime/turn-continuations.ts`, the session collaborator
+ * that schedules the continuations a session starts on its own and the recovery wait a prompt runs.
+ * It left `session/agent-session.ts`, already here, and its runtime imports (`@veyyon/utils` and
+ * `prompts/turn-control/rows.ts`) are already here. Measured 2026-10-27 at 1521.
+ *
+ * 1521 to 1522: `coding-agent/src/session/runtime/transcript-exports.ts`, the session collaborator
+ * behind the HTML export, the copy texts and the dumps. It left `session/agent-session.ts`, already
+ * here, and its static imports (`session-dump-format.ts`, `agent-session-message-shapes.ts` and
+ * `@veyyon/ai/utils/schema`) are already here; `export/html` stays behind its lazy import. Measured
+ * 2026-10-27 at 1522.
+ *
+ * 1522 to 1523: `coding-agent/src/session/runtime/turn-input.ts`, the session collaborator that
+ * builds the mode blocks, the `@path` mention reads and the `before_agent_start` input a prompt
+ * carries. It left `session/agent-session.ts`, already here, and its runtime imports
+ * (`edit/file-snapshot-store.ts`, `utils/file-mentions.ts`, `utils/file-display-mode.ts`,
+ * `utils/image-loading.ts` and the goals and session prompt rows) are already here. Measured
+ * 2026-10-27 at 1523.
+ *
+ * 1523 to 1524: `coding-agent/src/session/runtime/session-release.ts`, the session collaborator that
+ * releases at dispose the jobs, owned job manager, eval kernels, session-scoped resources and MCP
+ * hold the session ends with. It left `session/agent-session.ts`, already here, and its runtime
+ * imports (`@veyyon/kernel/session/owned-resources`, `@veyyon/utils` and `async/`) are already here.
+ * Measured 2026-10-27 at 1524.
+ *
+ * 1524 to 1525: `coding-agent/src/session/runtime/custom-messages.ts`, the session collaborator that
+ * routes a custom message by the arrival state into the queues, the next turn, a turn or the
+ * context, and runs one as a prompt. It left `session/agent-session.ts`, already here, and its
+ * runtime imports (`@veyyon/agent-core`, `@veyyon/utils/content-text` and `session/messages.ts`) are
+ * already here. Measured 2026-10-27 at 1525.
+ *
+ * 1525 to 1528: `utils/src/config-root.ts`, `utils/src/global-config.ts` and
+ * `utils/src/global-config-write.ts`, split out of `utils/src/dirs.ts` with no code added: the config
+ * root, the reader of the global `config.yml`, and its writer. The `@veyyon/utils` barrel, already
+ * here, exports all three and `dirs.ts` imports the first two; every module they import is already
+ * here. Measured 2026-10-28 at 1528.
+ *
+ * 1528 to 1529: `coding-agent/src/extensibility/extensions/session-actions.ts`, the extension action
+ * set print, RPC, ACP and a spawned agent build against their session, which `task/executor.ts`,
+ * already here, had assembled inline. Its runtime imports (`@veyyon/kernel/session/detached-abort`,
+ * `session/messages.ts`, `extensions/compact-handler.ts` and `extensions/get-commands-handler.ts`)
+ * are already here. Measured 2026-10-28 at 1529.
+ *
+ * 1529 to 1530: `catalog/src/provider-models/ollama-native.ts`, the one reader of Ollama's `/api/tags`
+ * and `/api/show` that the local and cloud catalog providers and `config/model-discovery.ts`, already
+ * here, each held a copy of. Its runtime imports (`@veyyon/utils/type-guards`, `discovery/failure.ts`,
+ * `model-thinking.ts` and the catalog `utils.ts`) are already here. Measured 2026-10-28 at 1530.
+ *
+ * 1530 to 1531: `ai/src/providers/anthropic-tool-choice.ts`, the Anthropic `tool_choice` mapping that
+ * `ai/src/stream.ts`, `providers/gitlab-duo.ts` and `providers/openai-anthropic-shim.ts`, already
+ * here, read; it was in `stream.ts`, so the two providers and the lazy Anthropic stream each closed an
+ * import cycle through the dispatcher that loads them. Its only imports are types. Measured
+ * 2026-10-28 at 1531.
+ *
+ * 1531 to 1532: `ai/src/utils/schema/tool-schema.ts`, the tool parameter schema that builds its value
+ * on the first read and reads its wire form from the profile's wire-schema cache, so a launch of a
+ * compiled build sends the default tool set without evaluating arktype. Its runtime imports
+ * (`@veyyon/utils/atomic-write`, `@veyyon/utils/dirs`, `@veyyon/utils/logger`,
+ * `@veyyon/utils/type-guards` and `schema/wire.ts`) are already here. Measured 2026-10-29 at 1532.
+ *
+ * 1532 to 1533: `utils/src/build-store.ts`, the per-build JSON store that `tool-schema.ts` and the
+ * catalog's `identity/bundled.ts`, both already here, persist build-derived values through, so a
+ * launch of a compiled build reads each custom model id's bundled reference instead of scanning the
+ * catalog keys. Its imports (`atomic-write.ts`, `logger.ts`, `type-guards.ts`) are already here.
+ * Measured 2026-10-29 at 1533.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
@@ -421,7 +594,7 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  *   isolation failures in `prompts/tools/rows.ts`, alongside `isolation-summary.md` and
  *   `isolation-recovery-hint.md`.
  */
-const LAUNCH_REACH_CEILING = 1668;
+const LAUNCH_REACH_CEILING = 1533;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
@@ -437,11 +610,33 @@ const LAUNCH_REACH_CEILING = 1668;
  * window-focus, desktop-notify, tmux, kitty-graphics, color-format), and catalog added 5 modules
  * (types, model, discovery/typesafe, codex-subscription, models-dev-policies).
  *
- * 536 to 540, re-measured 2026-10-06 on the santhreal sync (+4 upstream additions:
- * `ai/src/utils/schema/arktype.ts`, `utils/src/local-time.ts`, `ai/src/dialect/json-tool-call-scanner.ts`,
- * and `ai/src/dialect/bracket-walk.ts`).
+ * 522 to 523: `utils/src/local-time.ts`, which reads local time from the C library's `localtime_r`
+ * so a launch builds no ICU time zone cache. `logger.ts` and `log-file.ts`, already here, read through
+ * it, and its one import is `bun:ffi`. The launch count above is unchanged: the session's local day
+ * moved from `coding-agent/src/utils/local-date.ts`, which left, to the same module.
+ *
+ * 523 to 524: `ai/src/dialect/json-tool-call-scanner.ts`, for the reason the launch ceiling above
+ * records.
+ *
+ * 524 to 525: `ai/src/dialect/bracket-walk.ts`, for the reason the launch ceiling above records.
+ *
+ * 525 to 526: `catalog/wire/kimi-code.ts`, for the reason the launch ceiling above records.
+ * `catalog/provider-models/openai-compat.ts`, already here, resolves a Kimi request's endpoint through it.
+ *
+ * 526 to 488: re-measured. The modules that left prompt assembly since the last entry had left it
+ * without lowering this line, so the slack would have admitted 38 new ones unrecorded.
+ *
+ * 488 to 489: re-measured at 487 before, plus `ai/src/prompts/tool-choice/any.md` and
+ * `ai/src/prompts/tool-choice/named.md`, which `ai/src/prompts/registry.ts`, already here, registers.
+ *
+ * 489 to 492: the three modules split out of `utils/src/dirs.ts`, for the reason the launch ceiling
+ * above records.
+ *
+ * 492 to 493: `ai/src/utils/schema/tool-schema.ts`, for the reason the launch ceiling above records.
+ *
+ * 493 to 494: `utils/src/build-store.ts`, for the reason the launch ceiling above records.
  */
-const ASSEMBLER_REACH_CEILING = 540;
+const ASSEMBLER_REACH_CEILING = 494;
 
 function reached(entry: string): string[] {
 	return [...moduleReach(entry, RESOLUTION, CACHE)].map(file => path.relative(REPO_ROOT, file)).sort();

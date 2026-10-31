@@ -25,6 +25,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ScheduledAgentContinueOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import { createCustomMessage } from "@veyyon/coding-agent/session/messages";
 import {
@@ -128,14 +129,7 @@ function assistant(
 		api: "openai-responses",
 		provider: "openai",
 		model: "test-model",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: clock++,
 	};

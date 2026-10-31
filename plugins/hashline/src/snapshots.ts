@@ -22,6 +22,7 @@
 import { LRUCache } from "lru-cache/raw";
 import { computeFileHash } from "./format";
 import { LineMap } from "./line-map";
+import { stripBom } from "./normalize";
 
 /**
  * One full-file version observed at a point in time. The tag the model sees is
@@ -152,8 +153,10 @@ export abstract class SnapshotStore {
 
 	/**
 	 * Record the full normalized text of `path` and return its content tag.
-	 * `seenLines` (optional) are the 1-indexed lines the producer displayed;
-	 * they merge into {@link Snapshot.seenLines} across reads of identical text.
+	 * A leading BOM is dropped before hashing, because the patcher hashes the
+	 * file without it. `seenLines` (optional) are the 1-indexed lines the
+	 * producer displayed; they merge into {@link Snapshot.seenLines} across
+	 * reads of identical text.
 	 */
 	abstract record(path: string, fullText: string, seenLines?: Iterable<number>): string;
 
@@ -406,7 +409,11 @@ export class InMemorySnapshotStore extends SnapshotStore {
 	}
 
 	record(path: string, fullText: string, seenLines?: Iterable<number>): string {
-		const hash = computeFileHash(fullText);
+		// A reader that streams lines keeps a BOM on line 1, and a tag minted over it names a text the
+		// patcher never sees: it hashes the file BOM-stripped, so every edit made with that tag read
+		// as a file changed since the read.
+		const text = stripBom(fullText).text;
+		const hash = computeFileHash(text);
 		// `get` refreshes LRU recency for `path`.
 		const history = this.#versions.get(path) ?? [];
 		// Dedup requires full-text equality, not just tag equality: two distinct
@@ -415,7 +422,7 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		// text B onto the stored text A) and let the patcher misresolve which
 		// snapshot the section tag names during recovery or seen-line validation.
 		// See issue #4075.
-		const existing = history.find(version => version.hash === hash && version.text === fullText);
+		const existing = history.find(version => version.hash === hash && version.text === text);
 		if (existing) {
 			// Same content state observed again: refresh recency and promote to
 			// head (it is the current file content), then reuse the tag. Union any
@@ -428,7 +435,7 @@ export class InMemorySnapshotStore extends SnapshotStore {
 			return hash;
 		}
 
-		const snapshot: Snapshot = { path, text: fullText, hash, recordedAt: Date.now() };
+		const snapshot: Snapshot = { path, text, hash, recordedAt: Date.now() };
 		this.#restoreDropped(snapshot);
 		mergeLines(snapshot, "seenLines", seenLines);
 		const next = [snapshot, ...history];

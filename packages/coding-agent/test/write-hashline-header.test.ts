@@ -6,30 +6,11 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
+import { toolResultText } from "./helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "./helpers/tool-session";
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
 
@@ -65,12 +46,12 @@ describe("write tool hashline header", () => {
 
 	it("inserts a fresh [path#TAG] header that maps to the written content", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const content = "export const value = 42;\nexport const flag = true;\n";
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const lines = resultText(result).split("\n");
+		const lines = toolResultText(result).split("\n");
 
 		// First line is the hashline header; subsequent text is the byte count.
 		const match = HASHLINE_HEADER_LINE.exec(lines[0] ?? "");
@@ -88,12 +69,12 @@ describe("write tool hashline header", () => {
 
 	it("makes the post-write tag usable by the hashline patcher", async () => {
 		const filePath = path.join(tmpDir, "config.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const content = "export const enabled = false;\n";
 
 		const writeResult = await tool.execute("call-1", { path: filePath, content });
-		const headerLine = resultText(writeResult).split("\n")[0] ?? "";
+		const headerLine = toolResultText(writeResult).split("\n")[0] ?? "";
 		expect(HASHLINE_HEADER_LINE.test(headerLine)).toBe(true);
 
 		// Apply a hashline patch immediately, using only the tag the write tool
@@ -120,13 +101,13 @@ describe("write tool hashline header", () => {
 
 	it("omits the hashline header when the edit mode is not hashline", async () => {
 		const filePath = path.join(tmpDir, "plain.txt");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		const tool = new WriteTool(session);
 		const content = "no anchors here\n";
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text.startsWith("[")).toBe(false);
 		expect(text).toBe(`Successfully wrote ${content.length} bytes to ${path.relative(tmpDir, filePath)}`);
 	});
@@ -136,14 +117,14 @@ describe("write tool hashline header", () => {
 	// content would double its token cost in wire history for the whole session.
 	it("reports only a byte-count summary, never the written content (replace mode)", async () => {
 		const filePath = path.join(tmpDir, "big.txt");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		const tool = new WriteTool(session);
 		const sentinel = "PAYLOAD_LINE_UNIQUE_MARKER_9f2a\n";
 		const content = sentinel.repeat(2000); // ~62 KB of distinctive content
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 
 		// Exact summary, and not one byte of the payload leaks into the result.
 		expect(text).toBe(`Successfully wrote ${content.length} bytes to ${path.relative(tmpDir, filePath)}`);
@@ -156,13 +137,13 @@ describe("write tool hashline header", () => {
 
 	it("keeps the result body bounded and content-free in hashline mode", async () => {
 		const filePath = path.join(tmpDir, "big.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		const tool = new WriteTool(session);
 		const sentinel = "export const UNIQUE_TOKEN_7e10 = true;\n";
 		const content = sentinel.repeat(2000);
 
 		const result = await tool.execute("call-1", { path: filePath, content });
-		const text = resultText(result);
+		const text = toolResultText(result);
 
 		// Header line + summary line only; the payload never appears.
 		expect(text).not.toContain(sentinel);

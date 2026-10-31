@@ -17,18 +17,23 @@
  * one long blob with visible `\n` / `\"` / `\uXXXX`.
  *
  * The *whole-arguments* form of this quirk (the entire `arguments` blob is a
- * JSON string) is already auto-corrected by the validator's JSON-string
- * coercion. This module handles the *per-field* form, where the object parses
- * fine but an individual string value is double-encoded — the validator never
- * fires there because a double-encoded string is still a structurally valid
- * string.
+ * JSON string) is recovered by the generic repair cascade. This module handles
+ * the *per-field* form, where the object parses fine but an individual string
+ * value is double-encoded — validation never fires there because a
+ * double-encoded string is still a structurally valid string.
  *
  * This is deliberately scoped to the task tool's natural-language fields
- * (`task`, shared `context`); identifier fields (`name`, `agent`)
- * are never repaired. It is NOT applied to code-bearing
- * tools (write/edit/bash/search), where a backslash or quote is load-bearing
- * and a false-positive unescape would silently corrupt a file or command.
+ * (`task`, shared `context`); identifier and path fields (`name`, `agent`,
+ * `cwd`) are never repaired. It is NOT applied to code-bearing tools
+ * (write/edit/bash/search), where a backslash or quote is load-bearing and a
+ * false-positive unescape would silently corrupt a file or command.
+ *
+ * Execution reaches it once, through the `task` entry of `TOOL_ARGUMENT_REPAIRS`
+ * (`tools/core/repair/tool-repairs.ts`), so validation, approval and the tool
+ * all receive the decoded prose. The task renderer calls it again on the raw
+ * streamed arguments, for display only.
  */
+import { MAX_REPAIR_INPUT_BYTES } from "../tools/core/repair/limits";
 import type { TaskItem, TaskParams } from "./types";
 
 /** A backslash that escapes a structural char — `\"`, `\\`, `\/`, or `\uXXXX`. */
@@ -65,10 +70,23 @@ function hasDoubleEncodeSignature(value: string): boolean {
  * prose with a Windows path (`C:\Users`), a regex (`\d+`), an embedded quote,
  * or a real (already-decoded) newline makes the parse throw, so the value is
  * returned untouched.
+ *
+ * The decoded text must itself be clean: when it would decode again, the value
+ * was encoded more than twice or its prose quotes escapes of its own, and
+ * which of those holds cannot be told from the text, so it is left as sent.
+ * That also makes the repair idempotent: its output is never repaired again.
+ * A value over {@link MAX_REPAIR_INPUT_BYTES} is left as sent.
  */
 export function repairDoubleEncodedJsonString(value: string): string {
+	const decoded = decodeOnce(value);
+	if (decoded === value || decodeOnce(decoded) !== decoded) return value;
+	return decoded;
+}
+
+function decodeOnce(value: string): string {
 	// Fast path: no backslash → nothing was escaped → the parse can never differ.
 	if (!value.includes("\\")) return value;
+	if (value.length > MAX_REPAIR_INPUT_BYTES) return value;
 	if (!hasDoubleEncodeSignature(value)) return value;
 	let decoded: unknown;
 	try {
@@ -76,7 +94,7 @@ export function repairDoubleEncodedJsonString(value: string): string {
 	} catch {
 		return value;
 	}
-	return typeof decoded === "string" && decoded !== value ? decoded : value;
+	return typeof decoded === "string" ? decoded : value;
 }
 
 /** Repair a single (possibly partial) task item's prose field (`task`). */

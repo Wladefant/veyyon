@@ -129,6 +129,11 @@ describe("parseSwarmYaml", () => {
 			"swarm:\n  name: s\n  workspace: w\n  agents:\n    a: { role: r }\n",
 			"Agent 'a': 'task' is required",
 		],
+		[
+			"a YAML syntax error, at its line and column",
+			"swarm:\n  name: s\n  workspace: w\n  mode: pipeline: fast\n",
+			"Nested mappings are not allowed in compact mappings at line 4, column 9",
+		],
 	])("rejects a file with %s", (_case, yaml, message) => {
 		expect(() => parseSwarmYaml(yaml)).toThrow(message);
 	});

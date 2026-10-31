@@ -43,7 +43,7 @@ Logins are **provider-scoped**: authenticating `anthropic` does not authenticate
 
 Use the interactive slash commands inside a session:
 
-- `/login`: opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
+- `/login`: opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`). A provider login that ends on a `localhost` address the browser cannot reach takes the pasted address in its login card (see [Signing in over SSH](../using/authentication.md#signing-in-over-ssh)); `/login <redirect-url>` completes an MCP server's OAuth flow the same way.
 - `/logout`: opens the provider selector to remove stored credentials.
 
 For headless or remote setups backed by a shared auth broker, the CLI exposes `veyyon auth-broker login <provider>` / `veyyon auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](../architecture/secrets.md) for the broker model.
@@ -136,7 +136,8 @@ Each provider has one or more environment variables that supply a key when no st
 | `alibaba-coding-plan` | `ALIBABA_CODING_PLAN_API_KEY` |
 | `aimlapi` | `AIMLAPI_API_KEY` |
 | `gitlab-duo` | `GITLAB_TOKEN` |
-| `opencode-zen`, `opencode-go` | `OPENCODE_API_KEY` |
+| `opencode-zen` | `OPENCODE_API_KEY` |
+| `opencode-go` | `OPENCODE_API_KEY` (an API key; prefer `/login opencode-go`) |
 | `firepass` | `FIREPASS_API_KEY` |
 | `wafer-serverless` | `WAFER_SERVERLESS_API_KEY` |
 | `xiaomi` | `XIAOMI_API_KEY` |
@@ -149,6 +150,8 @@ Each provider has one or more environment variables that supply a key when no st
 OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `nous-research`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. Nous Portal stores a durable refresh token and mints short-lived inference access tokens for requests and model discovery; `NOUS_API_KEY` remains available for explicit headless use. The Kimi Code login asks for the account's region: Global signs in at kimi.ai and Mainland China at kimi.com, and an empty answer selects Global. The credential is stored under `kimi-code`, and requests go to the deployment that issued it.
 
 Command Code uses `https://api.commandcode.ai/provider/v1`, defaults to `claude-sonnet-4-6`, and issues keys at [Command Code Provider](https://commandcode.ai/studio/provider). Its `/models` endpoint answers without a key, so the bundled catalog includes every model it serves; prices, reasoning efforts and output ceilings come from the deployment contract, because the endpoint publishes none of them. Nous Research uses `https://inference-api.nousresearch.com/v1` and defaults to the tool-capable `anthropic/claude-sonnet-4.6`; authenticated discovery adds the current tool-capable chat catalog and excludes embedding, media-generation, and non-tool rows. Nous accepts either sign-in: `/login nous-research` runs the Portal device flow, and `/login nous-research-api-key` takes a key pasted from the Portal. Both store one credential under `nous-research`, so the model list and the account card show a single Nous account either way.
+
+OpenCode Go accepts either sign-in. `/login opencode-go` runs the OpenCode Console device flow and uses the organization chosen on the consent page or, when none is chosen, the first organization by name whose Console configuration includes a Go subscription. `/login opencode-go-api-key`, or `+ add with API key (legacy)` on the OpenCode Go account card, takes an OpenCode Go API key and is the legacy entry. Both store one credential under `opencode-go`. A Console login sends requests to the inference endpoint the Console states for that organization, with the organization id in the `x-opencode-org-id` header. An API key, including `OPENCODE_API_KEY`, is sent to `https://opencode.ai/zen/go`. Model discovery reads the public Go listing and sends no Console token.
 
 ### `.env` discovery and precedence
 

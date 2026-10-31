@@ -23,11 +23,10 @@
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow } from "@veyyon/utils";
+import { clampLow, collapseWhitespace, wrapIndex } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { formatProviderName } from "../../../../session/account-format";
@@ -35,7 +34,7 @@ import type { AccountInventory, AccountRow } from "../../../../session/account-i
 import { accountsForProvider, selectedButRotated } from "../../../../session/account-inventory";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -48,6 +47,7 @@ import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { hoverBandAt, renderScrollableList, selectionBand } from "../selectors/selector-helpers";
 import {
 	type AccountGlyphKind,
+	type AccountLoginChoice,
 	type AccountSidebarEntry,
 	accountGlyphKind,
 	accountHeadLine,
@@ -111,8 +111,11 @@ export interface AccountManagerCallbacks {
 	onLogout: (row: AccountRow) => void;
 	/** Show the full usage report for one account. */
 	onShowUsage: (row: AccountRow) => void;
-	/** Start a login that adds another account for this provider. */
-	onAddAccount: (provider: string) => void;
+	/**
+	 * Start a login that adds another account for this provider: its own login, or `loginId`, an
+	 * alternate login that stores its credential under `provider`.
+	 */
+	onAddAccount: (provider: string, loginId?: string) => void;
 	/**
 	 * Lift the rate-limit block this card is showing on one account, and re-probe it.
 	 *
@@ -159,10 +162,11 @@ export interface AccountManagerOptions {
 /**
  * What a body line points at.
  *
- * `add` is the `+ add another …` entry. It is a real list position, not a hint: arrowing off the
- * last account lands on it, `enter` there starts a login, and a click on it does the same.
+ * `add` is a `+ add …` entry. It is a real list position, not a hint: arrowing off the last account
+ * lands on it, `enter` there starts a login, and a click on it does the same. `loginId` is absent on
+ * the provider's own login and names the alternate login on each entry after it.
  */
-type BodyTarget = { kind: "account"; credentialId: number } | { kind: "add" };
+type BodyTarget = { kind: "account"; credentialId: number } | { kind: "add"; loginId?: string };
 
 /** One rendered body line, and the entry it belongs to. */
 interface BodyLine {
@@ -231,6 +235,14 @@ export class AccountManagerComponent implements Component {
 	#searchQuery = "";
 	/** Whether the sidebar is filtering. Entered with `ctrl+s`, left with `esc`. */
 	#searching = false;
+	/**
+	 * One line above the shortcuts reporting what the last action on this card did.
+	 *
+	 * The card is a fullscreen overlay, so a status written to the transcript sits underneath it
+	 * until the card closes, and `r` read as a key that did nothing. Dropped like any tip line when
+	 * the card is too short to spare the row.
+	 */
+	#notice: string | undefined;
 
 	constructor(inventory: AccountInventory, callbacks: AccountManagerCallbacks, options: AccountManagerOptions = {}) {
 		this.#inventory = inventory;
@@ -271,6 +283,13 @@ export class AccountManagerComponent implements Component {
 		}
 	}
 
+	/** Show `text` on the card's notice line, or clear it. Whitespace runs collapse to one space. */
+	setNotice(text: string | undefined): void {
+		const line = collapseWhitespace(text);
+		this.#notice = line.length > 0 ? line : undefined;
+		this.#requestRender?.();
+	}
+
 	dispose(): void {
 		this.#sidebarHover.dispose();
 	}
@@ -286,7 +305,12 @@ export class AccountManagerComponent implements Component {
 			// sidebar, so the short form is both consistent and more readable here.
 			getOAuthProviders().map(provider => {
 				const id = provider.storeCredentialsAs ?? provider.id;
-				return { id, label: formatProviderName(id) };
+				// The mechanism, not the login's full name: the card already names the provider, and
+				// "+ add with OpenCode Go (API key, legacy)" under "+ add OpenCode Go account" says it
+				// twice. A custom login that states no mechanism falls back to its name.
+				const alternateLogin =
+					id === provider.id ? undefined : { id: provider.id, method: provider.loginMethod ?? provider.name };
+				return { id, label: formatProviderName(id), alternateLogin };
 			}),
 		);
 		if (!this.#entries.some(entry => entry.providerId === this.#activeProviderId)) {
@@ -328,12 +352,29 @@ export class AccountManagerComponent implements Component {
 		this.#bodySelection = first ? { kind: "account", credentialId: first.credentialId } : { kind: "add" };
 	}
 
+	/** The add entries in list order: the provider's own login, then each alternate login. */
+	#addTargets(): BodyTarget[] {
+		const alternates = this.#activeEntry()?.alternateLogins ?? [];
+		return [{ kind: "add" }, ...alternates.map(login => ({ kind: "add" as const, loginId: login.id }))];
+	}
+
+	/**
+	 * The alternate login the cursor is on, or undefined on an account or the provider's own add
+	 * entry. A login id the active provider does not offer reads as its own login, so a selection
+	 * left over from another provider never starts a login this card is not showing.
+	 */
+	#selectedAlternateLogin(): AccountLoginChoice | undefined {
+		const selection = this.#bodySelection;
+		if (selection.kind !== "add" || selection.loginId === undefined) return undefined;
+		return this.#activeEntry()?.alternateLogins.find(login => login.id === selection.loginId);
+	}
+
 	#isSelected(target: BodyTarget | undefined): boolean {
 		if (!target) return false;
 		const selection = this.#bodySelection;
-		return target.kind === "add"
-			? selection.kind === "add"
-			: selection.kind === "account" && selection.credentialId === target.credentialId;
+		if (target.kind === "add")
+			return selection.kind === "add" && this.#selectedAlternateLogin()?.id === target.loginId;
+		return selection.kind === "account" && selection.credentialId === target.credentialId;
 	}
 
 	/**
@@ -536,25 +577,29 @@ export class AccountManagerComponent implements Component {
 				0,
 				filtered.findIndex(entry => entry.providerId === this.#activeProviderId),
 			);
-			const next = (current + direction + filtered.length) % filtered.length;
+			const next = wrapIndex(current + direction, filtered.length);
 			this.#selectProvider(filtered[next]?.providerId ?? this.#activeProviderId);
 			return;
 		}
 		const rows = this.#rows();
-		// The add entry is the position AFTER the last account, so arrowing off the bottom of the
-		// list lands on it instead of stopping. The list wraps, like `SelectList` and like the
-		// sidebar above: down from the add entry returns to the first account.
-		const count = rows.length + 1;
+		// The add entries are the positions AFTER the last account, so arrowing off the bottom of the
+		// list lands on them instead of stopping. The list wraps, like `SelectList` and like the
+		// sidebar above: down from the last add entry returns to the first account.
+		const adds = this.#addTargets();
+		const count = rows.length + adds.length;
+		const alternate = this.#selectedAlternateLogin();
 		const current =
 			this.#bodySelection.kind === "add"
-				? rows.length
+				? rows.length + adds.findIndex(target => target.kind === "add" && target.loginId === alternate?.id)
 				: Math.max(
 						0,
 						rows.findIndex(row => row.credentialId === this.#selectedCredentialId()),
 					);
-		const next = (current + direction + count) % count;
+		const next = wrapIndex(current + direction, count);
 		const row = rows[next];
-		this.#bodySelection = row ? { kind: "account", credentialId: row.credentialId } : { kind: "add" };
+		this.#bodySelection = row
+			? { kind: "account", credentialId: row.credentialId }
+			: (adds[next - rows.length] ?? { kind: "add" });
 	}
 
 	/**
@@ -564,7 +609,9 @@ export class AccountManagerComponent implements Component {
 	 */
 	#activate(): void {
 		if (this.#bodySelection.kind === "add") {
-			if (this.#activeProviderId) this.#callbacks.onAddAccount(this.#activeProviderId);
+			if (this.#activeProviderId) {
+				this.#callbacks.onAddAccount(this.#activeProviderId, this.#selectedAlternateLogin()?.id);
+			}
 			return;
 		}
 		const row = this.#selectedRow();
@@ -937,24 +984,36 @@ export class AccountManagerComponent implements Component {
 			lines.push({ text: "" });
 		}
 
-		// The last position in the list, and a selectable one. Down from the last account lands
-		// here, `enter` starts the login, and the cursor column lines up with the account glyphs
-		// above so the entry reads as part of the same list rather than a caption under it.
-		const addTarget: BodyTarget = { kind: "add" };
-		const addSelected = this.#isSelected(addTarget);
-		const addCursor = addSelected && this.#focus === "body" ? theme.fg("accent", theme.nav.cursor) : " ";
+		// The last positions in the list, and selectable ones. Down from the last account lands on
+		// the provider's own login, then on each alternate login; `enter` starts that login, and the
+		// cursor column lines up with the account glyphs above so the entries read as part of the
+		// same list rather than a caption under it.
 		// No `(a)` hint: the footer chip two rows below already says `a add`, and naming the key
 		// twice on one card reads as two different affordances.
 		// No article on the first account: provider names are brands and initialisms ("xAI",
 		// "AIML API") whose article follows pronunciation, which no letter test predicts.
-		const addLabel = `+ add ${rows.length > 0 ? "another " : ""}${sanitizeAccountText(entry.label)} account`;
-		let addText = truncateToWidth(
-			` ${addCursor} ${addSelected ? theme.bold(theme.fg("accent", addLabel)) : theme.fg("accent", addLabel)}`,
+		lines.push(
+			this.#addLine(
+				`+ add ${rows.length > 0 ? "another " : ""}${sanitizeAccountText(entry.label)} account`,
+				{ kind: "add" },
+				width,
+			),
+		);
+		for (const login of entry.alternateLogins) {
+			lines.push(this.#addLine(`+ add with ${login.method}`, { kind: "add", loginId: login.id }, width));
+		}
+		return lines;
+	}
+
+	#addLine(label: string, target: BodyTarget, width: number): BodyLine {
+		const selected = this.#isSelected(target);
+		const cursor = selected && this.#focus === "body" ? theme.fg("accent", theme.nav.cursor) : " ";
+		let text = truncateToWidth(
+			` ${cursor} ${selected ? theme.bold(theme.fg("accent", label)) : theme.fg("accent", label)}`,
 			width,
 		);
-		if (addSelected) addText = selectionBand(addText, width);
-		lines.push({ text: addText, target: addTarget });
-		return lines;
+		if (selected) text = selectionBand(text, width);
+		return { text, target };
 	}
 
 	#shortcuts(): ModalShortcut[] {
@@ -964,30 +1023,18 @@ export class AccountManagerComponent implements Component {
 				{ label: "esc cancel", clickable: true, id: "close" },
 			];
 		}
+		const use = this.#enterLabel();
 		// Search mode advertises only what search mode answers. Every letter chip below is a key
 		// the filter is consuming while the mode is on, and a footer that offers them anyway is
-		// the defect this mode exists to remove.
+		// the defect this mode exists to remove. `enter` still runs `#activate`, so it is labelled
+		// by the same rule as outside the mode: on a provider with no accounts it starts a login.
 		if (this.#searching) {
 			return [
 				{ label: "↑↓ move" },
-				{ label: "enter switch to this account", clickable: true, id: "confirm" },
+				{ label: use, clickable: true, id: "confirm" },
 				{ label: "esc exit search", clickable: true, id: "close" },
 			];
 		}
-		const entry = this.#activeEntry();
-		// The chip names the ACTION, not the mechanism: "switch to" is what pressing enter does, and
-		// the previous "use for <provider>" left the card's headline capability reading as a noun.
-		// Naming the provider is still the point — switching is per provider, and a bare "enter
-		// switch" reads as a global account change. On the add entry `enter` switches nothing, so
-		// the chip says what it will actually do rather than naming an account it cannot pick.
-		const use =
-			this.#bodySelection.kind === "add"
-				? entry
-					? `enter add ${entry.label} account`
-					: "enter add account"
-				: entry
-					? `enter switch ${entry.label} to this account`
-					: "enter switch to this account";
 		// The three account-scoped keys are omitted while the add entry is selected. `n`, `u` and `x`
 		// all read the selected ACCOUNT, and the add entry is not one, so each was a chip the card
 		// painted, made clickable, and answered with nothing: the same defect the `enter` chip above
@@ -1030,20 +1077,36 @@ export class AccountManagerComponent implements Component {
 		];
 	}
 
+	/**
+	 * The `enter` chip. It names the ACTION, not the mechanism: "switch to" is what pressing enter
+	 * does, and the previous "use for <provider>" left the card's headline capability reading as a
+	 * noun. Naming the provider is still the point — switching is per provider, and a bare "enter
+	 * switch" reads as a global account change. On an add entry `enter` switches nothing, so the
+	 * chip says what it will actually do rather than naming an account it cannot pick.
+	 */
+	#enterLabel(): string {
+		const entry = this.#activeEntry();
+		if (this.#bodySelection.kind === "add") {
+			const alternate = this.#selectedAlternateLogin();
+			if (alternate) return `enter add with ${alternate.method}`;
+			return entry ? `enter add ${entry.label} account` : "enter add account";
+		}
+		return entry ? `enter switch ${entry.label} to this account` : "enter switch to this account";
+	}
+
 	render(width: number): readonly string[] {
 		// EXACTLY the rows the screen has, never a floor of its own. The host mounts this card as a
 		// fullscreen overlay with `maxHeight: "100%"`, so a frame taller than the terminal is clipped
 		// by the overlay — and because the card is bottom-anchored, the clip comes off the TOP. The
 		// title row and the `[x]` disappear, and every row in `#shellGeometry` is then off by the
 		// clipped amount, so the close glyph, the footer chips and the whole split answer to clicks
-		// several rows away from where they are painted. `computeModalDims` already refuses a screen
+		// several rows away from where they are painted. `layoutModalCard` already refuses a screen
 		// too small to draw on, which is the case a minimum height was standing in for.
 		const height = this.#terminalHeight ?? (process.stdout.rows || 40);
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 		const contentWidth = dims.contentWidth;
 		const sidebarWidth = this.#sidebarWidth();
@@ -1052,12 +1115,11 @@ export class AccountManagerComponent implements Component {
 		const bodyWidth = Math.max(1, contentWidth - sidebarWidth - 3);
 
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const tipCandidates = this.#notice ? [this.#notice] : undefined;
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates,
 		});
 		const splitRows = Math.max(1, chrome.maxBodyRows);
 		// Published before the panes render: `#sidebarListRows` reads it, and so does every mouse
@@ -1099,14 +1161,9 @@ export class AccountManagerComponent implements Component {
 			body.push(fit(sidebarLines[i] ?? "", sidebarWidth) + paneSep + fit(paneLines[i] ?? "", bodyWidth));
 		}
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Accounts",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import type { ApiKeyResolver, FetchImpl } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { embed, resetEmbeddingProviderForTests } from "@veyyon/mnemopi/core/embeddings";
 import { extractFactCategories } from "@veyyon/mnemopi/core/extraction";
 import { type ChatMessage, ExtractionClient } from "@veyyon/mnemopi/core/extraction/client";
@@ -13,19 +13,9 @@ import {
 	type ResolvedMnemopiRuntimeOptions,
 	withMnemopiRuntimeOptions,
 } from "@veyyon/mnemopi/core/runtime-options";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
-
-function restoreEnv(): void {
-	for (const key in process.env) {
-		if (!(key in OLD_ENV)) delete process.env[key];
-	}
-	for (const key in OLD_ENV) {
-		const value = OLD_ENV[key];
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
 
 function openAiSse(text: string): Response {
 	const chunk = (delta: unknown, finishReason: string | null) =>
@@ -48,14 +38,7 @@ function piNativeSse(text: string): Response {
 		api: "openai-completions",
 		provider: "coreweave",
 		model: "zai-org/GLM-5.2",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};
@@ -70,7 +53,7 @@ function projection(secret: string, label: string): MnemopiProviderTextSanitizer
 }
 
 afterEach(() => {
-	restoreEnv();
+	restoreEnvSnapshot(OLD_ENV);
 	resetEmbeddingProviderForTests();
 	resetHostLlmBackendForTests();
 });

@@ -22,16 +22,17 @@
  * were called `JsonRpcResponse`.
  *
  * These cases are on the shared predicate and the fan-out helper rather than on a live transport,
- * because that is where the decision is made; the transports call these and nothing else.
+ * because that is where the decision is made; `a-server-message-reaches-the-same-route-on-every-
+ * transport.test.ts` drives the live transports.
  */
 import { describe, expect, it } from "bun:test";
-import type { JsonRpcMessage } from "@veyyon/coding-agent/mcp/types";
 import {
 	describeJsonRpcError,
 	isUnattributableError,
 	type RejectablePendingRequest,
 	rejectAllPending,
-} from "@veyyon/coding-agent/mcp/unattributable-error";
+} from "@veyyon/coding-agent/mcp/incoming-message";
+import type { JsonRpcMessage } from "@veyyon/coding-agent/mcp/types";
 
 /** A pending request that records what it was rejected with. */
 function pendingRequest(): RejectablePendingRequest & { rejectedWith: Error[] } {

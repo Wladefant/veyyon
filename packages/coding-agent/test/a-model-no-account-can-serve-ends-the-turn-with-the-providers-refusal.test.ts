@@ -17,13 +17,13 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 
@@ -94,8 +94,7 @@ describe("a model no account can serve", () => {
 	}
 
 	function primaryModel(): Model {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("bundled test model missing");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		return model;
 	}
 
@@ -135,8 +134,7 @@ describe("a model no account can serve", () => {
 
 	it("continues on the fallback model when one is configured", async () => {
 		const primary = primaryModel();
-		const fallback = getBundledModel("openai", "gpt-4o-mini");
-		if (!fallback) throw new Error("bundled fallback model missing");
+		const fallback = requireBundledModel("openai", "gpt-4o-mini");
 		const requested: string[] = [];
 		const ends = start(
 			agentRefusing(primary, Number.POSITIVE_INFINITY, requested),

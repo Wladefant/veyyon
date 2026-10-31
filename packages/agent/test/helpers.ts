@@ -1,7 +1,9 @@
-import type { AssistantMessage, Usage, UserMessage } from "@veyyon/ai";
+import type { AgentMessage } from "@veyyon/agent-core/types";
+import type { AssistantMessage, Message, Model, UserMessage } from "@veyyon/ai";
+import { emptyUsage, type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
 
-export function createUserMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
+export function createUserMessage(text: string, timestamp = Date.now()): UserMessage {
+	return { role: "user", content: text, timestamp };
 }
 
 export function createAssistantMessage(
@@ -14,19 +16,34 @@ export function createAssistantMessage(
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: createUsage(),
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: Date.now(),
 	};
 }
 
-function createUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+/** An assistant message that replies with one text block and stops. */
+export function createAssistantText(text: string): AssistantMessage {
+	return createAssistantMessage([{ type: "text", text }]);
+}
+
+/**
+ * A `convertToLlm` that passes every user, assistant and tool-result message through unchanged and
+ * drops the rest. Unlike the agent's default it keeps a provider refusal, so a suite sees exactly the
+ * messages its loop produced.
+ */
+export function identityConverter(messages: AgentMessage[]): Message[] {
+	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+}
+
+/** A model from the bundled catalog that a suite depends on; a model the catalog no longer ships fails the suite here. */
+export function requireBundledModel(provider: GeneratedProvider, id: string): Model {
+	const model = getBundledModel(provider, id);
+	if (!model) throw new Error(`The bundled catalog has no ${provider}/${id} model`);
+	return model;
+}
+
+/** The bundled Claude Sonnet 4.5 model the compaction, summary and handoff suites run against. */
+export function anthropicModel(): Model {
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }

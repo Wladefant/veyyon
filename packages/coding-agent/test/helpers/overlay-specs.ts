@@ -5,11 +5,12 @@
  * here reaches every sweep at once. `a-card-first-frame-is-settled.test.ts` pins the names by
  * exact equality, which is what turns a new card red until someone adds it here.
  */
+import type { AgentMessage } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import type { HistoryStorage } from "@veyyon/kernel/session/history-storage";
-import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
+import type { SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import type { Component, TUI } from "@veyyon/tui";
 import type { KeyId } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -24,10 +25,7 @@ import { HookEditorComponent } from "../../src/modes/terminal/components/dialogs
 import { HookInputComponent } from "../../src/modes/terminal/components/dialogs/hook-input";
 import { LoginDialogComponent } from "../../src/modes/terminal/components/dialogs/login-dialog";
 import { MCPAddWizard } from "../../src/modes/terminal/components/dialogs/mcp-add-wizard";
-import {
-	PlanReviewOverlay,
-	type PlanReviewOverlayOptions,
-} from "../../src/modes/terminal/components/dialogs/plan-review-overlay";
+import { PlanReviewOverlay } from "../../src/modes/terminal/components/dialogs/plan-review-overlay";
 import { ExtensionDashboard } from "../../src/modes/terminal/components/extensions/extension-dashboard";
 import { CopySelectorComponent } from "../../src/modes/terminal/components/selectors/copy-selector";
 import { HookSelectorComponent } from "../../src/modes/terminal/components/selectors/hook-selector";
@@ -86,6 +84,43 @@ const DUMMY_AUTH_STORAGE = {
 	saveToken: () => {},
 } as unknown as AuthStorage;
 
+/**
+ * Entries in every list fixture: more than the tallest swept terminal has rows, so a card that
+ * sizes its list by its own content rather than by the rows its card has turns the sweeps red.
+ */
+const LONG_LIST = 80;
+
+/** `LONG_LIST` entries built by `make` from their index. */
+function longList<T>(make: (index: number) => T): T[] {
+	return Array.from({ length: LONG_LIST }, (_, index) => make(index));
+}
+
+const HISTORY: readonly HistoryEntry[] = longList(i => ({ id: i, prompt: `Prompt ${i}`, created_at: i }));
+
+/** One chain of `count` user turns, `turn-0` to `turn-<count-1>`, so the tree card has more rows than a short card shows. */
+function userTurnChain(count: number): SessionTreeNode {
+	const nodes: SessionTreeNode[] = [];
+	for (let i = 0; i < count; i++) {
+		const message: AgentMessage = { role: "user", content: `turn ${i}`, timestamp: i };
+		const parent = nodes[i - 1];
+		const node: SessionTreeNode = {
+			entry: {
+				type: "message",
+				id: `turn-${i}`,
+				parentId: parent?.entry.id ?? null,
+				timestamp: "2026-01-01T00:00:00.000Z",
+				message,
+			},
+			children: [],
+		};
+		parent?.children.push(node);
+		nodes.push(node);
+	}
+	const root = nodes[0];
+	if (!root) throw new Error("userTurnChain needs at least one turn");
+	return root;
+}
+
 export type OverlayCard = Component | { render(width: number): readonly string[] | string[]; dispose?(): void };
 
 export interface OverlaySpec {
@@ -128,9 +163,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 					availableToolNames: ["read", "search"],
 				},
 				"project",
-				// More advisors than any short terminal can list, so the roster is clamped to the
-				// screen rather than sized by its own content.
-				{ advisors: Array.from({ length: 40 }, (_, index) => ({ name: `Advisor ${index + 1}` })) },
+				{ advisors: longList(index => ({ name: `Advisor ${index + 1}` })) },
 				{
 					loadDoc: async () => ({ advisors: [] }),
 					save: async () => {},
@@ -176,10 +209,13 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 	{
 		name: "CopySelectorComponent",
 		create: () =>
-			new CopySelectorComponent([{ id: "1", label: "Item 1", preview: "Preview 1", content: "Text 1" }], {
-				onPick: () => {},
-				onCancel: () => {},
-			}),
+			new CopySelectorComponent(
+				longList(i => ({ id: `${i}`, label: `Item ${i}`, preview: `Preview ${i}`, content: `Text ${i}` })),
+				{
+					onPick: () => {},
+					onCancel: () => {},
+				},
+			),
 	},
 	{
 		name: "ExtensionDashboard",
@@ -190,8 +226,8 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		create: () =>
 			new HistorySearchComponent(
 				{
-					getRecent: () => [],
-					search: () => [],
+					getRecent: () => HISTORY,
+					search: () => HISTORY,
 				} as unknown as HistoryStorage,
 				() => {},
 				() => {},
@@ -223,7 +259,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		create: () =>
 			new HookSelectorComponent(
 				"Hook Selector",
-				[{ label: "Hook A" }],
+				longList(i => ({ label: `Hook ${i}` })),
 				() => {},
 				() => {},
 			),
@@ -250,7 +286,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 			new ModalSelectListComponent(
 				{
 					title: "Items",
-					items: [{ value: "1", label: "One" }],
+					items: longList(i => ({ value: `${i}`, label: `Item ${i}` })),
 					theme: getSelectListTheme(),
 					getTerminalRows: () => rows,
 				},
@@ -293,11 +329,14 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 			new PlanReviewOverlay(
 				"# Plan\n- step 1\n- step 2",
 				{
-					options: [{ label: "Accept", description: "Accept plan" }],
-					onReopenProposal: () => {},
-					onDiscard: () => {},
-					onClose: () => {},
-				} as unknown as PlanReviewOverlayOptions,
+					promptTitle: "Plan mode - next step",
+					options: [
+						"Approve and execute",
+						"Approve and compact context",
+						"Approve and keep context",
+						"Refine plan",
+					],
+				},
 				{ onPick: () => {}, onCancel: () => {} },
 			),
 	},
@@ -314,15 +353,13 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "ResetUsageSelectorComponent",
 		create: () =>
 			new ResetUsageSelectorComponent(
-				[
-					{
-						label: "Default Account",
-						providerName: "OpenAI Codex",
-						availableCount: 1,
-						target: { provider: "openai-codex", accountId: "acc-1" },
-						active: true,
-					},
-				],
+				longList(i => ({
+					label: `Account ${i}`,
+					providerName: "OpenAI Codex",
+					availableCount: 1,
+					target: { provider: "openai-codex", accountId: `acc-${i}` },
+					active: i === 0,
+				})),
 				() => {},
 				() => {},
 			),
@@ -331,16 +368,14 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "RollbackPickerComponent",
 		create: () =>
 			new RollbackPickerComponent(
-				[
-					{
-						version: "1.0.0",
-						publishedAt: "2026-01-01",
-						current: true,
-						newer: false,
-						visited: true,
-						changelogUrl: "https://example.com",
-					},
-				],
+				longList(i => ({
+					version: `1.0.${i}`,
+					publishedAt: "2026-01-01",
+					current: i === 0,
+					newer: false,
+					visited: true,
+					changelogUrl: "https://example.com",
+				})),
 				{ onSelect: () => {}, onCancel: () => {}, openUrl: async () => true },
 			),
 	},
@@ -348,7 +383,18 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "SessionSelectorComponent",
 		create: rows =>
 			new SessionSelectorComponent(
-				[],
+				longList(i => ({
+					path: `/sessions/${i}.jsonl`,
+					id: `session-${i}`,
+					cwd: "/repo",
+					title: `Session ${i}`,
+					created: new Date(0),
+					modified: new Date(0),
+					messageCount: 2,
+					size: 1024,
+					firstMessage: `First message ${i}`,
+					allMessagesText: `First message ${i}`,
+				})),
 				() => {},
 				() => {},
 				() => {},
@@ -387,7 +433,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		create: () =>
 			new SubcommandPickerComponent(
 				"test",
-				[{ name: "sub1", description: "First subcommand" }],
+				longList(i => ({ name: `sub${i}`, description: `Subcommand ${i}` })),
 				() => {},
 				() => {},
 			),
@@ -397,7 +443,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		create: () =>
 			new ThemeSelectorComponent(
 				"dark",
-				["dark", "light", "titanium"],
+				["dark", "light", "titanium", ...longList(i => `theme-${i}`)],
 				() => {},
 				() => {},
 				() => {},
@@ -417,13 +463,8 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "TreeSelectorComponent",
 		create: () =>
 			new TreeSelectorComponent(
-				[
-					{
-						entry: { id: "root", type: "session_init", timestamp: Date.now() } as unknown as SessionEntry,
-						children: [],
-					},
-				],
-				"root",
+				[userTurnChain(LONG_LIST)],
+				`turn-${LONG_LIST - 1}`,
 				() => {},
 				() => {},
 			),
@@ -432,7 +473,7 @@ export const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "UserMessageSelectorComponent",
 		create: () =>
 			new UserMessageSelectorComponent(
-				[{ id: "m1", text: "Hello", timestamp: "2026-01-01" }],
+				longList(i => ({ id: `m${i}`, text: `Message ${i}`, timestamp: "2026-01-01" })),
 				() => {},
 				() => {},
 			),

@@ -18,7 +18,7 @@ import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { applyQuery, pathToQuery } from "./json-query";
-import { artifactsDirsFromRegistry } from "./registry-helpers";
+import { artifactFileNamesFromRegistry, artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /**
@@ -151,17 +151,8 @@ export class AgentProtocolHandler implements ProtocolHandler {
 
 	async complete(): Promise<UrlCompletion[]> {
 		const ids = new Set<string>();
-		for (const dir of artifactsDirsFromRegistry()) {
-			let files: string[];
-			try {
-				files = await fs.readdir(dir);
-			} catch (err) {
-				if (isEnoent(err)) continue;
-				throw err;
-			}
-			for (const f of files) {
-				if (f.endsWith(".md")) ids.add(f.slice(0, -3));
-			}
+		for (const name of await artifactFileNamesFromRegistry()) {
+			if (name.endsWith(".md")) ids.add(name.slice(0, -3));
 		}
 		return Array.from(ids)
 			.sort()

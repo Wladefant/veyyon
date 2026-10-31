@@ -1,8 +1,9 @@
 {
 	"extends": "../tsconfig.workspace.json",
 	"include": [
+		"bench",
+		"scripts",
 		"src",
-		"test",
-		"scripts"
+		"test"
 	]
 }

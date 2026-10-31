@@ -9,10 +9,10 @@
  * the publish that writes it reads the whole file back, and a promise rooted outside the heap holds
  * that text across full collections for a time that varies from run to run.
  */
-import { heapStats } from "bun:jsc";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { postmortem } from "@veyyon/utils";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export interface ColdHistoryHeap {
 	/** Heap and external bytes the open retains over the heap before it. */
@@ -53,14 +53,8 @@ class CountingStorage extends FileSessionStorage {
 	}
 }
 
-function retained(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
-}
-
 async function measure(file: string, dir: string): Promise<ColdHistoryHeap> {
-	const before = retained();
+	const before = liveHeapBytes();
 	const storage = new CountingStorage();
 	let opening = true;
 	let loadPeak = 0;
@@ -68,13 +62,13 @@ async function measure(file: string, dir: string): Promise<ColdHistoryHeap> {
 	const sample = (): void => {
 		if (!opening) return;
 		loadSamples += 1;
-		loadPeak = Math.max(loadPeak, retained() - before);
+		loadPeak = Math.max(loadPeak, liveHeapBytes() - before);
 		setImmediate(sample);
 	};
 	setImmediate(sample);
 	const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
 	opening = false;
-	const cold = retained() - before;
+	const cold = liveHeapBytes() - before;
 	const context = JSON.stringify(manager.buildSessionContext().messages);
 	const readsAfterContext = storage.reads;
 	let results = 0;
@@ -83,7 +77,7 @@ async function measure(file: string, dir: string): Promise<ColdHistoryHeap> {
 			results += 1;
 		}
 	}
-	const warm = retained() - before;
+	const warm = liveHeapBytes() - before;
 	await manager.close();
 	return { cold, loadPeak, loadSamples, context, readsAfterContext, results, warm };
 }

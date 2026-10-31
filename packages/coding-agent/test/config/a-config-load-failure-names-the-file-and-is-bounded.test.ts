@@ -130,9 +130,9 @@ describe("a config load failure", () => {
 		expect(message).toEndWith("…");
 	});
 
-	it("names the file and the fix for a syntax error, which names no key at all", () => {
+	it("names the file, the line and the fix for a syntax error, which names no key at all", () => {
 		expect(loadError("providers: { unterminated: [").message).toBe(
-			`Failed to load config file probe (${file}), Unexpected error: YAML Parse error: Unexpected token\n` +
+			`Failed to load config file probe (${file}), Parse error: Flow sequence in block collection must be sufficiently indented and end with a ] at line 1, column 29\n` +
 				`Fix: edit ${file}, or delete it to fall back to the defaults.`,
 		);
 	});
@@ -167,7 +167,7 @@ describe("a config load failure", () => {
 	 */
 	for (const [stage, content] of [
 		["Schema", JSON.stringify({ providers: { p: { transport: "bogus" } } })],
-		["Unexpected", "providers: { unterminated: ["],
+		["Parse", "providers: { unterminated: ["],
 		["Validate(probe)", JSON.stringify({ providers: { p: { transport: "pi-native" } } })],
 	] as const) {
 		it(`names the file a relocated handle read for a ${stage} failure`, () => {

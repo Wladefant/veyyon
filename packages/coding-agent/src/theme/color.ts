@@ -5,7 +5,7 @@
 
 import { getTerminalInfo } from "@veyyon/tui/terminal-capabilities";
 import { SGR_BG_RESET, SGR_FG_RESET } from "@veyyon/utils/ansi";
-import { colorLuma } from "@veyyon/utils/color";
+import { ansi256ToHex, ansi256ToRgb, colorLuma } from "@veyyon/utils/color";
 import { detectTerminalId } from "@veyyon/utils/terminal-emulator";
 import { isRecord } from "@veyyon/utils/type-guards";
 import {
@@ -97,8 +97,9 @@ export interface ThemeJsonProblems {
 	problems: string[];
 }
 
+/** A string, or a palette index: an integer from 0 to 255, the range `#rrggbb` and `38;5;N` can express. */
 function isColorValue(value: unknown): value is ColorValue {
-	return typeof value === "string" || typeof value === "number";
+	return typeof value === "string" || (typeof value === "number" && ansi256ToRgb(value) !== undefined);
 }
 
 function isColorValueRecord(value: unknown): boolean {
@@ -148,7 +149,7 @@ export function validateThemeJson(value: unknown): ThemeJsonProblems {
 		problems.push('"$schema" must be a string');
 	}
 	if (value.vars !== undefined && !isColorValueRecord(value.vars)) {
-		problems.push('"vars" must map each name to a string or a number');
+		problems.push('"vars" must map each name to a string or a palette index from 0 to 255');
 	}
 
 	const colors = value.colors;
@@ -159,12 +160,12 @@ export function validateThemeJson(value: unknown): ThemeJsonProblems {
 			if (colors[token] === undefined) {
 				missingColors.push(token);
 			} else if (!isColorValue(colors[token])) {
-				problems.push(`"colors.${token}" must be a string or a number`);
+				problems.push(`"colors.${token}" must be a string or a palette index from 0 to 255`);
 			}
 		}
 		for (const token of OPTIONAL_THEME_COLOR_TOKENS) {
 			if (colors[token] !== undefined && !isColorValue(colors[token])) {
-				problems.push(`"colors.${token}" must be a string or a number`);
+				problems.push(`"colors.${token}" must be a string or a palette index from 0 to 255`);
 			}
 		}
 	}
@@ -176,7 +177,7 @@ export function validateThemeJson(value: unknown): ThemeJsonProblems {
 		} else {
 			for (const key of ["pageBg", "cardBg", "infoBg"] as const) {
 				if (exported[key] !== undefined && !isColorValue(exported[key])) {
-					problems.push(`"export.${key}" must be a string or a number`);
+					problems.push(`"export.${key}" must be a string or a palette index from 0 to 255`);
 				}
 			}
 		}
@@ -415,53 +416,21 @@ export function resolveThemeColors<T extends Record<string, ColorValue>>(
  * Empty string represents the default terminal color.
  */
 export function resolveToHex(value: string | number, isLight: boolean): string {
-	if (typeof value === "number") return ansi256ToHex(value);
+	if (typeof value === "number") return themePaletteHex(value);
 	if (value === "") return isLight ? "#000000" : "#e5e5e7";
 	return value;
 }
 
 /**
- * Convert a 256-color index to hex string.
- * Indices 0-15: basic colors (approximate)
- * Indices 16-231: 6x6x6 color cube
- * Indices 232-255: grayscale ramp
+ * The `#rrggbb` of a theme palette index. `validateThemeJson` admits only an integer from 0 to 255,
+ * so an index outside that range here comes from a theme that was never validated.
  */
-export function ansi256ToHex(index: number): string {
-	// Basic colors (0-15) - approximate common terminal values
-	const basicColors = [
-		"#000000",
-		"#800000",
-		"#008000",
-		"#808000",
-		"#000080",
-		"#800080",
-		"#008080",
-		"#c0c0c0",
-		"#808080",
-		"#ff0000",
-		"#00ff00",
-		"#ffff00",
-		"#0000ff",
-		"#ff00ff",
-		"#00ffff",
-		"#ffffff",
-	];
-	if (index < 16) {
-		return basicColors[index];
+export function themePaletteHex(index: number): string {
+	const hex = ansi256ToHex(index);
+	if (hex === undefined) {
+		throw new RangeError(
+			`Theme palette index ${index} is not an integer from 0 to 255. Fix: use an index in that range.`,
+		);
 	}
-
-	// Color cube (16-231): 6x6x6 = 216 colors
-	if (index < 232) {
-		const cubeIndex = index - 16;
-		const r = Math.floor(cubeIndex / 36);
-		const g = Math.floor((cubeIndex % 36) / 6);
-		const b = cubeIndex % 6;
-		const toHex = (n: number) => (n === 0 ? 0 : 55 + n * 40).toString(16).padStart(2, "0");
-		return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-	}
-
-	// Grayscale (232-255): 24 shades
-	const gray = 8 + (index - 232) * 10;
-	const grayHex = gray.toString(16).padStart(2, "0");
-	return `#${grayHex}${grayHex}${grayHex}`;
+	return hex;
 }

@@ -10,7 +10,7 @@ import type { AssistantMessage, Context, Message, ToolResultMessage } from "@vey
 import { normalizeResponsesToolCallId } from "@veyyon/ai/utils";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -25,21 +25,11 @@ import {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const LONG_A = "call_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|fc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const LONG_B = "call_cccccccccccccccccccccccccccccccc|fc_dddddddddddddddddddddddddddddddddddd";
 const LONG_C = "call_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee|fc_ffffffffffffffffffffffffffffffff";
-
-function usage() {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function assistantWithCalls(
 	ids: string[],
@@ -56,7 +46,7 @@ function assistantWithCalls(
 		api: opts.api ?? "openai-responses",
 		provider: opts.provider ?? "openai",
 		model: opts.model ?? "gpt-test",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1_000,
 	};
@@ -385,8 +375,7 @@ describe("AgentSession transformProviderContext canonicalization", () => {
 
 	async function createHarness(seedMessages: Message[] = []) {
 		const observedContexts: Context[] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
@@ -429,7 +418,7 @@ describe("AgentSession transformProviderContext canonicalization", () => {
 					api: "anthropic-messages" as const,
 					provider: "anthropic" as const,
 					model: "claude-sonnet-4-5",
-					usage: usage(),
+					usage: emptyUsage(),
 					stopReason: "stop" as const,
 					timestamp: Date.now(),
 				};

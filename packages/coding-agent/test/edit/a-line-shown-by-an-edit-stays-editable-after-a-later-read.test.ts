@@ -23,11 +23,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as format from "@veyyon/hashline/format";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const SOURCE = [
 	"// header one",
@@ -90,29 +92,6 @@ function createSession(cwd: string): ToolSession {
 		settings: Settings.isolated({}),
 		enableLsp: false,
 	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 function tagFromOutput(text: string, name: string): string {
@@ -179,10 +158,10 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			const first = await new ReadTool(session).execute("r1", {
 				path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
 			});
-			const tag = tagFromOutput(resultText(first), "source.ts");
+			const tag = tagFromOutput(toolResultText(first), "source.ts");
 
-			const edited = resultText(
-				await executeHashlineSingle(execOptions(`[source.ts#${tag}]\n${hunk.body}`, session)),
+			const edited = toolResultText(
+				await executeHashlineSingle(hashlineExecOptions(`[source.ts#${tag}]\n${hunk.body}`, session)),
 			);
 			const name = hunk.dest ?? "source.ts";
 			const target = path.join(tmpDir, name);
@@ -192,7 +171,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			const later = await new ReadTool(session).execute("r2", {
 				path: `${target}:${LATER_READ.start}-${LATER_READ.end}`,
 			});
-			expect(tagFromOutput(resultText(later), name)).toBe(editedTag);
+			expect(tagFromOutput(toolResultText(later), name)).toBe(editedTag);
 
 			const shown = new Set([...shownRows(edited, lines), ...firstReadLines(lines)]);
 			for (let line = LATER_READ.start; line <= LATER_READ.end; line++) shown.add(line);
@@ -202,10 +181,12 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			const unshown = Array.from({ length: 10 }, (_, i) => 15 + i).find(line => !shown.has(line));
 			expect(unshown).toBeDefined();
 			await expect(
-				executeHashlineSingle(execOptions(`[${name}#${editedTag}]\n${swaps([unshown!], lines)}`, session)),
+				executeHashlineSingle(hashlineExecOptions(`[${name}#${editedTag}]\n${swaps([unshown!], lines)}`, session)),
 			).rejects.toThrow(/never displayed \(it showed/);
 
-			await executeHashlineSingle(execOptions(`[${name}#${editedTag}]\n${swaps([...shown], lines)}`, session));
+			await executeHashlineSingle(
+				hashlineExecOptions(`[${name}#${editedTag}]\n${swaps([...shown], lines)}`, session),
+			);
 			const after = (await fs.readFile(target, "utf8")).split("\n");
 			for (const line of shown) expect(after[line - 1]).toBe(`${lines[line - 1]} // kept`);
 		});
@@ -216,11 +197,11 @@ describe("a line shown by an edit stays editable after a later read", () => {
 		const first = await new ReadTool(session).execute("r1", {
 			path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
 		});
-		const tag = tagFromOutput(resultText(first), "source.ts");
+		const tag = tagFromOutput(toolResultText(first), "source.ts");
 		await fs.writeFile(source, CONTENT.replace("const v20 = 20;", "const v20 = 200;"));
 
-		const edited = resultText(
-			await executeHashlineSingle(execOptions(`[source.ts#${tag}]\n${HUNKS.SWAP.body}`, session)),
+		const edited = toolResultText(
+			await executeHashlineSingle(hashlineExecOptions(`[source.ts#${tag}]\n${HUNKS.SWAP.body}`, session)),
 		);
 		expect(edited).toContain("Recovered");
 		const editedTag = tagFromOutput(edited, "source.ts");
@@ -228,17 +209,19 @@ describe("a line shown by an edit stays editable after a later read", () => {
 		const later = await new ReadTool(session).execute("r2", {
 			path: `${source}:${LATER_READ.start}-${LATER_READ.end}`,
 		});
-		expect(tagFromOutput(resultText(later), "source.ts")).toBe(editedTag);
+		expect(tagFromOutput(toolResultText(later), "source.ts")).toBe(editedTag);
 
 		const shown = new Set([...shownRows(edited, lines), ...firstReadLines(lines)]);
 		for (let line = LATER_READ.start; line <= LATER_READ.end; line++) shown.add(line);
 		const changed = lines.indexOf("const v20 = 200;") + 1;
 		expect(shown.has(changed)).toBe(false);
 		await expect(
-			executeHashlineSingle(execOptions(`[source.ts#${editedTag}]\n${swaps([changed], lines)}`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[source.ts#${editedTag}]\n${swaps([changed], lines)}`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 
-		await executeHashlineSingle(execOptions(`[source.ts#${editedTag}]\n${swaps([...shown], lines)}`, session));
+		await executeHashlineSingle(
+			hashlineExecOptions(`[source.ts#${editedTag}]\n${swaps([...shown], lines)}`, session),
+		);
 		const after = (await fs.readFile(source, "utf8")).split("\n");
 		for (const line of shown) expect(after[line - 1]).toBe(`${lines[line - 1]} // kept`);
 	});

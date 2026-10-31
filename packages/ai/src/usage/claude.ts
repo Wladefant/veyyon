@@ -27,7 +27,7 @@ import {
 	parseAnthropicResetStatus,
 } from "./anthropic-reset";
 import { claudeOAuthHeaders, normalizeClaudeBaseUrl } from "./claude-oauth-endpoint";
-import { usageStatusFromUsedFraction } from "./shared";
+import { usageAmountFromUsedPercent, usageStatusFromUsedFraction } from "./shared";
 
 const FIVE_HOURS_MS = 5 * HOUR_MS;
 const MAX_ATTEMPTS = 3;
@@ -358,17 +358,7 @@ async function fetchProfile(
 }
 
 function buildUsageAmount(utilization: number | undefined): UsageAmount | undefined {
-	if (utilization === undefined) return undefined;
-	const clamped = clamp(utilization, 0, 100);
-	const usedFraction = clamped / 100;
-	return {
-		used: clamped,
-		limit: 100,
-		remaining: Math.max(0, 100 - clamped),
-		usedFraction,
-		remainingFraction: Math.max(0, 1 - usedFraction),
-		unit: "percent",
-	};
+	return utilization === undefined ? undefined : usageAmountFromUsedPercent(utilization);
 }
 
 // Claude omits the status field entirely when the used fraction is unknown

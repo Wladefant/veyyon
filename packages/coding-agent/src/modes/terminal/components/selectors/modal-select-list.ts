@@ -10,9 +10,9 @@ import {
 	type SelectListTheme,
 } from "@veyyon/tui";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import {
-	computeModalDims,
+	emptyModalArea,
+	layoutModalCard,
 	MODAL_SIZING_MEDIUM,
 	type ModalSizing,
 	modalWidthForContent,
@@ -21,6 +21,7 @@ import {
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
@@ -72,6 +73,8 @@ export interface ModalSelectListOptions {
  */
 export class ModalSelectListComponent implements Component {
 	#list: SelectList;
+	/** Rows the list shows when the card has room for them. */
+	#maxVisible: number;
 	#title: string;
 	#tipCandidates: readonly string[] | undefined;
 	#getTerminalRows: () => number;
@@ -106,11 +109,11 @@ export class ModalSelectListComponent implements Component {
 		this.#getTerminalRows = options.getTerminalRows ?? (() => process.stdout.rows || 40);
 		this.#onCancel = callbacks.onCancel;
 
-		const maxVisible = options.maxVisible ?? Math.min(12, Math.max(5, options.items.length));
+		this.#maxVisible = options.maxVisible ?? Math.min(12, Math.max(5, options.items.length));
 		// The footer names every key and the search, so the list's status row carries only a live
 		// query. Left on, it printed a second legend (`↑↓ move · ↵ select · esc close`) directly
 		// above the footer's own.
-		this.#list = new SelectList(options.items, maxVisible, options.theme, {
+		this.#list = new SelectList(options.items, this.#maxVisible, options.theme, {
 			statusLegend: false,
 			searchPrompt: false,
 			...options.layout,
@@ -195,7 +198,7 @@ export class ModalSelectListComponent implements Component {
 	 *
 	 * The medium card is 60% of the terminal, which cut `/mcp`'s usage hints and descriptions while
 	 * a third of the screen stood empty. Only the floor rises, to the width the list reports it
-	 * needs, so a list that already fits keeps the shared proportions and `computeModalDims` still
+	 * needs, so a list that already fits keeps the shared proportions and `layoutModalCard` still
 	 * caps the card at the sizing's maximum and the terminal's edge.
 	 */
 	#sizing(termHeight: number): ModalSizing {
@@ -212,28 +215,36 @@ export class ModalSelectListComponent implements Component {
 	render(width: number): string[] {
 		const termHeight = this.#getTerminalRows();
 		const sizing = this.#sizing(termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, sizing);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: termHeight }, () => padding(width));
+			return emptyModalArea(width, termHeight);
 		}
 
-		const body = [...this.#list.render(dims.contentWidth)];
+		// The list renders at its own height first. A list taller than the card sheds the tip, the
+		// padding and the reserved footer rows, and a list still taller than that shows fewer
+		// rows, so the shell never clips the rows under the cursor.
+		this.#list.setMaxVisible(this.#maxVisible);
+		let body = this.#list.render(dims.contentWidth);
+		const chrome = planModalChrome(dims, {
+			shortcuts: this.#shortcuts(),
+			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates: this.#tipCandidates,
+			minBodyRows: body.length,
+		});
+		if (body.length > chrome.maxBodyRows) {
+			this.#list.setMaxVisible(this.#maxVisible - (body.length - chrome.maxBodyRows));
+			body = this.#list.render(dims.contentWidth);
+		}
 		if (this.#highWaterWidth !== dims.contentWidth) {
 			this.#highWaterWidth = dims.contentWidth;
 			this.#bodyRowsHighWater = 0;
 		}
 		this.#bodyRowsHighWater = Math.max(this.#bodyRowsHighWater, body.length);
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: this.#title,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body,
 			preferredBodyRows: this.#bodyRowsHighWater,
-			tipCandidates: this.#tipCandidates,
-			shortcuts: this.#shortcuts(),
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

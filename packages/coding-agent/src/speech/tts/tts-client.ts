@@ -1,4 +1,4 @@
-import { logger } from "@veyyon/utils";
+import { logger, toError } from "@veyyon/utils";
 import {
 	createWorkerSubprocess,
 	type RefCountedWorkerHandle,
@@ -186,7 +186,7 @@ export class TtsClient extends WorkerRequestClient<TtsWorkerInbound, RoutedMessa
 			try {
 				return await this.#synthesizeOnce(modelKey, text, options);
 			} catch (error) {
-				const err = error instanceof Error ? error : new Error(String(error));
+				const err = toError(error);
 				// Same recovery as synthesizeStream: the failed worker process has
 				// the corrupt weight bytes memoized, so retry once on a fresh one.
 				if (attempt === 0 && isCorruptModelCacheError(err) && options.signal?.aborted !== true) {
@@ -293,7 +293,7 @@ export class TtsClient extends WorkerRequestClient<TtsWorkerInbound, RoutedMessa
 			try {
 				worker = this.ensureWorker();
 			} catch (error) {
-				return error instanceof Error ? error : new Error(String(error));
+				return toError(error);
 			}
 			const id = this.nextRequestId();
 			activeWorker = worker;

@@ -14,8 +14,10 @@
 import { describe, expect, it } from "bun:test";
 import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
-import type { AssistantMessage, Message, Model, ModelSpec, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { userMessage } from "./helpers";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -43,21 +45,10 @@ function zaiAnthropicMessage(thinkingText: string): AssistantMessage {
 			{ type: "thinking", thinking: thinkingText, thinkingSignature: ZAI_OPAQUE_SIGNATURE },
 			{ type: "text", text: "Done." },
 		],
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};
-}
-
-function userMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
 }
 
 function zaiOpenAITarget(): Model<"openai-completions"> {
@@ -277,14 +268,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 				{ type: "thinking", thinking: "hidden chain-of-thought, must not leak" },
 				{ type: "text", text: "Visible answer." },
 			],
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};

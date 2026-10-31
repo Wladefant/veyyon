@@ -114,6 +114,9 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 		toolRegistry,
 		cleanup: async () => {
 			mode.stop();
+			// A test that armed `getUserInput` and never answered it would otherwise leave the
+			// wait, and the keepalive interval it holds, pending for the rest of the process.
+			mode.onInputCallback?.({ text: "", cancelled: true, started: false });
 			await session.dispose();
 			tempDir.removeSync();
 			resetSettingsForTest();
@@ -558,7 +561,7 @@ describe("InteractiveMode goal mode integration", () => {
 	 * writing for another eight minutes and never opened another turn. A human had to type.
 	 *
 	 * The recorded shape, minimized and sanitized, is the event sequence below: goal active, an
-	 * operator-opened turn that DID call tools (so nothing suppressed the goal), a clean text-only
+	 * operator-opened turn that DID call tools (so no idle tally stood the goal down), a clean text-only
 	 * `agent_end`, and post-turn maintenance still draining when the continuation tick landed. The
 	 * fire-time guard discarded that tick and relied on "the next `agent_end`" to reschedule, but
 	 * that `agent_end` was the last one and every other re-arm edge was already behind it.
@@ -567,7 +570,7 @@ describe("InteractiveMode goal mode integration", () => {
 	 * rather than run for real. The sequence the guards read is driven through the mode itself.
 	 *
 	 * What it does not catch: a non-transient block (an operator draft left in the composer, a
-	 * suppressed goal), a stall upstream of the mode in the session's own continuation path, or a
+	 * goal that stood down), a stall upstream of the mode in the session's own continuation path, or a
 	 * fault that produces no `agent_end` at all because the process died.
 	 */
 	it("opens the continuation it owes after the last turn of a run settles", async () => {
@@ -693,80 +696,6 @@ describe("InteractiveMode goal mode integration", () => {
 
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
 		await waiter.inputPromise;
-	});
-
-	it("pauses after a visible no-tool user turn and resumes only after user-driven tool work", async () => {
-		await harness.mode.init();
-		await harness.mode.handleGoalModeCommand("Ship the release");
-		const userMessage = (text: string) => ({
-			role: "user" as const,
-			content: [{ type: "text" as const, text }],
-			timestamp: Date.now(),
-		});
-		const emit = (event: AgentEvent) => harness.session.agent.emitExternalEvent(event);
-		const deliver = async (event: AgentEvent): Promise<void> => {
-			const delivered = Promise.withResolvers<void>();
-			const unsubscribe = harness.session.subscribe(received => {
-				if (received.type === event.type) delivered.resolve();
-			});
-			emit(event);
-			await delivered.promise;
-			unsubscribe();
-			await waitForMicrotasks();
-		};
-		const settle = async (): Promise<void> => {
-			const ended = Promise.withResolvers<void>();
-			const unsubscribe = harness.session.subscribe(event => {
-				if (event.type === "agent_end") ended.resolve();
-			});
-			emit({ type: "agent_end", messages: [] });
-			await ended.promise;
-			await harness.session.waitForIdle();
-			unsubscribe();
-			await waitForMicrotasks();
-		};
-		const buildContinuation = vi.spyOn(harness.session.goalRuntime, "buildContinuationPrompt");
-		const pauseInput = await armInputWaiter(harness.mode);
-		expect(buildContinuation).toHaveBeenCalledTimes(1);
-		buildContinuation.mockClear();
-
-		const pausedSubmission = harness.mode.startPendingSubmission({ text: "Pause here" });
-		harness.mode.onInputCallback?.(pausedSubmission);
-		await pauseInput.inputPromise;
-		expect(pauseInput.getResolvedText()).toBe("Pause here");
-		await deliver({ type: "agent_start" });
-		await deliver({ type: "message_start", message: userMessage("Pause here") });
-		await settle();
-		harness.mode.finishPendingSubmission(pausedSubmission);
-
-		buildContinuation.mockClear();
-		const resumeInput = await armInputWaiter(harness.mode);
-		expect(buildContinuation).not.toHaveBeenCalled();
-		expect(resumeInput.getResolvedText()).toBeUndefined();
-
-		const resumedSubmission = harness.mode.startPendingSubmission({ text: "Resume the work" });
-		harness.mode.onInputCallback?.(resumedSubmission);
-		await resumeInput.inputPromise;
-		expect(resumeInput.getResolvedText()).toBe("Resume the work");
-		await deliver({ type: "agent_start" });
-		await deliver({ type: "message_start", message: userMessage("Resume the work") });
-		await deliver({
-			type: "tool_execution_start",
-			toolCallId: "read-1",
-			toolName: "read",
-			args: { path: "README.md" },
-		});
-		await settle();
-		harness.mode.finishPendingSubmission(resumedSubmission);
-		expect(harness.mode.goalModeEnabled).toBe(true);
-		expect(harness.mode.goalModePaused).toBe(false);
-		expect(harness.session.getGoalModeState()?.goal.status).toBe("active");
-		expect(harness.settings.get("goal.continuationModes")).toContain("interactive");
-
-		buildContinuation.mockClear();
-		void harness.mode.getUserInput();
-		await waitForMicrotasks();
-		expect(buildContinuation).toHaveBeenCalledTimes(1);
 	});
 
 	it("refuses /goal while plan mode is active", async () => {

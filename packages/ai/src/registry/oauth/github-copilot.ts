@@ -2,7 +2,6 @@
  * GitHub Copilot OAuth flow (device code, with the operator's own GitHub OAuth app; see
  * `../../github-copilot-client-id.ts`)
  */
-import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "@veyyon/catalog/models";
 import {
 	COPILOT_API_HEADERS,
@@ -23,6 +22,7 @@ import {
 } from "../../github-copilot-client-id";
 import type { FetchImpl } from "../../types";
 import { fetchGitHubCopilotJson } from "../../utils/github-copilot-http";
+import { deviceFlowTimeoutError, loginStep, waitForNextLoginPoll } from "./device-code";
 import { emitOAuthSuccessPage } from "./success-page";
 import type { OAuthCredentials } from "./types";
 
@@ -42,8 +42,6 @@ type GitHubCopilotLoginOptions = {
 	onProgress?: (message: string) => void;
 	onSuccessPage?: (url: string) => void;
 	signal?: AbortSignal;
-	pollIntervalFloorMs?: number;
-	pollIntervalScaleMs?: number;
 	fetch?: FetchImpl;
 };
 type DeviceCodeResponse = {
@@ -91,6 +89,7 @@ async function startDeviceFlow(domain: string, clientId: string, fetchImpl: Fetc
 			client_id: clientId,
 			scope: "read:user",
 		}),
+		signal,
 	});
 
 	if (!data || typeof data !== "object") {
@@ -133,27 +132,16 @@ async function pollForGitHubAccessToken(
 	expiresIn: number,
 	signal: AbortSignal | undefined,
 	fetchImpl: FetchImpl,
-	pollIntervalFloorMs = 1000,
-	pollIntervalScaleMs = 1000,
 ) {
 	const urls = getUrls(domain);
 	const deadline = Date.now() + expiresIn * 1000;
-	let intervalMs = Math.max(pollIntervalFloorMs, Math.floor(intervalSeconds * pollIntervalScaleMs));
+	let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
 	let intervalMultiplier = INITIAL_POLL_INTERVAL_MULTIPLIER;
 	let slowDownResponses = 0;
 
 	while (Date.now() < deadline) {
-		if (signal?.aborted) {
-			throw new AIError.LoginCancelledError();
-		}
-
 		const remainingMs = deadline - Date.now();
-		const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
-		try {
-			await scheduler.wait(waitMs, { signal });
-		} catch {
-			throw new AIError.LoginCancelledError();
-		}
+		await waitForNextLoginPoll(Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs), signal);
 
 		const raw = await fetchGitHubCopilotJson(fetchImpl, urls.accessTokenUrl, {
 			method: "POST",
@@ -167,7 +155,7 @@ async function pollForGitHubAccessToken(
 				device_code: deviceCode,
 				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
 			}),
-		});
+		);
 
 		if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
 			const success = raw as DeviceTokenSuccessResponse;
@@ -193,8 +181,8 @@ async function pollForGitHubAccessToken(
 				slowDownResponses += 1;
 				intervalMs =
 					typeof interval === "number" && interval > 0
-						? Math.max(pollIntervalFloorMs, interval * pollIntervalScaleMs)
-						: Math.max(pollIntervalFloorMs, intervalMs + 5 * pollIntervalScaleMs);
+						? Math.max(1000, interval * 1000)
+						: Math.max(1000, intervalMs + 5000);
 				intervalMultiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
 				continue;
 			}
@@ -207,14 +195,7 @@ async function pollForGitHubAccessToken(
 		}
 	}
 
-	if (slowDownResponses > 0) {
-		throw new AIError.OAuthError(
-			"Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.",
-			{ kind: "timeout", provider: "github-copilot" },
-		);
-	}
-
-	throw new AIError.OAuthError("Device flow timed out", { kind: "timeout", provider: "github-copilot" });
+	throw deviceFlowTimeoutError(slowDownResponses, "github-copilot");
 }
 
 /** Far-future expiry (10 years). GitHub OAuth tokens are long-lived; no JWT exchange needed. */
@@ -374,8 +355,6 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 		device.expires_in,
 		options.signal,
 		fetchImpl,
-		options.pollIntervalFloorMs,
-		options.pollIntervalScaleMs,
 	);
 
 	const apiEndpoint = await discoverGitHubCopilotApiEndpoint(githubAccessToken, fetchImpl);

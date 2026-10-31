@@ -3,6 +3,40 @@
 ## [Unreleased]
 
 ## [1.7.0] - 2026-10-31
+### Added
+
+- `AGENT_EVENT_TYPES` in `@veyyon/agent-core/types` lists every agent event type and fails to compile when the event union gains a type it lacks.
+
+### Changed
+
+- Tool normalization reads a tool's supplied `wireParameters` instead of building its `parameters`, and copies a wrapped tool without reading `parameters`.
+- The remote summarizer resolves an Azure model's deployment through the same `@veyyon/ai` helper as Azure turns; no user-facing change.
+- Tool normalization renders a tool's examples against the wire schema it already built instead of converting that schema again; the examples text is unchanged.
+- Building a request's stable prefix renders each tool's description once instead of twice and hashes the prefix fingerprint only when it is read, so the first provider turn of a print-mode session is built in 0.88 ms instead of 1.60 ms.
+
+### Fixed
+
+- A required tool call under an in-band tool dialect is asked for in the conversation text instead of being sent as a native `tool_choice` the dialect never reads.
+- Shake and duplicate elision leave a tool result, block or truncated middle in place when its marker is not smaller than it, and size a captioned image result by its caption, so `/shake` no longer reports a kept image as freed tokens.
+
+## [1.5.10] - 2026-10-25
+
+### Fixed
+
+- When a Cursor turn is cut short by a dropped stream or an abort, the partial-completion ledger reports each exec-channel call whose result arrived as ran instead of "started, no result recorded", and a batch whose every call has its result gets no ledger.
+- `prepareCompaction` and `findCutPoint` treat custom messages of an excluded type as absent when choosing the cut and when deciding a branch is already compacted, so excluding a block never turns an over-budget compaction into a refusal.
+
+## [1.5.9] - 2026-10-22
+
+### Added
+
+- `prepareToolCall` in `@veyyon/agent-core/tool-call-preparation` and `Agent.prepareExternalToolCall` strip the intent field from a tool call's arguments, repair, validate and transform them as the agent loop does, for a provider that runs tool calls itself during the stream.
+
+### Changed
+
+- `normalizeTools` moved from `@veyyon/agent-core/agent-loop` to `@veyyon/agent-core/tool-normalization`, so building the provider-bound tool list no longer loads the agent loop; the package root still exports it.
+- `prepareCompaction` validates only the server-side windows it uses, the newest valid window of each provider and api and the furthest kept boundary's window, instead of every window on the branch, so a pass over a session whose summarized windows were moved to disk reads none of them back.
+- `prepareToolCall` builds every rejection through one constructor; the rejections it returns are unchanged.
 
 ### Fixed
 

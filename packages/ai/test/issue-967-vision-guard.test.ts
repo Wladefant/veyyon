@@ -9,14 +9,22 @@ import type { Api, AssistantMessage, Context, Model, ModelSpec, ToolResultMessag
 import { buildModel } from "@veyyon/catalog/build";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
+
+import { convertMessages as convertGoogleMessages } from "@veyyon/ai/providers/google-shared";
+
+import { convertCodexResponsesMessages } from "@veyyon/ai/providers/openai-codex-responses";
+
+import { convertMessages as convertOpenAICompletionsMessages } from "@veyyon/ai/providers/openai-completions";
+
+import { appendResponsesToolResultMessages, convertResponsesInputContent } from "@veyyon/ai/providers/openai-shared";
+
+import { NON_VISION_IMAGE_PLACEHOLDER } from "@veyyon/ai/providers/vision-guard";
+
+import type { Api, AssistantMessage, Context, Model, ModelSpec, ToolResultMessage } from "@veyyon/ai/types";
+import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 
 const compat: ResolvedOpenAICompat = {
 	supportsStore: true,
@@ -87,7 +95,7 @@ function makeAssistant(api: Model["api"], provider: Model["provider"], modelId: 
 		api,
 		provider,
 		model: modelId,
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 2,
 	};

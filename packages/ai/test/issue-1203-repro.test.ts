@@ -1,36 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function createMockFetch(events: unknown[]): FetchImpl {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-		return createSseResponse(events);
-	}
-	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
-}
-
-function baseContext(): Context {
-	return {
-		messages: [
-			{
-				role: "user",
-				content: "hello",
-				timestamp: Date.now(),
-			},
-		],
-	};
-}
+import { sayHelloContext } from "./helpers";
+import { chatCompletionsStopChunk, sseFetch } from "./helpers/fetch-mock";
 
 function minimaxChunk(model: Model<"openai-completions">, content: string): unknown {
 	return {
@@ -42,29 +15,19 @@ function minimaxChunk(model: Model<"openai-completions">, content: string): unkn
 	};
 }
 
-function stopChunk(model: Model<"openai-completions">): unknown {
-	return {
-		id: "chatcmpl-minimax-cn",
-		object: "chat.completion.chunk",
-		created: 0,
-		model: model.id,
-		choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-	};
-}
-
 describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 	it("parses minimax-code-cn <think> content into a thinking block", async () => {
 		const model = getBundledModel("minimax-code-cn", "MiniMax-M2.5") as Model<"openai-completions">;
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			minimaxChunk(model, "<think>"),
 			minimaxChunk(model, "hidden reasoning"),
 			minimaxChunk(model, "</think>"),
 			minimaxChunk(model, "visible answer"),
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -77,7 +40,7 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 
 	it("does not duplicate MiniMax-M3 reasoning when content also carries think tags", async () => {
 		const model = getBundledModel("minimax-code-cn", "MiniMax-M3") as Model<"openai-completions">;
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-minimax-cn",
 				object: "chat.completion.chunk",
@@ -109,11 +72,11 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 					},
 				],
 			},
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -126,7 +89,7 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 
 	it("dedupes MiniMax-M3 cumulative reasoning snapshots after answer text has started", async () => {
 		const model = getBundledModel("minimax-code-cn", "MiniMax-M3") as Model<"openai-completions">;
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-minimax-cn",
 				object: "chat.completion.chunk",
@@ -177,11 +140,11 @@ describe("issue #1203 - MiniMax Coding Plan CN think tags", () => {
 					},
 				],
 			},
-			stopChunk(model),
+			chatCompletionsStopChunk(model),
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();

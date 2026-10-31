@@ -750,22 +750,26 @@ export function updateRowByKey(
 	key: string,
 	data: Record<string, unknown>,
 ): number {
-	getTableMasterRow(db, table);
-	const entries = validateWriteColumns(db, table, data);
-	if (entries.length === 0) {
-		throw new ToolError("SQLite updates require at least one column value");
-	}
-
-	const assignments = entries.map(([column]) => `${quoteSqliteIdentifier(column)} = ?`).join(", ");
-	const bindings = entries.map(([, value]) => value);
-	bindings.push(coerceLookupValue(key, pk.type ?? ""));
-	const statement = db.prepare<SqliteRow, SQLQueryBindings[]>(
-		`UPDATE ${quoteSqliteIdentifier(table)} SET ${assignments} WHERE ${quoteSqliteIdentifier(pk.column)} = ?`,
+	return updateRowsWhere(db, table, data, quoteSqliteIdentifier(pk.column), () =>
+		coerceLookupValue(key, pk.type ?? ""),
 	);
-	return statement.run(...bindings).changes;
 }
 
 export function updateRowByRowId(db: Database, table: string, key: string, data: Record<string, unknown>): number {
+	return updateRowsWhere(db, table, data, "rowid", () => coerceIntegerKey(key, "SQLite ROWID"));
+}
+
+/**
+ * Set `data` on the rows whose `keyColumn` (already quoted) equals the coerced key, returning the row
+ * count changed. The key is coerced after the columns are validated, so a bad column is reported first.
+ */
+function updateRowsWhere(
+	db: Database,
+	table: string,
+	data: Record<string, unknown>,
+	keyColumn: string,
+	coerceKey: () => SqliteBinding,
+): number {
 	getTableMasterRow(db, table);
 	const entries = validateWriteColumns(db, table, data);
 	if (entries.length === 0) {
@@ -774,9 +778,9 @@ export function updateRowByRowId(db: Database, table: string, key: string, data:
 
 	const assignments = entries.map(([column]) => `${quoteSqliteIdentifier(column)} = ?`).join(", ");
 	const bindings = entries.map(([, value]) => value);
-	bindings.push(coerceIntegerKey(key, "SQLite ROWID"));
+	bindings.push(coerceKey());
 	const statement = db.prepare<SqliteRow, SQLQueryBindings[]>(
-		`UPDATE ${quoteSqliteIdentifier(table)} SET ${assignments} WHERE rowid = ?`,
+		`UPDATE ${quoteSqliteIdentifier(table)} SET ${assignments} WHERE ${keyColumn} = ?`,
 	);
 	return statement.run(...bindings).changes;
 }

@@ -3,9 +3,16 @@ import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getOrCreateSnapshot, sanitizeSnapshotForBrush } from "@veyyon/coding-agent/utils/shell-snapshot";
 import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "text" };
+
+/** The snapshot directory a process whose temp directory is `tmp` writes to: the user's private temp directory. */
+function snapshotDirIn(tmp: string): string {
+	const uid = process.getuid?.();
+	return path.join(tmp, uid === undefined ? "veyyon" : `veyyon-${uid}`, "shell-snapshots");
+}
 
 // macOS ships bash at `/bin/bash`, not `/usr/bin/bash`; resolve a real bash the
 // same way `bash-executor.test.ts` does so these e2e tests stay portable. The
@@ -281,7 +288,7 @@ describe("getOrCreateSnapshot", () => {
 
 		// PR-review hardening: snapshot file must be group/world-unreadable since
 		// it now inlines env-var values. Directory must be 0700 for the same
-		// reason — UUID filenames shouldn't leak via `ls /tmp/veyyon-shell-snapshots`.
+		// reason — UUID filenames shouldn't leak via `ls` of the snapshot directory.
 		const fileStat = await fs.stat(snapshotPath!);
 		expect(fileStat.mode & 0o077).toBe(0);
 		const dirStat = await fs.stat(path.dirname(snapshotPath!));
@@ -326,7 +333,7 @@ describe("getOrCreateSnapshot", () => {
 			await fs.chmod(fakeShell, 0o755);
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -351,7 +358,7 @@ describe("getOrCreateSnapshot", () => {
 			const fakeShell = path.join(testRoot, "does-not-exist-shell");
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -378,7 +385,7 @@ describe("getOrCreateSnapshot", () => {
 			await fs.chmod(fakeShell, 0o755);
 
 			const env = { ...process.env, HOME: testRoot };
-			const snapshotDir = path.join(testRoot, "veyyon-shell-snapshots");
+			const snapshotDir = snapshotDirIn(testRoot);
 
 			const snapshotPath = await getOrCreateSnapshot(fakeShell, env);
 			expect(snapshotPath).toBeNull();
@@ -442,7 +449,93 @@ describe("getOrCreateSnapshot", () => {
 				exitCode: 143,
 				created: ["string", "string"],
 			});
-			expect(await fs.readdir(path.join(tmp, "veyyon-shell-snapshots"))).toEqual([]);
+			expect(await fs.readdir(snapshotDirIn(tmp))).toEqual([]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	// WHY: two first calls made together each spawned a snapshot shell and returned a different file.
+	// The bash executor keys its persistent shell session on the snapshot path, so parallel first
+	// commands opened two sessions, and the file of the call that finished first fell out of the cache,
+	// where the exit cleanup never reached it. Does not cover one shell reached through two paths, which
+	// the cache keys separately.
+	it("gives parallel first calls of a shell one snapshot", async () => {
+		if (!existsSync(REAL_BASH)) return;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-snap-parallel-"));
+		const originalTmpDir = process.env.TMPDIR;
+		const tmp = path.join(root, "tmp");
+		const home = path.join(root, "home");
+		await fs.mkdir(tmp);
+		await fs.mkdir(home);
+		await fs.writeFile(path.join(home, ".bashrc"), "export SNAP_PARALLEL_PROBE=1\n");
+		const shell = path.join(root, "bash-parallel");
+		await fs.symlink(REAL_BASH, shell);
+		process.env.TMPDIR = tmp;
+		try {
+			const env = { ...process.env, HOME: home };
+			const parallel = await Promise.all([0, 1, 2].map(() => getOrCreateSnapshot(shell, env)));
+			const later = await getOrCreateSnapshot(shell, env);
+			const files = await fs.readdir(snapshotDirIn(tmp));
+
+			expect(typeof later).toBe("string");
+			expect({ parallel, files }).toEqual({ parallel: [later, later, later], files: [path.basename(later!)] });
+		} finally {
+			if (originalTmpDir === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = originalTmpDir;
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	// WHY: the exit cleanup removed only finished snapshots. A process that exited while a snapshot
+	// shell still ran left that shell's file, holding the inlined values of exported variables, in the
+	// shared tmp directory, and the shell kept running and wrote it again after any removal. Driven
+	// through the real SIGTERM path in a child process. The fake shell sleeps before handing the real
+	// snapshot script to bash, so a shell that survives the exit writes the file back after the removal.
+	it("stops a snapshot shell still running at SIGTERM and removes its file", async () => {
+		if (!existsSync(REAL_BASH)) return;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-snap-inflight-"));
+		try {
+			const home = path.join(root, "home");
+			const tmp = path.join(root, "tmp");
+			await fs.mkdir(home);
+			await fs.mkdir(tmp);
+			await fs.writeFile(path.join(home, ".bashrc"), "export SNAP_INFLIGHT_PROBE=1\n");
+			const shell = path.join(root, "slow-bash.sh");
+			await fs.writeFile(shell, `#!/bin/sh\nsleep 1\nexec ${REAL_BASH} "$@"\n`);
+			await fs.chmod(shell, 0o755);
+			const snapshotDir = snapshotDirIn(tmp);
+			const module = pathToFileURL(path.join(import.meta.dir, "../src/utils/shell-snapshot.ts")).href;
+			const probe = path.join(root, "probe.ts");
+			await fs.writeFile(
+				probe,
+				[
+					`import * as fs from "node:fs";`,
+					`import { getOrCreateSnapshot } from ${JSON.stringify(module)};`,
+					`void getOrCreateSnapshot(${JSON.stringify(shell)}, process.env);`,
+					`process.stdout.write(JSON.stringify(fs.readdirSync(${JSON.stringify(snapshotDir)})));`,
+					`setTimeout(() => {}, 10_000);`,
+					`setTimeout(() => process.kill(process.pid, "SIGTERM"), 100);`,
+				].join("\n"),
+			);
+			const child = Bun.spawn([process.execPath, probe], {
+				env: { ...process.env, HOME: home, TMPDIR: tmp },
+				stdout: "pipe",
+				stderr: "ignore",
+				timeout: 15_000,
+				killSignal: "SIGKILL",
+			});
+			const stdout = await readStream(child.stdout as ReadableStream<Uint8Array> | null);
+			await child.exited;
+			const running = JSON.parse(stdout) as string[];
+			// Past the fake shell's sleep, when a surviving shell would have written its file back.
+			await sleep(2_000);
+
+			expect({ exitCode: child.exitCode, running: running.length, after: await fs.readdir(snapshotDir) }).toEqual({
+				exitCode: 143,
+				running: 1,
+				after: [],
+			});
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}

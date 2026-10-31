@@ -9,10 +9,11 @@ import {
 	resolveDefaultModelAssignment,
 	sortModelItems,
 } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
-import { getThemeByName, initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
+import { requireTheme } from "./helpers/require-theme";
 
 function makeModel(provider: string, id: string): Model {
 	return buildModel({
@@ -136,8 +137,7 @@ describe("ModelBrowser hover controller lifecycle", () => {
 		originalTheme = theme;
 		originalColorterm = Bun.env.COLORTERM;
 		Bun.env.COLORTERM = "truecolor";
-		const loaded = await getThemeByName("titanium");
-		if (loaded) setThemeInstance(loaded);
+		setThemeInstance(await requireTheme("titanium"));
 		policy = getAnsiPolicy();
 		setAnsiPolicy("full");
 	});

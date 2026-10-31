@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import {
+	decodeStreamedToolArgs,
+	streamingStringKeysForTool,
+} from "@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "@veyyon/coding-agent/tools/core/streamed-tool-args";
@@ -6,9 +11,8 @@ import { writeToolView } from "@veyyon/coding-agent/tools/fs/write-view";
 import type { TUI } from "@veyyon/tui";
 import { createToolExecution } from "./helpers/tool-execution";
 
-const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
 const hasLine = (lines: readonly string[], n: number): boolean =>
-	new RegExp(`\\bline ${n}\\b`).test(stripAnsi(lines.join("\n")));
+	new RegExp(`\\bline ${n}\\b`).test(stripVTControlCharacters(lines.join("\n")));
 
 describe("write streaming preview honors Ctrl+O expansion", () => {
 	let initialized = false;
@@ -51,7 +55,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		expect(hasLine(collapsed, 40)).toBe(true);
 		// ...but the head is capped away with an "earlier lines" marker.
 		expect(hasLine(collapsed, 1)).toBe(false);
-		expect(stripAnsi(collapsed.join("\n"))).toContain("earlier line");
+		expect(stripVTControlCharacters(collapsed.join("\n"))).toContain("earlier line");
 
 		comp.setExpanded(true);
 		const expanded = comp.render(80);
@@ -59,7 +63,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		// and the "earlier lines" marker is gone.
 		expect(hasLine(expanded, 1)).toBe(true);
 		expect(hasLine(expanded, 40)).toBe(true);
-		expect(stripAnsi(expanded.join("\n"))).not.toContain("earlier line");
+		expect(stripVTControlCharacters(expanded.join("\n"))).not.toContain("earlier line");
 		// Expanding must strictly grow the preview, not just reformat it.
 		expect(expanded.length).toBeGreaterThan(collapsed.length);
 	});
@@ -69,7 +73,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		const collapsed = comp.render(80);
 		expect(hasLine(collapsed, 1)).toBe(true);
 		expect(hasLine(collapsed, 4)).toBe(true);
-		expect(stripAnsi(collapsed.join("\n"))).not.toContain("earlier line");
+		expect(stripVTControlCharacters(collapsed.join("\n"))).not.toContain("earlier line");
 	});
 	it("highlights a streaming write once across widths and spinner frames", async () => {
 		// A live write recomposes on every spinner tick — the card's display key carries the frame —
@@ -109,10 +113,10 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		const grown = draw(2);
 		grown.render(120);
 		expect(gutters).toBe(3);
-		expect(stripAnsi(grown.render(120).join("\n"))).toContain("const c = 3;");
+		expect(stripVTControlCharacters(grown.render(120).join("\n"))).toContain("const c = 3;");
 		// And the row that arrived is numbered where it sits in the file, not where it sits in the
 		// window, so the memo cannot be satisfied by a stale gutter.
-		expect(stripAnsi(grown.render(120).join("\n"))).toContain("  3 const c = 3;");
+		expect(stripVTControlCharacters(grown.render(120).join("\n"))).toContain("  3 const c = 3;");
 	});
 
 	it("changes only its liveness row as the spinner advances", async () => {
@@ -131,7 +135,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		const second = rowsAt(1);
 		expect(second.slice(0, -1)).toEqual(first.slice(0, -1));
 		// The last row is the one that ticks, and it is the streaming row rather than a code row.
-		expect(stripAnsi(first.at(-1) ?? "")).toContain("… (streaming)");
+		expect(stripVTControlCharacters(first.at(-1) ?? "")).toContain("… (streaming)");
 		expect(second.at(-1)).not.toBe(first.at(-1));
 	});
 
@@ -148,7 +152,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			0,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
+		const rendered = stripVTControlCharacters(component.render(120).join("\n"));
 		expect(rendered).toContain("object first");
 		expect(rendered).toContain("object second");
 		expect(rendered).toMatch(/\b2 object second\b/);
@@ -171,7 +175,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			uiTheme,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
+		const rendered = stripVTControlCharacters(component.render(120).join("\n"));
 		expect(rendered).toContain("merged first");
 		expect(rendered).toContain("merged second");
 		expect(rendered).toContain("2 lines");
@@ -210,7 +214,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			0,
 		);
 
-		const rendered = stripAnsi(component.render(100).join("\n"));
+		const rendered = stripVTControlCharacters(component.render(100).join("\n"));
 		expect(rendered).toContain("Writing 12 bytes to tab");
 		expect(rendered).not.toContain("\t");
 		expect(rendered).not.toContain("UNTRUNCATED_TAIL_SENTINEL");
@@ -244,7 +248,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		// that reads args.content.
 		const comp = createToolExecution("write", renderArgs, {}, undefined, uiStub);
 
-		const rendered = stripAnsi(comp.render(100).join("\n"));
+		const rendered = stripVTControlCharacters(comp.render(100).join("\n"));
 		expect(rendered).toContain("GROWN_TAIL_SENTINEL");
 	});
 });

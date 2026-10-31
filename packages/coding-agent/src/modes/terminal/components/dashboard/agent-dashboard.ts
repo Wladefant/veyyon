@@ -62,7 +62,7 @@ import {
 	Text,
 	type TUI,
 } from "@veyyon/tui";
-import { clampLow, errorMessage, formatAge, formatMoreLines, getProjectDir, logger } from "@veyyon/utils";
+import { clampLow, errorMessage, formatAge, formatMoreLines, getProjectDir, logger, wrapIndex } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -89,7 +89,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
@@ -204,15 +204,6 @@ interface RosterExtras {
 }
 
 /**
- * The Live roster: one row per agent that exists, including the ones parked on
- * disk from previous runs.
- *
- * Deliberately NOT a configuration list. It only ever shows agents that exist,
- * which means a disabled specialist cannot appear in it at all: not by a filter
- * that could drift, but because a disabled agent is never spawned and so never
- * registers.
- */
-/**
  * Narrowest a model badge is worth drawing.
  *
  * `claude-son…` is a model you can recognise; `clau…` is four columns spent on
@@ -258,6 +249,15 @@ interface RosterColumns {
 	age: number;
 }
 
+/**
+ * The Live roster: one row per agent that exists, including the ones parked on
+ * disk from previous runs.
+ *
+ * Deliberately NOT a configuration list. It only ever shows agents that exist,
+ * which means a disabled specialist cannot appear in it at all: not by a filter
+ * that could drift, but because a disabled agent is never spawned and so never
+ * registers.
+ */
 class LiveRosterPane implements Component {
 	constructor(
 		private readonly agents: readonly LiveAgent[],
@@ -514,11 +514,10 @@ class AgentTerminationDialog implements Component {
 
 	render(width: number): readonly string[] {
 		const height = this.terminalRows();
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const type = agentType(this.agent);
@@ -531,17 +530,18 @@ class AgentTerminationDialog implements Component {
 			"",
 			...wrapTextWithAnsi(theme.fg("warning", warning), dims.contentWidth),
 		];
-		const shell = renderModalShell({
-			title: "Terminate agent?",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body,
-			preferredBodyRows: body.length,
-			shortcuts: TERMINATION_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: TERMINATION_SHORTCUTS,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: "Terminate agent?",
+				body,
+				preferredBodyRows: body.length,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		return shell.lines;
 	}
@@ -1246,37 +1246,29 @@ export class AgentDashboard extends Container {
 		// every other modal floated in the middle. The shell shrinks the card to
 		// `preferredBodyRows` below and re-centres it in this area.
 		const area = this.#terminalRows();
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, area);
-		const dims = computeModalDims(width, area, sizing);
+		const dims = layoutModalCard(width, area, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: area }, () => padding(width));
+			return emptyModalArea(width, area);
 		}
 
 		this.#contentWidth = dims.contentWidth;
 		const shortcuts = this.#currentShortcuts();
-		this.#bodyBudget = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
-		}).maxBodyRows;
+		});
+		this.#bodyBudget = chrome.maxBodyRows;
 		// Rebuild when terminal geometry changes so the card re-fits on resize.
 		if (area !== this.#builtRows || dims.contentWidth !== this.#builtCols) {
 			this.#buildLayout();
 		}
 
 		const body = super.render(dims.contentWidth);
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Agent Dashboard",
-			sizing,
-			areaWidth: width,
-			areaHeight: area,
 			body,
 			preferredBodyRows: this.#preferredBodyRows(body.length),
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 
@@ -1284,7 +1276,7 @@ export class AgentDashboard extends Container {
 		// The body's left edge: the card's border plus the ONE column `row()` in
 		// overlay-box insets every line by (`│ ` … ` │`). That inset is fixed and
 		// is NOT `sizing.hPad` — hPad narrows the content through
-		// `computeModalDims`, it does not move where the content starts. This used
+		// `layoutModalCard`, it does not move where the content starts. This used
 		// to add hPad and so landed one column right on any card whose padding was
 		// not compact, which put the row-local [x] permanently out of reach of the
 		// pointer while still drawing it under the cursor.
@@ -1294,7 +1286,7 @@ export class AgentDashboard extends Container {
 
 	#switchView(direction: 1 | -1): void {
 		const index = VIEW_ORDER.indexOf(this.#activeView);
-		this.#activeView = VIEW_ORDER[(index + direction + VIEW_ORDER.length) % VIEW_ORDER.length];
+		this.#activeView = VIEW_ORDER[wrapIndex(index + direction, VIEW_ORDER.length)];
 		this.#notice = undefined;
 		this.#liveHoveredIndex = -1;
 		if (this.#activeView === "live") this.#refreshLiveAgents();

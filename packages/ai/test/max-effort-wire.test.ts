@@ -7,6 +7,7 @@ import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { createCodexModel } from "./helpers";
+import { chatCompletionsOkSse, responsesCompletedSse } from "./helpers/fetch-mock";
 
 // End-to-end guard for the first-class `max` reasoning tier: a user-requested
 // `reasoning: "max"` on a model whose ladder natively includes `Effort.Max`
@@ -17,33 +18,6 @@ import { createCodexModel } from "./helpers";
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
 
 const MAX_LADDER = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max] as const;
-
-function chatSse(): Response {
-	const chunk = (delta: unknown, finish: string | null) =>
-		JSON.stringify({
-			id: "x",
-			object: "chat.completion.chunk",
-			created: 0,
-			choices: [{ index: 0, delta, finish_reason: finish }],
-		});
-	return new Response(`data: ${chunk({ content: "ok" }, null)}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function responsesSse(): Response {
-	return new Response(
-		`data: ${JSON.stringify({
-			type: "response.completed",
-			response: {
-				status: "completed",
-				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
-			},
-		})}\n\n`,
-		{ status: 200, headers: { "content-type": "text/event-stream" } },
-	);
-}
 
 describe("first-class max reasoning tier wire coverage", () => {
 	it("sends reasoning_effort:max on Chat Completions", async () => {
@@ -69,7 +43,7 @@ describe("first-class max reasoning tier wire coverage", () => {
 		let body: Record<string, unknown> | undefined;
 		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-			return chatSse();
+			return chatCompletionsOkSse();
 		});
 		for await (const event of streamOpenAICompletions(model, context, {
 			apiKey: "k",
@@ -103,7 +77,7 @@ describe("first-class max reasoning tier wire coverage", () => {
 		let body: Record<string, unknown> | undefined;
 		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-			return responsesSse();
+			return responsesCompletedSse();
 		});
 		for await (const event of streamOpenAIResponses(model, context, {
 			apiKey: "k",

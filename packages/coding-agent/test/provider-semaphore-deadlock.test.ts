@@ -9,36 +9,21 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { StreamFn } from "@veyyon/agent-core";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { wrapStreamFnWithProviderConcurrency } from "@veyyon/coding-agent/task/provider-concurrency";
-
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
-function requireModel(provider: string, id: string): Model {
-	const model = getBundledModel(provider as Parameters<typeof getBundledModel>[0], id);
-	if (!model) throw new Error(`Expected bundled model ${provider}/${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
- * Build a base StreamFn that gates each invocation through an externally
- * resolved Deferred, so the test can interleave parent and child turns
+ * Build a base StreamFn that gates each invocation on a promise the test
+ * resolves, so the test can interleave parent and child turns
  * deterministically without leaning on wall-clock timers.
  */
 function makeGatedStream(): {
 	stream: StreamFn;
-	gates: Deferred[];
+	gates: PromiseWithResolvers<void>[];
 	invocations: () => number;
 	inFlight: () => number;
 	peakInFlight: () => number;
@@ -46,9 +31,9 @@ function makeGatedStream(): {
 	let inFlight = 0;
 	let peakInFlight = 0;
 	let invocations = 0;
-	const gates: Deferred[] = [];
+	const gates: PromiseWithResolvers<void>[] = [];
 	const stream: StreamFn = model => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		gates.push(gate);
 		invocations++;
 		inFlight++;
@@ -62,14 +47,7 @@ function makeGatedStream(): {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			};
@@ -103,7 +81,7 @@ async function waitFor(check: () => boolean, label: string): Promise<void> {
 
 describe("issue #3749: provider semaphore deadlock", () => {
 	it("releases the slot between LLM turns so a child can acquire while the parent is mid-conversation", async () => {
-		const model = requireModel("ollama-cloud", "gpt-oss:120b");
+		const model = requireBundledModel("ollama-cloud", "gpt-oss:120b");
 		const settings = Settings.isolated({ "providers.ollama-cloud.maxConcurrency": 1 });
 		const { stream, gates, invocations, inFlight, peakInFlight } = makeGatedStream();
 		const wrapped = wrapStreamFnWithProviderConcurrency(settings, stream);
@@ -141,7 +119,7 @@ describe("issue #3749: provider semaphore deadlock", () => {
 	});
 
 	it("admits a deeper spawn tree than maxConcurrency without deadlocking", async () => {
-		const model = requireModel("ollama-cloud", "gpt-oss:120b");
+		const model = requireBundledModel("ollama-cloud", "gpt-oss:120b");
 		const settings = Settings.isolated({ "providers.ollama-cloud.maxConcurrency": 2 });
 		const { stream, gates, invocations, peakInFlight } = makeGatedStream();
 		const wrapped = wrapStreamFnWithProviderConcurrency(settings, stream);

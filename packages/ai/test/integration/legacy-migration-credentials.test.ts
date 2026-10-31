@@ -17,7 +17,7 @@ import { assertIsolatedAppPath, guardDestructivePath } from "../../../utils/test
  * `~/.veyyon/profiles/default/` must carry the CREDENTIAL STORE across intact,
  * exactly once.
  *
- * `global-config.test.ts` already covers the migration's structure: no-op on a
+ * `the-global-config-selects-the-profile-and-migrates-the-legacy-layout.test.ts` already covers the migration's structure: no-op on a
  * fresh root, loud refusal on a genuine conflict, and resuming an interrupted
  * move. What it does not cover is the payload, which is the part a user feels. A
  * migration that moves directories correctly but leaves the credential database

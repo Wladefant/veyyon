@@ -11,7 +11,11 @@ import { computeDigest, median, recordSettledStartup } from "./record-settled-st
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const CLI_SOURCE = path.join(REPO_ROOT, "packages", "coding-agent", "src", "cli.ts");
-const ONBOARDED_CONFIG = "onboardingVersion: 1\nstartup:\n  checkUpdate: false\n  autoUpdate: false\n";
+/**
+ * The global config holds only global keys such as onboarding; `startup.*` there is
+ * never read. Update controls go to the profile config, see {@link defaultProfileConfig}.
+ */
+const ONBOARDED_CONFIG = "onboardingVersion: 1\n";
 
 const ARM_GROUPS = ["version", "help", "ready", "frame", "replay"] as const;
 const OPTIONAL_ARM_GROUPS = ["settled", "responsive"] as const;
@@ -400,11 +404,19 @@ export async function timeRun(
 	return promise;
 }
 
-async function seedHome(root: string, installedNatives: string | undefined): Promise<string> {
+/** The config file the default profile reads its settings from, under a config root. */
+function defaultProfileConfig(configRoot: string): string {
+	return path.join(configRoot, "profiles", "default", "agent", "config.yml");
+}
+
+export async function seedHome(root: string, installedNatives: string | undefined): Promise<string> {
 	const home = path.join(root, "home");
-	await fs.mkdir(path.join(home, ".veyyon"), { recursive: true });
-	await fs.writeFile(path.join(home, ".veyyon", "config.yml"), ONBOARDED_CONFIG);
-	if (installedNatives) await hardlinkTree(installedNatives, path.join(home, ".veyyon", "natives"));
+	const configRoot = path.join(home, ".veyyon");
+	await fs.mkdir(configRoot, { recursive: true });
+	await fs.writeFile(path.join(configRoot, "config.yml"), ONBOARDED_CONFIG);
+	// A measured binary that finds a newer release replaces itself mid-run.
+	await disableBenchmarkUpdates(defaultProfileConfig(configRoot));
+	if (installedNatives) await hardlinkTree(installedNatives, path.join(configRoot, "natives"));
 	return home;
 }
 
@@ -505,8 +517,7 @@ async function main(): Promise<void> {
 			if (shouldSeed) {
 				if (options.cold) await fs.rm(config, { recursive: true, force: true });
 				await fs.cp(options.seed, config, { recursive: true, force: false });
-				await disableBenchmarkUpdates(path.join(config, "config.yml"));
-				await disableBenchmarkUpdates(path.join(config, "profiles", "default", "agent", "config.yml"));
+				await disableBenchmarkUpdates(defaultProfileConfig(config));
 				if (installedNatives) await hardlinkTree(installedNatives, path.join(config, "natives"));
 			}
 		}

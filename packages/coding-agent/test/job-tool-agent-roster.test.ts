@@ -11,6 +11,7 @@ import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
+import { firstToolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
 
 const managers: AsyncJobManager[] = [];
@@ -44,10 +45,6 @@ function registerRunningSub(registry: AgentRegistry, id: string, parentId = "Mai
 	registry.register({ id, displayName: id, kind: "sub", parentId, session: null });
 }
 
-function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content.find(part => part.type === "text")?.text ?? "";
-}
-
 const neverResolves = () => new Promise<string>(() => {});
 
 afterEach(async () => {
@@ -62,7 +59,7 @@ describe("job list snapshot", () => {
 
 		const result = await tool.execute("call", { list: true });
 
-		expect(resultText(result)).toBe("No background jobs.");
+		expect(firstToolResultText(result)).toBe("No background jobs.");
 		expect(result.details?.jobs).toEqual([]);
 	});
 
@@ -78,7 +75,7 @@ describe("job list snapshot", () => {
 		const result = await tool.execute("call", { list: true });
 
 		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
-		const text = resultText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("Running Agents (1)");
 		expect(text).toContain("Worker");
 		expect(result.useless).toBeUndefined();
@@ -137,14 +134,16 @@ describe("job list snapshot", () => {
 		const queuedRows = Object.fromEntries((queued.details?.jobs ?? []).map(job => [job.id, job]));
 		expect(queuedRows.Parser?.queued).toBe(true);
 		expect(queuedRows.AuthLoader?.queued).toBeUndefined();
-		expect(resultText(queued)).toMatch(/`Parser` \[task\] — Parser \(queued \S+, waiting for a concurrency slot\)/);
-		expect(resultText(queued)).toMatch(/`AuthLoader` \[task\] — AuthLoader \(up \S+\)/);
+		expect(firstToolResultText(queued)).toMatch(
+			/`Parser` \[task\] — Parser \(queued \S+, waiting for a concurrency slot\)/,
+		);
+		expect(firstToolResultText(queued)).toMatch(/`AuthLoader` \[task\] — AuthLoader \(up \S+\)/);
 
 		start();
 		await Promise.resolve();
 		const running = await tool.execute("call", { list: true });
 		expect(running.details?.jobs.find(job => job.id === "Parser")?.queued).toBeUndefined();
-		expect(resultText(running)).toMatch(/`Parser` \[task\] — Parser \(up \S+\)/);
+		expect(firstToolResultText(running)).toMatch(/`Parser` \[task\] — Parser \(up \S+\)/);
 		manager.cancel("Parser");
 		manager.cancel("AuthLoader");
 	});
@@ -171,7 +170,7 @@ describe("job poll with no matching jobs", () => {
 
 		const result = await tool.execute("call", {});
 
-		expect(resultText(result)).toBe("No running background jobs to wait for.");
+		expect(firstToolResultText(result)).toBe("No running background jobs to wait for.");
 		expect(result.useless).toBe(true);
 	});
 
@@ -182,7 +181,7 @@ describe("job poll with no matching jobs", () => {
 
 		const result = await tool.execute("call", {});
 
-		const text = resultText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("No running background jobs to wait for.");
 		expect(text).toContain("Worker");
 		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
@@ -196,7 +195,7 @@ describe("job poll with no matching jobs", () => {
 
 		const result = await tool.execute("call", { poll: ["Worker"] });
 
-		const text = resultText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("No matching jobs found for IDs: Worker");
 		expect(text).toContain("running agent with no job entry");
 		expect(text).toContain("history://Worker");

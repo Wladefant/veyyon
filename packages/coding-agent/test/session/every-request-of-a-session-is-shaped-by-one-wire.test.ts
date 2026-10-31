@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Context, Message, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session-types";
 import {
@@ -24,13 +24,13 @@ import {
 	type ProviderWireOptions,
 	type ProviderWireSecrets,
 } from "@veyyon/coding-agent/session/runtime/provider-wire";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const CWD = "/srv/checkout/alpha";
 const OTHER_CWD = "/srv/checkout/beta";
 const TIMESTAMP = 1_756_080_000;
 
-const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("Expected the bundled anthropic model to exist");
+const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 function user(text: string): UserMessage {
 	return { role: "user", content: text, timestamp: TIMESTAMP };
@@ -43,14 +43,7 @@ function toolCall(id: string): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "toolUse",
 		timestamp: TIMESTAMP,
 	};

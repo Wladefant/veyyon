@@ -23,11 +23,12 @@ import * as path from "node:path";
 import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import { HookEditorComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/hook-editor";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { editInTerminal, NO_EDITOR_CONFIGURED } from "@veyyon/coding-agent/utils/external-editor";
 import type { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "./helpers/require-theme";
 
 const CTRL_G = "\x07";
 const MISSING_EDITOR = "veyyon-test-editor-that-is-not-installed";
@@ -35,8 +36,7 @@ const MISSING_EDITOR = "veyyon-test-editor-that-is-not-installed";
 let scratch: TempDir;
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("Failed to load dark theme for tests");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 	scratch = await TempDir.create("@veyyon-editor-handoff-");
 });

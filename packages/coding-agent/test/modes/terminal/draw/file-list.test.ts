@@ -1,13 +1,14 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { renderFileList } from "@veyyon/coding-agent/modes/terminal/draw/file-list";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../../../helpers/require-theme";
 
 let uiTheme: Theme;
 
 beforeAll(async () => {
 	await initTheme();
-	uiTheme = (await getThemeByName("dark"))!;
+	uiTheme = await requireTheme("dark");
 });
 
 describe("renderFileList", () => {

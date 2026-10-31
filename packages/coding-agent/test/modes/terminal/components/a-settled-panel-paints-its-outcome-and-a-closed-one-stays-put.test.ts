@@ -15,6 +15,7 @@
  */
 
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { BtwPanelComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/btw-panel";
 import { OmfgPanelComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/omfg-panel";
@@ -30,7 +31,7 @@ function stubUi(): TUI {
 function paintedText(component: { render(width: number): readonly string[] }): string {
 	return component
 		.render(WIDTH)
-		.map(row => row.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(row => stripVTControlCharacters(row))
 		.join("\n");
 }
 

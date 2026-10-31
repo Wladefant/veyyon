@@ -18,6 +18,7 @@
  *   documentation promises not to have.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -25,8 +26,6 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 function deliveringSession(): AgentSession {
 	return {
@@ -80,7 +79,7 @@ afterEach(() => {
 function renderComms(scope: string | undefined): { text: string; dispose: () => void } {
 	const dashboard = new AgentDashboard({ terminalHeight: 40, scope });
 	dashboard.handleInput("\t");
-	return { text: dashboard.render(120).join("\n").replace(ANSI_PATTERN, ""), dispose: () => dashboard.dispose() };
+	return { text: stripVTControlCharacters(dashboard.render(120).join("\n")), dispose: () => dashboard.dispose() };
 }
 
 describe("Comms stream scoping", () => {

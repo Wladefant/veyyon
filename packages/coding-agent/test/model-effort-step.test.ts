@@ -7,8 +7,9 @@ import {
 	formatSelectorSummary,
 	renderEffortStep,
 } from "@veyyon/coding-agent/modes/terminal/components/selectors/effort-picker";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { Container } from "@veyyon/tui";
+import { requireTheme } from "./helpers/require-theme";
 
 const twoTierModel = buildModel({
 	id: "two-tier",
@@ -31,8 +32,7 @@ const mandatoryTwoTierModel: Model = {
 };
 
 beforeAll(async () => {
-	const dark = await getThemeByName("dark");
-	if (!dark) throw new Error("Failed to load dark theme for tests");
+	const dark = await requireTheme("dark");
 	setThemeInstance(dark);
 });
 

@@ -20,5 +20,5 @@
     "useDefineForClassFields": true,
     "types": ["vite/client", "bun"]
   },
-  "include": ["src/**/*", "vite.config.ts"]
+  "include": ["src/**/*", "scripts", "vite.config.ts"]
 }

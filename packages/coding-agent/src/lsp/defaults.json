@@ -11,11 +11,7 @@
 			}
 		},
 		"capabilities": {
-			"flycheck": true,
-			"ssr": true,
-			"expandMacro": true,
-			"runnables": true,
-			"relatedTests": true
+			"flycheck": true
 		}
 	},
 	"tlaplus": {

@@ -6,46 +6,11 @@
 import { errorMessage, getProjectDir, getSSHConfigPath, logger } from "@veyyon/utils";
 import { loadCapability } from "../../../discovery";
 import { type SSHHost, sshCapability } from "../../../discovery/capability/ssh";
-import { removedOptionMessage } from "../../../slash-commands/helpers/parse";
-import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../../ssh/config-writer";
+import { parseSshAddArgs, parseSshRemoveArgs, SSH_ADD_USAGE } from "../../../slash-commands/helpers/ssh-args";
+import { addSSHHost, readSSHConfigFile, removeSSHHost } from "../../../ssh/config-writer";
 import { theme } from "../../../theme/theme-binding";
-import { parseCommandArgs } from "../shared";
 import type { InteractiveModeContext } from "../types";
 import { dispatchSubcommand, groupBySource, showCommandMessage } from "./command-controller-shared";
-
-const SSH_ADD_USAGE =
-	"Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>] [desc <description>] [compat]";
-
-const SSH_REMOVE_USAGE = "Usage: /ssh remove <name>";
-
-/** The option spellings `/ssh add` no longer has, keyed by bare name. */
-const SSH_ADD_REMOVED_OPTIONS: Record<string, string> = {
-	host: "write the host as the second word, after the name",
-	user: "write `user <user>`",
-	port: "write the port as a plain integer",
-	key: "write `key <keyPath>`",
-	desc: "write `desc <description>`",
-	compat: "write `compat` as a plain word",
-};
-
-/**
- * `/ssh remove` never had an option worth converting. It used to read a scope and
- * then throw it away: SSH hosts live in ONE file, so nothing was there to select.
- */
-const SSH_REMOVE_REMOVED_OPTIONS: Record<string, string> = {
-	scope: "drop it — SSH hosts live in one config file, so there is no scope to choose",
-};
-
-type SshAddParsed = {
-	name?: string;
-	host?: string;
-	username?: string;
-	port?: number;
-	keyPath?: string;
-	description?: string;
-	compat?: boolean;
-	error?: string;
-};
 
 /**
  * The slice of the interactive context this controller uses: 2 members of the
@@ -59,17 +24,15 @@ export type SshCommandControllerContext = Pick<InteractiveModeContext, "present"
 export class SSHCommandController {
 	constructor(private ctx: SshCommandControllerContext) {}
 
-	/**
-	 * Handle /ssh command and route to subcommands
-	 */
-	async handle(text: string): Promise<void> {
+	/** `/ssh <subcommand>`. `args` is the text after `/ssh`, as the slash dispatcher parsed it. */
+	async handle(args: string): Promise<void> {
 		await dispatchSubcommand(
-			text,
+			args,
 			"ssh",
 			[
-				{ name: "add", handler: () => this.#handleAdd(text) },
+				{ name: "add", handler: rest => this.#handleAdd(rest) },
 				{ name: "list", handler: () => this.#handleList() },
-				{ name: "remove", aliases: ["rm"], handler: () => this.#handleRemove(text) },
+				{ name: "remove", aliases: ["rm"], handler: rest => this.#handleRemove(rest) },
 			],
 			{
 				onHelp: () => this.#showHelp(),
@@ -102,41 +65,23 @@ export class SSHCommandController {
 	/**
 	 * Handle /ssh add - read the plain-word arguments and add the host to config
 	 */
-	async #handleAdd(text: string): Promise<void> {
-		const parsed = parseAddCommand(text);
-		if (parsed.error) {
-			this.ctx.showError(parsed.error);
+	async #handleAdd(rest: string): Promise<void> {
+		const request = parseSshAddArgs(rest);
+		if ("error" in request) {
+			this.ctx.showError(request.error);
 			return;
 		}
-		if (!parsed.name) {
-			this.ctx.showError(`Host name required.\n${SSH_ADD_USAGE}`);
-			return;
-		}
-		if (!parsed.host) {
-			this.ctx.showError(`Host address required as the second word.\n${SSH_ADD_USAGE}`);
-			return;
-		}
-
-		const { name, host, username, port, keyPath, description, compat } = parsed;
+		const { name, config } = request;
 		try {
-			const filePath = getSSHConfigPath();
-
-			const hostConfig: SSHHostConfig = { host };
-			if (username) hostConfig.username = username;
-			if (port) hostConfig.port = port;
-			if (keyPath) hostConfig.keyPath = keyPath;
-			if (description) hostConfig.description = description;
-			if (compat) hostConfig.compat = true;
-
-			await addSSHHost(filePath, name, hostConfig);
+			await addSSHHost(getSSHConfigPath(), name, config);
 			await this.ctx.session.refreshSshTool({ activateIfAvailable: true });
 
-			const lines = ["", theme.fg("success", `+ Added SSH host "${name}"`), "", `  Host: ${host}`];
-			if (username) lines.push(`  User: ${username}`);
-			if (port) lines.push(`  Port: ${port}`);
-			if (keyPath) lines.push(`  Key:  ${keyPath}`);
-			if (description) lines.push(`  Desc: ${description}`);
-			if (compat) lines.push(`  Compat: true`);
+			const lines = ["", theme.fg("success", `+ Added SSH host "${name}"`), "", `  Host: ${config.host}`];
+			if (config.username) lines.push(`  User: ${config.username}`);
+			if (config.port) lines.push(`  Port: ${config.port}`);
+			if (config.keyPath) lines.push(`  Key:  ${config.keyPath}`);
+			if (config.description) lines.push(`  Desc: ${config.description}`);
+			if (config.compat) lines.push(`  Compat: true`);
 			lines.push("");
 			lines.push(theme.fg("muted", `Run ${theme.fg("accent", "/ssh list")} to see all configured hosts.`));
 			lines.push("");
@@ -232,27 +177,13 @@ export class SSHCommandController {
 	/**
 	 * Handle /ssh remove <name> - remove a host from config
 	 */
-	async #handleRemove(text: string): Promise<void> {
-		const match = text.match(/^\/ssh\s+(?:remove|rm)\b\s*(.*)$/i);
-		const tokens = parseCommandArgs(match?.[1]?.trim() ?? "");
-		const name = tokens[0];
-		if (!name) {
-			this.ctx.showError(`Host name required.\n${SSH_REMOVE_USAGE}`);
+	async #handleRemove(rest: string): Promise<void> {
+		const request = parseSshRemoveArgs(rest);
+		if ("error" in request) {
+			this.ctx.showError(request.error);
 			return;
 		}
-		if (name.startsWith("-")) {
-			this.ctx.showError(removedOptionMessage(name, SSH_REMOVE_REMOVED_OPTIONS, SSH_REMOVE_USAGE));
-			return;
-		}
-		if (tokens.length > 1) {
-			const extra = tokens[1];
-			this.ctx.showError(
-				extra.startsWith("-")
-					? removedOptionMessage(extra, SSH_REMOVE_REMOVED_OPTIONS, SSH_REMOVE_USAGE)
-					: `Unknown argument: ${extra}\n${SSH_REMOVE_USAGE}`,
-			);
-			return;
-		}
+		const { name } = request;
 
 		try {
 			const filePath = getSSHConfigPath();
@@ -277,80 +208,6 @@ export class SSHCommandController {
 	#showMessage(text: string): void {
 		showCommandMessage(this.ctx, text);
 	}
-}
-
-/**
- * Parse the argument tail of `/ssh add`.
- *
- * Both required values are POSITION: token 1 is the name and token 2 is the
- * address, so a host literally called `user` or `key` needs no escaping. The
- * optional values follow, `user`, `key` and `desc` as leading keywords because
- * their values are arbitrary text, `compat` as a bare literal, and the port by
- * PATTERN as a bare integer.
- *
- * Reading the port by its shape is sound rather than lucky. Past position 2
- * this grammar reads exactly four literal words — `user`, `key`, `desc`,
- * `compat` — and none is a run of digits, so no integer can be mistaken for a
- * word and no word for a port. A keyword's value is consumed by position and
- * never examined, so a user named `2222` is still a user.
- */
-function parseAddCommand(text: string): SshAddParsed {
-	const prefixMatch = text.match(/^\/ssh\s+add\b\s*(.*)$/i);
-	const tokens = parseCommandArgs(prefixMatch?.[1]?.trim() ?? "");
-	if (tokens.length === 0) return {};
-
-	const name = tokens[0];
-	if (name.startsWith("-")) return { error: removedOptionMessage(name, SSH_ADD_REMOVED_OPTIONS, SSH_ADD_USAGE) };
-	const parsed: SshAddParsed = { name };
-	if (tokens.length === 1) return parsed;
-
-	const host = tokens[1];
-	if (host.startsWith("-")) {
-		return { ...parsed, error: removedOptionMessage(host, SSH_ADD_REMOVED_OPTIONS, SSH_ADD_USAGE) };
-	}
-	parsed.host = host;
-
-	const seen = new Set<string>();
-	let index = 2;
-	while (index < tokens.length) {
-		const token = tokens[index];
-		if (token.startsWith("-")) {
-			return { ...parsed, error: removedOptionMessage(token, SSH_ADD_REMOVED_OPTIONS, SSH_ADD_USAGE) };
-		}
-		let word: string;
-		if (token === "user" || token === "key" || token === "desc") {
-			const value = tokens[index + 1];
-			if (!value) return { ...parsed, error: `Missing value after \`${token}\`.\n${SSH_ADD_USAGE}` };
-			if (token === "user") parsed.username = value;
-			else if (token === "key") parsed.keyPath = value;
-			else parsed.description = value;
-			word = token;
-			index += 2;
-		} else if (token === "compat") {
-			parsed.compat = true;
-			word = "compat";
-			index += 1;
-		} else if (/^\d+$/.test(token)) {
-			// `Number.parseInt` accepts trailing garbage (parseInt("22oops") === 22),
-			// so the digit test above is what keeps a typo from becoming a port.
-			const port = Number(token);
-			if (port < 1 || port > 65535) {
-				return {
-					...parsed,
-					error: `Invalid port: ${token}. Use an integer between 1 and 65535.\n${SSH_ADD_USAGE}`,
-				};
-			}
-			parsed.port = port;
-			word = "port";
-			index += 1;
-		} else {
-			return { ...parsed, error: `Unknown argument: ${token}\n${SSH_ADD_USAGE}` };
-		}
-		if (seen.has(word)) return { ...parsed, error: `\`${word}\` given twice.\n${SSH_ADD_USAGE}` };
-		seen.add(word);
-	}
-
-	return parsed;
 }
 
 /**

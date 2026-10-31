@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ImageContent, TextContent } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
@@ -11,6 +10,7 @@ import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import * as scrapers from "@veyyon/web/scrapers/types";
 import * as scraperUtils from "@veyyon/web/scrapers/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -57,13 +57,6 @@ function stubUrlText(body: string, contentType: string) {
 	return vi.spyOn(scraperUtils, "fetchBinary").mockImplementation(async () => {
 		throw new Error("unexpected binary fetch");
 	});
-}
-
-function textOutput(result: { content: Array<TextContent | ImageContent> }): string {
-	return result.content
-		.filter((content): content is TextContent => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
 }
 
 async function createSqliteFixtureBytes(testDir: string): Promise<Uint8Array> {
@@ -121,7 +114,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-zip", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("archive");
 		expect(text).toContain("Method: archive");
@@ -147,7 +140,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-zip-too-large", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("binary");
 		expect(result.details?.notes).toContain("Binary fetch failed: content-length 52428801 exceeds 52428800");
@@ -162,7 +155,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-sqlite", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("sqlite");
 		expect(text).toContain("Method: sqlite");
@@ -176,7 +169,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-notebook", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("notebook");
 		expect(text).toContain("Method: notebook");
@@ -192,7 +185,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-binary", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("binary");
 		expect(text).toContain("Method: binary");
@@ -207,7 +200,7 @@ describe("read URL binary dispatch", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("read-url-text-octet", { path: url });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.method).toBe("raw");
 		expect(text).toContain("plain UTF-8 text");

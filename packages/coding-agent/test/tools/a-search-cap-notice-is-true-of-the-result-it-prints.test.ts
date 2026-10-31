@@ -29,6 +29,7 @@ import {
 	SINGLE_FILE_MATCHES,
 } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 const NEEDLE = "findMe";
@@ -72,10 +73,7 @@ async function corpusOf(files: Record<string, string>): Promise<Corpus> {
 		dir,
 		search: async (args: Record<string, unknown>) => {
 			const result = await tool.execute("cap-notice", args);
-			return result.content
-				.filter(content => content.type === "text")
-				.map(content => content.text)
-				.join("\n");
+			return toolResultText(result);
 		},
 	};
 }

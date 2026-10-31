@@ -1,0 +1,59 @@
+name: Test sandbox image
+description: >-
+   Make the guest image `scripts/test-sandbox/run.sh` runs suites in available on
+   this runner. The image is restored from the Actions cache when one was saved for
+   the same guest stamp, and built otherwise. A build on a push to main saves the
+   image for later runs.
+
+runs:
+   using: composite
+   steps:
+      - name: Resolve the guest image key
+        id: guest
+        shell: bash
+        run: |
+           set -euo pipefail
+           stamp="$(bash scripts/test-sandbox/guest/build-guest.sh --print-stamp)"
+           echo "image=$(bash scripts/test-sandbox/guest/build-guest.sh --print-image)" >> "$GITHUB_OUTPUT"
+           echo "key=test-sandbox-guest-${RUNNER_OS}-${RUNNER_ARCH}-$(printf '%s' "$stamp" | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the guest image
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+           path: ${{ runner.temp }}/test-sandbox-guest.tar.zst
+           key: ${{ steps.guest.outputs.key }}
+
+      - name: Load the guest image
+        # The archive holds the image with its stamp label, so the build step below
+        # finds it current and builds nothing.
+        if: ${{ steps.restore.outputs.cache-hit == 'true' }}
+        shell: bash
+        run: |
+           set -euo pipefail
+           zstd -d -c "${RUNNER_TEMP}/test-sandbox-guest.tar.zst" | docker load
+
+      - name: Build the test sandbox image
+        # Every `bun test` in this repo refuses to run unless it can prove the
+        # operator's home is unreachable, so CI has to establish the same boundary
+        # a workstation does or the contract holds on one machine only. On a
+        # GitHub runner that is the container rung, and this builds the guest
+        # userland it runs. There is no /dev/kvm here, so the script builds the
+        # userland only and says so; the microVM rung reports itself unavailable
+        # instead of being silently swapped for something weaker.
+        shell: bash
+        run: bash scripts/test-sandbox/run.sh --build
+
+      - name: Export the guest image
+        if: ${{ steps.restore.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: |
+           set -euo pipefail
+           docker save "${{ steps.guest.outputs.image }}" | zstd -T0 -3 -q -o "${RUNNER_TEMP}/test-sandbox-guest.tar.zst"
+
+      - name: Save the guest image
+        if: ${{ steps.restore.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+           path: ${{ runner.temp }}/test-sandbox-guest.tar.zst
+           key: ${{ steps.guest.outputs.key }}

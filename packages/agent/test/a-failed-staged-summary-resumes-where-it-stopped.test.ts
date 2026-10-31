@@ -24,7 +24,8 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 const CHUNK_COUNT = 24;
 const FAILING_MARKER = "[[chunk-10]]";
@@ -38,8 +39,7 @@ function chunk(index: number): AgentMessage {
 }
 
 function codexModel(id?: string): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+	const found = requireBundledModel("openai-codex", "gpt-5.1-codex");
 	return { ...found, id: id ?? found.id, contextWindow: 60_000 };
 }
 
@@ -64,14 +64,7 @@ function response(text: string, errorMessage?: string): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 512,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 512,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), output: 512, totalTokens: 512 },
 		stopReason: errorMessage === undefined ? "stop" : "error",
 		errorMessage,
 	} as AssistantMessage;

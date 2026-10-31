@@ -35,6 +35,7 @@ import * as http2 from "node:http2";
 import * as path from "node:path";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentClientMessageSchema,
@@ -87,15 +88,8 @@ const LEVEL_ON_THE_WIRE: Record<ContextFile["level"], "delivered"> = {
 
 const fixture = useContextScopeFixture("cursor-e2e-");
 
-function frame(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
-}
-
 function requestContextAskFrame(): Buffer {
-	return frame(
+	return frameConnectMessage(
 		toBinary(
 			AgentServerMessageSchema,
 			create(AgentServerMessageSchema, {
@@ -112,7 +106,7 @@ function requestContextAskFrame(): Buffer {
 }
 
 function turnEndedFrame(): Buffer {
-	return frame(
+	return frameConnectMessage(
 		toBinary(
 			AgentServerMessageSchema,
 			create(AgentServerMessageSchema, {

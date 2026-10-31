@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 
 import { getSessionAccentHex } from "@veyyon/coding-agent/utils/session-color";
 import { hexToHsv, relativeLuminance } from "@veyyon/utils";
+import { requireTheme } from "./helpers/require-theme";
 
 const NO_THEME_COLORS: string[] = [];
 
@@ -74,8 +74,7 @@ describe("getSessionAccentHex", () => {
 
 describe("getSessionAccentHex with real Theme", () => {
 	it("stays in the cool band and avoids theme hues on light-catppuccin", async () => {
-		const theme = await getThemeByName("light-catppuccin");
-		if (!theme) return; // skip if theme not found
+		const theme = await requireTheme("light-catppuccin");
 		const colors = theme.getMajorThemeColorHexes();
 		const surface = theme.accentSurfaceLuminance;
 		const themeHues = saturatedThemeHues(colors);
@@ -93,8 +92,7 @@ describe("getSessionAccentHex with real Theme", () => {
 	});
 
 	it("stays in the warm band and avoids theme hues on dark-catppuccin", async () => {
-		const theme = await getThemeByName("dark-catppuccin");
-		if (!theme) return;
+		const theme = await requireTheme("dark-catppuccin");
 		const colors = theme.getMajorThemeColorHexes();
 		const themeHues = saturatedThemeHues(colors);
 

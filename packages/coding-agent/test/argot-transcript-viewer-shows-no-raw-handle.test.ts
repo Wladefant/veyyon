@@ -33,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { expandSessionMessageEntries } from "@veyyon/coding-agent/argot-wire";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
@@ -41,6 +42,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { CURRENT_SESSION_VERSION, type SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { ArgotSession, type Vocabulary } from "argot";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 
 const TS = new Date().toISOString();
 const HANDLE = "§db";
@@ -58,14 +60,7 @@ function loadedCodec(): ArgotSession {
 	return codec;
 }
 
-const USAGE = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function assistantLine(id: string, text: string): string {
 	return JSON.stringify({
@@ -96,6 +91,8 @@ function userLine(id: string, content: string): string {
 	});
 }
 
+let viewers: AgentTranscriptViewer[] = [];
+
 function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => SessionMessageEntry[]) {
 	const agents = new AgentRegistry();
 	agents.register({
@@ -107,7 +104,7 @@ function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => Se
 		sessionFile: file,
 		status: "parked",
 	});
-	return new AgentTranscriptViewer({
+	const viewer = new AgentTranscriptViewer({
 		agentId: "Main/advisor",
 		registry: agents,
 		ui: { requestRender: () => {}, requestComponentRender: () => {} } as never,
@@ -119,12 +116,14 @@ function makeViewer(file: string, expandArgot?: (e: SessionMessageEntry[]) => Se
 		onClose: () => {},
 		onHubClose: () => {},
 	});
+	viewers.push(viewer);
+	return viewer;
 }
 
 describe("the transcript viewer shows no raw handle", () => {
 	let dir: string;
 	let file: string;
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	const body = (viewer: AgentTranscriptViewer): string =>
 		viewer
@@ -136,8 +135,7 @@ describe("the transcript viewer shows no raw handle", () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: 40 });
 
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "argot-view-"));
 		file = path.join(dir, "__advisor.jsonl");
@@ -157,11 +155,9 @@ describe("the transcript viewer shows no raw handle", () => {
 	});
 
 	afterEach(() => {
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		for (const viewer of viewers) viewer.dispose();
+		viewers = [];
+		geometry?.restore();
 		removeSyncWithRetries(dir);
 	});
 

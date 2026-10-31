@@ -35,12 +35,7 @@ import { streamGoogleGeminiCli } from "@veyyon/ai/providers/google-gemini-cli";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { stopReasonForTerminallessEof } from "@veyyon/ai/utils/terminalless-eof";
 import { buildModel } from "@veyyon/catalog/build";
-
-/** SSE frames with no trailing `finishReason` anywhere: a clean body EOF. */
-function sse(...chunks: unknown[]): Response {
-	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
+import { sseResponse } from "./helpers/fetch-mock";
 
 /** Top-level `candidates` shape (public Generative Language + Vertex). */
 function genaiParts(...parts: unknown[]): Record<string, unknown> {
@@ -95,7 +90,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 	it("settles a text-only body with no finishReason as a finished turn", async () => {
 		const stream = streamGoogle(genaiModel, context, {
 			apiKey: "k",
-			fetch: always(() => sse(genaiParts({ text: "Hello!" }))),
+			fetch: always(() => sseResponse([genaiParts({ text: "Hello!" })])),
 		});
 		const result = await stream.result();
 
@@ -107,7 +102,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 	it("settles a complete function call with no finishReason as a tool-use turn", async () => {
 		const stream = streamGoogle(genaiModel, context, {
 			apiKey: "k",
-			fetch: always(() => sse(genaiParts({ functionCall: { name: "read", args: { path: "a.ts" } } }))),
+			fetch: always(() => sseResponse([genaiParts({ functionCall: { name: "read", args: { path: "a.ts" } } })])),
 		});
 		const result = await stream.result();
 
@@ -124,7 +119,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 	it("still refuses a body whose only function call has no name", async () => {
 		const stream = streamGoogle(genaiModel, context, {
 			apiKey: "k",
-			fetch: always(() => sse(genaiParts({ text: "here goes" }, { functionCall: { args: {} } }))),
+			fetch: always(() => sseResponse([genaiParts({ text: "here goes" }, { functionCall: { args: {} } })])),
 		});
 		const result = await stream.result();
 
@@ -135,7 +130,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 	it("settles a Cloud Code Assist body with no finishReason as a finished turn", async () => {
 		const stream = streamGoogleGeminiCli(cliModel, context, {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-			fetch: always(() => sse(ccaParts({ text: "From CCA" }))),
+			fetch: always(() => sseResponse([ccaParts({ text: "From CCA" })])),
 		});
 		const result = await stream.result();
 
@@ -146,7 +141,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 	it("still refuses a Cloud Code Assist body whose only function call has no name", async () => {
 		const stream = streamGoogleGeminiCli(cliModel, context, {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-			fetch: always(() => sse(ccaParts({ text: "here goes" }, { functionCall: { args: {} } }))),
+			fetch: always(() => sseResponse([ccaParts({ text: "here goes" }, { functionCall: { args: {} } })])),
 		});
 		const result = await stream.result();
 

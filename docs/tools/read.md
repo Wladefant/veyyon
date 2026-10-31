@@ -98,7 +98,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/web/fetc
 ## Modes / Variants
 
 ### Local text files
-- No selector: if summarization is enabled and the file is small enough, `trySummarize()` calls `summarizeCode()`.
+- No selector: if summarization is enabled and the file is small enough, `trySummarize()` awaits `summarizeCode()`, which parses on the libuv thread pool, so the summary of a large file does not hold the event loop and the reads of one batch parse in parallel.
   - Guards: file size `<= 2 MiB` (`MAX_SUMMARY_BYTES`), line count `<= 20_000` (`MAX_SUMMARY_LINES`).
   - Summary output keeps selected declarations and replaces elided spans with `…` or merged brace-pair lines containing `{ … }`. When at least one span is elided, the text content ends with a footer like `[…NNln elided; re-read needed ranges, e.g. <path>:5-16,40-80]` using concrete ranges from the actual elisions.
   - When an elided block sits between matching brace lines, `renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.

@@ -26,6 +26,7 @@ import { HookInputComponent } from "@veyyon/coding-agent/modes/terminal/componen
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, type TUI } from "@veyyon/tui";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { clickAt, motionAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 // Wide enough that a three-chip footer stays on one row: the wrapped footer is
@@ -51,13 +52,6 @@ afterEach(() => {
 	geometry.restore();
 	vi.restoreAllMocks();
 });
-
-function motionAt(row1: number, col1 = 40): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
-function clickAt(row1: number, col1 = 40): string {
-	return `\x1b[<0;${col1};${row1}M`;
-}
 
 function createTui(): TUI {
 	return {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
 import type { AssistantMessage } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function createPartial(text = ""): AssistantMessage {
 	return {
@@ -10,14 +11,7 @@ function createPartial(text = ""): AssistantMessage {
 		api: "openai-responses",
 		provider: "openai",
 		model: "test-model",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 1,
 	};

@@ -23,7 +23,7 @@ import {
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 // One owner for how `/fast` names the state it changes, so this suite cannot drift
 // from the command the way it did when the wording became "priority tier".
 import { PRIORITY_TIER_COMMAND_LABEL } from "@veyyon/coding-agent/config/service-tier";
@@ -123,14 +123,7 @@ function makeAssistantMessage(text: string, thinking?: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: TEST_MODELS[0].id,
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 2,
-			cacheWrite: 1,
-			totalTokens: 18,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18 },
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -1132,6 +1125,36 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("re-advertises commands and config options after any working-directory change", async () => {
+		// `/move`, `/cwd` and the agent's `set_cwd` tool all end in one session `cwd_changed` event,
+		// and only `/move` used to refresh the client: after `/cwd` or `set_cwd` an ACP client kept the
+		// previous directory's command list and config options. The host reacts to the event, so every
+		// path that changes the directory, present or future, refreshes the client the same way.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await waitForBootstrapGuard();
+
+		const before = harness.updates.length;
+		for (const listener of session.listeners()) {
+			listener({ type: "cwd_changed", previous: harness.cwdA, cwd: harness.cwdB } as AgentSessionEvent);
+		}
+		const kinds = () =>
+			harness.updates
+				.slice(before)
+				.filter(notification => notification.sessionId === created.sessionId)
+				.map(notification => notification.update.sessionUpdate);
+		// The refresh reloads plugin state from disk; it ends well inside this bound or not at all.
+		const deadline = Date.now() + 2_000;
+		while (!kinds().includes("config_option_update") && Date.now() < deadline) await Bun.sleep(10);
+
+		expect(kinds()).toEqual(["available_commands_update", "config_option_update"]);
+		expectAcpNotifications(harness.updates.slice(before));
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("emits a single config_option_update per setSessionConfigOption(thinking) call", async () => {
 		// Client-initiated thinking changes flow through #setThinkingLevelById,
 		// which fires `thinking_level_changed` and lets the lifetime subscription
@@ -1549,14 +1572,7 @@ describe("ACP agent", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: TEST_MODELS[0].id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});
@@ -1629,14 +1645,7 @@ describe("ACP agent", () => {
 			api: "openai-responses",
 			provider: "openai",
 			model: TEST_MODELS[1].id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		});
@@ -1678,14 +1687,7 @@ describe("ACP agent", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: TEST_MODELS[0].id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			errorMessage: SILENT_ABORT_MARKER,
 			timestamp: Date.now(),

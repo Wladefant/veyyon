@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import {
 	enableAutoTheme,
 	getCurrentThemeName,
@@ -16,10 +13,10 @@ import {
 	stopThemeWatcher,
 	theme,
 } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI, type TUIStartOptions } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 /**
  * ED 3 (`\x1b[3J`) erases the terminal's *saved* lines. It is not scoped to
@@ -69,19 +66,9 @@ describe("InteractiveMode startup scrollback", () => {
 		// which is after the first frame is already on screen.
 		if (options.autoTheme) enableAutoTheme();
 
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		session = new AgentSession({
-			agent: new Agent({
-				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
-			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true, ...overrides }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true, ...overrides },
+		}));
 
 		const createdMode = new InteractiveMode(session, "test");
 		mode = createdMode;
@@ -103,7 +90,7 @@ describe("InteractiveMode startup scrollback", () => {
 		vi.spyOn(createdMode.statusLine, "watchGitState").mockImplementation(() => {});
 
 		await createdMode.init();
-		await createdTerminal.waitForRender();
+		await createdTerminal.waitForRender(createdMode.ui);
 
 		return { mode: createdMode, terminal: createdTerminal, writes, startOptions };
 	}
@@ -183,7 +170,7 @@ describe("InteractiveMode startup scrollback", () => {
 		started.writes.length = 0;
 
 		await started.mode.handleClearCommand();
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).toContain("\x1b[3J");
 	});
@@ -203,7 +190,7 @@ describe("InteractiveMode startup scrollback", () => {
 		const darkGround = theme.getGroundHex();
 
 		onTerminalAppearanceChange("light");
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		// The swap really resolved, so the byte assertion below is not vacuous and
 		// the repaint that the swap owes the operator still happened. Confirmed
@@ -211,7 +198,7 @@ describe("InteractiveMode startup scrollback", () => {
 		// the caller never sees, and its render is scheduled only once that lands.
 		expect(getCurrentThemeName()).toBe("light");
 		expect(theme.getGroundHex()).not.toBe(darkGround);
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).not.toContain("\x1b[3J");
 	});
@@ -225,7 +212,7 @@ describe("InteractiveMode startup scrollback", () => {
 		started.writes.length = 0;
 
 		await previewTheme("light");
-		await started.terminal.waitForRender();
+		await started.terminal.waitForRender(started.mode.ui);
 
 		expect(started.writes.join("")).not.toContain("\x1b[3J");
 	});

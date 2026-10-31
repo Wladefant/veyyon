@@ -37,8 +37,8 @@ The user root is the active profile's agent directory via `getAgentDir()`, so un
 
 Notes:
 
-- Native auto-discovery is `.veyyon` based (`CONFIG_DIR_NAME`, one owner in `@veyyon/utils` dirs.ts).
-- Package manifests read the `veyyon` key first, then legacy `omp` / `pi` (`MANIFEST_KEYS` in `src/extensibility/manifest-key.ts`). Neither `.omp/` nor `.pi/` directories are native roots.
+- Native auto-discovery is `.veyyon` based (`CONFIG_DIR_NAME`, one owner in `@veyyon/utils/config-root`).
+- Package manifests read the `veyyon` key first, then legacy `omp` / `pi` (`MANIFEST_KEYS` in `kernel/src/loader/manifest-key.ts`). Neither `.omp/` nor `.pi/` directories are native roots.
 
 ### 2) Discovered JS/TS hook factories
 
@@ -46,17 +46,17 @@ After native auto-discovery, `discoverAndLoadExtensions()` also appends JS/TS ho
 
 Hook-capability loading already applies its own hook-specific disabled ids, so these paths are not additionally filtered by `disabledExtensions` extension-module names.
 
-### 3) Installed plugin extension entries
+### 3) Installed plugin extension and hook entries
 
-After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
+After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`, then their hook entry points via `getAllPluginHookPaths(cwd)`. A manifest `hooks` entry binds through the same runner as a discovered `hooks/*.ts` file.
 
 Plugin extension entries come from package `veyyon.extensions` manifests (legacy `omp.extensions` / `pi.extensions`), including enabled feature entries.
 
 ### 4) Explicitly configured paths
 
-After plugin extension entries, configured paths are appended and resolved.
+After plugin entries, configured paths are appended and resolved.
 
-Configured path sources in the main session startup path (`sdk.ts`):
+Configured path sources in the session startup path (`discoverSessionExtensionPaths()` in `src/session/factory-extensions.ts`):
 
 1. CLI-provided paths (`--extension/-e`, and `--hook` is also treated as an extension path)
 2. Merged settings `extensions` array
@@ -95,8 +95,8 @@ extensions:
 
 Behavior split:
 
-- SDK: when `disableExtensionDiscovery=true`, it still loads `additionalExtensionPaths` via `loadExtensions()`.
-- CLI path building (`main.ts`) currently clears CLI extension paths when `--no-extensions` is set, so explicit `-e/--hook` are not forwarded in that mode.
+- CLI: `--no-extensions` sets `disableExtensionDiscovery`. `applyLaunchCapabilityFlags()` in `main.ts` forwards `-e/--extension` and `--hook` paths as `additionalExtensionPaths` in either case, so explicit paths still load.
+- SDK: when `disableExtensionDiscovery=true`, `discoverSessionExtensionPaths()` returns `additionalExtensionPaths` alone and they load via `loadExtensions()`. Native discovery, hook discovery, plugin entries and settings `extensions` are skipped.
 
 ### Disable specific extension modules
 
@@ -166,10 +166,10 @@ Order:
 
 1. Native auto-discovered modules
 2. Discovered JS/TS hook factories
-3. Installed plugin extension entries
+3. Installed plugin extension and hook entries
 4. Explicit configured paths (in provided order)
 
-In `sdk.ts`, configured order is:
+In `discoverSessionExtensionPaths()`, configured order is:
 
 1. CLI additional paths
 2. Settings `extensions`
@@ -254,4 +254,4 @@ Legacy manifest key still accepted:
 }
 ```
 
-*Verified against `7e4c6374` on 2026-08-06.*
+*Verified against `1a4d6116b` on 2026-10-28.*

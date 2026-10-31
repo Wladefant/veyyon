@@ -941,6 +941,7 @@ export class ModelRegistry {
 	}
 
 	#resolveStartupModelCacheProviderId(providerId: string): string {
+		if (providerId === "openai-codex") return openaiCodexCacheProviderId(this.#codexAccountIds());
 		const descriptor = PROVIDER_DESCRIPTORS.find(candidate => candidate.providerId === providerId);
 		if (!descriptor?.resolveCacheProviderId) return providerId;
 		const registry = this;
@@ -954,6 +955,13 @@ export class ModelRegistry {
 				);
 			},
 		});
+	}
+
+	/** Account ids of the stored Codex logins. They select Codex's model cache row. */
+	#codexAccountIds(): string[] {
+		return this.authStorage
+			.listOAuthAccounts("openai-codex")
+			.flatMap(account => (account.accountId ? [account.accountId] : []));
 	}
 
 	#loadCachedStandardProviderModels(): {
@@ -1534,6 +1542,8 @@ export class ModelRegistry {
 			authoritative: boolean;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string) => ModelManagerOptions<Api>;
+			/** The model cache row discovery reads; the provider id when absent. */
+			cacheProviderId?: () => string;
 		}> = [
 			{
 				providerId: "google-antigravity",
@@ -1858,6 +1868,17 @@ export class ModelRegistry {
 			for (const model of this.#getProviderModels(known)) models.push(model);
 		}
 		return models;
+	}
+
+	/**
+	 * Every provider holding at least one model, in {@link getAll} order. Reads provider names
+	 * only, so it does not build a catalog that is not built yet.
+	 */
+	getProviders(): string[] {
+		if (this.#models === undefined) return [...this.#getKnownProviders()];
+		const providers = new Set<string>();
+		for (const model of this.#models) providers.add(model.provider);
+		return [...providers];
 	}
 
 	getAvailable(): Model<Api>[] {
@@ -2512,6 +2533,20 @@ function applyProviderTransportOverride<T extends { baseUrl?: string; headers?: 
 	};
 }
 
+/** The OAuth login a registered provider offers to /login. */
+export interface ProviderOAuthConfig {
+	/** Display name in login UI. */
+	name: string;
+	/** Run the provider login flow and return credentials (or a plain API key) to persist. */
+	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
+	/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
+	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
+	/** Convert credentials to an API key string for requests. */
+	getApiKey?(credentials: OAuthCredentials): string;
+	/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */
+	modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
+}
+
 /**
  * Input type for registerProvider API (from extensions).
  */
@@ -2525,13 +2560,7 @@ export interface ProviderConfigInput {
 	authHeader?: boolean;
 	/** Streaming transport override — see {@link Model.transport}. */
 	transport?: Model<Api>["transport"];
-	oauth?: {
-		name: string;
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
-		getApiKey?(credentials: OAuthCredentials): string;
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
+	oauth?: ProviderOAuthConfig;
 	/**
 	 * Async factory that fetches the live model list from the provider endpoint.
 	 * When present, the result is run through the same SQLite model-cache as

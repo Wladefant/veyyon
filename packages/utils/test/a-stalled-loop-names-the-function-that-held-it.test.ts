@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { logger } from "@veyyon/utils";
 import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
 import { parseProfile, StallSampler, type StallStacks, summarizeWindow } from "@veyyon/utils/stall-sampler";
+import { holdTheLoopForMs } from "./helpers/hold-the-loop";
 
 /**
  * WHY THIS SUITE EXISTS. The loop watchdog reported every long terminal freeze as
@@ -24,14 +25,6 @@ import { parseProfile, StallSampler, type StallStacks, summarizeWindow } from "@
  * no samples. The line then reports `samples: 0`, which says the stall was not JavaScript, and
  * does not say what it was.
  */
-
-/** Holds the loop. The name is what the stack line must report. */
-function holdTheLoopForMs(ms: number): number {
-	const until = performance.now() + ms;
-	let x = 0;
-	while (performance.now() < until) x += Math.sqrt(x + 1);
-	return x;
-}
 
 /** A second holder, so a window case can tell two stretches of work apart. */
 function holdTheLoopElsewhereForMs(ms: number): number {

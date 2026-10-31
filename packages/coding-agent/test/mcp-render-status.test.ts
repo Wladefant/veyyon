@@ -5,11 +5,12 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { DeferredMCPTool, MCPTool, type MCPToolDetails } from "@veyyon/coding-agent/mcp/tool-bridge";
 import type { MCPServerConnection, MCPToolDefinition, MCPTransport } from "@veyyon/coding-agent/mcp/types";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { formatOutputNotice, type OutputMeta } from "@veyyon/coding-agent/tools/core/output-notice";
 import { formatStatusIcon } from "@veyyon/coding-agent/tools/core/tool-ui-status";
 import { TUI } from "@veyyon/tui";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { requireTheme } from "./helpers/require-theme";
 import { createToolExecution } from "./helpers/tool-execution";
 
 beforeAll(async () => {
@@ -19,10 +20,7 @@ beforeAll(async () => {
 }, 15_000);
 
 async function getRequiredTheme() {
-	const uiTheme = await getThemeByName("dark");
-	if (!uiTheme) {
-		throw new Error("dark theme missing");
-	}
+	const uiTheme = await requireTheme("dark");
 	return uiTheme;
 }
 

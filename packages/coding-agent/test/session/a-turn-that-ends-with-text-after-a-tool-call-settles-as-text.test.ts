@@ -21,22 +21,16 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir, withTimeout } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
-const USAGE = {
-	input: 10,
-	output: 5,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 15,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 };
 
 describe("a turn that ends with text after a tool call settles as text", () => {
 	let tempDir: TempDir;
@@ -48,8 +42,7 @@ describe("a turn that ends with text after a tool call settles as text", () => {
 		tempDir = TempDir.createSync("@veyyon-settle-message-order-");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

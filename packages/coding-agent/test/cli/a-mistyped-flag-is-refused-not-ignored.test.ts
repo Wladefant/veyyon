@@ -21,8 +21,19 @@
  * message survives, and refusing would drop the message in order to report the flag. That row is
  * here too, because the boundary between "no value at all" and "a value the bootstrap removed" is
  * exactly what a future edit to this branch would blur.
+ *
+ * THE SUBCOMMAND THAT IGNORED A TYPO. A subcommand parses its own flags, and `static strict = false`
+ * told that parser to keep an unknown flag instead of refusing it. `veyyon trust --denny`, a typo of
+ * `--deny`, then fell through to the command's default action, which is APPROVE: the project's plugin
+ * registry was recorded as trusted at exit 0. `veyyon rollback --lisst` likewise ran as a bare
+ * rollback. The sweep below covers every registered command, so a new one that copies the lenient
+ * setting fails until it is recorded as a command that hands its argv to a parser of its own.
+ *
+ * NOT CAUGHT: what a lenient command's own parser does with an unknown flag. A launch refuses it once
+ * its extensions load, and `acp` refuses it at `session/new` (pinned in acp-mcp-isolation.test.ts);
+ * this sweep checks neither.
  */
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { parseArgs, reportUnrecognizedFlags } from "@veyyon/coding-agent/cli/args";
 import {
 	OPTIONAL_VALUE_FLAGS,
@@ -30,6 +41,8 @@ import {
 	STRING_VALUE_FLAGS,
 	VALUELESS_FLAGS,
 } from "@veyyon/coding-agent/cli/flag-tables";
+import { commands } from "@veyyon/coding-agent/cli-commands";
+import { CLI_EXIT_USAGE, type CommandCtor, run } from "@veyyon/utils/cli";
 import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 
 /** Collect what the reporter writes instead of letting it reach the real stderr. */
@@ -185,5 +198,95 @@ describe("an unrecognized flag", () => {
 
 		expect(had).toBe(false);
 		expect(wrote).toBe(false);
+	});
+});
+
+const ctors = new Map<string, CommandCtor>();
+for (const entry of commands) {
+	ctors.set(entry.name, (await entry.load()) as CommandCtor);
+}
+
+/** Run `veyyon <name> ...argv` through the real dispatcher, returning its exit status and stderr. */
+async function runAs(
+	name: string,
+	argv: string[],
+): Promise<{ exitCode: number | string | null | undefined; stderr: string }> {
+	const errs: string[] = [];
+	const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+		errs.push(String(chunk));
+		return true;
+	});
+	const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
+	const prevExitCode = process.exitCode;
+	let exitCode: number | string | null | undefined;
+	try {
+		process.exitCode = 0;
+		await run({ bin: "veyyon", version: "0.0.0", argv: [name, ...argv], commands });
+		exitCode = process.exitCode;
+	} finally {
+		stderrSpy.mockRestore();
+		stdoutSpy.mockRestore();
+		process.exitCode = prevExitCode ?? 0;
+	}
+	return { exitCode, stderr: errs.join("") };
+}
+
+describe("a subcommand's unrecognized flag", () => {
+	/**
+	 * The commands whose parse keeps an unknown flag, because `run()` hands the whole argv to a parser
+	 * of its own: `launch` and `acp` to the launch parser, `__complete` to the shell-completion protocol.
+	 * Every other command declares its flags, and an undeclared one is a typo.
+	 */
+	it("is kept only by the commands that parse their argv themselves", () => {
+		const lenient = [...ctors].filter(([, ctor]) => ctor.strict === false).map(([name]) => name);
+
+		expect(lenient.sort()).toEqual(["__complete", "acp", "launch"]);
+	});
+
+	for (const name of [...ctors.keys()].filter(name => ctors.get(name)?.strict !== false)) {
+		it(`is refused by ${name}`, async () => {
+			const result = await runAs(name, ["--zzzz-not-a-flag"]);
+
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain("zzzz-not-a-flag");
+		});
+	}
+
+	/** The reported case: a misspelled refusal must never reach the approving default. */
+	it("refuses `trust --denny` before any decision is made", async () => {
+		const result = await runAs("trust", ["--denny"]);
+
+		expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+		expect(result.stderr).toContain("denny");
+	});
+
+	/** Anti-vacuity: the sweep loaded the real command table. */
+	it("sweeps the registered commands", () => {
+		expect(ctors.size).toBeGreaterThan(20);
+		expect(ctors.has("trust")).toBe(true);
+	});
+});
+
+/**
+ * `veyyon licenses nosuch` printed the license bundle at exit 0: its run() never parsed, so neither a
+ * stray word nor a typo was checked. A command that declares no argument refuses every word.
+ */
+describe("a stray word after a command that takes no argument", () => {
+	const argless = [...ctors]
+		.filter(([, ctor]) => ctor.strict !== false && Object.keys(ctor.args ?? {}).length === 0)
+		.map(([name]) => name);
+
+	for (const name of argless) {
+		it(`is refused by ${name}`, async () => {
+			const result = await runAs(name, ["zzzz-stray"]);
+
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain('Unexpected argument: "zzzz-stray"');
+		});
+	}
+
+	/** Anti-vacuity: the reported command is in the sweep. */
+	it("sweeps the command that never parsed", () => {
+		expect(argless).toContain("licenses");
 	});
 });

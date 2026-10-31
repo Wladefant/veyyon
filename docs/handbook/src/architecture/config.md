@@ -105,7 +105,7 @@ Project-level bases:
 
 The project bases exist in the generic helper, but capability discovery does not use them: a checked-out working tree is untrusted input, so a repository contributes context files (`AGENTS.md` / `CLAUDE.md`) and nothing else. The remaining caller of the project bases is `TITLE_SYSTEM.md` discovery (see [Session title prompt override](#session-title-prompt-override)).
 
-`CONFIG_DIR_NAME` is `.veyyon` (`packages/utils/src/dirs.ts`).
+`CONFIG_DIR_NAME` is `.veyyon` (`packages/utils/src/config-root.ts`).
 
 ## Profiles
 

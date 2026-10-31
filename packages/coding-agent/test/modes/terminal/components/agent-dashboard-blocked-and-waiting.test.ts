@@ -25,12 +25,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geo: StubbedStdoutGeometry;
 
@@ -48,7 +47,7 @@ afterEach(() => {
 function rowsOf(dashboard: AgentDashboard, callSign: string): string[] {
 	return dashboard
 		.render(120)
-		.map(line => line.replace(ANSI_PATTERN, "").trimEnd())
+		.map(line => stripVTControlCharacters(line).trimEnd())
 		.filter(line => line.includes(callSign));
 }
 

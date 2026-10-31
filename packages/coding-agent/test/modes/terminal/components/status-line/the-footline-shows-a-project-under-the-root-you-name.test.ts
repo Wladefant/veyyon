@@ -24,8 +24,9 @@ import {
 	resolveDisplayRoots,
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/location";
 import type { QuietSegmentBounds } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { logger, pathIsWithin, stripAnsi } from "@veyyon/utils";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 
 /** Wide enough that nothing on the row is clipped, so the text asserted is the text produced. */
@@ -65,8 +66,7 @@ function paintedPath(cwd: string, options: Record<string, unknown>): string {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 });
 

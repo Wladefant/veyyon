@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SearchRenderDetails, SearchResponse } from "@veyyon/coding-agent/tools/web/search/types";
 import {
 	type WebSearchViewArgs,
@@ -9,6 +9,7 @@ import {
 	webSearchToolView,
 } from "@veyyon/coding-agent/tools/web/search/view";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const ANSWER = [
 	"## Overview Heading",
@@ -72,7 +73,7 @@ describe("the web search card", () => {
 	});
 
 	it("renders the answer as markdown (strips ## and ** markers)", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const answer = answerSection(
 			card(buildResult(ANSWER), true, uiTheme, { query: "test query" }).map(l => sanitizeText(l)),
 		);
@@ -85,7 +86,7 @@ describe("the web search card", () => {
 	});
 
 	it("shows the full answer when expanded — no answer truncation summary", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const answer = answerSection(
 			card(buildResult(ANSWER), true, uiTheme, { query: "test query" }).map(l => sanitizeText(l)),
 		);
@@ -95,7 +96,7 @@ describe("the web search card", () => {
 	});
 
 	it("shows the full answer when collapsed by default", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const answer = answerSection(
 			card(buildResult(ANSWER), false, uiTheme, { query: "test query" }).map(l => sanitizeText(l)),
 		);
@@ -105,7 +106,7 @@ describe("the web search card", () => {
 	});
 
 	it("truncates the answer only when compact mode provides maxAnswerLines", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const answer = answerSection(
 			card(buildResult(ANSWER), false, uiTheme, { query: "test query", maxAnswerLines: 3 }).map(l =>
 				sanitizeText(l),
@@ -117,7 +118,7 @@ describe("the web search card", () => {
 	});
 
 	it("renders sources as railed body lines without tree connectors", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const rendered = card(buildResult(ANSWER), true, uiTheme, { query: "test query" });
 		const plainLines = rendered.map(l => sanitizeText(l));
 		const rail = uiTheme.symbol("block.rail");
@@ -138,7 +139,7 @@ describe("the web search card", () => {
 	});
 
 	it("respects collapsed vs expanded sources budgets with overflow summary line", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const sources = Array.from({ length: 12 }, (_, i) => ({
 			title: `Source Result ${i}`,
 			url: `https://example.com/res${i}`,
@@ -178,7 +179,7 @@ describe("the web search card", () => {
 	});
 
 	it("renders fallback text and error panels as railed framed blocks without tree connectors", async () => {
-		const uiTheme = (await getThemeByName("dark"))!;
+		const uiTheme = await requireTheme("dark");
 		const rail = uiTheme.symbol("block.rail");
 
 		// Fallback text (no response details)

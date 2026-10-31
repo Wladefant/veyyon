@@ -98,6 +98,8 @@ describe("an interactive session's static import graph", () => {
 			"session-focus-controller.ts",
 			// Carved out of command-controller.ts, which loads with the session.
 			"session-info-view.ts",
+			// The request slot btw-controller.ts and omfg-controller.ts share; both load with the session.
+			"side-panel-slot.ts",
 			"streaming-reveal.ts",
 			// Carved out of input-controller.ts, which loads with the session.
 			"submitted-input.ts",

@@ -24,14 +24,11 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let tool: BrowserTool;
 const TAB = `prompts-${process.pid}`;
-
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
 
 function profileDirs(): string[] {
 	return fs.readdirSync(os.tmpdir()).filter(name => name.startsWith("veyyon-chrome-profile-"));
@@ -65,7 +62,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a headless browser", () => {
 			code: `await page.goto("chrome://prefs-internals"); const all = JSON.parse(await page.evaluate(() => document.body.innerText));
 return { save: all.credentials_enable_service?.value, breach: all.profile?.password_manager_leak_detection?.value };`,
 		});
-		expect(JSON.parse(text(prefs))).toEqual({ save: false, breach: false });
+		expect(JSON.parse(toolResultText(prefs))).toEqual({ save: false, breach: false });
 
 		await tool.execute("close", { action: "close", name: TAB, kill: true });
 		expect(fs.existsSync(path.join(os.tmpdir(), created[0]!))).toBe(false);

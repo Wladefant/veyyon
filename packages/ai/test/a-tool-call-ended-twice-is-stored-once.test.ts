@@ -18,18 +18,14 @@
  * before any projector sees it.
  */
 import { describe, expect, it } from "bun:test";
-import {
-	type BlockState,
-	createCursorUsageAccount,
-	processInteractionUpdate,
-	synthesizeCursorExecToolCall,
-	type ToolCallState,
-} from "@veyyon/ai/providers/cursor";
-import type { AssistantMessage, AssistantMessageEvent, Model, ToolCall } from "@veyyon/ai/types";
+import { processInteractionUpdate, synthesizeCursorExecToolCall } from "@veyyon/ai/providers/cursor";
+import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@veyyon/ai/types";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { wrapLeakedThinkingStream } from "@veyyon/ai/utils/leaked-thinking-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
+import { newBlockState } from "./helpers/cursor-stream-harness";
 
 function assistant(): AssistantMessage {
 	return {
@@ -38,14 +34,7 @@ function assistant(): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};
@@ -150,49 +139,11 @@ describe("a tool call its provider ends twice", () => {
 	}
 });
 
-function cursorState(output: AssistantMessage): BlockState {
-	let textBlock: BlockState["currentTextBlock"] = null;
-	let thinkingBlock: BlockState["currentThinkingBlock"] = null;
-	let toolCall: ToolCallState | null = null;
-	return {
-		usage: createCursorUsageAccount(
-			{
-				id: "cursor-composer-2.5",
-				provider: "cursor",
-				api: "cursor-agent",
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			} as Model<"cursor-agent">,
-			output,
-		),
-		get currentTextBlock() {
-			return textBlock;
-		},
-		get currentThinkingBlock() {
-			return thinkingBlock;
-		},
-		get currentToolCall() {
-			return toolCall;
-		},
-		firstTokenTime: undefined,
-		setTextBlock: b => {
-			textBlock = b;
-		},
-		setThinkingBlock: b => {
-			thinkingBlock = b;
-		},
-		setToolCall: t => {
-			toolCall = t;
-		},
-		setFirstTokenTime: () => {},
-		execDispatches: new Map(),
-	};
-}
-
 describe("a Cursor exec-channel call reported completed", () => {
 	it("reaches the agent loop as one resolved block", async () => {
 		const inner = new AssistantMessageEventStream();
 		const output = { ...assistant(), api: "cursor-agent", provider: "cursor" } as AssistantMessage;
-		const state = cursorState(output);
+		const state = newBlockState(output);
 		const out = wrapLeakedThinkingStream(inner);
 
 		inner.push({ type: "start", partial: output });

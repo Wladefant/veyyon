@@ -7,10 +7,11 @@ import {
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
 import { serializeConversation, serializeConversationForSummary } from "@veyyon/agent-core/compaction/utils";
-import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
+import type { AssistantMessage, Context, Message } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel } from "./helpers";
 
 /**
  * WHY: compacting a session that had thinking on came back as
@@ -52,14 +53,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }
@@ -93,12 +87,6 @@ function branchEntries(): SessionEntry[] {
 		timestamp: new Date(index).toISOString(),
 		message,
 	}));
-}
-
-function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
 }
 
 /** Every byte a Context would put on the wire, as one string. */

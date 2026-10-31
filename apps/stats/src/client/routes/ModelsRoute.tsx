@@ -1,7 +1,13 @@
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import { getModelDashboardStats } from "../api";
-import { CHART_THEMES, MODEL_COLORS, topModelLabels } from "../components/chart-shared";
+import {
+	buildSharedPlugins,
+	buildSharedScales,
+	CHART_THEMES,
+	MODEL_COLORS,
+	topModelLabels,
+} from "../components/chart-shared";
 import {
 	DetailChartEmpty,
 	detailChartPlugins,
@@ -83,6 +89,7 @@ function ModelShareChart({ modelSeries, timeRange }: { modelSeries: ModelTimeSer
 	}, [chartData, timeRange]);
 
 	const options = useMemo(() => {
+		const { sharedScaleBase, yScale } = buildSharedScales({ chartTheme, formatY: value => `${value}%` });
 		return {
 			responsive: true,
 			maintainAspectRatio: false,
@@ -90,60 +97,13 @@ function ModelShareChart({ modelSeries, timeRange }: { modelSeries: ModelTimeSer
 				mode: "index" as const,
 				intersect: false,
 			},
-			plugins: {
-				legend: {
-					position: "top" as const,
-					align: "start" as const,
-					labels: {
-						color: chartTheme.legendLabel,
-						usePointStyle: true,
-						padding: 16,
-						font: { size: 12 },
-						boxWidth: 8,
-					},
-				},
-				tooltip: {
-					backgroundColor: chartTheme.tooltipBackground,
-					titleColor: chartTheme.tooltipTitle,
-					bodyColor: chartTheme.tooltipBody,
-					borderColor: chartTheme.tooltipBorder,
-					borderWidth: 1,
-					padding: 12,
-					cornerRadius: 8,
-					callbacks: {
-						label: (context: { dataset: { label?: string }; parsed: { y: number | null } }) => {
-							const label = context.dataset.label ?? "";
-							const value = context.parsed.y;
-							return `${label}: ${(value ?? 0).toFixed(1)}%`;
-						},
-					},
-				},
-			},
-			scales: {
-				x: {
-					grid: {
-						color: chartTheme.grid,
-						drawBorder: false,
-					},
-					ticks: {
-						color: chartTheme.tick,
-						font: { size: 11 },
-					},
-				},
-				y: {
-					grid: {
-						color: chartTheme.grid,
-						drawBorder: false,
-					},
-					ticks: {
-						color: chartTheme.tick,
-						font: { size: 11 },
-						callback: (value: number | string) => `${value}%`,
-					},
-					min: 0,
-					max: 100,
-				},
-			},
+			plugins: buildSharedPlugins({
+				chartTheme,
+				showLegend: true,
+				defaultLabel: "",
+				formatValue: value => `${value.toFixed(1)}%`,
+			}),
+			scales: { x: sharedScaleBase, y: { ...yScale, max: 100 } },
 		};
 	}, [chartTheme]);
 

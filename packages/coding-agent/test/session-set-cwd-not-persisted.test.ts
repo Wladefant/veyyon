@@ -4,20 +4,13 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
 import { YAML } from "bun";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
+const makeTempDir = useTempDirs();
 
 afterEach(async () => {
 	AgentStorage.resetInstance();
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
 });
 
 describe("setCwd does not persist session.workdir", () => {

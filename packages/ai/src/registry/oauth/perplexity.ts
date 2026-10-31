@@ -21,6 +21,7 @@ import { $env } from "@veyyon/utils/env";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import { $ } from "bun";
 import * as AIError from "../../error";
+import { loginStep } from "./device-code";
 import type { OAuthController, OAuthCredentials } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -94,19 +95,22 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 		// An address you type rather than paste, and a typo in it means no code arrives.
 		secret: false,
 	});
+	// A prompt closed on Esc answers "": the abort is the answer, not a missing email.
+	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 	const trimmedEmail = email.trim();
 	if (!trimmedEmail)
 		throw new AIError.OAuthError("Email is required for Perplexity login", {
 			kind: "validation",
 			provider: "perplexity",
 		});
-	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 
 	ctrl.onProgress?.("Fetching Perplexity CSRF token...");
-	const csrfResponse = await fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/csrf`, {
-		headers: PERPLEXITY_NATIVE_APP_HEADERS,
-		signal: ctrl.signal,
-	});
+	const csrfResponse = await loginStep(ctrl.signal, () =>
+		fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/csrf`, {
+			headers: PERPLEXITY_NATIVE_APP_HEADERS,
+			signal: ctrl.signal,
+		}),
+	);
 
 	if (!csrfResponse.ok) {
 		throw new AIError.ProviderHttpError(
@@ -123,18 +127,20 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 		});
 	}
 	ctrl.onProgress?.("Sending login code to your email...");
-	const sendResponse = await fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/signin-email`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...PERPLEXITY_NATIVE_APP_HEADERS,
-		},
-		body: JSON.stringify({
-			email: trimmedEmail,
-			csrfToken: csrfData.csrfToken,
+	const sendResponse = await loginStep(ctrl.signal, () =>
+		fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/signin-email`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...PERPLEXITY_NATIVE_APP_HEADERS,
+			},
+			body: JSON.stringify({
+				email: trimmedEmail,
+				csrfToken: csrfData.csrfToken,
+			}),
+			signal: ctrl.signal,
 		}),
-		signal: ctrl.signal,
-	});
+	);
 
 	if (!sendResponse.ok) {
 		const body = await sendResponse.text();
@@ -150,24 +156,26 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 		// hiding the digits only causes the mistyped attempt this flow cannot retry.
 		secret: false,
 	});
+	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 	const trimmedOtp = otp.trim();
 	if (!trimmedOtp)
 		throw new AIError.OAuthError("OTP code is required", { kind: "validation", provider: "perplexity" });
-	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 	ctrl.onProgress?.("Verifying login code...");
-	const verifyResponse = await fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/signin-otp`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...PERPLEXITY_NATIVE_APP_HEADERS,
-		},
-		body: JSON.stringify({
-			email: trimmedEmail,
-			otp: trimmedOtp,
-			csrfToken: csrfData.csrfToken,
+	const verifyResponse = await loginStep(ctrl.signal, () =>
+		fetch(`${PERPLEXITY_WEB_ORIGIN}/api/auth/signin-otp`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...PERPLEXITY_NATIVE_APP_HEADERS,
+			},
+			body: JSON.stringify({
+				email: trimmedEmail,
+				otp: trimmedOtp,
+				csrfToken: csrfData.csrfToken,
+			}),
+			signal: ctrl.signal,
 		}),
-		signal: ctrl.signal,
-	});
+	);
 
 	const verifyData = (await verifyResponse.json()) as {
 		token?: string;

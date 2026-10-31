@@ -82,7 +82,9 @@ async function fixture(args: string[]): Promise<string> {
 }
 
 async function measure(groups: readonly string[]): Promise<CompactedBlockGrowth[]> {
-	const report = JSON.parse(await fixture([String(TARGET_CHARS), groups.join(",")])) as CompactedBlockReport;
+	const report = JSON.parse(
+		await fixture([String(TARGET_CHARS), String(GROWTH_LIMIT), groups.join(",")]),
+	) as CompactedBlockReport;
 	return report.groups;
 }
 

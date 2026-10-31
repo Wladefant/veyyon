@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Effort } from "@veyyon/catalog/effort";
+import { DIALECTS } from "@veyyon/catalog/identity/dialect";
 import {
 	captureRegistryForTests,
 	initializeWithSettings,
@@ -142,7 +143,11 @@ describe("Settings", () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
 			expect(settings.quarantinedFiles).toEqual([
-				{ path: getConfigPath(), quarantinePath: `${getConfigPath()}.corrupt` },
+				{
+					path: getConfigPath(),
+					quarantinePath: `${getConfigPath()}.corrupt`,
+					reason: "Nested mappings are not allowed in compact mappings at line 3, column 8",
+				},
 			]);
 		});
 
@@ -195,7 +200,11 @@ describe("Settings", () => {
 			expect(fs.existsSync(`${getConfigPath()}.corrupt`)).toBe(true);
 			expect(fs.readFileSync(`${getConfigPath()}.corrupt`, "utf-8")).toBe(sequenceYaml);
 			expect(settings.quarantinedFiles).toEqual([
-				{ path: getConfigPath(), quarantinePath: `${getConfigPath()}.corrupt` },
+				{
+					path: getConfigPath(),
+					quarantinePath: `${getConfigPath()}.corrupt`,
+					reason: "settings root must be a YAML mapping, not a scalar or sequence",
+				},
 			]);
 		});
 
@@ -505,24 +514,8 @@ describe("Settings", () => {
 			expect(getDefault("providers.maxInFlightRequests")).toEqual({});
 		});
 
-		it("exposes all tool calling mode options", () => {
-			const values = getEnumValues("tools.format");
-			expect(values).toEqual([
-				"auto",
-				"native",
-				"glm",
-				"hermes",
-				"kimi",
-				"xml",
-				"anthropic",
-				"deepseek",
-				"harmony",
-				"qwen3",
-				"gemini",
-				"gemma",
-				"minimax",
-				"pi-native",
-			]);
+		it("offers auto, native and every owned dialect as tool calling modes", () => {
+			expect(getEnumValues("tools.format")).toEqual(["auto", "native", ...DIALECTS]);
 		});
 	});
 

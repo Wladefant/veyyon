@@ -45,6 +45,7 @@ import {
 	collectFileWindow,
 	collectWindowFromLines,
 	computeRangeWindow,
+	contextHidRequestedLine,
 	formatContextPaddingNotice,
 	formatMoreLinesFooter,
 	formatOutOfBoundsMessage,
@@ -333,13 +334,17 @@ async function readLocalFileRange(
 	if (bridgeResult) return { kind: "result", result: bridgeResult };
 
 	const rawSelector = isRawSelector(parsed);
-	const window = computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session);
-	const { requestedStart, startLine, startLineDisplay, maxBytesForRead } = window;
+	let window = computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session);
 	// One materialization, three consumers: this window, the bracket context below, and
 	// the snapshot tag. A file over the snapshot cap, or one whose raw bytes and
 	// normalized text split differently, still streams -- see materializeFile.
 	const materialized = rawSelector ? undefined : await materializeFile(absolutePath, fileSize);
-	const collected = await collectFileWindow(absolutePath, fileSize, window, materialized);
+	let collected = await collectFileWindow(absolutePath, fileSize, window, materialized);
+	if (contextHidRequestedLine(window, collected.lines.length, collected.stoppedByByteLimit)) {
+		window = computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session, false);
+		collected = await collectFileWindow(absolutePath, fileSize, window, materialized);
+	}
+	const { requestedStart, startLine, startLineDisplay, maxBytesForRead } = window;
 	const { lines: collectedLines, totalFileLines, reachedEof } = collected;
 
 	// Check if offset is out of bounds - return graceful message instead of throwing
@@ -389,6 +394,7 @@ async function readLocalFileRange(
 			collected.firstLinePreview?.text ?? "",
 			hashLines,
 			(text, startNum) => formatter.text(text, startNum),
+			true,
 		);
 	} else {
 		const entries =
@@ -454,6 +460,7 @@ async function readLocalFileRange(
 							startLine: startLineDisplay,
 							totalFileLines: reachedEof ? totalFileLines : undefined,
 							totalLinesUnknown: !reachedEof,
+							maxBytes: maxBytesForRead,
 						},
 					}
 				: undefined,

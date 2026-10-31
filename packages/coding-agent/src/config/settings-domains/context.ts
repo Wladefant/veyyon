@@ -3,6 +3,7 @@
 // the most imported module in this package.
 import { AUTO_COMPACTION_THRESHOLD } from "@veyyon/agent-core/compaction/threshold";
 import { INSTRUMENTATION_LEVELS } from "@veyyon/ai/instrumentation";
+import type { Dialect } from "@veyyon/catalog/identity/dialect";
 import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
 import { DEFAULT_TOKEN_BUDGET } from "argot/constants";
 import {
@@ -11,6 +12,30 @@ import {
 	HINDSIGHT_RECALL_TYPES_DEFAULT,
 	MAX_EMBED_IDLE_UNLOAD_MS,
 } from "./shared";
+
+/**
+ * How `/settings` shows each dialect `tools.format` can force, and the order it lists them in.
+ * Keyed by `Dialect`, so a dialect the catalog adds or drops fails to compile here until this
+ * table matches. The import is type-only: the catalog's dialect module stays off the launch card's
+ * module graph, which this settings domain is on.
+ */
+const DIALECT_OPTIONS: Record<Dialect, { label: string; description: string }> = {
+	glm: { label: "GLM", description: "Use GLM-style in-band tool calls." },
+	hermes: { label: "Hermes", description: "Use Hermes-style in-band tool calls." },
+	kimi: { label: "Kimi", description: "Use Kimi-style in-band tool calls." },
+	xml: { label: "XML", description: "Use generic XML in-band tool calls." },
+	anthropic: { label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
+	deepseek: { label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
+	harmony: { label: "Harmony", description: "Use Harmony-style in-band tool calls." },
+	qwen3: { label: "Qwen3", description: "Use the Qwen3 owned dialect." },
+	gemini: { label: "Gemini", description: "Use the Gemini owned dialect." },
+	gemma: { label: "Gemma", description: "Use the Gemma owned dialect." },
+	minimax: { label: "MiniMax", description: "Use the MiniMax owned dialect." },
+	"pi-native": { label: "pi-native", description: "Use the pi-native <call:NAME> owned dialect." },
+};
+
+/** Every dialect `tools.format` can force: the same set as the catalog's `DIALECTS`, by the table's key type. */
+const FORCEABLE_DIALECTS = Object.keys(DIALECT_OPTIONS) as Dialect[];
 
 /** Context domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const CONTEXT_SETTINGS = {
@@ -470,22 +495,7 @@ export const CONTEXT_SETTINGS = {
 
 	"tools.format": {
 		type: "enum",
-		values: [
-			"auto",
-			"native",
-			"glm",
-			"hermes",
-			"kimi",
-			"xml",
-			"anthropic",
-			"deepseek",
-			"harmony",
-			"qwen3",
-			"gemini",
-			"gemma",
-			"minimax",
-			"pi-native",
-		] as const,
+		values: ["auto", "native", ...FORCEABLE_DIALECTS] as const,
 		default: "auto",
 		ui: {
 			tab: "experimental",
@@ -500,18 +510,7 @@ export const CONTEXT_SETTINGS = {
 					description: "Use native tool calls unless the model is known not to support them.",
 				},
 				{ value: "native", label: "Native", description: "Use provider-native tool calls." },
-				{ value: "glm", label: "GLM", description: "Use GLM-style in-band tool calls." },
-				{ value: "hermes", label: "Hermes", description: "Use Hermes-style in-band tool calls." },
-				{ value: "kimi", label: "Kimi", description: "Use Kimi-style in-band tool calls." },
-				{ value: "xml", label: "XML", description: "Use generic XML in-band tool calls." },
-				{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
-				{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
-				{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
-				{ value: "qwen3", label: "Qwen3", description: "Use the Qwen3 owned dialect." },
-				{ value: "gemini", label: "Gemini", description: "Use the Gemini owned dialect." },
-				{ value: "gemma", label: "Gemma", description: "Use the Gemma owned dialect." },
-				{ value: "minimax", label: "MiniMax", description: "Use the MiniMax owned dialect." },
-				{ value: "pi-native", label: "pi-native", description: "Use the pi-native <call:NAME> owned dialect." },
+				...FORCEABLE_DIALECTS.map(dialect => ({ value: dialect, ...DIALECT_OPTIONS[dialect] })),
 			],
 		},
 	},

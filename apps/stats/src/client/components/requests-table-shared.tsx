@@ -1,7 +1,8 @@
+import { StatusPill } from "@veyyon/tool-render";
 import type React from "react";
 import { formatCost, formatDurationMs, formatInteger, formatRelativeTime } from "../data/formatters";
 import type { MessageStats } from "../types";
-import { type DataTableColumn, StatusPill } from "../ui";
+import type { DataTableColumn } from "../ui";
 
 export function createMessageColumns(isErrorRoute?: boolean): DataTableColumn<MessageStats>[] {
 	if (isErrorRoute) {

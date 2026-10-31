@@ -8,9 +8,9 @@
  * {@link RetryHost}.
  */
 import { scheduler } from "node:timers/promises";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -20,7 +20,7 @@ import {
 	unreplayableContinueDelayMs,
 } from "@veyyon/kernel/session/retry-policy";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { errorMessage, extractRetryHint, logger } from "@veyyon/utils";
+import { errorMessage, extractRetryHint, formatDuration, logger } from "@veyyon/utils";
 import type { RecoveredRetryError } from "../../extensibility/shared-events";
 import { turnControlPrompts } from "../../prompts/turn-control/rows";
 import { isEmptyAssistantStop, isSameAssistantMessage } from "../agent-session-message-shapes";
@@ -33,7 +33,6 @@ import type {
 import {
 	hasReplayUnsafeOutput,
 	hasReplayUnsafeToolOutput,
-	isClassifierRefusal,
 	isGenericAbortSentinel,
 	retryRecoveryKind,
 	retryRecoveryNote,
@@ -41,13 +40,8 @@ import {
 } from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
+import { parkUsageLimitedCredential } from "./provider-usage";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
-
-/**
- * Slack added past a sibling credential's block expiry before retrying, so
- * the next getApiKey lands after the block has actually lapsed.
- */
-const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
 
 /** How a failed turn entered retry handling: which switches the recovery may make. */
 interface RetryEntryOptions {
@@ -240,7 +234,7 @@ export class RetryRuntime {
 		const contextWindow = this.#session.model?.contextWindow ?? 0;
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
 
-		if (isClassifierRefusal(message)) return true;
+		if (isProviderRefusalMessage(message)) return true;
 		return AIError.retriable(id, {
 			replayUnsafe: hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
 		});
@@ -494,7 +488,7 @@ export class RetryRuntime {
 			// this last resort a provider-wide usage cap never fails over to the
 			// configured chain.
 			budgetExhausted: this.#attempt > policy.maxRetries,
-			classifierRefusal: isClassifierRefusal(message),
+			classifierRefusal: isProviderRefusalMessage(message),
 			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
 			options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),
@@ -581,48 +575,34 @@ export class RetryRuntime {
 
 	/**
 	 * Park the credential a usage-limit failure exhausted and decide the wait: none when a sibling
-	 * credential or a banked Codex reset takes over, else the sooner of the provider's retry-after
-	 * window and the moment a temporarily blocked sibling frees up.
+	 * credential or a banked Codex reset takes over, else {@link parkUsageLimitedCredential}'s.
 	 */
 	async #parkUsageLimit(attempt: RetryAttempt, model: Model): Promise<void> {
-		const retryAfterMs =
-			attempt.parsedRetryAfterMs ??
-			calculateRateLimitBackoffMs(parseRateLimitReason(attempt.errorMessage), "credential-park");
 		const failedCredentialId = Number(attempt.message.usage?.credentialId);
-		const outcome = await this.#session.modelRegistry.authStorage.markUsageLimitReached(
-			model.provider,
+		const park = await parkUsageLimitedCredential(
+			this.#session.modelRegistry.authStorage,
+			model,
 			this.#session.sessionId,
 			{
-				credentialId:
-					Number.isSafeInteger(failedCredentialId) && failedCredentialId > 0 ? failedCredentialId : Number.NaN,
-				retryAfterMs,
-				baseUrl: model.baseUrl,
-				modelId: model.id,
+				errorMessage: attempt.errorMessage,
+				retryAfterMs: attempt.parsedRetryAfterMs,
 				modelNotInPlan: attempt.modelNotInPlan,
+				...(Number.isSafeInteger(failedCredentialId) && failedCredentialId > 0
+					? { credentialId: failedCredentialId }
+					: {}),
 			},
 		);
-		attempt.quotaMessage = outcome.quotaMessage;
+		attempt.quotaMessage = park.quotaMessage;
 		// A live usage-limit 429 on the active Codex account, with a banked reset and the opt-in
 		// setting on, spends the reset and retries immediately instead of waiting out the window.
 		// It runs after the free sibling switch and before model fallback.
-		if (outcome.switched || (await this.#host.maybeAutoRedeemCodexReset())) {
+		if (park.switched || (await this.#host.maybeAutoRedeemCodexReset())) {
 			attempt.switchedCredential = true;
 			attempt.delayMs = 0;
 			return;
 		}
-		// No sibling credential is usable right now. Wait for whichever comes first: the provider's
-		// retry-after window for the current account, or the earliest moment a temporarily blocked
-		// sibling frees up (e.g. a 60s post-401 block or a 5-min usage-probe block); the next
-		// attempt's getApiKey re-ranks and picks it up. Without this, one short-lived sibling block
-		// escalates a recoverable situation into the provider's multi-hour wait and trips the
-		// fail-fast cap.
-		let waitMs = retryAfterMs;
-		if (outcome.retryAtMs !== undefined) {
-			const siblingWaitMs = Math.max(0, outcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
-			if (siblingWaitMs < waitMs) waitMs = siblingWaitMs;
-		}
-		attempt.usageLimitWaitMs = waitMs;
-		if (waitMs > attempt.delayMs) attempt.delayMs = waitMs;
+		attempt.usageLimitWaitMs = park.waitMs;
+		if (park.waitMs > attempt.delayMs) attempt.delayMs = park.waitMs;
 	}
 
 	/**
@@ -714,7 +694,7 @@ export class RetryRuntime {
 			return this.#endWithFailure(
 				message,
 				this.#attempt,
-				`Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). ${quotaPrefix}Original error: ${attempt.errorMessage}`,
+				`Provider requested a ${formatDuration(delayMs)} wait, longer than retry.maxDelayMs (${formatDuration(maxDelayMs)}). ${quotaPrefix}Original error: ${attempt.errorMessage}`,
 			);
 		}
 		return false;

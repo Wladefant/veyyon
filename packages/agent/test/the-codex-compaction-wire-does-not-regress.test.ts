@@ -53,8 +53,8 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { Message, Model } from "@veyyon/ai";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
+import { requireBundledModel } from "./helpers";
 
 const BANNER = "DO NOT CHANGE WITHOUT OPERATOR PERMISSION — THIS REGRESSION HAS HAPPENED 50+ TIMES";
 
@@ -74,9 +74,7 @@ function codexToken(): string {
 }
 
 function codexModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error(`${BANNER}: the bundled openai-codex row this wire is pinned to is gone`);
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function sse(...events: Array<Record<string, unknown>>): string {

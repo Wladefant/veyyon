@@ -37,17 +37,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { hoverBandAt, selectionBand } from "@veyyon/coding-agent/modes/terminal/components/selectors/selector-helpers";
 import { resetGroundTintsForTest, setDetectedTerminalGround } from "@veyyon/coding-agent/theme/ground-tints";
-import {
-	getThemeByName,
-	hoverBand,
-	initTheme,
-	setThemeInstance,
-	theme,
-	visibleGroundHex,
-} from "@veyyon/coding-agent/theme/theme";
+import { hoverBand, initTheme, setThemeInstance, theme, visibleGroundHex } from "@veyyon/coding-agent/theme/theme";
 import { Ellipsis } from "@veyyon/natives";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import { hexRgb } from "../../../helpers/band-colors";
+import { requireTheme } from "../../../helpers/require-theme";
 
 /** The grey a real terminal reports, so the ramp resolves out of something that is not black. */
 const TERMINAL_GREY = "#1e2127";
@@ -69,14 +64,6 @@ function cells(line: string): string {
 /** Every truecolor background the row opens, in the order it opens them. */
 function backgrounds(line: string): Array<[number, number, number]> {
 	return [...line.matchAll(BG_TRUECOLOR)].map(match => [Number(match[1]), Number(match[2]), Number(match[3])]);
-}
-
-function hexRgb(hex: string): [number, number, number] {
-	return [
-		Number.parseInt(hex.slice(1, 3), 16),
-		Number.parseInt(hex.slice(3, 5), 16),
-		Number.parseInt(hex.slice(5, 7), 16),
-	];
 }
 
 /** How far one colour is from another, summed over the channels. */
@@ -102,8 +89,7 @@ async function useMode(mode: "truecolor" | "256color"): Promise<void> {
 		delete (Bun.env as Record<string, string | undefined>).COLORTERM;
 		Bun.env.TERM = "linux";
 	}
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== mode) throw new Error(`titanium built as ${loaded.getColorMode()}, wanted ${mode}`);
 	setThemeInstance(loaded);
 }

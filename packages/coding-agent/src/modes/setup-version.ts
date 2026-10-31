@@ -27,7 +27,7 @@
  * the global-config reader, which `main.ts` already pulls in.
  */
 
-import { readGlobalOnboardingVersionSafe, readLegacyProfileSetupVersion } from "@veyyon/utils/dirs";
+import { readGlobalOnboardingVersionSafe, readLegacyProfileSetupVersion } from "@veyyon/utils/global-config";
 import type { Settings } from "../config/settings";
 
 /**

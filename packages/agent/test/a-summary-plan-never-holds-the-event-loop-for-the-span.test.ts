@@ -12,8 +12,9 @@ import { measureSummarySource, SUMMARY_TRANSCRIPT_GLUE_BYTES } from "@veyyon/age
 import * as compactionUtils from "@veyyon/agent-core/compaction/utils";
 import type { AssistantMessage, Context, Message, Model } from "@veyyon/ai";
 import { DIALECTS } from "@veyyon/catalog/identity";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { TIME_SLICE_MS } from "@veyyon/utils";
+import { requireBundledModel } from "./helpers";
 
 /**
  * Planning a history summary never serializes the whole span in one event-loop turn when the
@@ -41,14 +42,7 @@ import { TIME_SLICE_MS } from "@veyyon/utils";
  * a dialect whose framing per message exceeds the glue only on a shape the corpus below lacks.
  */
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return { role: "assistant", content, timestamp: 2, provider: "m", model: "m", api: "m", usage, stopReason: "stop" };
@@ -194,8 +188,7 @@ function chunks(count: number): AgentMessage[] {
 }
 
 function model(contextWindow: number): Model {
-	const found = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!found) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+	const found = requireBundledModel("openai-codex", "gpt-5.1-codex");
 	return { ...found, contextWindow };
 }
 

@@ -18,21 +18,15 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { LspTool } from "@veyyon/coding-agent/lsp";
 import * as lspClient from "@veyyon/coding-agent/lsp/client";
 import * as lspConfig from "@veyyon/coding-agent/lsp/config";
-import {
-	type LspParams,
-	type LspToolDetails,
-	lspSchema,
-	type Range,
-	type ServerConfig,
-} from "@veyyon/coding-agent/lsp/types";
+import { type LspParams, lspSchema, type Range, type ServerConfig } from "@veyyon/coding-agent/lsp/types";
 import { fileToUri, symbolKindToIcon } from "@veyyon/coding-agent/lsp/utils";
 import { ToolAbortError, ToolError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { TempDir } from "@veyyon/utils";
 import { type FakeLspHandler, type FakeLspServer, installFakeLsp } from "../helpers/fake-lsp";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** The actions the tool answers without a file-bound server; everything else goes through the preamble. */
@@ -561,13 +555,6 @@ function useServer(servers: Array<[string, ServerConfig]>): void {
 	vi.spyOn(lspConfig, "getServersForFile").mockReturnValue(servers);
 }
 
-function textOf(result: AgentToolResult<LspToolDetails>): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
-}
-
 /** Every action the schema declares, so a new one arrives uncovered and fails the sweep. */
 function declaredActions(): string[] {
 	return [...new Set(lspSchema.value.get("action").expression.match(/[a-z_]+/g) ?? [])];
@@ -604,7 +591,7 @@ describe("a file-bound lsp action", () => {
 				const params: LspParams = { action, file: target.file, ...entry.params, timeout: 10 };
 				const result = await new LspTool(makeToolSession({ cwd: target.dir })).execute(`lsp-${action}`, params);
 
-				expect(textOf(result)).toBe(entry.text);
+				expect(toolResultText(result)).toBe(entry.text);
 				expect(result.details).toEqual({ serverName: SERVER_NAME, action, success: true, request: params });
 				expect(result.useless).toBe(entry.useless);
 				entry.after?.(target, server);
@@ -644,7 +631,7 @@ describe("a file-bound lsp action", () => {
 			timeout: 10,
 		});
 
-		expect(textOf(result)).toBe("Error: new_name parameter required for rename");
+		expect(toolResultText(result)).toBe("Error: new_name parameter required for rename");
 		expect(result.details).toEqual({ action: "rename", serverName: SERVER_NAME, success: false });
 		expect(requestsFor(server, "textDocument/rename")).toEqual([]);
 	});
@@ -655,7 +642,7 @@ describe("a file-bound lsp action", () => {
 		const params: LspParams = { action: "hover", file: target.file, line: 4, symbol: "greet", timeout: 10 };
 		const result = await new LspTool(makeToolSession({ cwd: target.dir })).execute("lsp-hover", params);
 
-		expect(textOf(result)).toBe("LSP error: hover crashed");
+		expect(toolResultText(result)).toBe("LSP error: hover crashed");
 		expect(result.details).toEqual({ serverName: SERVER_NAME, action: "hover", success: false, request: params });
 	});
 
@@ -665,7 +652,7 @@ describe("a file-bound lsp action", () => {
 		const params: LspParams = { action: "hover", file: target.file, line: 2, symbol: "greet", timeout: 10 };
 		const result = await new LspTool(makeToolSession({ cwd: target.dir })).execute("lsp-hover", params);
 
-		expect(textOf(result)).toBe('LSP error: Symbol "greet" not found on line 2');
+		expect(toolResultText(result)).toBe('LSP error: Symbol "greet" not found on line 2');
 		expect(result.details).toEqual({ serverName: SERVER_NAME, action: "hover", success: false, request: params });
 	});
 
@@ -698,7 +685,7 @@ describe("a file-bound lsp action", () => {
 			timeout: 10,
 		});
 
-		expect(textOf(result)).toBe("No language server found for this action");
+		expect(toolResultText(result)).toBe("No language server found for this action");
 		expect(result.details).toEqual({ action: "hover", success: false });
 	});
 
@@ -710,7 +697,9 @@ describe("a file-bound lsp action", () => {
 			timeout: 10,
 		});
 
-		expect(textOf(result)).toBe("Error: file parameter required. Use `*` for workspace scope where supported.");
+		expect(toolResultText(result)).toBe(
+			"Error: file parameter required. Use `*` for workspace scope where supported.",
+		);
 		expect(result.details).toEqual({ action: "hover", success: false });
 	});
 });

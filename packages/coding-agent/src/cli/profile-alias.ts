@@ -7,7 +7,7 @@ import * as path from "node:path";
 // here would load .env before `setProfile` runs (see profile-cli.test.ts). Both
 // atomic-write.ts and file-lock.ts are env-free, so importing them eagerly is safe.
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
-import { normalizeProfileName } from "@veyyon/utils/dirs";
+import { normalizeProfileName } from "@veyyon/utils/config-root";
 import { withFileLock } from "@veyyon/utils/file-lock";
 import { isEnoent } from "@veyyon/utils/fs-error";
 

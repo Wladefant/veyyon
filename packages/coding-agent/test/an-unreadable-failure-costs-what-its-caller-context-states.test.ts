@@ -24,13 +24,13 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
 
@@ -64,8 +64,7 @@ describe("an unreadable failure costs what its caller context states", () => {
 	});
 
 	it("parks the credential for the quota window and suppresses the selector for five minutes", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled Anthropic test model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// The premise: the failure is one the reason rules cannot read.
 		expect(parseRateLimitReason(UNREADABLE_USAGE_LIMIT)).toBe("UNKNOWN");
 

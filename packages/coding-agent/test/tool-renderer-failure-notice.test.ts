@@ -15,6 +15,7 @@
  * one information loss for another.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { AnyAgentTool } from "@veyyon/agent-core";
 import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { ToolExecutionProducer } from "@veyyon/coding-agent/presentation/tool-execution";
@@ -35,7 +36,7 @@ beforeAll(async () => {
 function flatten(component: Component): string {
 	return component
 		.render(WIDTH)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join(" ")
 		.replace(/\s+/g, " ")
 		.trim();
@@ -198,7 +199,7 @@ describe("the notice as a signal", () => {
 
 		const line = component
 			.render(WIDTH)
-			.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").trim())
+			.map(l => stripVTControlCharacters(l).trim())
 			.find(l => l.includes("renderer threw"));
 
 		expect(line).toBeDefined();

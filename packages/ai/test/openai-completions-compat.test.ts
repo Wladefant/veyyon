@@ -10,7 +10,6 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
-	FetchImpl,
 	Model,
 	ModelSpec,
 	OpenAICompat,
@@ -19,8 +18,10 @@ import type {
 } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
+import { sayHelloContext } from "./helpers";
+import { sseFetch } from "./helpers/fetch-mock";
 
 const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
 	const {
@@ -30,12 +31,6 @@ const gpt4oMiniSpec: ModelSpec<"openai-completions"> = (() => {
 	} = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
 	return { ...rest, compat: compatConfig };
 })();
-
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
 
 function toObject(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
@@ -52,34 +47,6 @@ function getNestedBoolean(value: unknown, key: string): boolean | undefined {
 	if (!obj) return undefined;
 	const property = obj[key];
 	return typeof property === "boolean" ? property : undefined;
-}
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function createMockFetch(events: unknown[]): FetchImpl {
-	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
-		return createSseResponse(events);
-	}
-
-	return Object.assign(mockFetch, { preconnect: fetch.preconnect });
-}
-
-function baseContext(): Context {
-	return {
-		messages: [
-			{
-				role: "user",
-				content: "hello",
-				timestamp: Date.now(),
-			},
-		],
-	};
 }
 
 function zaiGlm52Model(): Model<"openai-completions"> {
@@ -117,15 +84,15 @@ function kimiZaiModel(): Model<"openai-completions"> {
 
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
-	context: Context = baseContext(),
+	context: Context = sayHelloContext(),
 	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; cacheRetention?: CacheRetention },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
-	const fetchMock = createMockFetch(["[DONE]"]);
+	const fetchMock = sseFetch(["[DONE]"]);
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
 		fetch: fetchMock,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 		...options,
 	});
@@ -219,14 +186,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -259,14 +219,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -298,14 +251,7 @@ describe("openai-completions compatibility", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -640,7 +586,7 @@ describe("openai-completions compatibility", () => {
 			...gpt4oMiniSpec,
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-test",
 				object: "chat.completion.chunk",
@@ -668,7 +614,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -684,7 +630,7 @@ describe("openai-completions compatibility", () => {
 			...gpt4oMiniSpec,
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-batched-tools",
 				object: "chat.completion.chunk",
@@ -712,7 +658,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -726,7 +672,7 @@ describe("openai-completions compatibility", () => {
 			...gpt4oMiniSpec,
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-batched-continuation",
 				object: "chat.completion.chunk",
@@ -768,7 +714,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -858,10 +804,10 @@ describe("openai-completions compatibility", () => {
 			},
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamOpenAICompletions(model, baseContext(), {
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			reasoning: "high",
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => resolve(payload),
 		});
 		const payload = await promise;
@@ -884,11 +830,11 @@ describe("openai-completions compatibility", () => {
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		streamOpenAICompletions(
 			model,
-			{ ...baseContext(), tools: [readTool] },
+			{ ...sayHelloContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
 				reasoning: "max",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 				maxTokens: 65_536,
 			},
@@ -919,16 +865,16 @@ describe("openai-completions compatibility", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
-			{ ...baseContext(), tools: [readTool] },
+			{ ...sayHelloContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -949,7 +895,7 @@ describe("openai-completions compatibility", () => {
 			...gpt4oMiniSpec,
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-end",
 				object: "chat.completion.chunk",
@@ -967,7 +913,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -982,7 +928,7 @@ describe("openai-completions compatibility", () => {
 			id: "local-12b",
 			baseUrl: "http://ollama.invalid/v1",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-empty-length",
 				object: "chat.completion.chunk",
@@ -998,7 +944,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const stream = streamOpenAICompletions(model, baseContext(), {
+		const stream = streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		});
@@ -1025,7 +971,7 @@ describe("openai-completions compatibility", () => {
 			provider: "custom" as Model["provider"],
 			baseUrl: "https://gateway.example/v1",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-empty-length",
 				object: "chat.completion.chunk",
@@ -1036,7 +982,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const stream = streamOpenAICompletions(model, baseContext(), {
+		const stream = streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		});
@@ -1066,11 +1012,11 @@ describe("openai-completions compatibility", () => {
 		} as ModelSpec<"openai-completions">);
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		const fetchMock = sseFetch(["[DONE]"]);
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => resolve(payload),
 		});
 
@@ -1088,7 +1034,7 @@ describe("openai-completions compatibility", () => {
 			...gpt4oMiniSpec,
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-reasoning-text",
 				object: "chat.completion.chunk",
@@ -1111,7 +1057,7 @@ describe("openai-completions compatibility", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -1146,10 +1092,10 @@ describe("openai-completions compatibility", () => {
 		});
 
 		const minimalPayload = toObject(
-			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "minimal" }),
+			await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "minimal" }),
 		);
 		const xhighPayload = toObject(
-			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" }),
+			await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "xhigh" }),
 		);
 
 		expect(minimalPayload ? Reflect.get(minimalPayload, "reasoning_effort") : undefined).toBe("low");
@@ -1179,10 +1125,10 @@ describe("openai-completions compatibility", () => {
 			maxTokens: 32000,
 		});
 		const collapsedMinimalPayload = toObject(
-			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "minimal" }),
+			await captureOpenAICompletionsPayload(collapsedModel, sayHelloContext(), { reasoning: "minimal" }),
 		);
 		const collapsedXhighPayload = toObject(
-			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "xhigh" }),
+			await captureOpenAICompletionsPayload(collapsedModel, sayHelloContext(), { reasoning: "xhigh" }),
 		);
 		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "model") : undefined).toBe(
 			"mimo-v2.5-pro-thinking",
@@ -1275,9 +1221,9 @@ describe("kimi model detection via detectCompat", () => {
 			reasoning: true,
 		} as ModelSpec<"openai-completions">);
 
-		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
-		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
-		const maxPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "max" });
+		const highPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "high" });
+		const xhighPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "xhigh" });
+		const maxPayload = await captureOpenAICompletionsPayload(model, sayHelloContext(), { reasoning: "max" });
 
 		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "high" });
 		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "xhigh" });
@@ -1312,14 +1258,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1351,14 +1290,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1405,20 +1337,13 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1439,7 +1364,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1474,20 +1399,13 @@ describe("kimi model detection via detectCompat", () => {
 			api: "anthropic-messages",
 			provider: "zai",
 			model: "claude-compatible",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1508,7 +1426,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1541,20 +1459,13 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1574,7 +1485,7 @@ describe("kimi model detection via detectCompat", () => {
 			{
 				apiKey: "test-key",
 				fetch: fetchMock,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1627,14 +1538,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1650,7 +1554,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1675,7 +1579,7 @@ describe("kimi model detection via detectCompat", () => {
 				// Forced tool choice triggers `disableReasoningOnForcedToolChoice`
 				// for Kimi, suppressing reasoning_effort on the wire body.
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1722,14 +1626,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -1744,7 +1641,7 @@ describe("kimi model detection via detectCompat", () => {
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1767,7 +1664,7 @@ describe("kimi model detection via detectCompat", () => {
 				fetch: fetchMock,
 				reasoning: "high",
 				toolChoice: { type: "tool", name: "read" },
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1820,20 +1717,13 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1854,7 +1744,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning: "high",
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1904,20 +1794,13 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
 
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
+		const fetchMock = sseFetch(["[DONE]"]);
 		streamOpenAICompletions(
 			model,
 			{
@@ -1938,7 +1821,7 @@ describe("kimi model detection via detectCompat", () => {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				reasoning,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload: payload => resolve(payload),
 			},
 		);
@@ -1974,14 +1857,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -2017,14 +1893,7 @@ describe("kimi model detection via detectCompat", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};
@@ -2087,7 +1956,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 	it("strips leaked <\uff5cDSML\uff5c...\uff5c> markers from visible content", async () => {
 		const model = nvidiaDeepseekModel();
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-nim-1",
 				object: "chat.completion.chunk",
@@ -2110,7 +1979,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2125,7 +1994,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 	it("holds back partial token split across chunks", async () => {
 		const model = nvidiaDeepseekModel();
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-nim-2",
 				object: "chat.completion.chunk",
@@ -2150,7 +2019,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2163,7 +2032,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 	it("flushes a dangling partial open delimiter at end of stream", async () => {
 		const model = nvidiaDeepseekModel();
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-nim-3",
 				object: "chat.completion.chunk",
@@ -2183,7 +2052,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 
 		// At end-of-stream we have no way to know whether the partial is a real token,
 		// so we emit it verbatim rather than swallow legitimate text forever.
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2202,7 +2071,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			baseUrl: "https://integrate.api.nvidia.com/v1",
 			id: "meta/llama-3.3-70b-instruct",
 		} as ModelSpec<"openai-completions">);
-		const fetchMock = createMockFetch([
+		const fetchMock = sseFetch([
 			{
 				id: "chatcmpl-nim-4",
 				object: "chat.completion.chunk",
@@ -2220,7 +2089,7 @@ describe("NVIDIA NIM DeepSeek special-token stripping", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -2315,14 +2184,7 @@ describe("anthropic cache control for OpenAI-compatible chat completions", () =>
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 1,
 		};
@@ -2416,11 +2278,11 @@ describe("openrouterVariant request integration", () => {
 	it("appends the configured variant suffix to params.model for OpenRouter requests", async () => {
 		const model = getBundledModel("openrouter", "anthropic/claude-sonnet-4") as Model<"openai-completions">;
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		const fetchMock = sseFetch(["[DONE]"]);
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});
@@ -2436,11 +2298,11 @@ describe("openrouterVariant request integration", () => {
 			compat: base.compatConfig,
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		const fetchMock = sseFetch(["[DONE]"]);
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});
@@ -2454,11 +2316,11 @@ describe("openrouterVariant request integration", () => {
 			api: "openai-completions",
 		} as ModelSpec<"openai-completions">);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
-		const fetchMock = createMockFetch(["[DONE]"]);
-		streamOpenAICompletions(model, baseContext(), {
+		const fetchMock = sseFetch(["[DONE]"]);
+		streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			openrouterVariant: "nitro",
 			onPayload: payload => resolve(payload),
 		});
@@ -2545,7 +2407,7 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 	it("rewrites tool schemas to MFJS on native Moonshot hosts", async () => {
 		const model = moonshotKimiModel();
 		expect(model.compat.toolSchemaFlavor).toBe("moonshot-mfjs");
-		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const payload = await captureOpenAICompletionsPayload(model, { ...sayHelloContext(), tools: mfjsProbeTools });
 		const op = probeProperty(payload, "github", "op");
 		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
 		const paths = probeProperty(payload, "find", "paths");
@@ -2556,7 +2418,7 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 	it("leaves raw JSON Schema untouched on non-Moonshot hosts (flag-gated)", async () => {
 		const model = genericNonStrictModel();
 		expect(model.compat.toolSchemaFlavor).toBeUndefined();
-		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const payload = await captureOpenAICompletionsPayload(model, { ...sayHelloContext(), tools: mfjsProbeTools });
 		// The const-union → enum collapse is a universal wire optimization, not MFJS,
 		// so `op` collapses identically here; MFJS gating is proven by `paths.minItems` below.
 		const op = probeProperty(payload, "github", "op");

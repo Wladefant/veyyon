@@ -594,6 +594,19 @@ function includePrecedingNonMessageEntries(
 	return index;
 }
 
+/** The first entry in `[startIndex, endIndex)` a summary reads a message from; `endIndex` when none is. */
+function firstSummarizableIndex(
+	entries: SessionEntry[],
+	startIndex: number,
+	endIndex: number,
+	excludedCustomMessageTypes: ReadonlySet<string> | undefined,
+): number {
+	for (let i = startIndex; i < endIndex; i++) {
+		if (getMessageFromEntry(entries[i], excludedCustomMessageTypes)) return i;
+	}
+	return endIndex;
+}
+
 /**
  * Find the cut point in session entries that keeps approximately `keepRecentTokens`.
  *
@@ -612,7 +625,8 @@ function includePrecedingNonMessageEntries(
  * Only considers entries between `startIndex` and `endIndex` (exclusive). The turn a
  * mid-turn cut splits is searched for from `turnSearchStart`, which a caller sets
  * below `startIndex` when the history it summarizes begins earlier than the range
- * the cut may land in.
+ * the cut may land in. Custom messages of a type in `excludedCustomMessageTypes`
+ * are never summarized, so a cut with only those in front of it summarizes nothing.
  */
 export function findCutPoint(
 	entries: SessionEntry[],
@@ -620,6 +634,7 @@ export function findCutPoint(
 	endIndex: number,
 	keepRecentTokens: number,
 	turnSearchStart = startIndex,
+	excludedCustomMessageTypes?: ReadonlySet<string>,
 ): CutPointResult {
 	// Behind `startIndex` the turn search reads compacted history, so ids are read only from it on.
 	const interior = toolCallWindowInteriors(entries, Math.min(turnSearchStart, startIndex), startIndex, endIndex);
@@ -637,18 +652,22 @@ export function findCutPoint(
 		: (cutPoints[0] ?? startIndex);
 	let cutIndex = includePrecedingNonMessageEntries(entries, budgetCut, startIndex, endIndex);
 
-	// Dead-end guard: a cut at `startIndex` keeps the ENTIRE range, so there is
-	// nothing to summarize and `prepareCompaction` refuses — at exactly the
-	// moment the session is most over budget, and silently, which surfaces to the
-	// user as "Nothing to compact (session too small)" against a full gauge.
+	// Dead-end guard: a cut with no summarizable message in front of it keeps
+	// everything the summary could read, so there is nothing to summarize and
+	// `prepareCompaction` refuses — at exactly the moment the session is most
+	// over budget, and silently, which surfaces to the user as "Nothing to
+	// compact (session too small)" against a full gauge. A cut at `startIndex`
+	// is the plain case; a cut behind only non-message entries or custom
+	// messages the summary never reads is the same dead end.
 	//
-	// Cut at the next valid point instead. When there is no next point the whole
-	// range is one unbreakable turn, and the only way to free anything is to
-	// summarize all of it and keep nothing: `endIndex` says exactly that.
-	// A range that never crossed the budget fits it, which is a genuinely small
-	// session and must still be refused.
-	if (cutIndex === startIndex && crossed) {
-		cutIndex = cutPoints.find(point => point > startIndex) ?? endIndex;
+	// Cut at the first valid point past the first summarizable message instead.
+	// When there is none the whole range is one unbreakable turn, and the only
+	// way to free anything is to summarize all of it and keep nothing:
+	// `endIndex` says exactly that. A range that never crossed the budget fits
+	// it, which is a genuinely small session and must still be refused.
+	const firstSummarizable = firstSummarizableIndex(entries, startIndex, endIndex, excludedCustomMessageTypes);
+	if (cutIndex <= firstSummarizable && crossed) {
+		cutIndex = cutPoints.find(point => point > firstSummarizable) ?? endIndex;
 	}
 
 	// Keeping nothing has no cut entry and splits no turn: everything in the
@@ -2472,14 +2491,28 @@ function firstKeptEntryIdAt(
 	return pathEntries[firstKeptEntryIndex]?.id || undefined;
 }
 
+/**
+ * Whether nothing a summary reads was added since the newest compaction: the branch ends at a
+ * compaction entry, past any custom messages of an excluded type the caller restated after it.
+ */
+export function endsAtCompaction(
+	pathEntries: readonly SessionEntry[],
+	excludedCustomMessageTypes?: ReadonlySet<string>,
+): boolean {
+	for (let i = pathEntries.length - 1; i >= 0; i--) {
+		const entry = pathEntries[i];
+		if (entry.type === "custom_message" && excludedCustomMessageTypes?.has(entry.customType)) continue;
+		return entry.type === "compaction";
+	}
+	return false;
+}
+
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
 	options?: CompactionPreparationOptions,
 ): CompactionPreparation | undefined {
-	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
-		return undefined;
-	}
+	if (endsAtCompaction(pathEntries, options?.excludedCustomMessageTypes)) return undefined;
 
 	const { prevCompactionIndex, windowIndices } = findCompactionBase(pathEntries);
 	const prevCompaction = prevCompactionIndex >= 0 ? (pathEntries[prevCompactionIndex] as CompactionEntry) : undefined;
@@ -2514,12 +2547,12 @@ export function prepareCompaction(
 	// The turn a mid-turn cut splits may have opened behind the newest window,
 	// and the local pass reads back to the summary's kept boundary, so the turn
 	// opening is searched for from there.
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens, summaryStart);
+	const excluded = options?.excludedCustomMessageTypes;
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens, summaryStart, excluded);
 
 	const firstKeptEntryId = firstKeptEntryIdAt(pathEntries, cutPoint.firstKeptEntryIndex, boundaryEnd);
 	if (firstKeptEntryId === undefined) return undefined; // Session needs migration
 
-	const excluded = options?.excludedCustomMessageTypes;
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
 	// Messages to summarize (will be discarded after summary)
 	const messagesToSummarize = messagesInRange(pathEntries, summaryStart, historyEnd, excluded);

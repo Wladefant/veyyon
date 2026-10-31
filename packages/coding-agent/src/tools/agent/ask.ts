@@ -18,17 +18,9 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type as arkType } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { Ellipsis } from "@veyyon/natives";
-import {
-	clamp,
-	clampLow,
-	collapseWhitespace,
-	formatCount,
-	isCancellation,
-	lazy,
-	prompt,
-	untilAborted,
-} from "@veyyon/utils";
+import { clamp, clampLow, collapseWhitespace, formatCount, isCancellation, prompt, untilAborted } from "@veyyon/utils";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { stripRecommendedSuffix, withRecommendedSuffix } from "@veyyon/wire";
 import type { ExtensionUISelectItem } from "../../extensibility/extensions";
@@ -51,7 +43,7 @@ import { ASK_OTHER_OPTION_LABEL, isReservedAskOptionLabel } from "./ask-option-l
 // Types
 // =============================================================================
 
-const askSchema = lazy(() => {
+const askSchema = toolSchema("ask", () => {
 	const OptionItem = arkType({
 		label: arkType("string").describe("display label"),
 		"description?": arkType("string").describe("optional explanatory text displayed below the label"),
@@ -760,6 +752,9 @@ export class AskTool implements AgentTool<typeof askSchema.value, AskToolDetails
 	readonly description: string;
 	get parameters(): typeof askSchema.value {
 		return askSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return askSchema.wire;
 	}
 	readonly strict = true;
 

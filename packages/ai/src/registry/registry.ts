@@ -52,6 +52,7 @@ import { openaiProvider } from "./openai";
 import { openaiCodexProvider } from "./openai-codex";
 import { openaiCodexDeviceProvider } from "./openai-codex-device";
 import { opencodeGoProvider } from "./opencode-go";
+import { opencodeGoApiKeyProvider } from "./opencode-go-api-key";
 import { opencodeZenProvider } from "./opencode-zen";
 import { openrouterProvider } from "./openrouter";
 import { parallelProvider } from "./parallel";
@@ -143,6 +144,7 @@ const ALL = [
 	zenmuxProvider,
 	opencodeZenProvider,
 	opencodeGoProvider,
+	opencodeGoApiKeyProvider,
 	tavilyProvider,
 	kagiProvider,
 	parallelProvider,

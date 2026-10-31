@@ -11,9 +11,9 @@ import {
 	prepareCompaction,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { createAssistantText, createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * Compaction has exactly two strategies — `summary` and `handoff` — and no
@@ -40,43 +40,17 @@ import { getBundledModel } from "@veyyon/catalog/models";
 
 const REMOVED_PLACEHOLDER = "Remote compaction preserved provider-native history for this session.";
 
-function makeAssistantStop(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
-
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
-
 /** The exact provider that used to receive the private compaction path. */
 function getCodexModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [makeUserMessage("history msg"), makeAssistantStop("history reply")],
+		messagesToSummarize: [createUserMessage("history msg"), createAssistantText("history reply")],
 		turnPrefixMessages: [],
-		recentMessages: [makeUserMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
@@ -114,7 +88,7 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 * real text — never the placeholder that replaced it.
 	 */
 	test("a codex model compacts to real summary text, not the provider-native placeholder", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("## Goal\nShip the release script fix."));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("## Goal\nShip the release script fix."));
 
 		const result = await compact(makePreparation(), getCodexModel(), "test-key");
 
@@ -129,7 +103,7 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 * actually kept was a ~20 KB blob. Nothing may reintroduce that claim.
 	 */
 	test("no compaction result claims tokens were retained in a replay payload", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("real summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("real summary"));
 
 		const result = await compact(makePreparation(), getCodexModel(), "test-key");
 
@@ -162,13 +136,13 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 */
 	test("prepareCompaction re-expands history behind a legacy provider-native entry", () => {
 		const entries: SessionEntry[] = [
-			makeMessageEntry("msg-1", undefined, makeUserMessage("pre-compaction work")),
+			makeMessageEntry("msg-1", undefined, createUserMessage("pre-compaction work")),
 			makeCompactionEntry({
 				id: "compaction-legacy",
 				summary: REMOVED_PLACEHOLDER,
 				preserveData: { openaiRemoteCompaction: { provider: "openai-codex", replacementHistory: [{}] } },
 			}),
-			makeMessageEntry("msg-2", "compaction-legacy", makeUserMessage("post-compaction work")),
+			makeMessageEntry("msg-2", "compaction-legacy", createUserMessage("post-compaction work")),
 		];
 
 		const preparation = prepareCompaction(entries, { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 0 });
@@ -186,7 +160,7 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 * live replay handle.
 	 */
 	test("a legacy provider-native payload is dropped, not copied into the new entry", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("fresh local summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("fresh local summary"));
 
 		const result = await compact(
 			makePreparation({
@@ -214,12 +188,12 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 * stops emitting the block, it silently gets worse again for free.
 	 */
 	test("handoff appends the same deterministic files block as summary", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("## Goal\nShip it."));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("## Goal\nShip it."));
 		const fileOps = createFileOps();
 		fileOps.read.add("natives/scanner/src/engine/process.rs");
 		fileOps.edited.add("scripts/publish_release_assets.py");
 
-		const handoff = await generateHandoff([makeUserMessage("do the work")], getCodexModel(), "test-key", {
+		const handoff = await generateHandoff([createUserMessage("do the work")], getCodexModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 			fileOps,
@@ -232,9 +206,9 @@ describe("compaction: no provider gets a private compaction path", () => {
 
 	/** Without fileOps the caller gets the document unchanged, no empty block. */
 	test("handoff omits the files block when there are no file operations", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("## Goal\nShip it."));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("## Goal\nShip it."));
 
-		const handoff = await generateHandoff([makeUserMessage("do the work")], getCodexModel(), "test-key", {
+		const handoff = await generateHandoff([createUserMessage("do the work")], getCodexModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		});
@@ -256,7 +230,7 @@ describe("compaction: no provider gets a private compaction path", () => {
 	 * direct POST to /responses/compact means the native path is back.
 	 */
 	test("compacting a codex model never calls a provider compaction endpoint", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("local summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("local summary"));
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
 
 		await compact(makePreparation(), getCodexModel(), "test-key");

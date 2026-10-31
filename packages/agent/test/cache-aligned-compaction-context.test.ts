@@ -7,8 +7,10 @@ import {
 	modelServesPrefixCacheHits,
 } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
-import type { AssistantMessage, Message, Model, Tool, ToolResultMessage, UserMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import type { AssistantMessage, Message, Model, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel, requireBundledModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 /**
  * The cache-aligned compaction request replays the live session's provider prefix
@@ -23,20 +25,10 @@ import { getBundledModel } from "@veyyon/catalog/models";
  * turn an invalid request outright.
  */
 
-function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected the bundled anthropic compaction model");
-	return model;
-}
-
 /** Same row, with the prompt-cache capability turned off, as an unknown gateway resolves it. */
 function nonCachingModel(): Model {
 	const model = anthropicModel();
 	return { ...model, compat: { ...model.compat, supportsLongCacheRetention: false } } as Model;
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
 }
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
@@ -59,34 +51,16 @@ function assistantToolCalls(ids: string[], timestamp = 3): AssistantMessage {
 		api: "anthropic-messages",
 		content: ids.map(id => ({ type: "toolCall" as const, id, name: "read", arguments: { path: id } })),
 		stopReason: "toolUse",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp,
 	} as AssistantMessage;
-}
-
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp,
-	};
 }
 
 function conversation(): Message[] {
 	return [
 		user("first question"),
 		assistantToolCalls(["call-1"]),
-		toolResult("call-1", "file contents"),
+		readResult("call-1", "file contents"),
 		assistantText("here is the answer"),
 	];
 }
@@ -178,7 +152,7 @@ describe("hasUnansweredToolCall", () => {
 		// the assistant turn and the tool execution that answers it.
 		expect(hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1"])])).toBe(true);
 		expect(
-			hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1", "call-2"]), toolResult("call-1", "done")]),
+			hasUnansweredToolCall([user("go"), assistantToolCalls(["call-1", "call-2"]), readResult("call-1", "done")]),
 		).toBe(true);
 	});
 
@@ -187,8 +161,8 @@ describe("hasUnansweredToolCall", () => {
 		expect(
 			hasUnansweredToolCall([
 				assistantToolCalls(["call-1", "call-2"]),
-				toolResult("call-2", "b"),
-				toolResult("call-1", "a"),
+				readResult("call-2", "b"),
+				readResult("call-1", "a"),
 			]),
 		).toBe(false);
 		expect(hasUnansweredToolCall([])).toBe(false);
@@ -202,8 +176,7 @@ describe("modelServesPrefixCacheHits", () => {
 		// id and api say anthropic.
 		expect(modelServesPrefixCacheHits(anthropicModel())).toBe(true);
 		expect(modelServesPrefixCacheHits(nonCachingModel())).toBe(false);
-		const openai = getBundledModel("openai", "gpt-5");
-		if (!openai) throw new Error("Expected a bundled openai model");
+		const openai = requireBundledModel("openai", "gpt-5");
 		expect(modelServesPrefixCacheHits(openai)).toBe(false);
 	});
 });

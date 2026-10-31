@@ -195,7 +195,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 	test("/mcp test does not connect to a server only a repository declares", async () => {
 		const { controller, showError } = createController();
 
-		await controller.handle(`/mcp test ${REPO_SERVER}`);
+		await controller.handle(`test ${REPO_SERVER}`);
 
 		expect(await pathExists(sentinel, "the MCP connection sentinel")).toBe(false);
 		expect(showError).toHaveBeenCalledTimes(1);
@@ -205,7 +205,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 	test("/mcp reauth does not resolve a server only a repository declares", async () => {
 		const { controller, showError } = createController();
 
-		await controller.handle(`/mcp reauth ${REPO_SERVER}`);
+		await controller.handle(`reauth ${REPO_SERVER}`);
 
 		expect(await pathExists(sentinel, "the MCP connection sentinel")).toBe(false);
 		expect(showError).toHaveBeenCalledTimes(1);
@@ -216,7 +216,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 		const before = await readRepoFiles();
 		const { controller, showError, mcpManager } = createController();
 
-		await controller.handle(`/mcp enable ${REPO_DISABLED_SERVER}`);
+		await controller.handle(`enable ${REPO_DISABLED_SERVER}`);
 
 		// Order matters: the repository files are the contract. Asserting the
 		// message first would hide the write behind a message mismatch.
@@ -238,7 +238,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 		const before = await readRepoFiles();
 		const { controller, showError } = createController();
 
-		await controller.handle(`/mcp disable ${REPO_SERVER}`);
+		await controller.handle(`disable ${REPO_SERVER}`);
 
 		expect(await readRepoFiles()).toEqual(before);
 		expect(showError).toHaveBeenCalledTimes(1);
@@ -258,7 +258,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 		const before = await readRepoFiles();
 		const { controller, showError, mcpManager } = createController();
 
-		await controller.handle("/mcp enable profile-server");
+		await controller.handle("enable profile-server");
 
 		expect(showError).not.toHaveBeenCalled();
 		const written = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
@@ -289,7 +289,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 		const before = await readRepoFiles();
 		const { controller, showError } = createController();
 
-		await controller.handle(command);
+		await controller.handle(parseSlashCommand(command)?.args ?? "");
 
 		expect(showError).toHaveBeenCalledTimes(1);
 		const message = showError.mock.calls[0]![0];
@@ -304,7 +304,7 @@ describe("a repository's MCP config is invisible to /mcp", () => {
 	test("the refusal explains that MCP servers live in the profile, naming no option spelling", async () => {
 		const { controller, showError } = createController();
 
-		await controller.handle("/mcp add repo-add project url https://example.com");
+		await controller.handle("add repo-add project url https://example.com");
 
 		const message = showError.mock.calls[0]![0];
 		expect(message).toContain("project is gone");

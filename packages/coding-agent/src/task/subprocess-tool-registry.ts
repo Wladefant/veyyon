@@ -26,6 +26,25 @@ import { TOOL } from "../tools/core/builtin-names";
  */
 export const YIELD_TOOL_NAME = TOOL.yield;
 
+/**
+ * Whether a `yield` result ends the agent's run: one that did not fail, unless its details hold
+ * `status: "success"` with a non-empty `type` list of strings, which submits one section and
+ * keeps the run going. The session's terminal-yield tracking and the executor's subprocess
+ * termination both read it.
+ */
+export function yieldResultEndsRun(event: { isError?: boolean; result?: { details?: unknown } }): boolean {
+	if (event.isError) return false;
+	const details = event.result?.details;
+	if (!details || typeof details !== "object") return true;
+	const record = details as Record<string, unknown>;
+	return !(
+		record.status === "success" &&
+		Array.isArray(record.type) &&
+		record.type.length > 0 &&
+		record.type.every(item => typeof item === "string")
+	);
+}
+
 /** Event from subprocess tool execution (parsed from JSONL) */
 export interface SubprocessToolEvent {
 	toolName: string;

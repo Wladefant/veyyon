@@ -9,7 +9,7 @@
   - `packages/coding-agent/src/lsp/client.ts`: client process lifecycle and JSON-RPC
   - `packages/coding-agent/src/lsp/config.ts`: config loading, auto-detect, server selection
   - `packages/coding-agent/src/lsp/servers.ts`: per-cwd config cache and the servers selected for a file
-  - `packages/coding-agent/src/lsp/diagnostics.ts`: wait for a fresh publish, filter orphan-project diagnostics, cap and format messages
+  - `packages/coding-agent/src/lsp/diagnostics.ts`: pull or wait for fresh diagnostics, filter orphan-project diagnostics, cap and format messages
   - `packages/coding-agent/src/lsp/workspace-diagnostics.ts`: whole-project checks (`cargo check`, `tsc`, `go build`) for `diagnostics` without a file
   - `packages/coding-agent/src/lsp/rename-file.ts`: `rename_file` edit collection, coalescing, application and `didRenameFiles`
   - `packages/coding-agent/src/lsp/writethrough.ts`: the edit and write commit path: atomic write, format-on-write, sync, diagnostics
@@ -78,7 +78,7 @@
 **Execution**
 - `file: "*"`: `runWorkspaceDiagnostics()` detects project type from root markers and runs one subprocess command: Rust `cargo check --message-format=short`, TypeScript `npx tsc --noEmit`, Go `go build ./...`, Python `pyright`.
 - Concrete file or glob: `resolveDiagnosticTargets()` treats non-globs as one target, otherwise expands a `Bun.Glob` up to `MAX_GLOB_DIAGNOSTIC_TARGETS`.
-- Per file, every matching server runs: custom clients call `lint(file)`; real LSP servers optionally wait for project load, capture `diagnosticsVersion`, `refreshFile()`, then `waitForDiagnostics()` for fresh `publishDiagnostics` (settles on the latest publish; exact-version match accepted immediately).
+- Per file, every matching server runs: custom clients call `lint(file)`; real LSP servers optionally wait for project load, capture `diagnosticsVersion`, `refreshFile()`, then `waitForDiagnostics()`. A server that advertises `diagnosticProvider` is also sent `textDocument/diagnostic`, which is resent on ServerCancelled (-32802) or ContentModified (-32801). The first full pull report or exact-version `publishDiagnostics` is accepted immediately; otherwise the wait settles on the latest publish. A server that only answers pulls (tsgo) publishes nothing.
 - Results are deduplicated by range+message and severity-sorted.
 
 **Output text**

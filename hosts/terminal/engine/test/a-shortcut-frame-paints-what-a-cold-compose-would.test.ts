@@ -41,6 +41,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { type Component, type RenderStablePrefix, TUI } from "@veyyon/tui";
+import { plainRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -103,10 +104,6 @@ class InPlaceBlock implements Component, RenderStablePrefix {
 	}
 }
 
-function strip(rows: readonly string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 interface Painted {
 	viewport: string[];
 	frameRows: number;
@@ -126,7 +123,7 @@ async function coldCompose(states: readonly (readonly string[])[]): Promise<Pain
 		await scheduler.drain(term);
 		tui.requestRender();
 		await scheduler.drain(term);
-		return { viewport: strip(term.getViewport()), frameRows: tui.composedFrameRows };
+		return { viewport: plainRows(term.getViewport()), frameRows: tui.composedFrameRows };
 	} finally {
 		tui.stop();
 		await term.flush();
@@ -178,7 +175,7 @@ describe("a component-scoped frame sizes itself from the children it did not re-
 				tui.requestComponentRender(live);
 				await scheduler.drain(term);
 
-				const scoped: Painted = { viewport: strip(term.getViewport()), frameRows: tui.composedFrameRows };
+				const scoped: Painted = { viewport: plainRows(term.getViewport()), frameRows: tui.composedFrameRows };
 				const cold = await coldCompose([rowsOf("head", 2), rowsOf("live", height), rowsOf("tail", 2)]);
 				// Non-vacuity: if the engine downgraded to a full compose, the
 				// siblings re-rendered and this arm is comparing a full compose
@@ -231,7 +228,7 @@ describe("a component-scoped frame sizes itself from the children it did not re-
 				await scheduler.drain(term);
 
 				const want = [...body.lines, "footer-1", "footer-2"];
-				const got = strip(term.getViewport()).filter(row => row.length > 0);
+				const got = plainRows(term.getViewport()).filter(row => row.length > 0);
 				if (got.join("\n") !== want.join("\n") || tui.composedFrameRows !== want.length) {
 					divergences.push({ total, got, want, frameRows: tui.composedFrameRows });
 				}
@@ -299,7 +296,7 @@ describe("a frame the loop coalesced leaves the viewport a cold compose would pa
 			await scheduler.drain(term);
 			expect(block.renders - rendersBefore).toBeLessThan(8);
 
-			const coalesced = strip(term.getViewport());
+			const coalesced = plainRows(term.getViewport());
 			const cold = await coldCompose([rowsOf("step", 2)]);
 			expect(coalesced).toEqual(cold.viewport);
 			expect(tui.composedFrameRows).toBe(cold.frameRows);
@@ -332,7 +329,7 @@ describe("a frame the loop coalesced leaves the viewport a cold compose would pa
 			await scheduler.drain(term);
 
 			const cold = await coldCompose([rowsOf("wide", 2)]);
-			expect(strip(term.getViewport())).toEqual(cold.viewport);
+			expect(plainRows(term.getViewport())).toEqual(cold.viewport);
 		} finally {
 			tui.stop();
 			await term.flush();

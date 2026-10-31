@@ -33,10 +33,11 @@ import { ExtensionDashboard } from "@veyyon/coding-agent/modes/terminal/componen
 import { ExtensionList } from "@veyyon/coding-agent/modes/terminal/components/extensions/extension-list";
 import { SelectorController } from "@veyyon/coding-agent/modes/terminal/controllers/selector-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
+import { requireTheme } from "../../../helpers/require-theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -121,8 +122,7 @@ beforeEach(async () => {
 	await initTheme(false);
 	originalColorterm = Bun.env.COLORTERM;
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") throw new Error(`titanium built as ${loaded.getColorMode()}`);
 	setThemeInstance(loaded);
 	policy = getAnsiPolicy();

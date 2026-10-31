@@ -21,6 +21,7 @@ import {
 	CpuLimitDeniedError,
 	initSessionCpuLimit,
 	SessionCpuLimit,
+	SPAWN_NICE,
 	sessionCpuBudgetName,
 	sessionCpuLimit,
 } from "../src/session/cpu-limit";
@@ -743,14 +744,14 @@ describe("SessionCpuLimit watcher policy", () => {
 		expect(() => limiter.assertMaySpawn("a bash command")).toThrow(CpuLimitDeniedError);
 		expect(renices).toEqual([CPU_LIMIT_SATURATION_NICE]);
 
-		// Recovery restores the nice level.
+		// Recovery restores the level every spawn starts at.
 		for (const usage of [9_100_000, 9_200_000, 9_300_000]) {
 			fakeUsage.value = usage;
 			host.clock.now += 1_000;
 			await limiter.pollOnce();
 		}
 		limiter.assertMaySpawn("a bash command");
-		expect(renices).toEqual([CPU_LIMIT_SATURATION_NICE, 0]);
+		expect(renices).toEqual([CPU_LIMIT_SATURATION_NICE, SPAWN_NICE]);
 		await limiter.dispose();
 	});
 });

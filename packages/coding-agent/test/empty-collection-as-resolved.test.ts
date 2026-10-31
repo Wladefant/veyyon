@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "bun:test";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { buildSystemPrompt } from "@veyyon/coding-agent/system-prompt";
 import { logger } from "@veyyon/utils";
 import {
@@ -11,6 +15,7 @@ import {
 const fixture = useContextScopeFixture("empty-resolved-");
 
 const EMPTY_TREE = { rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] as string[] };
+const DISABLED = "Context file discovery disabled: caller supplied an empty resolved list";
 
 /** Capture `logger.warn` for the duration of `body`, restoring the spy either way. */
 async function withCapturedWarnings<T>(
@@ -115,5 +120,57 @@ describe("buildSystemPrompt must not take the resolved branch in silence", () =>
 		expect(warnings.map(entry => entry.message)).not.toContain(
 			"Context file discovery disabled: caller supplied an empty resolved list",
 		);
+	});
+});
+
+/**
+ * WHY. The session runtime hands `buildSystemPrompt` the list its own discovery found. In a project
+ * with no `AGENTS.md` that list is `[]`, so every session there logged "caller supplied an empty
+ * resolved list" at open and again at every prompt rebuild, for a list no caller supplied. A warning
+ * that fires on the ordinary path is one every reader learns to skip, which defeats the case above.
+ *
+ * CLASS CLOSED: a session logs the warning only for an empty list its caller supplied, once, however
+ * many times it rebuilds its prompt.
+ *
+ * NOT CAUGHT: a session runtime other than `createAgentSession` that builds through
+ * `buildSystemPrompt` with its own discovered list.
+ */
+describe("a session logs only the empty context-file list its caller supplied", () => {
+	async function openAndRebuild(cwd: string, agentDir: string, contextFiles?: []): Promise<string[]> {
+		const warnings = await withCapturedWarnings(async captured => {
+			const { session } = await createAgentSession({
+				cwd,
+				agentDir,
+				modelRegistry: new ModelRegistry(await AuthStorage.create(":memory:")),
+				settings: Settings.isolated(),
+				disableExtensionDiscovery: true,
+				skills: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				...(contextFiles ? { contextFiles } : {}),
+			});
+			try {
+				await session.refreshBaseSystemPrompt("rebuild");
+				await session.refreshBaseSystemPrompt("rebuild");
+			} finally {
+				await session.dispose();
+			}
+			return captured;
+		});
+		return warnings.filter(entry => entry.message === DISABLED).map(entry => JSON.stringify(entry.fields));
+	}
+
+	it("logs nothing when its own discovery finds no context file", async () => {
+		const f = fixture("discovers-none");
+		expect(await openAndRebuild(f.cwd, f.agentDir)).toEqual([]);
+	});
+
+	it("logs its caller's empty list once across prompt rebuilds", async () => {
+		const f = fixture("caller-empty");
+		expect(await openAndRebuild(f.cwd, f.agentDir, [])).toEqual([
+			JSON.stringify({ cwd: f.cwd, agentDir: f.agentDir }),
+		]);
 	});
 });

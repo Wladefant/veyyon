@@ -8,7 +8,7 @@ import { streamCursor } from "@veyyon/ai/providers/cursor";
 import { streamOllama } from "@veyyon/ai/providers/ollama";
 import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { Context, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentClientMessageSchema,
@@ -19,7 +19,8 @@ import {
 	TurnEndedUpdateSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import * as piUtils from "@veyyon/utils";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
+import { mockFetch } from "./helpers/fetch-mock";
 
 const ORIGINAL_SECRET = "raw-payload-secret";
 const MUTATED_SECRET = "mutated-intermediate-secret";
@@ -32,10 +33,6 @@ interface CursorRunRequestJson {
 
 function contextWithSecret(): Context {
 	return { messages: [{ role: "user", content: ORIGINAL_SECRET, timestamp: 0 }] };
-}
-
-function asFetch(implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): FetchImpl {
-	return Object.assign(implementation, { preconnect: fetch.preconnect });
 }
 
 function bodyBytes(body: RequestInit["body"] | undefined): Uint8Array {
@@ -158,7 +155,7 @@ describe("onPayload is the final physical transport seam", () => {
 	it("replaces every OpenAI completion retry body after an async yield", async () => {
 		const bodies: string[] = [];
 		let hookCalls = 0;
-		const customFetch = asFetch(async (_input, init) => {
+		const customFetch = mockFetch(async (_input, init) => {
 			bodies.push(new TextDecoder().decode(bodyBytes(init?.body)));
 			return new Response(hookCalls === 1 ? "retry" : "bad request", {
 				status: hookCalls === 1 ? 500 : 400,
@@ -196,7 +193,7 @@ describe("onPayload is the final physical transport seam", () => {
 		await withEnv({ AWS_BEDROCK_SKIP_AUTH: "1", AWS_REGION: "us-east-1" }, async () => {
 			const captures: Array<{ body: Uint8Array; payloadHash: string | null }> = [];
 			let hookCalls = 0;
-			const customFetch = asFetch(async (_input, init) => {
+			const customFetch = mockFetch(async (_input, init) => {
 				const body = bodyBytes(init?.body);
 				captures.push({
 					body: Uint8Array.from(body),
@@ -250,7 +247,7 @@ describe("onPayload is the final physical transport seam", () => {
 		let fetchAttempt = 0;
 		const result = await streamBedrock(bedrockModel(), contextWithSecret(), {
 			bearerToken: "resolved-bedrock-credential",
-			fetch: asFetch(async (_input, init) => {
+			fetch: mockFetch(async (_input, init) => {
 				fetchAttempt++;
 				order.push(`fetch:${fetchAttempt}`);
 				bodies.push(JSON.parse(new TextDecoder().decode(bodyBytes(init?.body))) as Record<string, unknown>);
@@ -296,7 +293,7 @@ describe("onPayload is the final physical transport seam", () => {
 		const order: string[] = [];
 		const result = await streamBedrock(bedrockModel(), contextWithSecret(), {
 			bearerToken: "resolved-bedrock-credential",
-			fetch: asFetch(async () => {
+			fetch: mockFetch(async () => {
 				order.push("fetch");
 				return new Response("retryable upstream failure", {
 					status: 503,
@@ -460,7 +457,7 @@ describe("onPayload is the final physical transport seam", () => {
 		let openAIDispatches = 0;
 		const openAIResult = await streamOpenAICompletions(openAIModel(), contextWithSecret(), {
 			apiKey: "resolved-openai-credential",
-			fetch: asFetch(async () => {
+			fetch: mockFetch(async () => {
 				openAIDispatches++;
 				return new Response(null, { status: 200 });
 			}),
@@ -475,7 +472,7 @@ describe("onPayload is the final physical transport seam", () => {
 		let bedrockDispatches = 0;
 		const bedrockResult = await streamBedrock(bedrockModel(), contextWithSecret(), {
 			bearerToken: "resolved-bedrock-credential",
-			fetch: asFetch(async () => {
+			fetch: mockFetch(async () => {
 				bedrockDispatches++;
 				return new Response(null, { status: 200 });
 			}),
@@ -580,7 +577,7 @@ describe("a serialize-once transport sends the bytes its hook left, on every att
 			contextWithSecret(),
 			{
 				apiKey: "resolved-anthropic-credential",
-				fetch: asFetch(async (_input, init) => {
+				fetch: mockFetch(async (_input, init) => {
 					bodies.push(wireText(init?.body));
 					if (bodies.length === 1) {
 						return new Response(GRAMMAR_TOO_LARGE, {
@@ -651,7 +648,7 @@ describe("a serialize-once transport sends the bytes its hook left, on every att
 			contextWithSecret(),
 			{
 				apiKey: "resolved-ollama-credential",
-				fetch: asFetch(async (_input, init) => {
+				fetch: mockFetch(async (_input, init) => {
 					bodies.push(wireText(init?.body));
 					return retryThenReject(bodies.length);
 				}),
@@ -705,7 +702,7 @@ describe("a serialize-once transport sends the bytes its hook left, on every att
 			contextWithSecret(),
 			{
 				apiKey: `aaa.${claims}.bbb`,
-				fetch: asFetch(async (_input, init) => {
+				fetch: mockFetch(async (_input, init) => {
 					bodies.push(wireText(init?.body));
 					return retryThenReject(bodies.length);
 				}),

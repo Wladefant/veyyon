@@ -109,6 +109,9 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	get parameters(): typeof ircSchema.value {
 		return ircSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return ircSchema.wire;
+	}
 	readonly strict = true;
 	// Only the ops that block observe an interrupt. `list`, `inbox`, a
 	// fire-and-forget `send` and a `send` the tool rejects all return at once,
@@ -301,7 +304,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 						message => ({ message, error: null as Error | null }),
 						error => ({
 							message: null,
-							error: error === awaitCancelled ? null : error instanceof Error ? error : new Error(String(error)),
+							error: error === awaitCancelled ? null : toError(error),
 						}),
 					)
 			: undefined;

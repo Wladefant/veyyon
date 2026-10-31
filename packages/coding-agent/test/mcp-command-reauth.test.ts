@@ -147,7 +147,7 @@ describe("/mcp auth commands", () => {
 		});
 		const { controller, showError, prepareConfig } = createController(authStorage);
 
-		await controller.handle("/mcp reauth envserver");
+		await controller.handle("reauth envserver");
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(prepareConfig).toHaveBeenCalledWith(
@@ -388,7 +388,7 @@ describe("/mcp auth commands", () => {
 		});
 		const { controller, showError } = createController(authStorage);
 
-		await controller.handle("/mcp reauth envserver");
+		await controller.handle("reauth envserver");
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(registrationRequests).toEqual(["https://auth.example.com/auth/v1/oauth/register"]);
@@ -428,7 +428,7 @@ describe("/mcp auth commands", () => {
 		});
 		const { controller, showError } = createController(authStorage);
 
-		await controller.handle("/mcp reauth envserver");
+		await controller.handle("reauth envserver");
 
 		expect(showError).not.toHaveBeenCalled();
 		const tokenRequestBody = String(fetchSpy.mock.calls[0]?.[1]?.body ?? "");
@@ -461,7 +461,7 @@ describe("/mcp auth commands", () => {
 
 		const { controller, showError, showStatus, editor } = createController(authStorage);
 
-		const reauthPromise = controller.handle("/mcp reauth envserver");
+		const reauthPromise = controller.handle("reauth envserver");
 
 		// Wait for #handleOAuthFlow to install its editor.onEscape hook.
 		const deadline = Date.now() + 1_000;
@@ -503,7 +503,7 @@ describe("/mcp auth commands", () => {
 		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockReturnValue(Promise.withResolvers<never>().promise);
 		const { controller, showError, showStatus, editor } = createController(authStorage);
 
-		const reauthPromise = controller.handle("/mcp reauth envserver");
+		const reauthPromise = controller.handle("reauth envserver");
 		const deadline = Date.now() + 1_000;
 		while (typeof editor.onEscape !== "function" && Date.now() < deadline) {
 			await Bun.sleep(10);
@@ -537,7 +537,7 @@ describe("/mcp auth commands", () => {
 		);
 		const { controller, showError, showStatus } = createController(authStorage);
 
-		await controller.handle("/mcp reauth envserver");
+		await controller.handle("reauth envserver");
 
 		// Deadline must read as "failed", not "cancelled" — they have different
 		// surfaces (error banner vs status line) and the user expects a clear
@@ -563,7 +563,7 @@ describe("/mcp auth commands", () => {
 		});
 		const { controller, showError } = createController(authStorage);
 
-		await controller.handle("/mcp unauth envserver");
+		await controller.handle("unauth envserver");
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();
@@ -589,7 +589,7 @@ describe("/mcp auth commands", () => {
 			getSource: vi.fn(() => ({ provider: "test", path: "/tmp/discovered.json" })),
 		});
 
-		await controller.handle("/mcp unauth discovered");
+		await controller.handle("unauth discovered");
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(authStorage.get(oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL))).toBeUndefined();

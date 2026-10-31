@@ -30,7 +30,8 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { assistantMsg, userMsg } from "./helpers/e2e-session";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 describe("compaction model chain", () => {
 	let tempDir: TempDir;
@@ -251,8 +252,7 @@ describe("compaction model chain", () => {
 	 * reaches no network either, which is what the rest of the suite gets by turning the setting off.
 	 */
 	it("falls through to the configured chain when the remote pass refuses, and announces both", async () => {
-		const remoteModel = getBundledModel("openai", "gpt-5.1");
-		if (!remoteModel) throw new Error("Expected bundled openai/gpt-5.1 to exist");
+		const remoteModel = requireBundledModel("openai", "gpt-5.1");
 		await createSession(
 			{ "compaction.model": `${selector(firstChoice)},${selector(secondChoice)}`, "compaction.remote": true },
 			model => model.id === secondChoice.id,

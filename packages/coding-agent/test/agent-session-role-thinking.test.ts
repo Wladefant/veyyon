@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolver";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -12,6 +11,7 @@ import { AUTO_THINKING, clampAutoThinkingEffort, resolveProvisionalAutoLevel } f
 import * as autoThinkingClassifier from "@veyyon/coding-agent/thinking/auto-classifier";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession model effort behavior", () => {
@@ -36,8 +36,7 @@ describe("AgentSession model effort behavior", () => {
 	});
 
 	function getAnthropicModelOrThrow(id: string) {
-		const model = getBundledModel("anthropic", id);
-		if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
+		const model = requireBundledModel("anthropic", id);
 		return model;
 	}
 
@@ -587,8 +586,7 @@ describe("AgentSession model effort behavior", () => {
 	});
 
 	it("keeps auto effectively off for non-reasoning models", async () => {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) throw new Error("Expected bundled gpt-4o-mini model");
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 		const agent = new Agent({
 			initialState: {
 				model,
@@ -628,8 +626,7 @@ describe("AgentSession model effort behavior", () => {
 
 	it("applies a helper selector's effort to a temporary pick of the same model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const temporaryModel = getBundledModel("google-antigravity", "gemini-3.5-flash");
-		if (!temporaryModel) throw new Error("Expected google-antigravity model gemini-3.5-flash to exist");
+		const temporaryModel = requireBundledModel("google-antigravity", "gemini-3.5-flash");
 
 		await createSession({
 			initialModelId: defaultModel.id,

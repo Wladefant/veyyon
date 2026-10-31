@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isEnoent } from "@veyyon/utils/fs-error";
 import type { InternalResource } from "./types";
 
 /**
@@ -22,6 +23,34 @@ export function ensureWithinRoot(targetPath: string, rootPath: string, scheme: s
 	if (!isWithinRoot(targetPath, rootPath)) {
 		throw new Error(`${scheme}:// URL escapes ${scheme} root`);
 	}
+}
+
+/**
+ * The real path of `targetPath` under `resolvedRoot`, itself a real path. The target, the real
+ * path of its parent and its own real path must each lie within the root, so neither a `..`
+ * segment nor a symlinked file or directory reaches outside it; an escape throws the scheme's
+ * {@link ensureWithinRoot} error. Returns null when the target does not exist.
+ */
+export async function realPathWithinRoot(
+	targetPath: string,
+	resolvedRoot: string,
+	scheme: string,
+): Promise<string | null> {
+	ensureWithinRoot(targetPath, resolvedRoot, scheme);
+	try {
+		ensureWithinRoot(await fs.realpath(path.dirname(targetPath)), resolvedRoot, scheme);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	let realTargetPath: string;
+	try {
+		realTargetPath = await fs.realpath(targetPath);
+	} catch (error) {
+		if (isEnoent(error)) return null;
+		throw error;
+	}
+	ensureWithinRoot(realTargetPath, resolvedRoot, scheme);
+	return realTargetPath;
 }
 
 /**

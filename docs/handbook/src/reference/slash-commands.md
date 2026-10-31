@@ -37,7 +37,7 @@ with a grammar:
 /mcp add <name> [http|sse] [url <url>] [token <token>] [run <command...>]
 /mcp remove <name>
 /mcp smithery-search <keyword...> [<limit 1-100>] [semantic]
-/ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+/ssh add <name> <host> [user <user>] [<port>] [key <keyPath>] [desc <description>] [compat]
 /ssh remove <name>
 /stats [<port>]
 ```
@@ -46,8 +46,9 @@ with a grammar:
 
 Position covers every required word, so `/mcp remove project` removes a server named
 `project`. Where meaning is taken from a word's shape instead, the sets cannot overlap: on
-`/ssh add` a port is digits and nothing else the command reads is, and `user` and `key` are the only
-two keywords, each taking the word after it. A word the command cannot use is rejected, not ignored.
+`/ssh add` a port is digits and nothing else the command reads is, `user`, `key` and `desc` are
+keywords, each taking the word after it, and `compat` is a word on its own. A word the command
+cannot use is rejected, not ignored.
 
 ### A spelling that was an option
 
@@ -57,7 +58,7 @@ replaced each one:
 ```text
 /ssh add box example.com --port 2222
 --port is gone: write the port as a plain integer.
-Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>] [desc <description>] [compat]
 ```
 
 The plain word gets the same answer as the dashed one. `/stats port 8080` is rejected the way
@@ -69,9 +70,11 @@ A word that never was an option is rejected more briefly, since there is no repl
 `Unknown argument: <word>`, or `Invalid port: <word>` where a port was the only thing the command
 reads.
 
-`/mcp smithery-search` is the exception: its trailing words are search
-terms, arbitrary text with no closed set, so a plain `project` there is a keyword to search for and
-is searched for. Only the dashed spellings are rejected.
+`/mcp smithery-search` is the exception: its trailing words are search terms, arbitrary text with
+no closed set, so in ACP and `--print` mode a plain `project` there is a keyword and is searched
+for. Only the dashed spellings are rejected. In the terminal, picking a result adds the server, so a
+trailing `scope`, `project` or `user`, which used to choose where the server was written, is
+rejected with its replacement instead.
 
 ## A bare command that has subcommands
 
@@ -116,7 +119,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 
 | Command | Purpose |
 | --- | --- |
-| `/model [id]`, `/models` | Select the **interactive** model only (helper models live in settings) |
+| `/model [query]`, `/models` | Select the **interactive** model only (helper models live in settings). In the terminal, `/model <query>` opens the picker with `<query>` in its search field. Over ACP and in print mode, `/model <id>` switches to that model and a bare `/model` prints the current one |
 | `/switch` | Try a model for this session only, without saving it as default (same as alt+p) |
 | `/fast on\|off\|status` | Fast mode |
 | `/effort [level]` (`/thinking`) | Set reasoning effort; no argument opens the picker |

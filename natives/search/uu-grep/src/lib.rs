@@ -54,7 +54,7 @@ use grep_searcher::{BinaryDetection, Searcher, Sink, SinkContext, SinkFinish, Si
 pub use rg::{run as run_rg, try_parse_argv as try_parse_rg_argv, uu_app as rg_uu_app};
 use veyyon_grep_kernel::{
 	CompiledMatcher, SearcherSpec, build_searcher as kernel_build_searcher, escape_literal_pattern,
-	pcre_matcher_defaults,
+	pcre_matcher_defaults, pcre_standalone_error, rust_standalone_error,
 };
 
 #[derive(Parser, Debug)]
@@ -980,6 +980,14 @@ fn compile_matcher(
 	flags: &GrepMatcherFlags,
 ) -> Result<BuiltMatcher, String> {
 	if mode == MatchMode::Perl {
+		// Asked as written first: the builder wraps each pattern in `(?:…)` and
+		// would compile `)(` as `(?:)()`, which matches every line.
+		if let Some(error) = patterns
+			.iter()
+			.find_map(|pattern| pcre_standalone_error(pattern, true))
+		{
+			return Err(error.to_string());
+		}
 		let mut builder = PcreMatcherBuilder::new();
 		apply_pcre_flags(&mut builder, flags);
 		return builder
@@ -1036,7 +1044,17 @@ fn compile_matcher(
 			.map_err(|error| error.to_string());
 	}
 
-	match builder.build_many(patterns) {
+	// Asked as written first, for the same reason as the PCRE2 path above.
+	let compiled = match patterns
+		.iter()
+		.find_map(|pattern| rust_standalone_error(pattern))
+	{
+		Some(error) => Err(error.to_string()),
+		None => builder
+			.build_many(patterns)
+			.map_err(|error| error.to_string()),
+	};
+	match compiled {
 		Ok(matcher) => Ok(BuiltMatcher::new(CompiledMatcher::Rust(matcher), patterns.to_vec())),
 		Err(error) if mode == MatchMode::Default => {
 			// The historical builtin accepts ERE syntax by default but falls
@@ -1044,7 +1062,7 @@ fn compile_matcher(
 			let sanitized: Vec<String> = patterns
 				.iter()
 				.map(|pattern| {
-					if builder.build(pattern).is_ok() {
+					if rust_standalone_error(pattern).is_none() && builder.build(pattern).is_ok() {
 						pattern.clone()
 					} else {
 						escape_literal_pattern(pattern)
@@ -1054,9 +1072,9 @@ fn compile_matcher(
 			builder
 				.build_many(&sanitized)
 				.map(|matcher| BuiltMatcher::new(CompiledMatcher::Rust(matcher), sanitized.clone()))
-				.map_err(|_| error.to_string())
+				.map_err(|_| error)
 		},
-		Err(error) => Err(error.to_string()),
+		Err(error) => Err(error),
 	}
 }
 
@@ -2491,6 +2509,166 @@ mod tests {
 		let (code, _stdout, stderr) = run_grep(&["-E", "fail)"], "fail)\n");
 		assert_eq!(code, 2);
 		assert!(stderr.contains("grep:"), "expected a grep error, got: {stderr}");
+	}
+
+	/// A parenthesis that cannot pair is never paired with the `(?:…)` both
+	/// engines wrap a pattern in.
+	///
+	/// Without the checks before each build, `)(` compiled as `(?:)()` in every
+	/// mode and printed every line, and `a)|(b` matched any `a` or `b`. The
+	/// sweep covers every pattern of one to five group, `a` and alternation
+	/// tokens in every match mode, listed by an exhaustive match so a new mode
+	/// does not compile until it states its rule here: a balanced pattern
+	/// matches what grep-regex matches; a fixed string, and a default-mode
+	/// pattern that does not compile, match their own text; `-E` and `-P` exit
+	/// 2; `-G` exits 2 with GNU grep 3.11's message, which agrees with GNU over
+	/// every unbalanced pattern of the sweep.
+	///
+	/// Not caught: a stray `)` hidden from the token alphabet, such as one
+	/// after a PCRE2 `\Q`.
+	#[test]
+	fn a_parenthesis_that_cannot_pair_never_closes_the_engine_wrapper() {
+		#[derive(Clone, Copy)]
+		enum Token {
+			Open,
+			Close,
+			A,
+			Alt,
+		}
+		enum Expected<'a> {
+			Lines(Vec<&'a str>),
+			Error(Option<&'static str>),
+		}
+
+		let mut lines = vec![String::new()];
+		let mut layer = vec![String::new()];
+		for _ in 0..3 {
+			layer = layer
+				.iter()
+				.flat_map(|prefix| ['(', ')', 'a'].map(|ch| format!("{prefix}{ch}")))
+				.collect();
+			lines.extend(layer.iter().cloned());
+		}
+		let stdin: String = lines.iter().map(|line| format!("{line}\n")).collect();
+
+		let mut sequences: Vec<Vec<Token>> = Vec::new();
+		let mut layer: Vec<Vec<Token>> = vec![Vec::new()];
+		for _ in 0..5 {
+			layer = layer
+				.iter()
+				.flat_map(|prefix| {
+					[Token::Open, Token::Close, Token::A, Token::Alt].map(|token| {
+						let mut next = prefix.clone();
+						next.push(token);
+						next
+					})
+				})
+				.collect();
+			sequences.extend(layer.iter().cloned());
+		}
+
+		let modes = [
+			MatchMode::Default,
+			MatchMode::Basic,
+			MatchMode::Extended,
+			MatchMode::Fixed,
+			MatchMode::Perl,
+		];
+		for mode in modes {
+			let (flag, basic) = match mode {
+				MatchMode::Default => (None, false),
+				MatchMode::Basic => (Some("-G"), true),
+				MatchMode::Extended => (Some("-E"), false),
+				MatchMode::Fixed => (Some("-F"), false),
+				MatchMode::Perl => (Some("-P"), false),
+			};
+			for sequence in &sequences {
+				let render = |open, close, alt| -> String {
+					sequence
+						.iter()
+						.map(|token| match token {
+							Token::Open => open,
+							Token::Close => close,
+							Token::A => "a",
+							Token::Alt => alt,
+						})
+						.collect()
+				};
+				let text = render("(", ")", "|");
+				let written = if basic {
+					render(r"\(", r"\)", r"\|")
+				} else {
+					text.clone()
+				};
+
+				let mut depth = 0usize;
+				let mut stray_close = false;
+				for token in sequence {
+					match token {
+						Token::Open => depth += 1,
+						Token::Close => match depth.checked_sub(1) {
+							Some(open) => depth = open,
+							None => {
+								stray_close = true;
+								break;
+							},
+						},
+						Token::A | Token::Alt => {},
+					}
+				}
+				let balanced = !stray_close && depth == 0;
+
+				let literal = || {
+					lines
+						.iter()
+						.map(String::as_str)
+						.filter(|line| line.contains(&text))
+				};
+				let regex = || -> Vec<&str> {
+					let reference = RegexMatcherBuilder::new()
+						.build(&text)
+						.unwrap_or_else(|err| panic!("reference `{text}`: {err}"));
+					lines
+						.iter()
+						.map(String::as_str)
+						.filter(|line| {
+							reference
+								.is_match(line.as_bytes())
+								.expect("reference match")
+						})
+						.collect()
+				};
+				let expected = match mode {
+					MatchMode::Fixed => Expected::Lines(literal().collect()),
+					_ if balanced => Expected::Lines(regex()),
+					MatchMode::Default => Expected::Lines(literal().collect()),
+					MatchMode::Basic if stray_close => Expected::Error(Some(r"Unmatched ) or \)")),
+					MatchMode::Basic => Expected::Error(Some(r"Unmatched ( or \(")),
+					MatchMode::Extended | MatchMode::Perl => Expected::Error(None),
+				};
+
+				let mut args: Vec<&str> = flag.into_iter().collect();
+				args.extend(["-e", written.as_str()]);
+				let (code, stdout, stderr) = run_grep(&args, &stdin);
+				let label = format!("grep {}", args.join(" "));
+				match expected {
+					Expected::Lines(hits) => {
+						let printed: String = hits.iter().map(|line| format!("{line}\n")).collect();
+						assert_eq!(stdout, printed, "{label}");
+						assert_eq!(stderr, "", "{label}");
+						assert_eq!(code, i32::from(hits.is_empty()), "{label}");
+					},
+					Expected::Error(message) => {
+						assert_eq!(code, 2, "{label}: {stdout:?}");
+						assert_eq!(stdout, "", "{label}");
+						match message {
+							Some(message) => assert_eq!(stderr, format!("grep: {message}\n"), "{label}"),
+							None => assert!(stderr.starts_with("grep: "), "{label}: {stderr:?}"),
+						}
+					},
+				}
+			}
+		}
 	}
 
 	#[test]

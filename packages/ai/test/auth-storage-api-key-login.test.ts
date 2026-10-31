@@ -192,12 +192,13 @@ describe("AuthStorage api-key login upsert", () => {
 		expect(await authStorage.getApiKey("deepseek", "session-deepseek-relogin")).toBe("same-deepseek-key");
 	});
 
-	it("uses a fresh OpenCode Go login over an existing env fallback", async () => {
+	it("uses a fresh OpenCode Go API-key login over an existing env fallback", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
 		getEnvApiKeySpy.mockImplementation(provider => (provider === "opencode-go" ? "old-opencode-key" : undefined));
 
-		await authStorage.login("opencode-go", {
+		// The key paste is the legacy entry; it files the key under the product the requests read.
+		await authStorage.login("opencode-go-api-key", {
 			onAuth: () => {},
 			onPrompt: async () => "new-opencode-key",
 		});

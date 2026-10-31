@@ -42,6 +42,7 @@ import {
 	setDetectedTerminalGround,
 } from "@veyyon/coding-agent/theme/ground-tints";
 import { hoverBand, theme, visibleGroundHex } from "@veyyon/coding-agent/theme/theme";
+import { hexRgb, rgbDistance } from "./helpers/band-colors";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 /** The grey a real terminal reports; nothing like titanium's declared black. */
@@ -49,23 +50,11 @@ const TERMINAL_GREY = "#1e2127";
 /** A ground this process painted, distinguishable from both the grey and the theme's black. */
 const PAINTED_TEAL = "#0d3b3b";
 
-function rgb(hex: string): [number, number, number] {
-	return [
-		Number.parseInt(hex.slice(1, 3), 16),
-		Number.parseInt(hex.slice(3, 5), 16),
-		Number.parseInt(hex.slice(5, 7), 16),
-	];
-}
-
 /** `48;2;r;g;b` from a painted band, or null when it carries no truecolor background. */
 function bandRgb(row: string): [number, number, number] {
 	const match = /\x1b\[[0-9;]*?48;2;(\d+);(\d+);(\d+)/.exec(row);
 	if (match === null) throw new Error(`no truecolor background in ${JSON.stringify(row)}`);
 	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function distance(a: [number, number, number], b: [number, number, number]): number {
-	return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
 }
 
 /** A terminal that records the OSC 11 calls a paint decision makes on it. */
@@ -106,19 +95,19 @@ afterEach(() => {
 describe("a band is mixed out of the ground the terminal is showing", () => {
 	it("mixes out of the reported terminal ground, not the ground the theme declares", () => {
 		setDetectedTerminalGround(TERMINAL_GREY);
-		const grey = rgb(TERMINAL_GREY);
+		const grey = hexRgb(TERMINAL_GREY);
 		const full = bandRgb(hoverBand("row", 1));
 
 		const faint = bandRgb(hoverBand("row", 0.2));
 		// The visible symptom of the defect: at a fifth of the way in, the band was nearer black
 		// than the page it was arriving on.
-		expect(distance(faint, grey)).toBeLessThan(distance(faint, [0, 0, 0]));
-		expect(distance(faint, grey)).toBeLessThan(distance(faint, full));
+		expect(rgbDistance(faint, grey)).toBeLessThan(rgbDistance(faint, [0, 0, 0]));
+		expect(rgbDistance(faint, grey)).toBeLessThan(rgbDistance(faint, full));
 	});
 
 	it("keeps every frame of the fade inside the segment it is travelling", () => {
 		setDetectedTerminalGround(TERMINAL_GREY);
-		const grey = rgb(TERMINAL_GREY);
+		const grey = hexRgb(TERMINAL_GREY);
 		const full = bandRgb(hoverBand("row", 1));
 
 		// A mix is bounded by its endpoints. The defect overshot BOTH of them downward, which no
@@ -137,16 +126,16 @@ describe("a band is mixed out of the ground the terminal is showing", () => {
 
 	it("travels monotonically from the page to the band", () => {
 		setDetectedTerminalGround(TERMINAL_GREY);
-		const grey = rgb(TERMINAL_GREY);
+		const grey = hexRgb(TERMINAL_GREY);
 		const full = bandRgb(hoverBand("row", 1));
 		let previous = Number.POSITIVE_INFINITY;
 		for (let step = 1; step <= 9; step++) {
 			const band = bandRgb(hoverBand("row", step / 10));
-			const remaining = distance(band, full);
+			const remaining = rgbDistance(band, full);
 			// Each step is nearer the band than the last and never nearer the page than the last.
 			expect(remaining).toBeLessThan(previous);
 			previous = remaining;
-			expect(distance(band, grey)).toBeGreaterThan(0);
+			expect(rgbDistance(band, grey)).toBeGreaterThan(0);
 		}
 	});
 
@@ -180,7 +169,9 @@ describe("a band is mixed out of the ground the terminal is showing", () => {
 			// answer: two policies for "what is behind this row" is two washes on one screen.
 			expect(modalRevealGround()).toBe(visibleGroundHex());
 			const band = bandRgb(hoverBand("row", 0.2));
-			expect(distance(band, rgb(state.expected()))).toBeLessThan(distance(band, bandRgb(hoverBand("row", 1))));
+			expect(rgbDistance(band, hexRgb(state.expected()))).toBeLessThan(
+				rgbDistance(band, bandRgb(hoverBand("row", 1))),
+			);
 		});
 	}
 
