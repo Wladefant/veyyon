@@ -134,6 +134,20 @@ describe("the launch shell does not evaluate a package barrel", () => {
 	}
 
 	/**
+	 * Process-backed Git helpers are unnecessary while importing the shell row.
+	 * This names the cold-runtime edge that would otherwise appear only as an
+	 * increase in the aggregate budget below.
+	 */
+	it("keeps process Git outside the eager first-frame status row", async () => {
+		const imports = ENTRIES.map(entry => `await import(${JSON.stringify(`./${entry}`)});`).join("\n");
+		const lightweight = await probe(`${imports}
+const cached = Object.keys(require.cache).map(file => file.replaceAll(String.fromCharCode(92), "/"));
+const statusRowLoaded = cached.some(file => file.endsWith("/src/modes/terminal/components/status-line/component.ts"));
+const processGitLoaded = cached.some(file => file.endsWith("/src/utils/git.ts"));
+console.log(Number(statusRowLoaded && !processGitLoaded));`);
+		expect(lightweight).toBe(1);
+	}, 60_000);
+	/**
 	 * The whole-graph number, so a cost that arrives through a leaf rather than a barrel is still
 	 * visible. This is the figure the shell is actually budgeted against; the per-barrel cases above
 	 * name the usual cause when it moves.
