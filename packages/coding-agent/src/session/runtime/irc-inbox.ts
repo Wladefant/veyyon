@@ -121,6 +121,17 @@ function isContinuation(value: unknown): value is IrcContinuation {
 		(Reflect.get(value, "resultSource") === "agent" || Reflect.get(value, "resultSource") === "harness");
 }
 
+/** Keep native continuation artifacts in one portable path component.
+ * Regular IDs retain their existing handles. Unsafe/oversized IDs use a stable
+ * digest so traversal, Windows device names and invalid filename characters
+ * never become filesystem path syntax. The original agentId stays in the journal. */
+function continuationArtifactAgentComponent(agentId: string): string {
+	const portable = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(agentId) &&
+		!/[.]$/.test(agentId) &&
+		!/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(agentId);
+	return portable ? agentId : `agent-${createHash("sha256").update(agentId).digest("hex")}`;
+}
+
 export class IrcContinuationOutbox {
 	readonly #store: SessionManager;
 	#flushing: Promise<void> | undefined;
@@ -181,7 +192,7 @@ export class IrcContinuationOutbox {
 		const id = createHash("sha256").update(this.#store.getSessionId()).update("\0").update(phaseId).digest("hex");
 		const existing = this.#results().find(item => item.id === id);
 		if (existing) return existing;
-		const stem = `${agentId}.phase-${id}`;
+		const stem = `${continuationArtifactAgentComponent(agentId)}.phase-${id}`;
 		const completion: IrcContinuation = { version: 1, id, agentId, parentId, phaseId, handle: `agent://${stem}`, output, resultSource };
 		const dir = this.#store.getArtifactsDir();
 		if (!dir) throw new Error("Cannot publish a continuation without an artifact directory");
