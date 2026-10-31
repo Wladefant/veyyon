@@ -134,21 +134,12 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				sessionFile = found?.[1];
 			}
 			if (sessionFile) {
-				// A persisted live session can branch in memory without appending a JSONL row.
-				// Its last physical row may belong to an abandoned branch.
-				const liveLeafId = ref?.session?.sessionManager.getLeafId();
-				if (ref?.session && liveLeafId === null && !exactRequest?.leafId && !searchRequest?.leafId) {
+				if (exactRequest?.leafId === null || searchRequest?.leafId === null) {
 					throw new Error("history:// active session has no branch leaf; pass leaf= to select stored history");
 				}
 				const result = exactRequest
-					? await readStoredHistoryEntry(sessionFile, {
-						...exactRequest,
-						leafId: exactRequest.leafId ?? liveLeafId ?? undefined,
-					})
-					: await searchStoredHistoryEntries(sessionFile, {
-						...searchRequest!,
-						leafId: searchRequest!.leafId ?? liveLeafId ?? undefined,
-					});
+					? await readStoredHistoryEntry(sessionFile, exactRequest)
+					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
 				const content = JSON.stringify(result, null, 2);
 				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
 					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };

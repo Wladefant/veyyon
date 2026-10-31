@@ -71,9 +71,9 @@ describe("exact history pages keep their record revision", () => {
 			const tooLarge = JSON.stringify({ type: "message", id: "large", message: "x".repeat(8 * 1024 * 1024) });
 			const raw = JSON.stringify({ type: "message", id: "a", parentId: null, message: "needle 🔑" });
 			await fs.appendFile(file, `${tooLarge}\n${raw}\n`);
-			expect((await readStoredHistoryEntry(file, { entryId: "a", offset: 0, limit: 1000 })).fragment).toBe(raw);
+			expect((await readStoredHistoryEntry(file, { entryId: "a", leafId: "a", offset: 0, limit: 1000 })).fragment).toBe(raw);
 			expect((await readStoredHistoryEntry(file, { entryId: "large", offset: 0, limit: 100 })).status).toBe("unavailable");
-			const searched = await searchStoredHistoryEntries(file, { query: "needle", limit: 2 });
+			const searched = await searchStoredHistoryEntries(file, { query: "needle", leafId: "a", limit: 2 });
 			expect(searched.status).toBe("partial");
 			expect(searched.matches.map(match => match.entryId)).toEqual(["a"]);
 		} finally {

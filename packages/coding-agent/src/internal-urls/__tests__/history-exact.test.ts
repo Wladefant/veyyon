@@ -36,14 +36,12 @@ describe("history exact record lookup", () => {
 			const whole = JSON.stringify(records[3]);
 			const parts: string[] = [];
 			let offset = 0;
-			let revision = first.revision;
 			while (true) {
 				const read = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset });
 				expect(read.status).toBe("ok");
 				parts.push(read.fragment!);
 				if (read.nextOffset === null) break;
 				offset = read.nextOffset!;
-				revision = read.revision;
 			}
 			expect(parts.join("")).toBe(whole);
 			// Sibling history must not be returned by a default-current-branch read.
@@ -143,6 +141,7 @@ describe("history exact record lookup", () => {
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=-1"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10"))).toThrow(/rev/);
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&leaf=a&revision=short"))).toThrow(/SHA-256/);
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&revision=short"))).toThrow(/SHA-256/);
 		expect(parseExactHistoryRequest(new URL("history://Scout"))).toBeUndefined();
 	});
 	it("finds stored evidence IDs on the selected branch and returns newest matches first", async () => {
