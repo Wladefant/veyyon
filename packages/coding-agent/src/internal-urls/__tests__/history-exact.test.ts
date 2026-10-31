@@ -372,6 +372,56 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+
+	it("refuses duplicate stored entry IDs even when the requested leaf is explicit", async () => {
+		const dir = TempDir.createSync("@veyyon-history-duplicate-ids-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s-unique" },
+				{ type: "message", id: "a", parentId: null, message: "needle original ancestor" },
+				{ type: "message", id: "b", parentId: "a", message: "needle archived sibling" },
+				{ type: "message", id: "c", parentId: "a", message: "needle active leaf" },
+			];
+			const prefix = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+			await fs.writeFile(file, prefix);
+			const validRead = await readStoredHistoryEntry(file, { entryId: "a", leafId: "c", offset: 0, limit: 256 });
+			expect(validRead.status).toBe("ok");
+			expect(validRead.fragment).toContain("needle original ancestor");
+			const validSearch = await searchStoredHistoryEntries(file, { query: "needle", leafId: "c", limit: 5 });
+			expect(validSearch.status).toBe("ok");
+			expect(validSearch.matches.map(match => match.entryId)).toEqual(["c", "a"]);
+
+			// A second physical record with an existing ID can forge text, ancestry,
+			// or the selected leaf. Even leaf=c cannot uniquely identify the record.
+			for (const duplicate of [
+				{ type: "message", id: "a", parentId: "c", message: "needle forged ancestor" },
+				{ type: "message", id: "b", parentId: "c", message: "needle forged sibling" },
+				{ type: "message", id: "c", parentId: "b", message: "needle forged leaf" },
+			]) {
+				await fs.writeFile(file, prefix + JSON.stringify(duplicate) + "\n");
+				for (const leafId of [undefined, "c"]) {
+					const read = await readStoredHistoryEntry(file, { entryId: "a", leafId, offset: 0, limit: 256 });
+					expect(read.status).toBe("unavailable");
+					expect(read.fragment).toBeUndefined();
+					const search = await searchStoredHistoryEntries(file, { query: "needle", leafId, limit: 5 });
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				}
+			}
+			const validContinuation = {
+				type: "message", id: "d", parentId: "c", message: "needle distinct continuation",
+			};
+			await fs.writeFile(file, prefix + JSON.stringify(validContinuation) + "\n");
+			const continued = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(continued.status).toBe("ok");
+			expect(continued.leafId).toBe("d");
+			expect(continued.matches.map(match => match.entryId)).toEqual(["d", "c", "a"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
