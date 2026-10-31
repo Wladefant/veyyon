@@ -71,7 +71,9 @@ describe("artifact recovery stays with its session", () => {
 		expect((await handler.resolve(scoped, context)).content).toBe("source B");
 		const pathOnly = await handler.resolve(scoped, { ...context, pathOnly: true });
 		expect(pathOnly.content).toBe("");
-		expect(pathOnly.sourcePath).toBe(await b.getArtifactPath(sharedId));
+		const artifactPath = await b.getArtifactPath(sharedId);
+		if (!artifactPath) throw new Error("Expected the source artifact path");
+		expect(pathOnly.sourcePath).toBe(artifactPath);
 		expect((await handler.resolve(url(`artifact://${sharedId}`), context)).content).toBe("source A");
 	});
 

@@ -31,8 +31,10 @@ describe("history exact record lookup", () => {
 			expect(first.leafId).toBe("c");
 			expect(first.sessionId).toBe("session-1");
 			expect(Array.from(first.fragment ?? "").length).toBeLessThanOrEqual(17);
-			const second = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset: first.nextOffset! });
-			expect(second.offset).toBe(first.nextOffset);
+			const nextOffset = first.nextOffset;
+			if (nextOffset === null || nextOffset === undefined) throw new Error("Expected another page");
+			const second = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset: nextOffset });
+			expect(second.offset).toBe(nextOffset);
 			const whole = JSON.stringify(records[3]);
 			const parts: string[] = [];
 			let offset = 0;

@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
@@ -431,6 +432,59 @@ describe("history:// protocol", () => {
 
 			} finally {
 				await session.dispose();
+			}
+		});
+	});
+
+	it("does not substitute the stored tail when a persisted live session has no branch leaf", async () => {
+		await withTempDir(async dir => {
+			const manager = SessionManager.create(dir, dir);
+			try {
+				manager.appendMessage({ role: "user", content: "persisted archived prompt", timestamp: 1 });
+				const tailId = manager.appendMessage({
+					role: "assistant",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "fixture",
+					content: [{ type: "text", text: "archived stored tail" }],
+					stopReason: "stop",
+					timestamp: 2,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				});
+				await manager.flush();
+				const sessionFile = manager.getSessionFile();
+				if (!sessionFile) throw new Error("Expected a persisted session fixture");
+				await fs.access(sessionFile);
+				manager.resetLeaf();
+				expect(manager.getLeafId()).toBeNull();
+				expect(manager.getBranch()).toHaveLength(0);
+				AgentRegistry.global().register({
+					id: "LivePersisted",
+					displayName: "task",
+					kind: "sub",
+					session: { sessionManager: manager } as AgentSession,
+					sessionFile,
+					status: "running",
+				});
+
+				const router = InternalUrlRouter.instance();
+				await expect(router.resolve(`history://LivePersisted?entry=${tailId}`)).rejects.toThrow(/no branch leaf/);
+				await expect(router.resolve("history://LivePersisted?q=archived")).rejects.toThrow(/no branch leaf/);
+				const explicit = await router.resolve(`history://LivePersisted?entry=${tailId}&leaf=${tailId}`);
+				const exact = JSON.parse(explicit.content) as { status: string; entryId: string; leafId?: string; fragment?: string };
+				expect(exact.status).toBe("ok");
+				expect(exact.entryId).toBe(tailId);
+				expect(exact.leafId).toBe(tailId);
+				expect(exact.fragment).toContain("archived stored tail");
+			} finally {
+				await manager.close();
 			}
 		});
 	});

@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
+import type { ReadToolDetails, ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
-type ReadResult = {
-	content: Array<{ type: string; text?: string }>;
-	details?: { displayContent?: { text: string } };
-};
+type ReadResult = AgentToolResult<ReadToolDetails>;
 
 type ArtifactMetadata = {
 	version: number;
@@ -23,10 +21,7 @@ type ArtifactMetadata = {
 };
 
 function textOutput(result: ReadResult): string {
-	return result.content
-		.filter(content => content.type === "text" && typeof content.text === "string")
-		.map(content => content.text as string)
-		.join("\n");
+	return result.content.flatMap(content => content.type === "text" ? [content.text] : []).join("\n");
 }
 
 function metadataFrom(result: ReadResult): ArtifactMetadata {
@@ -185,6 +180,8 @@ describe("read tool artifact view selection", () => {
 			},
 		);
 		expect(resource.content).toBe("");
-		expect(resource.sourcePath).toBe(await other.getArtifactPath(sharedId));
+		const artifactPath = await other.getArtifactPath(sharedId);
+		if (!artifactPath) throw new Error("Expected the explicitly selected artifact path");
+		expect(resource.sourcePath).toBe(artifactPath);
 	});
 });
