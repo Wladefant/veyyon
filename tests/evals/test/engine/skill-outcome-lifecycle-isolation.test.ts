@@ -9,15 +9,25 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireFinalSkillRunLock, buildFeedbackOnlyPrompt, claimFinalSkillUse, createCandidateSourceBinding, createSkillSelection, readFrozenSkillSelection, selectSkillCandidate } from "../../engine/skills/lifecycle";
-import type { SkillCandidateArtifact, SkillScoreOutcome } from "../../engine/skills/lifecycle";
 import type { TaskDescriptor } from "../../engine/contracts";
+import type { SkillCandidateArtifact, SkillScoreOutcome } from "../../engine/skills/lifecycle";
+import {
+	acquireFinalSkillRunLock,
+	buildFeedbackOnlyPrompt,
+	claimFinalSkillUse,
+	createCandidateSourceBinding,
+	createSkillSelection,
+	readFrozenSkillSelection,
+	selectSkillCandidate,
+} from "../../engine/skills/lifecycle";
 import { splitTasks } from "../../engine/task-splits";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-	await Promise.all(temporaryDirectories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
+	await Promise.all(
+		temporaryDirectories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })),
+	);
 });
 
 function taskSet(): TaskDescriptor[] {
@@ -47,7 +57,12 @@ function sourceBinding(
 			registryHash: "registry",
 			graderHash: "grader",
 			criteriaHash: criteria.hash,
-			suiteIdentity: { suite: "example", version: "1", sha: "verified-corpus-sha", metadata: { archivePath, touchedAt: archivePath } },
+			suiteIdentity: {
+				suite: "example",
+				version: "1",
+				sha: "verified-corpus-sha",
+				metadata: { archivePath, touchedAt: archivePath },
+			},
 			requestedModels: ["provider/model"],
 		},
 		tasks,
@@ -82,7 +97,7 @@ describe("skill outcome lifecycle", () => {
 		const tasks = taskSet();
 		const split = splitTasks(tasks, "seed");
 		const source = 'const x = "<tag>&";';
-		const feedback = 'assertion failed: <tag>&';
+		const feedback = "assertion failed: <tag>&";
 		const outcomes = split.feedback.map(task => ({ taskId: task.id, reward: 0, feedback }));
 		const prompt = buildFeedbackOnlyPrompt({
 			skillName: "example",
@@ -357,11 +372,25 @@ describe("skill outcome lifecycle", () => {
 		await expect(
 			claimFinalSkillUse(directory, identity, { ...details, candidateHash: "candidate-b", resume: true }),
 		).rejects.toThrow();
-		await expect(claimFinalSkillUse(directory, identity, { ...details, executionFingerprint: "changed", resume: true })).rejects.toThrow();
-		await expect(claimFinalSkillUse(directory, reorderedIdentity, { ...details, resume: true })).resolves.toBe(claimPath);
+		await expect(
+			claimFinalSkillUse(directory, identity, { ...details, executionFingerprint: "changed", resume: true }),
+		).rejects.toThrow();
+		await expect(claimFinalSkillUse(directory, reorderedIdentity, { ...details, resume: true })).resolves.toBe(
+			claimPath,
+		);
 		for (const invalidRecord of [
-			{ version: 2, identity, candidateHash: details.candidateHash, executionFingerprint: details.executionFingerprint },
-			{ version: 1, identity: { ...identity, model: "provider/other" }, candidateHash: details.candidateHash, executionFingerprint: details.executionFingerprint },
+			{
+				version: 2,
+				identity,
+				candidateHash: details.candidateHash,
+				executionFingerprint: details.executionFingerprint,
+			},
+			{
+				version: 1,
+				identity: { ...identity, model: "provider/other" },
+				candidateHash: details.candidateHash,
+				executionFingerprint: details.executionFingerprint,
+			},
 		]) {
 			const invalidDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-final-invalid-"));
 			temporaryDirectories.push(invalidDirectory);
@@ -370,7 +399,9 @@ describe("skill outcome lifecycle", () => {
 			await expect(claimFinalSkillUse(invalidDirectory, identity, { ...details, resume: true })).rejects.toThrow();
 		}
 		const release = await acquireFinalSkillRunLock(claimPath!, details.executionFingerprint);
-		await expect(acquireFinalSkillRunLock(claimPath!, details.executionFingerprint)).rejects.toThrow(/already executing/);
+		await expect(acquireFinalSkillRunLock(claimPath!, details.executionFingerprint)).rejects.toThrow(
+			/already executing/,
+		);
 		await release();
 		const resumedRelease = await acquireFinalSkillRunLock(claimPath!, details.executionFingerprint);
 		await resumedRelease();
@@ -402,7 +433,7 @@ describe("skill outcome lifecycle", () => {
 		expect(attempts.filter(result => result.status === "fulfilled")).toHaveLength(1);
 		expect(attempts.filter(result => result.status === "rejected")).toHaveLength(1);
 		const acquired = attempts.find(result => result.status === "fulfilled");
-		if (!acquired || acquired.status !== "fulfilled") throw new Error("No final-use lock recovery succeeded.");
+		if (acquired?.status !== "fulfilled") throw new Error("No final-use lock recovery succeeded.");
 		await acquired.value();
 		await expect(fs.stat(`${lockPath}.recovery`)).rejects.toThrow();
 	});

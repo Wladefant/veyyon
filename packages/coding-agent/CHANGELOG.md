@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Validate MCP event-stream JSON-RPC envelopes before dispatch so malformed notifications and responses cannot interrupt a subscription.
+
 - Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
 - Child prompts and IRC rosters distinguish delegation from exclusive write ownership ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 - The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).

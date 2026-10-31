@@ -6,9 +6,9 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import * as fsCache from "@veyyon/coding-agent/tools/core/fs-cache-invalidation";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
-import * as fsCache from "@veyyon/coding-agent/tools/core/fs-cache-invalidation";
 import { removeWithRetries } from "@veyyon/utils";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -112,7 +112,9 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		const allowed = createSession(cwdDir, false);
 		const header = textOutput(await new ReadTool(allowed).execute("read-generated", { path: file })).split("\n")[0];
 		const patch = `${header}\nSWAP 2.=2:\n+export const value = 2;\n`;
-		await expect(executeHashlineSingle(editOptions(blocked, patch))).rejects.toThrow("Cannot modify auto-generated file");
+		await expect(executeHashlineSingle(editOptions(blocked, patch))).rejects.toThrow(
+			"Cannot modify auto-generated file",
+		);
 		expect(await fs.readFile(file, "utf8")).toBe(original);
 		await executeHashlineSingle(editOptions(allowed, patch));
 		expect(await fs.readFile(file, "utf8")).toBe("// @generated\nexport const value = 2;\n");

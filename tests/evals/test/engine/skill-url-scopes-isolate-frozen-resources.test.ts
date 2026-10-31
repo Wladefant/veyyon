@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls/router";
 
-const makeSkill = (root: string, name: string, content: string): Skill => {
+const makeSkill = (root: string, name: string): Skill => {
 	const baseDir = path.join(root, name);
 	const filePath = path.join(baseDir, "SKILL.md");
 	return { name, description: "Frozen test resource", filePath, baseDir, source: "eval-experiment" };
@@ -17,8 +17,8 @@ describe("skill URL session isolation", () => {
 		try {
 			const alphaText = "alpha frozen content";
 			const betaText = "beta frozen content";
-			const alpha = makeSkill(root, "alpha", alphaText);
-			const beta = makeSkill(root, "beta", betaText);
+			const alpha = makeSkill(root, "alpha");
+			const beta = makeSkill(root, "beta");
 			await fs.mkdir(alpha.baseDir, { recursive: true });
 			await fs.mkdir(beta.baseDir, { recursive: true });
 			await fs.writeFile(alpha.filePath, alphaText, "utf8");
@@ -28,7 +28,8 @@ describe("skill URL session isolation", () => {
 			const [alphaResource, betaResource, absent] = await Promise.all([
 				router.resolve("skill://alpha", { cwd: root, skills: [alpha] }),
 				router.resolve("skill://beta", { cwd: root, skills: [beta] }),
-				router.resolve("skill://alpha", { cwd: root, skills: [] })
+				router
+					.resolve("skill://alpha", { cwd: root, skills: [] })
 					.then(() => "unexpected")
 					.catch(error => String(error)),
 			]);

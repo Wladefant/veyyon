@@ -48,13 +48,18 @@ describe("frozen skill body reaches the in-process model context", () => {
 				await fs.mkdir(skillDir, { recursive: true });
 				const filePath = path.join(skillDir, "SKILL.md");
 				if (arm.content !== null) await fs.writeFile(filePath, arm.content, "utf8");
-				const skill = arm.content === null ? [] : [{
-					name: arm.skillName,
-					description: "Frozen experiment resource",
-					filePath,
-					baseDir: skillDir,
-					source: "eval-experiment",
-				}];
+				const skill =
+					arm.content === null
+						? []
+						: [
+								{
+									name: arm.skillName,
+									description: "Frozen experiment resource",
+									filePath,
+									baseDir: skillDir,
+									source: "eval-experiment",
+								},
+							];
 				const mock = createMockModel({ handler: { content: ["done"] } });
 				const agent = new Agent({
 					getApiKey: () => "test-key",
@@ -72,14 +77,18 @@ describe("frozen skill body reaches the in-process model context", () => {
 					skills: skill,
 				});
 				if (arm.content !== null) {
-					await expect(observeFrozenSkillPrompt(session, arm)).rejects.toThrow("body is absent from model history");
+					await expect(observeFrozenSkillPrompt(session, arm)).rejects.toThrow(
+						"body is absent from model history",
+					);
 				}
 				await appendFrozenSkillPrompt(session, arm);
 				const receipt = await observeFrozenSkillPrompt(session, arm);
 				expect(receipt.present).toBe(arm.content !== null);
 				expect(receipt.contentHash).toBe(arm.content === null ? null : arm.contentHash);
 				expect(session.systemPrompt).toEqual([CORE_SYSTEM_PROMPT]);
-				expect(session.agent.state.messages.filter(message => message.role === "developer")).toHaveLength(arm.content === null ? 0 : 1);
+				expect(session.agent.state.messages.filter(message => message.role === "developer")).toHaveLength(
+					arm.content === null ? 0 : 1,
+				);
 				await session.prompt("Respond with done.");
 				await session.waitForIdle();
 				const modelContext = mock.calls[0]?.context;
@@ -88,7 +97,8 @@ describe("frozen skill body reaches the in-process model context", () => {
 				const requestMessages = JSON.stringify(modelContext?.messages);
 				if (arm.kind === "full") expect(requestMessages).toContain(OMITTED_CONTENT);
 				else expect(requestMessages).not.toContain(OMITTED_CONTENT);
-				if (arm.content !== null) expect(requestMessages).toContain(JSON.stringify(arm.content.trim()).slice(1, -1));
+				if (arm.content !== null)
+					expect(requestMessages).toContain(JSON.stringify(arm.content.trim()).slice(1, -1));
 			} finally {
 				if (session) await session.dispose();
 				authStorage?.close();

@@ -145,7 +145,6 @@ describe("InProcessBackend — trial deadline and artifact paths", () => {
 		}
 	});
 
-
 	it("records a pre-aborted run as cancelled, not timed out", async () => {
 		const tempDir = await TempDir.create("@evals-test-pre-cancelled-trial-");
 		try {
@@ -175,14 +174,16 @@ describe("InProcessBackend — trial deadline and artifact paths", () => {
 					runsDir: tempDir.join("runs"),
 					harnesses,
 					options: {
-						variants: [{
-							name: "default",
-							harness: "veyyon",
-							configPath: null,
-							promptVariantPath: null,
-							model: "anthropic/claude-sonnet-4-6",
-							attachments: [],
-						}],
+						variants: [
+							{
+								name: "default",
+								harness: "veyyon",
+								configPath: null,
+								promptVariantPath: null,
+								model: "anthropic/claude-sonnet-4-6",
+								attachments: [],
+							},
+						],
 						trialTimeoutSec: 30,
 					},
 					signal: controller.signal,

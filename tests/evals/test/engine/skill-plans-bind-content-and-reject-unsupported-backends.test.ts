@@ -13,22 +13,22 @@
  * integration test separately exercises the real grader with a controlled client boundary.
  */
 
+import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { describe, expect, it } from "bun:test";
-import type { RunPlan } from "../../engine/plan/run-plan";
+import { TempDir } from "@veyyon/utils";
+import { InProcessBackend } from "../../backends/in-process/main";
 import { harnesses } from "../../engine/members/loaded";
+import { cacheDir } from "../../engine/package-paths";
+import { planIdentity } from "../../engine/plan/plan-identity";
+import type { RunPlan } from "../../engine/plan/run-plan";
 import { buildRunPlan } from "../../engine/plan/run-plan";
 import { canonicalizeConfig, expandVariantMatrix } from "../../engine/plan/variant-matrix";
-import { planIdentity } from "../../engine/plan/plan-identity";
-import { buildSkillArms } from "../../engine/skills/arms";
-import { InProcessBackend } from "../../backends/in-process/main";
 import { executeRun } from "../../engine/run/execute";
-import { finalExecutionFingerprint, markFinalSkillSelectionVerified } from "../../engine/skills/final-use";
+import { buildSkillArms } from "../../engine/skills/arms";
 import type { FinalSkillUseDeclaration } from "../../engine/skills/final-use";
-import { cacheDir } from "../../engine/package-paths";
-import { TempDir } from "@veyyon/utils";
+import { finalExecutionFingerprint, markFinalSkillSelectionVerified } from "../../engine/skills/final-use";
 import { typescriptEditSuite } from "../../suites/typescript-edit/main";
 
 const MODEL = "anthropic/claude-sonnet-4-6";
@@ -57,7 +57,6 @@ const plannedRun = buildRunPlan({
 	repeats: 2,
 	runId: "skill-plan-test",
 });
-
 
 describe("skill-bound run plans", () => {
 	it("retains frozen snapshots for baseline, full content and each ablation in paired task order", async () => {
@@ -91,27 +90,31 @@ describe("skill-bound run plans", () => {
 	it("refuses a non-veyyon harness instead of dropping its skill resource", async () => {
 		const nonVeyyon = harnesses.ids().find(id => id !== "veyyon");
 		expect(nonVeyyon).toBeDefined();
-		await expect(buildRunPlan({
-			suite,
-			harnesses,
-			selection: { harnesses: [nonVeyyon!], models: [MODEL], skillArms: arms },
-		})).rejects.toThrow("Skill experiments require the veyyon in-process resource snapshot boundary");
+		await expect(
+			buildRunPlan({
+				suite,
+				harnesses,
+				selection: { harnesses: [nonVeyyon!], models: [MODEL], skillArms: arms },
+			}),
+		).rejects.toThrow("Skill experiments require the veyyon in-process resource snapshot boundary");
 	});
 
 	it("refuses a backend outside the veyyon in-process boundary instead of dropping its skill resource", async () => {
-		await expect(buildRunPlan({
-			suite: {
-				...suite,
-				backend: "harbor",
-				discoverTasks: suite.discoverTasks,
-				describeTask: suite.describeTask,
-				provenance: suite.provenance,
-				scoreTrial: suite.scoreTrial,
-				preflight: suite.preflight,
-			},
-			harnesses,
-			selection: { harnesses: ["veyyon"], models: [MODEL], skillArms: arms },
-		})).rejects.toThrow("Skill experiments require the veyyon in-process resource snapshot boundary");
+		await expect(
+			buildRunPlan({
+				suite: {
+					...suite,
+					backend: "harbor",
+					discoverTasks: suite.discoverTasks,
+					describeTask: suite.describeTask,
+					provenance: suite.provenance,
+					scoreTrial: suite.scoreTrial,
+					preflight: suite.preflight,
+				},
+				harnesses,
+				selection: { harnesses: ["veyyon"], models: [MODEL], skillArms: arms },
+			}),
+		).rejects.toThrow("Skill experiments require the veyyon in-process resource snapshot boundary");
 	});
 
 	it("changes plan identity when skill content, recipe, model, build, registry or grader hashes change", async () => {
@@ -124,9 +127,24 @@ describe("skill-bound run plans", () => {
 			contentHash: createHash("sha256").update(changedContent, "utf8").digest("hex"),
 		};
 		const cases: RunPlan[] = [
-			{ ...original, variants: original.variants.map(variant => variant.skillArm?.id === "full" ? { ...variant, skillArm: changedArm } : variant) },
-			{ ...original, variants: original.variants.map(variant => variant.skillArm?.id === "full" ? { ...variant, skillArm: { ...variant.skillArm, recipeHash: "a".repeat(64) } } : variant) },
-			{ ...original, variants: original.variants.map(variant => ({ ...variant, model: "anthropic/claude-opus-4-6" })) },
+			{
+				...original,
+				variants: original.variants.map(variant =>
+					variant.skillArm?.id === "full" ? { ...variant, skillArm: changedArm } : variant,
+				),
+			},
+			{
+				...original,
+				variants: original.variants.map(variant =>
+					variant.skillArm?.id === "full"
+						? { ...variant, skillArm: { ...variant.skillArm, recipeHash: "a".repeat(64) } }
+						: variant,
+				),
+			},
+			{
+				...original,
+				variants: original.variants.map(variant => ({ ...variant, model: "anthropic/claude-opus-4-6" })),
+			},
 			{ ...original, variants: original.variants.map(variant => ({ ...variant, build: "/builds/changed" })) },
 			{ ...original, skillBinding: { ...original.skillBinding!, buildHash: "d".repeat(64) } },
 			{ ...original, skillBinding: { ...original.skillBinding!, registryHash: "b".repeat(64) } },
@@ -318,10 +336,22 @@ describe("skill-bound run plans", () => {
 			version: 1 as const,
 			sourceHash: full!.sourceHash,
 			datasetFingerprint: createHash("sha256")
-				.update(canonicalizeConfig({ suite: suiteIdentity.suite, version: suiteIdentity.version, sha: suiteIdentity.sha }))
+				.update(
+					canonicalizeConfig({
+						suite: suiteIdentity.suite,
+						version: suiteIdentity.version,
+						sha: suiteIdentity.sha,
+					}),
+				)
 				.digest("hex"),
 			splitFingerprint: createHash("sha256")
-				.update(canonicalizeConfig({ seed: "test-seed", taskIds: [task.id], membership: { feedback: [], score: [], final: [task.id] } }))
+				.update(
+					canonicalizeConfig({
+						seed: "test-seed",
+						taskIds: [task.id],
+						membership: { feedback: [], score: [], final: [task.id] },
+					}),
+				)
 				.digest("hex"),
 			criteriaHash: planBinding.criteriaHash!,
 			minimumImprovement: 0,
@@ -345,7 +375,12 @@ describe("skill-bound run plans", () => {
 			binding: candidateBinding,
 			scoreRunHash: "e".repeat(64),
 			minimumImprovement: 0,
-			score: Object.freeze({ selected: candidateHash, reason: "candidate-improved", incumbentMean: 0, candidateMean: 1 }),
+			score: Object.freeze({
+				selected: candidateHash,
+				reason: "candidate-improved",
+				incumbentMean: 0,
+				candidateMean: 1,
+			}),
 		});
 		const runsDir = temp.join("runs");
 		const claimIdentity = {
@@ -396,7 +431,13 @@ describe("skill-bound run plans", () => {
 				return {
 					extra: {
 						resolvedModel: candidate.resolvedModel,
-						skillArm: { id: candidateArm.id, kind: "candidate", contentHash: candidateHash, sourceHash: full!.sourceHash, recipeHash: candidateHash },
+						skillArm: {
+							id: candidateArm.id,
+							kind: "candidate",
+							contentHash: candidateHash,
+							sourceHash: full!.sourceHash,
+							recipeHash: candidateHash,
+						},
 						observedSkillHashes: [{ name: full!.skillName, contentHash: candidateHash }],
 					},
 				};
@@ -437,9 +478,9 @@ describe("skill-bound run plans", () => {
 		let incumbentClaimPath: string | null = null;
 		try {
 			await expect(executeRun(common)).rejects.toThrow(/requires a frozen candidate-use declaration/);
-			await expect(
-				executeRun({ ...common, finalSkillUse: declarationFor(plan, runsDir) }),
-			).rejects.toThrow(/verified frozen score selection/);
+			await expect(executeRun({ ...common, finalSkillUse: declarationFor(plan, runsDir) })).rejects.toThrow(
+				/verified frozen score selection/,
+			);
 			expect(started).toBe(0);
 			markFinalSkillSelectionVerified(selection);
 			const firstExecution = executeRun({ ...common, finalSkillUse: declarationFor(plan, runsDir) });
@@ -451,7 +492,11 @@ describe("skill-bound run plans", () => {
 			]);
 			expect(started).toBe(1);
 			await expect(
-				executeRun({ ...common, finalSkillUse: declarationFor(plan, runsDir, candidate, selection, true), resume: true }),
+				executeRun({
+					...common,
+					finalSkillUse: declarationFor(plan, runsDir, candidate, selection, true),
+					resume: true,
+				}),
 			).rejects.toThrow(/already executing/);
 			gate.resolve();
 			const record = await firstExecution;
@@ -487,10 +532,7 @@ describe("skill-bound run plans", () => {
 			const repeatedPlan: RunPlan = {
 				...plan,
 				repeats: 2,
-				cells: [
-					plan.cells[0]!,
-					{ ...plan.cells[0]!, repeat: 2 },
-				],
+				cells: [plan.cells[0]!, { ...plan.cells[0]!, repeat: 2 }],
 			};
 			await expect(
 				executeRun({
@@ -502,7 +544,13 @@ describe("skill-bound run plans", () => {
 			).rejects.toThrow();
 			const replacementHash = "c".repeat(64);
 			const replacementCandidate = { ...candidate, candidateHash: replacementHash };
-			const replacementArm = { ...candidateArm, id: `candidate-${replacementHash.slice(0, 12)}`, content: "Different candidate.", contentHash: replacementHash, recipeHash: replacementHash };
+			const replacementArm = {
+				...candidateArm,
+				id: `candidate-${replacementHash.slice(0, 12)}`,
+				content: "Different candidate.",
+				contentHash: replacementHash,
+				recipeHash: replacementHash,
+			};
 			const replacementVariant = { ...selectedVariant, skillArm: replacementArm };
 			const replacementPlan = { ...plan, variants: [replacementVariant] };
 			const replacementSelection = Object.freeze({
@@ -515,7 +563,13 @@ describe("skill-bound run plans", () => {
 				executeRun({
 					...common,
 					plan: replacementPlan,
-					finalSkillUse: declarationFor(replacementPlan, runsDir, replacementCandidate, replacementSelection, true),
+					finalSkillUse: declarationFor(
+						replacementPlan,
+						runsDir,
+						replacementCandidate,
+						replacementSelection,
+						true,
+					),
 					resume: true,
 				}),
 			).rejects.toThrow();

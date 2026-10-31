@@ -19,15 +19,20 @@
 
 import { describe, expect, it } from "bun:test";
 import { harnessFlags, suites } from "../../engine/members/loaded";
-import { BOOLEAN_FLAGS, CliUsageError, evalsUsage, parseEvalsArgs, parseSkillCommandArgs, suiteContext, VALUE_FLAGS } from "../../evals";
+import {
+	BOOLEAN_FLAGS,
+	CliUsageError,
+	evalsUsage,
+	parseEvalsArgs,
+	parseSkillCommandArgs,
+	suiteContext,
+	VALUE_FLAGS,
+} from "../../evals";
 
 const fixedValueFlags = Object.keys(VALUE_FLAGS);
 const declaredHarnessFlags = harnessFlags().map(flag => `--${flag}`);
 const valueFlags = [...fixedValueFlags, ...declaredHarnessFlags];
 const booleanFlags = Object.keys(BOOLEAN_FLAGS);
-
-/** Flags the `serve` subcommand parser owns, not the main flag grammar. */
-const SERVE_ONLY_FLAGS = new Set(["--port", "--host"]);
 
 describe("a value flag refuses a missing value", () => {
 	it("has value flags to sweep", () => {
