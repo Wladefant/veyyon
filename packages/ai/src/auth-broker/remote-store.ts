@@ -128,6 +128,29 @@ function credentialEntryWithBlocks(
 	return incoming;
 }
 
+/**
+ * Bind a broker refresh reply to the exact grant that requested it. A schema-valid OAuth
+ * response for another row/provider, or one exposing a refresh token, is not usable by
+ * this client. The broker remains the only writer/owner of the refresh credential.
+ */
+function assertBrokerOAuthRefresh(
+	entry: AuthCredentialSnapshotEntry,
+	credentialId: number,
+	provider: string,
+): asserts entry is AuthCredentialSnapshotEntry & { credential: OAuthCredential } {
+	if (entry.id !== credentialId || entry.provider !== provider) {
+		throw new AIError.AuthBrokerError(
+			`Broker refresh identity mismatch for credential id=${credentialId} provider=${provider}`,
+		);
+	}
+	if (entry.credential.type !== "oauth") {
+		throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+	}
+	if (entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
+		throw new AIError.AuthBrokerError(`Broker returned unredacted OAuth refresh credential for id=${credentialId}`);
+	}
+}
+
 function emptySnapshot(): SnapshotResponse {
 	return {
 		generation: 0,
@@ -602,10 +625,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
-		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
-		if (entry.credential.type !== "oauth") {
-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+		const current = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
+		if (!current) {
+			throw new AIError.AuthBrokerError(`Broker suspect refresh requested unknown credential id=${credentialId}`);
 		}
+		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
+		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
 		this.#applyCredentialEntry(entry);
 		this.#maybeRefreshSnapshot("suspect credential refresh");
 	}
@@ -867,19 +892,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * the `refresh` slot.
 	 */
 	async refreshOAuthCredential(
-		_provider: Provider,
+		provider: Provider,
 		credentialId: number,
 		_credential: OAuthCredential,
 		signal?: AbortSignal,
 	): Promise<OAuthCredentials> {
 		const { entry } = await this.#client.refreshCredential(credentialId, signal);
+		assertBrokerOAuthRefresh(entry, credentialId, provider);
 		if (!this.#streamingActive) {
 			await this.refreshSnapshot().catch(error => {
 				this.#reportStaleSnapshot("refresh-after-credential-refresh", error, { credentialId });
 			});
-		}
-		if (entry.credential.type !== "oauth") {
-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
 		}
 		const refreshed = entry.credential;
 		return {
