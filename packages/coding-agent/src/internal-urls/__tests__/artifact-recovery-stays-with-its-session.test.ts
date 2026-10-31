@@ -8,6 +8,7 @@ import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { ArtifactProtocolHandler } from "../artifact-protocol";
 import { resetRegisteredArtifactDirsForTests } from "../registry-helpers";
+import { InternalUrlRouter } from "../router";
 import type { InternalUrl, ResolveContext } from "../types";
 
 const url = (value: string): InternalUrl => new URL(value) as InternalUrl;
@@ -37,6 +38,7 @@ describe("artifact recovery stays with its session", () => {
 	}
 
 	beforeEach(async () => {
+		InternalUrlRouter.resetForTests();
 		AgentRegistry.resetGlobalForTests();
 		resetRegisteredArtifactDirsForTests();
 		temp = TempDir.createSync("@veyyon-artifact-owner-");
@@ -51,6 +53,7 @@ describe("artifact recovery stays with its session", () => {
 
 	afterEach(async () => {
 		await a.close(); await b.close();
+		InternalUrlRouter.resetForTests();
 		AgentRegistry.resetGlobalForTests(); resetRegisteredArtifactDirsForTests();
 		await temp.remove();
 	});
@@ -70,6 +73,12 @@ describe("artifact recovery stays with its session", () => {
 		expect(pathOnly.content).toBe("");
 		expect(pathOnly.sourcePath).toBe(await b.getArtifactPath(sharedId));
 		expect((await handler.resolve(url(`artifact://${sharedId}`), context)).content).toBe("source A");
+	});
+
+	it("dispatches an explicitly scoped URL through the router without changing caller context", async () => {
+		const scoped = `artifact://${sharedId}?session=${b.getSessionId()}`;
+		expect((await InternalUrlRouter.instance().resolve(scoped, context)).content).toBe("source B");
+		expect((await InternalUrlRouter.instance().resolve(`artifact://${sharedId}`, context)).content).toBe("source A");
 	});
 
 	it("preserves structured recovery envelopes and legacy shake text byte for byte", async () => {
