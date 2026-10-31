@@ -1372,7 +1372,9 @@ describe("ACP agent", () => {
 		});
 
 		const chunks = harness.updates.filter(
-			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+			(update): update is SessionNotification & {
+				update: Extract<SessionNotification["update"], { sessionUpdate: "agent_message_chunk" }>;
+			} => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
 		);
 		const firstId = getChunkMessageId(chunks[0]!);
 		expect(
