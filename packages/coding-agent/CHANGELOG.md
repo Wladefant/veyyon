@@ -6,10 +6,14 @@
 
 ### Added
 
+- Added an explicitly loaded, off-by-default task-record context pilot that archives exact branch evidence, redacts task strings before JSON escaping, accepts fully covered keep-nothing boundaries, and preserves execution and pending-work ownership ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
 
 ### Fixed
 
+- Invalid JSON-RPC records no longer terminate MCP HTTP event streams or block valid batch notifications ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
+- MCP HTTP streams no longer treat request extension fields as final responses ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Child prompts and IRC rosters distinguish delegation from exclusive write ownership ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 - The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
@@ -20,8 +24,12 @@
 
 ### Changed
 
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
+### Fixed
+
+- Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

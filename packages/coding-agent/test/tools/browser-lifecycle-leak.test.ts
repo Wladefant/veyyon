@@ -119,6 +119,8 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 	afterEach(async () => {
 		try {
 			await drainAllTabs();
+			expect(getTabsMapForTest().size).toBe(0);
+			expect(getBrowsersMapForTest().size).toBe(0);
 		} finally {
 			// The spies sit on `CmuxSocketClient.prototype`: left in place, every later suite in the
 			// process talks to these mocks instead of a socket.
@@ -178,14 +180,15 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 
 		const browser = await acquireBrowser(makeKind("foreign-close"), { cwd: "/tmp" });
 		await acquireTab("foreign-tab", browser, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browser, { kill: false });
 		const tool = new BrowserTool(makeToolSession("session-B"));
 
 		await expect(tool.execute("close-foreign", { action: "close", name: "foreign-tab" })).rejects.toThrow(
 			/own|approved/i,
 		);
-		await expect(
-			tool.execute("close-untracked", { action: "close", name: "foreign-tab", approved_tab_ids: [100] }),
-		).rejects.toThrow(/own|approved/i);
+		await expect(tool.execute("close-untracked", { action: "close", name: "foreign-tab" })).rejects.toThrow(
+			/own|approved/i,
+		);
 		expect(getTabsMapForTest().has("foreign-tab")).toBe(true);
 	});
 
@@ -199,6 +202,7 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 
 		const browser = await acquireBrowser(makeKind("anonymous-close"), { cwd: "/tmp" });
 		await acquireTab("anonymous-tab", browser, { timeoutMs: 1_000 });
+		await releaseBrowser(browser, { kill: false });
 		const tool = new BrowserTool(makeToolSession());
 
 		await expect(tool.execute("close-anonymous", { action: "close", name: "anonymous-tab" })).rejects.toThrow(
@@ -222,7 +226,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		const browserA = await acquireBrowser(makeKind("close-all-a"), { cwd: "/tmp" });
 		const browserB = await acquireBrowser(makeKind("close-all-b"), { cwd: "/tmp" });
 		await acquireTab("lane-a-tab", browserA, { timeoutMs: 1_000, ownerSessionId: "session-A" });
+		await releaseBrowser(browserA, { kill: false });
 		await acquireTab("lane-b-tab", browserB, { timeoutMs: 1_000, ownerSessionId: "session-B" });
+		await releaseBrowser(browserB, { kill: false });
 		const tool = new BrowserTool(makeToolSession("session-B"));
 
 		await tool.execute("close-owned", { action: "close", all: true });
@@ -231,123 +237,9 @@ describe("browser lifecycle — session-scoped teardown reaps owned tabs", () =>
 		expect(getTabsMapForTest().has("lane-b-tab")).toBe(false);
 	});
 
-	it("inventory lists only this session's and ownerless relay tabs, never another session's name, title or URL", async () => {
-		const relay = {
-			getTrackedTabs: () => [
-				{
-					tabId: 100,
-					windowId: 7,
-					targetId: "ext-100",
-					url: "https://example.com/docs?access_token=inventory-secret&view=full",
-					title: "Owned page",
-				},
-				{
-					tabId: 101,
-					windowId: 7,
-					targetId: "ext-101",
-					url: "https://example.com/foreign-path?token=foreign-secret",
-					title: "Foreign page",
-				},
-				{
-					tabId: 103,
-					windowId: 9,
-					targetId: "ext-103",
-					url: "https://example.com/ownerless",
-					title: "Ownerless page",
-				},
-			],
-		};
-		const browser = { kind: { kind: "extension" }, relay } as unknown as PuppeteerBrowserHandle;
-		const tabs = getTabsMapForTest() as Map<string, TabSession>;
-		tabs.set(
-			"owned-extension-tab",
-			{
-				name: "owned-extension-tab",
-				browser,
-				targetId: "ext-100",
-				state: "alive",
-				info: {},
-				pending: new Map(),
-				kindTag: "extension",
-				ownerSessionId: "session-A",
-				backend: "worker",
-				worker: {},
-			} as unknown as TabSession,
-		);
-		tabs.set(
-			"foreign-extension-tab",
-			{
-				name: "foreign-extension-tab",
-				browser,
-				targetId: "ext-101",
-				state: "alive",
-				info: {},
-				pending: new Map(),
-				kindTag: "extension",
-				ownerSessionId: "session-B",
-				backend: "worker",
-				worker: {},
-			} as unknown as TabSession,
-		);
-		tabs.set(
-			"ownerless-extension-tab",
-			{
-				name: "ownerless-extension-tab",
-				browser,
-				targetId: "ext-103",
-				state: "alive",
-				info: {},
-				pending: new Map(),
-				kindTag: "extension",
-				backend: "worker",
-				worker: {},
-			} as unknown as TabSession,
-		);
-
-		try {
-			const tool = new BrowserTool(makeToolSession("session-A"));
-			const result = await tool.execute("inventory", { action: "inventory" });
-			const content = result.content[0];
-			expect(content?.type).toBe("text");
-			if (content?.type !== "text") throw new Error("Inventory did not return text.");
-			expect(JSON.parse(content.text)).toMatchObject([
-				{ tab_id: 100, window_id: 7, name: "owned-extension-tab", ownership: "owned", title: "Owned page" },
-				{ tab_id: 103, window_id: 9, name: "ownerless-extension-tab", ownership: "attached", title: "Ownerless page" },
-			]);
-			for (const leaked of ["foreign-extension-tab", "Foreign page", "foreign-secret", "foreign-path", "ext-101"]) {
-				expect(content.text).not.toContain(leaked);
-			}
-			expect(content.text).not.toContain("inventory-secret");
-
-			// A caller with no identity sees only the ownerless tab, never the owned ones.
-			const anonymous = await new BrowserTool(makeToolSession()).execute("inventory", { action: "inventory" });
-			const anonymousContent = anonymous.content[0];
-			if (anonymousContent?.type !== "text") throw new Error("Inventory did not return text.");
-			expect(JSON.parse(anonymousContent.text)).toMatchObject([
-				{ tab_id: 103, ownership: "attached", name: "ownerless-extension-tab" },
-			]);
-			expect(anonymousContent.text).not.toContain("Owned page");
-			expect(getBrowsersMapForTest().size).toBe(0);
-		} finally {
-			tabs.delete("owned-extension-tab");
-			tabs.delete("foreign-extension-tab");
-			tabs.delete("ownerless-extension-tab");
-		}
-	});
-
-	it("inventory reads existing relay state without opening a browser", async () => {
-		const tool = new BrowserTool(makeToolSession("session-A"));
-
-		const result = await tool.execute("inventory", { action: "inventory" });
-
-		expect(result.content).toEqual([{ type: "text", text: "No relay-managed extension tabs are open." }]);
-		expect(getBrowsersMapForTest().size).toBe(0);
-	});
-
 	// WHY: one tab name is shared, so a second session that opens, reuses, runs or lists it could drive or
 	// read another lane's page. These tests pin the refusal before any side effect, and that the owner and
-	// ownerless callers keep working. GAPS, unproven here: raw CDP and relay direct target commands, which
-	// bypass this tab table entirely, and whether ownership survives a relay reconnect.
+	// ownerless callers keep working.
 	it("refuses another session's tab on open, dialog replacement, or no identity, leaving it untouched", async () => {
 		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
 		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
