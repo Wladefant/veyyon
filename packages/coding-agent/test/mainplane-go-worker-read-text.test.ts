@@ -26,7 +26,7 @@ describe("Mainplane worker file read", () => {
      "pc2", "/tmp/file", undefined, transport)).rejects.toThrow("mismatch");
  });
  test("rejects digest-valid UTF-8 NUL bytes, including beyond the preview slice", async () => {
-   for (const text of ["ok\\0hidden".replace("\\0", "\0"), "x".repeat(50_001) + "\0hidden"]) {
+   for (const text of ["ok\0hidden", "x".repeat(50_001) + "\0hidden"]) {
      const data = Buffer.from(text, "utf8");
      const transport = (async () => new Response(JSON.stringify({
        data_base64: data.toString("base64"), bytes: data.length,
@@ -37,7 +37,7 @@ describe("Mainplane worker file read", () => {
    }
  });
  test("keeps legitimate Unicode and newlines readable", async () => {
-   const data = Buffer.from("München\\n東京".replace("\\n", "\n"), "utf8");
+   const data = Buffer.from("München\n東京", "utf8");
    const transport = (async () => new Response(JSON.stringify({
      data_base64: data.toString("base64"), bytes: data.length,
      sha256: createHash("sha256").update(data).digest("hex"),
