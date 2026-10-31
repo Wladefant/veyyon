@@ -14,6 +14,10 @@ on:
       test_files:
         description: JSON array of related test paths (empty uses dependency selection)
         type: string
+      fleet_adapter:
+        description: Run fixed fleet adapter contracts
+        type: boolean
+        default: false
       native:
         description: Build native addon for focused tests
         type: boolean
@@ -75,8 +79,10 @@ jobs:
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
           PINNED_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha }}
           FOCUSED_TESTS: ${{ inputs.test_files }}
+          FLEET_ADAPTER: ${{ inputs.fleet_adapter }}
         run: |
           set -euo pipefail
+          [[ "$FLEET_ADAPTER" != "true" || -n "$FOCUSED_TESTS" ]] || { echo '::error::Fleet adapter requires explicit test_files'; exit 1; }
           [[ -z "$FOCUSED_TESTS" || -n "$PINNED_BASE" ]] || { echo '::error::Focused checks require an exact base SHA'; exit 1; }
           if [[ -n "$PINNED_BASE" ]]; then
             [[ "$PINNED_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Base must be a full SHA'; exit 1; }
@@ -105,6 +111,8 @@ jobs:
           import path from 'node:path';
           const root = fs.realpathSync('.');
           const files = JSON.parse(process.env.FOCUSED_TESTS);
+          const fleetExpected = ["packages/coding-agent/test/mainplane-go-worker-extension.test.ts","packages/coding-agent/test/mainplane-go-worker-read-text.test.ts","packages/coding-agent/test/mainplane-go-tool-failure.test.ts","packages/coding-agent/test/mainplane-go-worker-write.test.ts"];
+          if (process.env.FLEET_ADAPTER === 'true' && (!Array.isArray(files) || files.length !== 4 || new Set(files).size !== 4 || fleetExpected.some(file => !files.includes(file)))) throw new Error('Fleet adapter requires exactly the four fixed test paths');
           if (!Array.isArray(files) || files.length === 0 || files.length > 30 ||
               files.some(file => typeof file !== 'string' || !/^[A-Za-z0-9_./-]+\.(test|spec)\.[cm]?[jt]sx?$/.test(file) ||
                 file.split('/').includes('..') || file.startsWith('/') || !fs.statSync(file).isFile())) {
@@ -311,6 +319,7 @@ jobs:
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           SHARD_FILE: ${{ runner.temp }}/ovh-shards/shard-${{ matrix.index }}.txt
+          FLEET_ADAPTER: ${{ inputs.fleet_adapter }}
         run: |
           set -uo pipefail
           shard_start=$(date +%s)
@@ -360,12 +369,20 @@ jobs:
           fi
 
           status=0; total_pass=0; total_fail=0; total_ran=0
+          if [[ "$FLEET_ADAPTER" == "true" && "${{ matrix.index }}" == "0" ]]; then
+            mkdir -p .ovh-tools/fleet-ci
+            unit_log="$GITHUB_WORKSPACE/.ovh-tools/fleet-ci/reducer-unit.log"
+            if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /usr/bin/python3 -m unittest discover -s scripts/fleet -p 'test_*.py' 2>&1 | tee "$unit_log"; then :; else status=1; fi
+          fi
           while IFS= read -r file; do
             [[ -n "$file" ]] || continue
             log="$RUNNER_TEMP/ovh-test-$(printf '%s' "$file" | sha256sum | cut -c1-16).log"
             sandbox_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
             runtime_bin="$sandbox_root/.ovh-tools/bin"
-            if timeout 600 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            junit_args=()
+            if [[ "$FLEET_ADAPTER" == "true" ]]; then mkdir -p .ovh-tools/fleet-ci; junit_args=(--reporter=junit --reporter-outfile="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"); fi
+            if timeout 600 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            if [[ "$FLEET_ADAPTER" == "true" ]]; then report="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"; receipt="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").json"; if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'exec /usr/bin/python3 scripts/fleet/junit_receipt.py --input "$1" --head-sha "$(git rev-parse HEAD)" --output "$2"' _ "$report" "$receipt"; then :; else status=1; fi; fi
             summary="$(grep -E '^[[:space:]]*[0-9]+ (pass|fail)([,[:space:]]|$)|Ran [0-9]+' "$log" || true)"; printf '%s\n' "$summary"
             pass="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) pass.*/\1/p' | awk '{s+=$1} END{print s+0}')"
             fail="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) fail.*/\1/p' | awk '{s+=$1} END{print s+0}')"
@@ -402,6 +419,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ovh-test-*.log
             ${{ runner.temp }}/ovh-receipt.txt
+            .ovh-tools/fleet-ci/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
   typecheck:
