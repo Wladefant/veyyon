@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode Go no longer routes Console credential envelopes; API keys continue to use the configured gateway.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed

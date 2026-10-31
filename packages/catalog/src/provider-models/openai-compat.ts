@@ -54,7 +54,6 @@ import {
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
 import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
-import { isOpenCodeGoLoginApiKey } from "../wire/opencode-go";
 import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, mapWithBundledReference, toModelSpec } from "./bundled-references";
@@ -2551,25 +2550,12 @@ function resolveOpenCodeDiscoveryBaseUrl(baseUrl: string | undefined, defaultBas
 	return openCodeBaseUrlForApi("openai-completions", basePath);
 }
 
-/**
- * The key OpenCode discovery sends. The Go listing is public. A Console login token is accepted only by
- * its account's inference endpoint and the public gateway rejects it, so a login lists without it.
- */
-function openCodeDiscoveryApiKey(
-	providerId: "opencode-go" | "opencode-zen",
-	apiKey: string | undefined,
-): string | undefined {
-	return providerId === "opencode-go" && isOpenCodeGoLoginApiKey(apiKey) ? undefined : apiKey;
-}
-
 function openCodeModelCacheProviderId(
 	providerId: "opencode-go" | "opencode-zen",
 	apiKey: string | undefined,
 	discoveryBaseUrl: string,
 ): string {
-	// OpenCode catalogs are entitlement-scoped; isolate authoritative rows by the credential discovery
-	// sends and the endpoint. A Console login sends none, so a refreshed token keeps its cached rows.
-	const scope = `${openCodeDiscoveryApiKey(providerId, apiKey) ?? ""}\u0000${discoveryBaseUrl}`;
+	const scope = `${apiKey ?? ""}\u0000${discoveryBaseUrl}`;
 	return `${providerId}:models-v1:${Bun.hash(scope).toString(36)}`;
 }
 

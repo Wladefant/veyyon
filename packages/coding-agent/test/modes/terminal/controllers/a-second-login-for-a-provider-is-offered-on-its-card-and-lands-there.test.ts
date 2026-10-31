@@ -1,22 +1,13 @@
 /**
- * WHY: a provider that signs in two ways registers the second mechanism as a login entry of its own,
- * filed under the first by `storeCredentialsAs`: `opencode-go-api-key` beside the OpenCode Console
- * login, `nous-research-api-key` beside the Nous device flow, `openai-codex-device` beside the Codex
- * browser login. The account card groups logins by the provider they store under, and its add entry
- * started only the provider's own login, so the second mechanism was reachable only by typing its id.
- * Typed that way, the login was labelled with the mechanism's slug ("OpenCode Go Api Key"), counted
- * sibling accounts under the mechanism's id and so never offered a name for a second account, and
- * reopened the card on that id, which has no entry, so the card landed on whichever provider sorted
- * first.
+ * WHY: a login stored under another provider used to reopen the account card on its own login id.
+ * That id had no account entry, so the card landed on another provider instead.
  *
- * THE CLASS: every login whose credential lands under another provider. The card half enumerates them
- * from `getOAuthProviders()` at run time, so a mechanism registered later is held to the same
- * contract with no edit here. The controller half drives the real login, dialog and credential store
- * with the OpenCode Go API key, whose login validates nothing over the network.
+ * THE CLASS: every login whose credential lands under another provider. The card sweep enumerates
+ * them from `getOAuthProviders()` at run time, so each new alternate login gets the same coverage.
+ * The OpenCode Go cases below separately prove its sole API-key login uses the provider ID.
  *
- * WHAT IT DOES NOT CATCH: which login is a provider's default is pinned for OpenCode Go only. A
- * mechanism whose login needs the network is covered by the card sweep and the shared storage-id
- * resolution the controller half exercises, not by running its own login.
+ * WHAT IT DOES NOT CATCH: which alternate login is the provider default. The card contract checks
+ * every alternate entry, while the OpenCode Go cases cover the primary API-key path.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
@@ -131,7 +122,7 @@ function card(provider: string, rows: AccountRow[] = []) {
 describe("the account card offers every login a provider can be added with", () => {
 	test("the sweep reaches the alternate logins this product registers", () => {
 		expect(ALTERNATES.map(login => login.id)).toEqual(
-			expect.arrayContaining(["openai-codex-device", "opencode-go-api-key", "nous-research-api-key"]),
+			expect.arrayContaining(["openai-codex-device", "nous-research-api-key"]),
 		);
 	});
 
@@ -170,10 +161,9 @@ describe("the account card offers every login a provider can be added with", () 
 	}
 });
 
-describe("OpenCode Go signs in with the Console first and keeps the API key as the legacy way", () => {
-	test("the provider's own entry is the Console login and holds the cursor", () => {
-		expect(getLoginCredential("opencode-go")).toBe("oauth");
-		expect(getLoginCredential("opencode-go-api-key")).toBe("api-key");
+describe("OpenCode Go signs in with its API key under its provider ID", () => {
+	test("the provider's entry is an API-key login", () => {
+		expect(getLoginCredential("opencode-go")).toBe("api-key");
 		const view = card("opencode-go");
 		expect(view.cursorLine()).toBe("› + add OpenCode Go account");
 
@@ -181,33 +171,73 @@ describe("OpenCode Go signs in with the Console first and keeps the API key as t
 
 		expect(view.added).toEqual([["opencode-go", undefined]]);
 	});
+});
 
-	test("`a` starts the Console login even from the legacy entry", () => {
-		const view = card("opencode-go");
-		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
-
-		view.component.handleInput("a");
-
-		expect(view.added).toEqual([["opencode-go", undefined]]);
+describe("an OpenCode Go API-key login lands under its provider ID", () => {
+	beforeEach(async () => {
+		vi.restoreAllMocks();
+		const storage = authStorage;
+		if (!storage) throw new Error("no auth storage");
+		// Health probing is an HTTP call per credential and has nothing to do with this contract.
+		vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
+		// The API-key login needs no network request in this contract.
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("this suite reaches no network"));
+		await storage.set("opencode-go", []);
+		// A populated provider that sorts ahead of OpenCode Go proves the card reopens on Go.
+		await storage.set("anthropic", [{ type: "api_key", key: "sk-other-provider" }]);
 	});
 
-	test("the list wraps through both add entries in each direction", () => {
-		const view = card("opencode-go", [account("opencode-go", 1, "first")]);
-		expect(view.cursorLine()).toContain("first");
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
-		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toBe("› + add another OpenCode Go account");
-		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
-		view.component.handleInput(DOWN);
-		expect(view.cursorLine()).toContain("first");
+	test("a provider login stores the key and opens its card", async () => {
+		const h = controllerHarness();
 
-		view.component.handleInput(UP);
-		expect(view.cursorLine()).toBe("› + add with API key (legacy)");
-		view.component.handleInput(ENTER);
-		expect(view.added).toEqual([["opencode-go", "opencode-go-api-key"]]);
-		expect(view.used).toEqual([]);
+		const running = h.controller.showLogin("opencode-go");
+		const prompt = await keyPrompt(h);
+		expect(prompt).toContain("Login to OpenCode Go ");
+		expect(prompt).not.toContain("Api Key");
+		await pasteKey(h, "sk-opencode-one");
+		await running;
+
+		expect(h.errors).toEqual([]);
+		expect(h.statuses).toContain("Logging in to OpenCode Go…");
+		expect(h.presented.join("\n")).toContain("Successfully logged in to OpenCode Go");
+		expect(storedKeys(h.storage, "opencode-go").map(row => row.key)).toEqual(["sk-opencode-one"]);
+		expect(h.cards).toHaveLength(1);
+		expect(text(cardAt(h, 0))).toContain("OpenCode Go · 1 account");
+	});
+
+	test("a second provider login can name its saved key", async () => {
+		const h = controllerHarness();
+		await h.storage.set("opencode-go", [{ type: "api_key", key: "sk-opencode-one" }]);
+
+		const running = h.controller.showLogin("opencode-go");
+		await pasteKey(h, "sk-opencode-two");
+		await until(() => text(h.dialog()).includes("Name this OpenCode Go account (optional)"), "the name prompt");
+		h.dialog().pasteText("spare key");
+		h.dialog().handleInput(ENTER);
+		await running;
+
+		const second = storedKeys(h.storage, "opencode-go").find(row => row.key === "sk-opencode-two");
+		expect(second).toBeDefined();
+		expect(h.storage.getAccountName("opencode-go", second?.id ?? -1)).toBe("spare key");
+		expect(h.presented.join("\n")).toContain('Named "spare key"');
+	});
+
+	test("the provider card starts its default key login and returns to that card", async () => {
+		const h = controllerHarness();
+		await h.controller.showAccountManager("opencode-go");
+		const opened = cardAt(h, 0);
+
+		opened.handleInput(ENTER);
+		await pasteKey(h, "sk-from-card");
+		await until(() => h.cards.length === 2, "the card to reopen");
+
+		expect(h.errors).toEqual([]);
+		expect(storedKeys(h.storage, "opencode-go").map(row => row.key)).toEqual(["sk-from-card"]);
+		expect(text(cardAt(h, 1))).toContain("OpenCode Go · 1 account");
 	});
 });
 
@@ -352,74 +382,3 @@ function storedKeys(storage: AuthStorage, provider: string): Array<{ id: number;
 		.flatMap(row => (row.credential.type === "api_key" ? [{ id: row.id, key: row.credential.key }] : []));
 }
 
-describe("an alternate login lands its account on the provider it stores under", () => {
-	beforeEach(async () => {
-		vi.restoreAllMocks();
-		const storage = authStorage;
-		if (!storage) throw new Error("no auth storage");
-		// Health probing is an HTTP call per credential and has nothing to do with this contract.
-		vi.spyOn(storage, "checkCredentials").mockResolvedValue([]);
-		// The API-key login reaches no network. A route to the Console login would, and fails here
-		// instead of sending a device-code request from a test.
-		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("this suite reaches no network"));
-		await storage.set("opencode-go", []);
-		// A populated provider that sorts ahead of OpenCode Go. A card opened on an id with no entry
-		// falls back to the first populated provider, which without this would be OpenCode Go itself.
-		await storage.set("anthropic", [{ type: "api_key", key: "sk-other-provider" }]);
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
-	test("/login opencode-go-api-key is labelled OpenCode Go, stores there, and opens its card", async () => {
-		const h = controllerHarness();
-
-		const running = h.controller.showLogin("opencode-go-api-key");
-		const prompt = await keyPrompt(h);
-		expect(prompt).toContain("Login to OpenCode Go ");
-		expect(prompt).not.toContain("Api Key");
-		await pasteKey(h, "sk-legacy-one");
-		await running;
-
-		expect(h.errors).toEqual([]);
-		expect(h.statuses).toContain("Logging in to OpenCode Go…");
-		expect(h.presented.join("\n")).toContain("Successfully logged in to OpenCode Go");
-		expect(storedKeys(h.storage, "opencode-go").map(row => row.key)).toEqual(["sk-legacy-one"]);
-		expect(h.storage.listStoredCredentials("opencode-go-api-key")).toEqual([]);
-		expect(h.cards).toHaveLength(1);
-		expect(text(cardAt(h, 0))).toContain("OpenCode Go · 1 account");
-	});
-
-	test("a second key is offered a name, and the name lands on the row the login wrote", async () => {
-		const h = controllerHarness();
-		await h.storage.set("opencode-go", [{ type: "api_key", key: "sk-legacy-one" }]);
-
-		const running = h.controller.showLogin("opencode-go-api-key");
-		await pasteKey(h, "sk-legacy-two");
-		await until(() => text(h.dialog()).includes("Name this OpenCode Go account (optional)"), "the name prompt");
-		h.dialog().pasteText("spare key");
-		h.dialog().handleInput(ENTER);
-		await running;
-
-		const second = storedKeys(h.storage, "opencode-go").find(row => row.key === "sk-legacy-two");
-		expect(second).toBeDefined();
-		expect(h.storage.getAccountName("opencode-go", second?.id ?? -1)).toBe("spare key");
-		expect(h.presented.join("\n")).toContain('Named "spare key"');
-	});
-
-	test("the card's legacy entry runs the API-key login and returns to the OpenCode Go card", async () => {
-		const h = controllerHarness();
-		await h.controller.showAccountManager("opencode-go");
-		const opened = cardAt(h, 0);
-
-		opened.handleInput(DOWN);
-		opened.handleInput(ENTER);
-		await pasteKey(h, "sk-from-card");
-		await until(() => h.cards.length === 2, "the card to reopen");
-
-		expect(h.errors).toEqual([]);
-		expect(storedKeys(h.storage, "opencode-go").map(row => row.key)).toEqual(["sk-from-card"]);
-		expect(text(cardAt(h, 1))).toContain("OpenCode Go · 1 account");
-	});
-});

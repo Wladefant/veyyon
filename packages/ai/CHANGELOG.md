@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode Go uses its API-key login under `opencode-go` again, and the Console device-flow login is removed.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
@@ -181,17 +185,12 @@
 - A provider request that fails with an error the registry does not classify as transient (a host that does not resolve, a certificate that does not verify) is no longer redialed by the shared provider fetch.
 - An Anthropic connection failure reports the underlying error (`ECONNREFUSED: Unable to connect…`, `getaddrinfo ENOTFOUND …`) instead of `Connection error.`, and a host that does not resolve is no longer retried by the Anthropic stream and the turn.
 - A GitLab Duo turn whose host cannot be reached reports the connection error and is retried by the turn, instead of failing with a request to set `GITLAB_DUO_NAMESPACE_ID`.
-- A cancelled Cursor, GitHub Copilot, OpenAI Codex device, Kilo, Kimi, xAI, Perplexity, Nous Research or OpenCode login stops its pending request or poll wait, sends no further request and stores no approval that arrives after the cancel, instead of waiting out the poll interval or a hung request.
 
 ## [1.5.10] - 2026-10-25
 
 ### Changed
 
-- `/login opencode-go` signs in with an OpenCode Console account through its device flow and sends requests to the Go inference endpoint of the organization that holds the subscription, with the organization id in `x-opencode-org-id`; an OpenCode Go API key is the legacy `opencode-go-api-key` login.
-- The OpenCode Go usage ledger reports spend for a Console login as it does for an API key.
-- The OpenCode Console device flow loads when an OpenCode Go login or token refresh first runs instead of at startup, with no user-visible change.
 - A provider login that stores under another provider states its `loginMethod` ("API key", "device code"), which `getOAuthProviders()` returns beside its name.
-- The OpenCode Console login asks for its code in one line, `Enter code X if the page asks for it.`, and an OpenCode Go login that finds no Go subscription names `/login opencode-go-api-key` for the API key instead.
 - The HTML page title quoted by the non-event-stream error is flattened through the shared `collapseWhitespace` helper; no user-facing change.
 
 ### Fixed

@@ -69,8 +69,8 @@ profiles and sessions on this machine.
 
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. A
-provider with a second way to sign in lists it beneath, as `+ add with <method>`: OpenCode Go offers
-`+ add with API key (legacy)`, Nous Research `+ add with API key`, and ChatGPT `+ add with device code`.
+provider with a second way to sign in lists it beneath, as `+ add with <method>`: Nous Research offers
+`+ add with API key`, and ChatGPT offers `+ add with device code`.
 Each stores the account under the same provider. `a` always starts the provider's default login.
 The mouse works on the card as well. Click an account to select it, click an add row to start that
 login, and click any key chip in the footer to run what it names.

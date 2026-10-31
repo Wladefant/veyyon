@@ -137,7 +137,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `aimlapi` | `AIMLAPI_API_KEY` |
 | `gitlab-duo` | `GITLAB_TOKEN` |
 | `opencode-zen` | `OPENCODE_API_KEY` |
-| `opencode-go` | `OPENCODE_API_KEY` (an API key; prefer `/login opencode-go`) |
+| `opencode-go` | `OPENCODE_API_KEY` (OpenCode Go API key; prefer `/login opencode-go`) |
 | `firepass` | `FIREPASS_API_KEY` |
 | `wafer-serverless` | `WAFER_SERVERLESS_API_KEY` |
 | `xiaomi` | `XIAOMI_API_KEY` |
@@ -151,7 +151,7 @@ OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-
 
 Command Code uses `https://api.commandcode.ai/provider/v1`, defaults to `claude-sonnet-4-6`, and issues keys at [Command Code Provider](https://commandcode.ai/studio/provider). Its `/models` endpoint answers without a key, so the bundled catalog includes every model it serves; prices, reasoning efforts and output ceilings come from the deployment contract, because the endpoint publishes none of them. Nous Research uses `https://inference-api.nousresearch.com/v1` and defaults to the tool-capable `anthropic/claude-sonnet-4.6`; authenticated discovery adds the current tool-capable chat catalog and excludes embedding, media-generation, and non-tool rows. Nous accepts either sign-in: `/login nous-research` runs the Portal device flow, and `/login nous-research-api-key` takes a key pasted from the Portal. Both store one credential under `nous-research`, so the model list and the account card show a single Nous account either way.
 
-OpenCode Go accepts either sign-in. `/login opencode-go` runs the OpenCode Console device flow and uses the organization chosen on the consent page or, when none is chosen, the first organization by name whose Console configuration includes a Go subscription. `/login opencode-go-api-key`, or `+ add with API key (legacy)` on the OpenCode Go account card, takes an OpenCode Go API key and is the legacy entry. Both store one credential under `opencode-go`. A Console login sends requests to the inference endpoint the Console states for that organization, with the organization id in the `x-opencode-org-id` header. An API key, including `OPENCODE_API_KEY`, is sent to `https://opencode.ai/zen/go`. Model discovery reads the public Go listing and sends no Console token.
+OpenCode Go uses its API key for both `/login opencode-go` and `OPENCODE_API_KEY`. Login stores the key under `opencode-go`, and requests go to `https://opencode.ai/zen/go`.
 
 ### `.env` discovery and precedence
 

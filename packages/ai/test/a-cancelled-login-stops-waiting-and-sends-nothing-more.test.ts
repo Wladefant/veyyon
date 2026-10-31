@@ -87,7 +87,6 @@ const FIXTURES: Readonly<Record<string, LoginFixture>> = {
 		pending: { status: 403 },
 		approved: { status: 200, body: { authorization_code: "code-1", code_verifier: "verifier-1" } },
 	},
-	"opencode-go": { waits: "poll", pending: RFC_PENDING, approved: RFC_APPROVED },
 	perplexity: { waits: "prompts", prompts: ["user@example.com", "123456"] },
 	"xai-oauth": { waits: "poll", pending: RFC_PENDING, approved: RFC_APPROVED },
 };
