@@ -602,3 +602,7 @@ From `settings-schema.ts`:
 
 These values are consumed at runtime by `AgentSession` and compaction/branch summarization modules.
 
+
+### Stale-result recovery
+
+The per-turn stale-read and useless-result pass uses the same staged archive-before-commit path as threshold pruning. Its recovery envelope has operation `prune-stale`; each retained marker names the archive and original entry. A later read of a path does not make the earlier bytes disposable evidence. Archive or transcript failures keep the original result available, and reported savings include the recovery-reference cost.
