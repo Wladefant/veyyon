@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ### Fixed
 

@@ -284,6 +284,12 @@ export class HistoryRewrites {
 	 */
 	async offloadAndApply(regions: ShakeRegion[]): Promise<ElisionOutcome> {
 		const artifactId = await this.#saveArtifact(regions);
+		// Never mutate or persist elided messages without an addressable copy of
+		// their exact originals. Keeping the bytes in context is preferable to an
+		// apparently successful reduction that cannot be recovered after restart.
+		if (!artifactId) {
+			throw new Error("Cannot elide session history: recovery artifact was not saved");
+		}
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;
 		let originalTokens = 0;
@@ -438,7 +444,7 @@ export class HistoryRewrites {
 	/**
 	 * Concatenate the regions' original contents into one session artifact, readable as
 	 * `artifact://<id>`. `undefined` when the session is not persisted or the write fails; the
-	 * placeholders then link nothing.
+	 * callers must refuse to replace the originals when no artifact id is returned.
 	 */
 	async #saveArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
 		const parts: string[] = [];
