@@ -11,7 +11,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCustomApis, type FetchImpl, type Model } from "@veyyon/ai";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { unregisterOAuthProviders } from "@veyyon/ai/oauth";
 import { buildModel } from "@veyyon/catalog/build";
 import {

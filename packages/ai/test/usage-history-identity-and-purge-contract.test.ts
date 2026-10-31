@@ -16,8 +16,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildUsageCacheIdentity, buildUsageHistoryAccountKey } from "@veyyon/ai/auth-storage/usage-requests";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import type { UsageCredential } from "@veyyon/ai/usage";
 
 const cleanups: Array<() => void> = [];

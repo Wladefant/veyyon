@@ -482,8 +482,8 @@ export class CompactionRuntime {
 	 * over-budget tool-result bulk in the kept tail with markers on the live
 	 * branch; this offloads the originals to one recovery artifact, points the
 	 * markers at it, and rewrites the session file so the bounded tail — not
-	 * the pre-elision bulk — is what a resume rebuilds. A failed offload still
-	 * rewrites: the elision is the bound, the artifact is only the pointer.
+	 * the pre-elision bulk — is what a resume rebuilds. If saving the recovery
+	 * copy fails, compaction must abort before it records a successful boundary.
 	 */
 	async #persistCompactionTailElisions(preparation: CompactionPreparation): Promise<void> {
 		const elisions = preparation.tailElisions ?? [];
@@ -500,6 +500,12 @@ export class CompactionRuntime {
 				elisionCount: elisions.length,
 			});
 			artifactId = undefined;
+		}
+		// `prepareCompaction` has already replaced the live tail. Without a saved
+		// artifact, persisting those markers would irreversibly discard the originals.
+		// The caller catches this error and rolls all tail elisions back.
+		if (!artifactId) {
+			throw new Error("Cannot complete compaction: recovery artifact for the kept tail was not saved");
 		}
 		const updated: SessionEntry[] = [];
 		for (const elision of elisions) {
@@ -780,6 +786,10 @@ export class CompactionRuntime {
 		codexCompaction: CodexCompactionContext | undefined,
 	): Promise<CompactionEntry | undefined> {
 		assertValidCompactionResult(preparation, result);
+		// Archive-before-boundary: a missing tail artifact must not leave a newly
+		// committed compaction entry in session history. The caller can restore
+		// the original tail and report an unsuccessful compaction instead.
+		await this.#persistCompactionTailElisions(preparation);
 		const entryId = this.#session.sessionManager.appendCompaction(
 			result.summary,
 			result.shortSummary,
@@ -789,7 +799,6 @@ export class CompactionRuntime {
 			fromExtension,
 			result.preserveData,
 		);
-		await this.#persistCompactionTailElisions(preparation);
 		this.#session.sessionManager.coolCompactedHistory();
 		this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
 		await this.#pruneDiscoveredTools(this.#session.agent.state.messages);

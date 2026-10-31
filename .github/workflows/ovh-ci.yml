@@ -138,7 +138,7 @@ jobs:
       - name: TypeScript check
         id: types
         if: steps.selection.outputs.ts_changed == 'true'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
         run: |
@@ -404,7 +404,7 @@ jobs:
         uses: ./.github/actions/bun-install
       - name: Run TypeScript check
         id: check
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RAW_LOG: ${{ runner.temp }}/ovh-typecheck-raw.log
           KEYS_FILE: ${{ runner.temp }}/ovh-typecheck-keys.txt
