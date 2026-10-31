@@ -4,8 +4,9 @@ import { logger } from "@veyyon/utils";
 const ENTRY_TYPE = "terminal:operator-answer";
 const ANSWER_MARKER = /^\[operator-answer question=([^\s\]]{1,256}) event=[^\s\]]{1,256}\](?:\s|$)/;
 type DeliveryMode = "auto" | "steer" | "followUp";
-// In-process FIFO across inbox instances that reference the same session journal.
-const journalOperationChains = new WeakMap<SessionManager, Promise<void>>();
+// In-process FIFO by durable session identity: reconnect may reopen the same file with a different manager.
+// Idle chains are removed; this is not a cross-process lease.
+const journalOperationChains = new Map<string, Promise<void>>();
 interface PendingAnswer {
 	version: 1;
 	sessionId: string;
@@ -79,9 +80,14 @@ export class OperatorAnswerInbox {
 			const journal = this.#journal();
 			// Reconnect can replace an inbox while the old instance is still accepting a sender retry.
 			// Serialize both instances against their shared durable journal, not only each inbox's chain.
-			const previous = journalOperationChains.get(journal) ?? Promise.resolve();
+			const sessionId = journal.getSessionId();
+			const previous = journalOperationChains.get(sessionId) ?? Promise.resolve();
 			const queued = previous.then(() => operation(journal));
-			journalOperationChains.set(journal, queued.then(() => {}, () => {}));
+			const settled = queued.then(() => {}, () => {});
+			journalOperationChains.set(sessionId, settled);
+			void settled.then(() => {
+				if (journalOperationChains.get(sessionId) === settled) journalOperationChains.delete(sessionId);
+			});
 			return queued;
 		});
 		this.#chain = run.then(() => {}, () => {});
@@ -113,7 +119,9 @@ export class OperatorAnswerInbox {
 			// runtime taking the message and journaling it is a window of milliseconds against a retry's seconds.
 			// A replacement inbox may receive the sender's retry before recover() inspects a still-queued
 			// answer. The durable pending record, not only this instance's mark, requires checking the queue.
-			if (!consumed.has(questionId) && (pending.has(questionId) || this.#queued.has(key))) {
+			// Another manager can have queued the answer after this manager loaded a stale snapshot.
+			// Check the shared runtime queue even when no local pending record was observed.
+			if (!consumed.has(questionId)) {
 				if (this.#isQueued(questionId)) this.#queued.add(key);
 				else this.#queued.delete(key);
 			}

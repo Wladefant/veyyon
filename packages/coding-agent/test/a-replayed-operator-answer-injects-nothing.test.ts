@@ -386,3 +386,43 @@ test("a failed first concurrent injection permits exactly one later pending-answ
 	expect(queue).toEqual([original]);
 	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
 });
+
+test("concurrent reconnect managers share one pending answer and preserve it after a cleared queue", async () => {
+	const { manager, dir } = newSession();
+	manager.appendMessage({ role: "user", content: "session seed", timestamp: Date.now() });
+	await manager.ensureOnDisk();
+	await manager.flush();
+	const file = manager.getSessionFile();
+	expect(file).toBeString();
+
+	// Both managers load the same disk state before either accepts a sender delivery.
+	const firstManager = await SessionManager.open(file as string, dir.path());
+	const secondManager = await SessionManager.open(file as string, dir.path());
+	expect(firstManager).not.toBe(secondManager);
+	expect(firstManager.getSessionId()).toBe(secondManager.getSessionId());
+	const queue: string[] = [];
+	const original = envelope("q-reopened-race", "evt-original");
+	const first = new OperatorAnswerInbox(() => firstManager, queueingInto(queue), waiting(queue));
+	const second = new OperatorAnswerInbox(() => secondManager, queueingInto(queue), waiting(queue));
+	const results = await Promise.all([
+		first.accept(original, "followUp"),
+		second.accept(envelope("q-reopened-race", "evt-replay"), "followUp"),
+	]);
+	expect([...results].sort()).toEqual(["duplicate", "queued"]);
+	expect(queue).toEqual([original]);
+
+	const persisted = await SessionManager.open(file as string, dir.path());
+	const pending = persisted.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer");
+	expect(pending).toHaveLength(1);
+	expect(JSON.stringify(pending[0])).toContain("evt-original");
+
+	// A cleared, unconsumed answer must be retryable from the durable original, not the new envelope.
+	queue.length = 0;
+	const retryManager = await SessionManager.open(file as string, dir.path());
+	const retry = new OperatorAnswerInbox(() => retryManager, queueingInto(queue), waiting(queue));
+	expect(await retry.accept(envelope("q-reopened-race", "evt-later"), "followUp")).toBe("queued");
+	expect(queue).toEqual([original]);
+	await retryManager.flush();
+	const afterRetry = await SessionManager.open(file as string, dir.path());
+	expect(afterRetry.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});
