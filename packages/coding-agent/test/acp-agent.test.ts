@@ -1375,6 +1375,12 @@ describe("ACP agent", () => {
 			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
 		);
 		const firstId = getChunkMessageId(chunks[0]!);
+		expect(
+			chunks
+				.filter(chunk => getChunkMessageId(chunk) === firstId)
+				.map(chunk => (chunk.update.content.type === "text" ? chunk.update.content.text : ""))
+				.join(""),
+		).toBe("T3_LEADING_CHAR_TRACE_OK");
 		expect(chunks.filter(chunk => getChunkMessageId(chunk) === firstId).map(chunk => chunk.update.content)).toEqual([
 			{ type: "text", text: "T" },
 			{ type: "text", text: "3_LEADING_CHAR_TRACE_OK" },
