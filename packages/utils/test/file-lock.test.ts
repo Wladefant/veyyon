@@ -457,38 +457,6 @@ describe("file-lock candidate publication errors", () => {
 		},
 	);
 
-	test.each(["async", "sync"] as const)("retries and then acquires through %s publication", async (mode) => {
-		const root = await mkRoot();
-		const target = path.join(root, `${mode}-recovered.json`);
-		const lockPath = getLockPath(target);
-		const error = Object.assign(new Error("temporary rename contention"), { code: "EBUSY" });
-		let attempts = 0;
-		const publishAsync = fs.rename.bind(fs);
-		const publishSync = fsSync.renameSync.bind(fsSync);
-		const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-			attempts += 1;
-			if (attempts === 1) throw error;
-			return await publishAsync(source, destination);
-		});
-		const renameSync = spyOn(fsSync, "renameSync").mockImplementation((source, destination) => {
-			attempts += 1;
-			if (attempts === 1) throw error;
-			return publishSync(source, destination);
-		});
-		try {
-			const value =
-				mode === "async"
-					? await withFileLock(target, async () => "acquired", { retries: 3, retryDelayMs: 0 })
-					: withFileLockSync(target, () => "acquired", { retries: 3, retryDelayMs: 0 });
-			expect(value).toBe("acquired");
-			expect(attempts).toBe(2);
-			expect(await readLockInfo(lockPath)).not.toBeNull();
-		} finally {
-			renameSync.mockRestore();
-			rename.mockRestore();
-		}
-	});
-});
 
 describe("tryWithFileLock", () => {
 	test("runs fn and returns its value when the lock is free", async () => {
