@@ -16,6 +16,7 @@ const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+const DUPLICATE_ID_DETAIL = "Duplicate stored entry ID makes branch identity and exact evidence ambiguous";
 
 function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
 	try {
@@ -243,6 +244,12 @@ export async function readStoredHistoryEntry(
 				incomplete = true;
 				continue;
 			}
+			if (parents.has(entry.id)) {
+				return {
+					status: "unavailable", entryId: request.entryId, sessionId, source: "stored-jsonl",
+					detail: DUPLICATE_ID_DETAIL,
+				};
+			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
 				incomplete = true;
 				break;
@@ -410,6 +417,12 @@ export async function searchStoredHistoryEntries(
 				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
 				unreadable = true;
 				continue;
+			}
+			if (parents.has(entry.id)) {
+				return {
+					status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
+					matches: [], detail: DUPLICATE_ID_DETAIL,
+				};
 			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
 				unreadable = true;
