@@ -128,7 +128,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				if (searchRequest && searchRequest.leafId === undefined) searchRequest.leafId = selectedLeaf;
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
-			if (!sessionFile) {
+			if (!sessionFile && !ref?.session) {
 				const disk = await sessionFilesFromDisk();
 				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];
@@ -142,7 +142,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
 			}
 			if (ref?.session) {
-				const branch = ref.session.sessionManager.getBranch();
+				const requestedLeaf = exactRequest ? exactRequest.leafId : searchRequest!.leafId;
+				const branch = requestedLeaf === null ? [] : ref.session.sessionManager.getBranch(requestedLeaf);
 				const result = exactRequest
 					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
 					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());

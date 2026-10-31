@@ -8,6 +8,8 @@
 - `read` honors `artifact://<id>?view=metadata` and rejects unknown or duplicate views instead of returning artifact bytes ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Exact history pages require a matching branch and record revision across continuations, honor the active branch, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.6.8] - 2026-10-30
 
