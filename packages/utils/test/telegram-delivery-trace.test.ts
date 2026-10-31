@@ -7,14 +7,13 @@ import {
 	getTelegramTrace,
 	getTelegramTraceSessionId,
 	logTelegramDeliveryTrace,
+	normalizeDeliveryOutcome,
 	parseTelegramTrace,
 	type TelegramDeliveryTraceData,
 	transferTelegramTrace,
-	normalizeDeliveryOutcome,
 } from "../src/telegram-delivery-trace";
 
 describe("telegram-delivery-trace", () => {
-
 	it("preserves duplicate as a successful delivery outcome and fails closed for unknown outcomes", () => {
 		expect(normalizeDeliveryOutcome("duplicate")).toBe("duplicate");
 		expect(normalizeDeliveryOutcome("unrecognized")).toBe("failed");

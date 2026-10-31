@@ -16,13 +16,7 @@ export type TelegramDeliveryTraceStage =
 	| "provider_call_start"
 	| "delivery_outcome";
 
-export type TelegramDeliveryOutcome =
-	| "started"
-	| "steered"
-	| "queued"
-	| "failed"
-	| "rejected"
-	| "duplicate";
+export type TelegramDeliveryOutcome = "started" | "steered" | "queued" | "failed" | "rejected" | "duplicate";
 
 export function normalizeDeliveryOutcome(outcome: unknown): TelegramDeliveryOutcome {
 	if (
