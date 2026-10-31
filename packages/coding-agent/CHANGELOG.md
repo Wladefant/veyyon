@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Added `--mcp-config` to load explicit run-only MCP connectors in direct and ACP sessions without rewriting a profile; server-name collisions and connector setup failures stop activation ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+- Fixed run-only MCP config validation to accept shared server options across stdio, HTTP and SSE while rejecting unknown keys ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
 ## [1.6.8] - 2026-10-30
 

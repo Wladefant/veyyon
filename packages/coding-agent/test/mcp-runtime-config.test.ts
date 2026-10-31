@@ -15,21 +15,52 @@ test("run-only MCP files preserve native configuration and do not rewrite their 
 	const file = path.join(dir, "mcp.json");
 	const original = JSON.stringify({
 		mcpServers: {
-			fleet: { type: "stdio", command: process.execPath, args: ["connector.ts"], env: { FLEET_HOST: "pc1" } },
+			fleet: {
+				type: "stdio",
+				command: process.execPath,
+				args: ["connector.ts"],
+				env: { FLEET_HOST: "pc1" },
+				enabled: true,
+				timeout: 2500,
+				auth: { type: "apikey" },
+				oauth: { clientId: "fleet-client" },
+				events: { enabled: true, subscriptions: [{ name: "changed", mode: "poll" }] },
+			},
 			disabled: { type: "stdio", command: "unused", enabled: false },
+			http: {
+				type: "http",
+				url: "https://example.test/mcp",
+				enabled: true,
+				timeout: 2500,
+				auth: { type: "apikey" },
+				oauth: { clientId: "http-client" },
+				events: { enabled: true, subscriptions: [{ name: "changed", mode: "poll" }] },
+			},
+			sse: {
+				type: "sse",
+				url: "https://example.test/events",
+				enabled: true,
+				timeout: 2500,
+				auth: { type: "apikey" },
+				oauth: { clientId: "sse-client" },
+				events: { enabled: true, subscriptions: [{ name: "changed", mode: "poll" }] },
+			},
 		},
 	});
 	try {
 		await fs.writeFile(file, original);
 		const loaded = await loadRuntimeMCPConfig(file);
 		expect(loaded.path).toBe(file);
-		expect(Object.keys(loaded.configs)).toEqual(["fleet"]);
-		expect(loaded.configs.fleet).toEqual(JSON.parse(original).mcpServers.fleet);
+		expect(Object.keys(loaded.configs)).toEqual(["fleet", "http", "sse"]);
+		const nativeServers = JSON.parse(original).mcpServers;
+		expect(loaded.configs.fleet).toEqual(nativeServers.fleet);
+		expect(loaded.configs.http).toEqual(nativeServers.http);
+		expect(loaded.configs.sse).toEqual(nativeServers.sse);
 		expect(await fs.readFile(file, "utf8")).toBe(original);
 		expect(await fs.readdir(dir)).toEqual(["mcp.json"]);
 		const existing = { other: { type: "stdio" as const, command: "existing" } };
 		const merged = mergeRuntimeMCPConfig(existing, {}, loaded);
-		expect(Object.keys(merged.configs)).toEqual(["other", "fleet"]);
+		expect(Object.keys(merged.configs)).toEqual(["other", "fleet", "http", "sse"]);
 		expect(Object.keys(existing)).toEqual(["other"]);
 		expect(merged.sources.fleet.path).toBe(file);
 		expect(() => mergeRuntimeMCPConfig({ fleet: existing.other }, {}, loaded)).toThrow("conflicts");
@@ -50,6 +81,9 @@ test("invalid, ambiguous, missing and oversized explicit MCP input cannot silent
 			"{}",
 			JSON.stringify({ mcpServers: { fleet: { type: "stdio", command: "valid", args: [42] } } }),
 			JSON.stringify({ mcpServers: { fleet: { type: "stdio", command: "valid", url: "https://example.test" } } }),
+			JSON.stringify({ mcpServers: { fleet: { type: "stdio", command: "valid", unknownOption: true } } }),
+			JSON.stringify({ mcpServers: { fleet: { type: "http", url: "https://example.test/mcp", unknownOption: true } } }),
+			JSON.stringify({ mcpServers: { fleet: { type: "sse", url: "https://example.test/events", unknownOption: true } } }),
 			JSON.stringify({ mcpServers: {}, disabledServers: [] }),
 			"x".repeat(MAX_RUNTIME_MCP_CONFIG_BYTES + 1),
 		]) {
