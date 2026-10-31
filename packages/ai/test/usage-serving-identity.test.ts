@@ -8,7 +8,8 @@ import {
 	seedApiKeyResolver,
 	unregisterCustomApis,
 } from "@veyyon/ai";
-import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "@veyyon/ai/registry/oauth/types";
 import { streamSimple } from "@veyyon/ai/stream";

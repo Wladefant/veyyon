@@ -25,6 +25,7 @@ Execution blocks your turn: the call only returns once the work is completely fi
 - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
 {{/if}}
 {{/if}}
+- `successorOf` (optional, per task): The predecessor agent ID from this parent's persisted session. Start a fresh lane with its durable results. Use the same task, shared context, agent contract and cwd. At most two successors may run per slice; the third fails with `successor-limit`. A checkpoint accepts only one successor claim. Claims remain consumed after a crash; do not retry completed work. Isolated and fileless-parent tasks do not support successors. This is explicit continuation, not automatic retry or external-action replay protection.
 
 # Context and Communication
 Spawned agents start blank. They have no access to your conversation history.

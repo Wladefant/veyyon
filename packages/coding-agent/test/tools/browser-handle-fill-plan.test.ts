@@ -1,14 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { toActionableHandle } from "@veyyon/coding-agent/tools/web/browser/tab-worker";
+import { fillViaHandle } from "@veyyon/coding-agent/tools/web/browser/fill";
 import type { ElementHandle } from "puppeteer-core";
 
 /**
  * WHY. `fill()` on an element handle decides in the page whether to select-and-insert, assign a
  * value (date, time, colour, range), or refuse, then does at most one trusted text insertion. A
  * wrong decision types a value into another field, silently keeps a stale value, or edits an element
- * `fill` must refuse. These suites drive the real decision (`planFill`, reached through
- * `toActionableHandle(...).fill`) against a stub element and a stub page keyboard, so they run with no
- * Chromium. The real-browser behaviour (React's value tracker, real focus) lives in
+ * `fill` must refuse. These suites drive the real `fillViaHandle` decision against a stub element
+ * and a stub page keyboard, so they run with no Chromium. They do not exercise handle enrichment,
+ * run deadlines or Chromium's date-field typing. The real-browser behaviour lives in
  * `a-fill-replaces-a-value-with-one-real-edit.test.ts`, which needs a launchable Chromium.
  */
 
@@ -36,6 +36,7 @@ function makeFixture(options: StubOptions) {
 	let active: unknown = null;
 	const element: Record<string, unknown> = {
 		tagName: options.tag.toUpperCase(),
+		isConnected: true,
 		type: options.type,
 		disabled: options.disabled,
 		readOnly: options.readOnly,
@@ -88,6 +89,7 @@ function makeFixture(options: StubOptions) {
 		},
 	});
 	const handle = {
+		remoteObject: () => ({}),
 		evaluate: async (fn: (el: unknown, value: string) => unknown, value: string) => fn(element, value),
 		frame: {
 			page: () => ({
@@ -100,7 +102,12 @@ function makeFixture(options: StubOptions) {
 			}),
 		},
 	} as unknown as ElementHandle;
-	return { handle: toActionableHandle(handle), events, inserted, value: () => storedValue };
+	return {
+		fill: (value: string) => fillViaHandle(handle, value, undefined, null),
+		events,
+		inserted,
+		value: () => storedValue,
+	};
 }
 
 describe("handle fill — text fields get one selected-contents insertion", () => {
@@ -112,7 +119,7 @@ describe("handle fill — text fields get one selected-contents insertion", () =
 	]) {
 		it(`<${options.tag}${options.type ? ` type=${options.type}` : ""}> is focused, selected, then filled by one insertion`, async () => {
 			const fixture = makeFixture({ ...options, value: "old" });
-			await fixture.handle.fill("fresh");
+			await fixture.fill("fresh");
 			expect(fixture.events).toEqual(["focus", "select", "insert"]);
 			expect(fixture.inserted).toEqual(["fresh"]);
 		});
@@ -120,19 +127,19 @@ describe("handle fill — text fields get one selected-contents insertion", () =
 
 	it("an empty value is still the one insertion: it deletes the selected contents", async () => {
 		const fixture = makeFixture({ tag: "input", value: "old" });
-		await fixture.handle.fill("");
+		await fixture.fill("");
 		expect(fixture.inserted).toEqual([""]);
 	});
 
 	it("an element that does not take focus is refused, so nothing is typed into another field", async () => {
 		const fixture = makeFixture({ tag: "input", takesFocus: false });
-		await expect(fixture.handle.fill("x")).rejects.toThrow(/fill: the <input> cannot take focus/);
+		await expect(fixture.fill("x")).rejects.toThrow(/fill: the <input> cannot take focus/);
 		expect(fixture.inserted).toEqual([]);
 	});
 
 	it("a textarea that does not take focus is refused", async () => {
 		const fixture = makeFixture({ tag: "textarea", takesFocus: false });
-		await expect(fixture.handle.fill("x")).rejects.toThrow(/cannot take focus/);
+		await expect(fixture.fill("x")).rejects.toThrow(/cannot take focus/);
 		expect(fixture.inserted).toEqual([]);
 	});
 });
@@ -140,7 +147,7 @@ describe("handle fill — text fields get one selected-contents insertion", () =
 describe("handle fill — value-assigned inputs are set, with the events a user edit fires", () => {
 	it("assigns a date, then fires input and change, and types nothing", async () => {
 		const fixture = makeFixture({ tag: "input", type: "date", value: "2020-01-01" });
-		await fixture.handle.fill("2026-10-01");
+		await fixture.fill("2026-10-01");
 		expect(fixture.value()).toBe("2026-10-01");
 		expect(fixture.events).toEqual(["focus", "event:input", "event:change"]);
 		expect(fixture.inserted).toEqual([]);
@@ -148,7 +155,7 @@ describe("handle fill — value-assigned inputs are set, with the events a user 
 
 	it("an empty value clears a date input (a deletion) through the same set path", async () => {
 		const fixture = makeFixture({ tag: "input", type: "date", value: "2020-01-01" });
-		await fixture.handle.fill("");
+		await fixture.fill("");
 		expect(fixture.value()).toBe("");
 		expect(fixture.events).toEqual(["focus", "event:input", "event:change"]);
 	});
@@ -160,7 +167,7 @@ describe("handle fill — value-assigned inputs are set, with the events a user 
 			value: "2020-01-01",
 			accepts: value => /^\d{4}-\d{2}-\d{2}$/.test(value),
 		});
-		await expect(fixture.handle.fill("tomorrow")).rejects.toThrow(/not a value an <input type="date"> holds/);
+		await expect(fixture.fill("tomorrow")).rejects.toThrow(/not a value an <input type="date"> holds/);
 		expect(fixture.value()).toBe("2020-01-01");
 		expect(fixture.events).not.toContain("event:input");
 		expect(fixture.inserted).toEqual([]);
@@ -183,7 +190,7 @@ describe("handle fill — elements fill refuses, naming what to use", () => {
 	for (const [name, options, message] of refusals) {
 		it(`${name} is refused and nothing is typed`, async () => {
 			const fixture = makeFixture(options);
-			await expect(fixture.handle.fill("x")).rejects.toThrow(message);
+			await expect(fixture.fill("x")).rejects.toThrow(message);
 			expect(fixture.inserted).toEqual([]);
 			expect(fixture.events).not.toContain("insert");
 		});
@@ -193,26 +200,26 @@ describe("handle fill — elements fill refuses, naming what to use", () => {
 describe("handle fill — contenteditable", () => {
 	it("selects the element's contents and replaces them with one insertion", async () => {
 		const fixture = makeFixture({ tag: "div", isContentEditable: true });
-		await fixture.handle.fill("fresh");
+		await fixture.fill("fresh");
 		expect(fixture.events).toEqual(["focus", "range", "clearSelection", "addRange", "insert"]);
 		expect(fixture.inserted).toEqual(["fresh"]);
 	});
 
 	it("an empty value deletes the selected contents with one empty insertion", async () => {
 		const fixture = makeFixture({ tag: "div", isContentEditable: true });
-		await fixture.handle.fill("");
+		await fixture.fill("");
 		expect(fixture.inserted).toEqual([""]);
 	});
 
 	it("is refused when no editing host took the selection's focus", async () => {
 		const fixture = makeFixture({ tag: "div", isContentEditable: true, takesFocus: false });
-		await expect(fixture.handle.fill("x")).rejects.toThrow(/cannot take focus/);
+		await expect(fixture.fill("x")).rejects.toThrow(/cannot take focus/);
 		expect(fixture.inserted).toEqual([]);
 	});
 
 	it("is refused when the focused editing host does not contain the element", async () => {
 		const fixture = makeFixture({ tag: "div", isContentEditable: true, editingHostContains: false });
-		await expect(fixture.handle.fill("x")).rejects.toThrow(/cannot take focus/);
+		await expect(fixture.fill("x")).rejects.toThrow(/cannot take focus/);
 		expect(fixture.inserted).toEqual([]);
 	});
 });
