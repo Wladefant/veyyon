@@ -933,14 +933,19 @@ export class SessionManager {
 	 * a large transcript back to learn nothing is the single most expensive step
 	 * of a rewrite (246ms and 322MiB of a 253MiB session's 778ms and 1056MiB).
 	 */
-	async #refreshForeignLines(): Promise<void> {
+	async #refreshForeignLines(requireReadable = false): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#fileIsExactlyAsPublished()) return;
-		if (!(await this.#storage.exists(this.#sessionFile))) return;
+		if (requireReadable) {
+			const state = this.#storage.existsStateSync(this.#sessionFile);
+			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+			if (state !== "present") throw new Error("Cannot verify current session journal");
+		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
 		let text: string;
 		try {
 			text = await this.#storage.readText(this.#sessionFile);
 		} catch {
+			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
 		}
 		this.#adoptForeignLines(text);
@@ -2210,8 +2215,8 @@ export class SessionManager {
 	 * re-read is what tells the operator once that a second session is writing this
 	 * file.
 	 */
-	async holdsForeignEntries(): Promise<boolean> {
-		await this.#refreshForeignLines();
+	async holdsForeignEntries(options: { requireReadable?: boolean } = {}): Promise<boolean> {
+		await this.#refreshForeignLines(options.requireReadable === true);
 		return this.#foreignLines.length > 0;
 	}
 
