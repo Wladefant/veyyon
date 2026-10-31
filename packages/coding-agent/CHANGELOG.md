@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Signed-in operator browsing and ChatGPT now use the managed ego-browser skill. Browser app connections require `path` or `cdp_url` ([Refs #754](https://github.com/Wladefant/veyyon/issues/754)).
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
 ### Fixed

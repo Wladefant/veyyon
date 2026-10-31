@@ -56,7 +56,7 @@ Directories containing unrelated binaries without this installer's start marker 
 14. Retrieve the PC2 device bearer from Bitwarden US. Inject it as `VEYYON_DEVICE_BEARER` for the process, without printing it.
 15. Inject `HINDSIGHT_API_TOKEN`, `VEYYON_CHECKPOINT_TOKEN` and `VEYYON_CHECKPOINT_KEY` from Bitwarden US into the process environment.
 16. Set `VEYYON_CHECKPOINT_URL` to the existing approved HTTPS checkpoint endpoint.
-17. Authorize each MCP service using its own owner sign-in. Keep local paths, SSH definitions and browser-extension enrollment PC2-specific.
+17. Sign in to the managed ego browser on PC2 for the operator's signed-in accounts and all ChatGPT work. Follow the managed `ego-browser` skill setup; use API/MCP for integrations when available. Keep local paths and SSH definitions PC2-specific.
 18. Select the same original provider and model in Veyyon. Confirm missing device auth refuses before any provider call.
 19. Confirm both PCs recall the same existing memory through the selected Hindsight bank.
 20. Set `VEYYON_CHECKPOINT_NODE=pc1` on PC1. Stop its session, then run `veyyon session handoff <session-id> --file <stopped-session.jsonl> --to pc2`.
