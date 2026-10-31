@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ### Added
