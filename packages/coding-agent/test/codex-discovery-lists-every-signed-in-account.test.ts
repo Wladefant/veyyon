@@ -17,7 +17,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { buildModel } from "@veyyon/catalog/build";
 import { readModelCache, writeModelCache } from "@veyyon/catalog/model-cache";
-import { openaiCodexCacheProviderId } from "@veyyon/catalog/provider-models";
+import { openAICodexModelCacheProviderId } from "@veyyon/catalog/provider-models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
@@ -94,7 +94,7 @@ describe("Codex discovery lists every signed-in account", () => {
 	test("a launch reads the cached list of the signed-in account set and no other row", () => {
 		const cacheDbPath = path.join(dir, "models.db");
 		writeModelCache(
-			openaiCodexCacheProviderId(ACCOUNT_IDS),
+			openAICodexModelCacheProviderId(ACCOUNT_FINGERPRINT),
 			Date.now(),
 			[cachedModel("gpt-set-row")],
 			true,
@@ -129,7 +129,7 @@ describe("Codex discovery lists every signed-in account", () => {
 			"account-blue": { listed: true, cyber: ["daybreak_blue"] },
 		});
 		const cached = readModelCache(
-			openaiCodexCacheProviderId(ACCOUNT_IDS),
+			openAICodexModelCacheProviderId(ACCOUNT_FINGERPRINT),
 			HOUR_MS,
 			Date.now,
 			path.join(dir, "models.db"),

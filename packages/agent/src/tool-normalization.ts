@@ -177,8 +177,9 @@ function normalizeTool(
 ): Tool {
 	const intentMode = resolveIntentMode(tool.intent);
 	const spec = specWithoutReplacedFields(tool);
+	const wireParameters = toolWireSchema(tool) as TSchema;
 	const doInjectIntent =
-		injectIntent && intentMode !== "omit" && !schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD);
+		injectIntent && intentMode !== "omit" && !schemaDefinesProperty(wireParameters, INTENT_FIELD);
 	// When the full catalog is rendered into the system prompt, ship the tool
 	// specs without their descriptions (top-level + nested schema annotations)
 	// so they are not duplicated on the wire. Strip the STABLE wire schema (the
@@ -186,11 +187,11 @@ function normalizeTool(
 	// re-inject `i` (without its hint, which `describeIntent: false` omits) so
 	// intent tracing keeps the field while no descriptions ride the wire.
 	if (pruneDescriptions) {
-		let parameters = stripSchemaDescriptions(toolWireSchema(tool)) as TSchema;
+		let parameters = stripSchemaDescriptions(wireParameters) as TSchema;
 		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
 		return { ...spec, parameters, description: "" } as Tool;
 	}
-	let parameters = toolWireSchema(tool) as TSchema;
+	let parameters = wireParameters;
 	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 	const description = tool.description ?? "";
 	const examplesBlock = exampleDialect

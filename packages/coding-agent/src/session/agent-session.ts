@@ -1826,6 +1826,7 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 		this.#exitRecord = new ExitRecord({
 			sessionStore: this.sessionManager,
 			redact: text => this.obfuscateProviderText(text),
+		});
 		// The counterpart of the exit recorder below: a death that never reached
 		// JavaScript wrote no `session_exit` entry and no error line, so the only
 		// account of it is what its process left on disk — the in-flight marker of

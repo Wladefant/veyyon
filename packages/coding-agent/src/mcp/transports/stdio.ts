@@ -666,73 +666,9 @@ export class StdioTransport implements MCPTransport {
 		notification: (method, params) => this.onNotification?.(method, params),
 		unattributableError: error => {
 			const failed = rejectAllPending(this.#pendingRequests, error);
-			logger.warn("MCP server reported an error it could not attribute to a request", {
-				server: this.config.command,
-				code: error.code,
-				message: error.message,
-				failedRequests: failed,
-			});
-			this.onError?.(new Error(describeJsonRpcError(error)));
-			return;
-		}
-
-		// Server-to-client request: has both method and id
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(response =>
-				this.#sendResponse(response),
-			);
-			return;
-		}
-
-		// Response to our request: has id
-		if ("id" in message && message.id != null) {
-			const response = message as JsonRpcResponse;
-			const responseId = response.id as string | number;
-			const pending = this.#pendingRequests.get(responseId);
-			if (pending) {
-				this.#pendingRequests.delete(responseId);
-				if (response.error) {
-					pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
-				} else {
-					pending.resolve(response.result);
-				}
-				return;
-			}
-			const stream = this.#streamRequests.get(responseId);
-			if (stream) {
-				if (response.error) {
-					stream.reject(Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
-						code: response.error.code,
-						data: response.error.data,
-					}));
-				} else {
-					stream.resolve();
-				}
-				return;
-			}
-			return;
-		}
-
-		// Notification: has method but no id
-
-		if ("method" in message) {
-			if (message.params && typeof message.params === "object" && "_meta" in message.params) {
-				const meta = message.params._meta;
-				if (meta && typeof meta === "object" && "io.modelcontextprotocol/subscriptionId" in meta) {
-					const streamId = meta["io.modelcontextprotocol/subscriptionId"];
-					if (typeof streamId === "string" || typeof streamId === "number") {
-						const stream = this.#streamRequests.get(streamId);
-						if (stream) {
-							stream.onNotification(message);
-							return;
-						}
-					}
-				}
-			}
-			const notification = message as { method: string; params?: unknown };
-			this.onNotification?.(notification.method, notification.params);
-		}
-	}
+			this.onError?.(reportUnattributableError(this.config.command, error, failed));
+		},
+	};
 
 	streamRequest(
 		method: string,
