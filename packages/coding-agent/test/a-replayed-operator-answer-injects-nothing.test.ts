@@ -7,6 +7,7 @@
 // taking an answer and journaling it is the one window a retry can inject twice.
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { logger, TempDir } from "@veyyon/utils";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../src/session/operator-answer-inbox";
 
@@ -480,4 +481,101 @@ test("retained reconnect manager cannot inject a consumed answer missing from it
 	const after = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
 	expect(await after.accept(envelope("q-retained-consumed", "evt-retry"), "auto")).toBe("duplicate");
 	expect(queue).toEqual([]);
+});
+
+class FailOnceReadStorage extends FileSessionStorage {
+	failNextRead = false;
+
+	override async readText(filePath: string): Promise<string> {
+		if (this.failNextRead) {
+			this.failNextRead = false;
+			throw new Error("synthetic durable-read fault");
+		}
+		return super.readText(filePath);
+	}
+}
+
+test("a failed durable read cannot acknowledge a retained manager's changed retry", async () => {
+	const { manager, dir } = newSession();
+	manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+	await manager.ensureOnDisk();
+	await manager.flush();
+	const file = manager.getSessionFile() as string;
+	const firstManager = await SessionManager.open(file, dir.path());
+	const storage = new FailOnceReadStorage();
+	const retainedManager = await SessionManager.open(file, dir.path(), storage);
+	const queue: string[] = [];
+	const original = envelope("q-read-fault", "evt-original");
+	const retry = envelope("q-read-fault", "evt-retry", "different answer");
+	const first = new OperatorAnswerInbox(() => firstManager, queueingInto(queue), waiting(queue));
+	const retained = new OperatorAnswerInbox(() => retainedManager, queueingInto(queue), waiting(queue));
+
+	expect(await first.accept(original, "followUp")).toBe("queued");
+	queue.length = 0;
+	storage.failNextRead = true;
+	await expect(retained.accept(retry, "followUp")).rejects.toThrow("Cannot verify current session journal");
+	expect(storage.failNextRead).toBe(false);
+	expect(queue).toEqual([]);
+
+	const authoritative = await SessionManager.open(file, dir.path());
+	const resumed = new OperatorAnswerInbox(() => authoritative, queueingInto(queue), waiting(queue));
+	expect(await resumed.accept(retry, "followUp")).toBe("queued");
+	expect(queue).toEqual([original]);
+	await authoritative.flush();
+	const persisted = await SessionManager.open(file, dir.path());
+	expect(persisted.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});
+
+test("a failed journal read blocks recovery after the pending answer was consumed elsewhere", async () => {
+	const { manager, dir } = newSession();
+	manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+	await manager.ensureOnDisk();
+	await manager.flush();
+	const file = manager.getSessionFile() as string;
+	const firstManager = await SessionManager.open(file, dir.path());
+	const queue: string[] = [];
+	const answer = envelope("q-read-recovery", "evt-original");
+	const first = new OperatorAnswerInbox(() => firstManager, queueingInto(queue), waiting(queue));
+	expect(await first.accept(answer, "auto")).toBe("queued");
+
+	// Retained B sees pending but not A's later consumed user message.
+	const storage = new FailOnceReadStorage();
+	const retainedManager = await SessionManager.open(file, dir.path(), storage);
+	const retained = new OperatorAnswerInbox(() => retainedManager, queueingInto(queue), waiting(queue));
+	firstManager.appendMessage({ role: "user", content: answer, timestamp: Date.now() });
+	await firstManager.flush();
+	queue.length = 0;
+	storage.failNextRead = true;
+	await expect(retained.recover()).resolves.toBeUndefined();
+	expect(storage.failNextRead).toBe(false);
+	expect(queue).toEqual([]);
+
+	const authoritative = await SessionManager.open(file, dir.path());
+	const resumed = new OperatorAnswerInbox(() => authoritative, queueingInto(queue), waiting(queue));
+	expect(await resumed.accept(envelope("q-read-recovery", "evt-retry"), "auto")).toBe("duplicate");
+	expect(queue).toEqual([]);
+});
+
+test("a failed first dispatch cannot let a stale manager replace durable pending text", async () => {
+	const { manager, dir } = newSession();
+	manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+	await manager.ensureOnDisk();
+	await manager.flush();
+	const file = manager.getSessionFile() as string;
+	const firstManager = await SessionManager.open(file, dir.path());
+	const retainedManager = await SessionManager.open(file, dir.path());
+	const original = envelope("q-failed-dispatch", "evt-original");
+	const retry = envelope("q-failed-dispatch", "evt-retry", "different answer");
+	const first = new OperatorAnswerInbox(() => firstManager, async () => {
+		throw new Error("synthetic dispatch fault");
+	}, () => false);
+	const queue: string[] = [];
+	const retained = new OperatorAnswerInbox(() => retainedManager, queueingInto(queue), waiting(queue));
+	await expect(first.accept(original, "followUp")).rejects.toThrow("synthetic dispatch fault");
+	await expect(retained.accept(retry, "followUp")).rejects.toThrow("journal is stale");
+	expect(queue).toEqual([]);
+	const authoritative = await SessionManager.open(file, dir.path());
+	const resumed = new OperatorAnswerInbox(() => authoritative, queueingInto(queue), waiting(queue));
+	expect(await resumed.accept(retry, "followUp")).toBe("queued");
+	expect(queue).toEqual([original]);
 });
