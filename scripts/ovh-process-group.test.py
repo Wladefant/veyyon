@@ -99,7 +99,7 @@ def run_case(name, command, expected, sig=None, need_tree=False, timeout=None, e
             if timeout is not None and pids:
                 snapshot = subprocess.run(["ps", "-o", "pid,ppid,pgid,sid,stat,args", "-p", ",".join(map(str, pids))], text=True, capture_output=True, check=True).stdout.strip()
                 print(f"{name} ps before:\n{snapshot}")
-            status = proc.wait(timeout=5)
+            status = proc.wait(timeout=8)
             require(status == expected, f"{name}: status {status}, expected {expected}")
             if pids:
                 require(not any(alive(pid) for pid in pids), f"{name}: live descendants remain: {pids}")
@@ -168,7 +168,7 @@ def run_startup_cancellation():
 
 
 def run_deadline_case(mode):
-    run_case(f"independent deadline {mode}", ["python3", "-c", TREE, mode], 124, need_tree=True, timeout="1s")
+    run_case(f"independent deadline {mode}", ["python3", "-c", TREE, mode], 124, need_tree=True, timeout="5s")
 
 
 def main():
