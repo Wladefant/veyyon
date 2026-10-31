@@ -27,13 +27,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { compactionDeadEndWarning } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { highUsageAssistant } from "./helpers/compaction-session";
 
 const NOTICE_SOURCE = "compaction";
 const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
@@ -52,8 +54,7 @@ describe("a failed compaction parks the run instead of looping", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
@@ -96,38 +97,11 @@ describe("a failed compaction parks the run instead of looping", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1050,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 50, totalTokens: 1050 },
 				timestamp: Date.now(),
 			});
 			manager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
 		}
-	}
-
-	function highUsageAssistant() {
-		return {
-			role: "assistant" as const,
-			content: [{ type: "text" as const, text: "Done." }],
-			api: "anthropic-messages" as const,
-			provider: "anthropic" as const,
-			model: "claude-sonnet-4-5",
-			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
 	}
 
 	function overflowAssistant() {
@@ -139,14 +113,7 @@ describe("a failed compaction parks the run instead of looping", () => {
 			model: "claude-sonnet-4-5",
 			stopReason: "error" as const,
 			errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
-			usage: {
-				input: 250000,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 250000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 250000, totalTokens: 250000 },
 			timestamp: Date.now(),
 		};
 	}
@@ -159,14 +126,7 @@ describe("a failed compaction parks the run instead of looping", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "length" as const,
-			usage: {
-				input: 150000,
-				output: 64000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 214000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 150000, output: 64000, totalTokens: 214000 },
 			timestamp: Date.now(),
 		};
 	}

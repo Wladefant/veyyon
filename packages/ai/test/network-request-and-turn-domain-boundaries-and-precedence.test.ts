@@ -40,7 +40,7 @@ describe("network domain boundary conditions", () => {
 			const negative = new AnthropicConnectionError(new Error("socket hang up"));
 			const negativeExplanation = explain(negative);
 			expect(negativeExplanation.rules).not.toContain("anthropic-connection-timeout");
-			expect(negativeExplanation.rules).toContain("anthropic-connection-error");
+			expect(negativeExplanation.rules).toContain("transport-vocabulary");
 			expect((negativeExplanation.id & Flag.Timeout) !== 0).toBe(false);
 		});
 

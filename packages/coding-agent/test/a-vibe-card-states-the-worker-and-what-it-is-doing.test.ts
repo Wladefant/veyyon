@@ -23,10 +23,11 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { VibeScreenSnapshot } from "@veyyon/coding-agent/session/vibe-runtime";
-import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
 import type { VibeToolDetails } from "@veyyon/coding-agent/tools/agent/vibe";
 import { createVibeToolView, type VibeRenderArgs } from "@veyyon/coding-agent/tools/agent/vibe-view";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { requireTheme } from "./helpers/require-theme";
 
 const WIDTH = 100;
 
@@ -76,8 +77,7 @@ function resultRows(
 describe("a vibe card states the worker and what it is doing", () => {
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true });
-		const loaded = await getThemeByName("dark");
-		if (!loaded) throw new Error("theme unavailable");
+		const loaded = await requireTheme("dark");
 		uiTheme = loaded;
 		setThemeInstance(uiTheme);
 	});

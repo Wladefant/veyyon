@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { Agent, isSoftToolRequirement } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -14,6 +13,7 @@ import { queueResolveHandler, ResolveTool } from "@veyyon/coding-agent/tools/age
 import { buildNamedToolChoice } from "@veyyon/coding-agent/utils/tool-choice";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { makeToolSession } from "./helpers/tool-session";
 
 describe("AgentSession resolve reminder", () => {
@@ -27,10 +27,7 @@ describe("AgentSession resolve reminder", () => {
 		tempDir = path.join(os.tmpdir(), `pi-resolve-reminder-test-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Test model not found in registry");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

@@ -9,9 +9,8 @@
  * renderers that asked for `borderMuted` by hand already drew; the outcome stays in the words on the
  * rows, which are byte-identical. The held-back count, which closes the list in the same dim main
  * wrote it in and adds the expand gesture the host offers on every other card. The empty detailed
- * card, whose rows carry their own two-column indent and open only the colour runs they use, where
- * main joined pre-coloured strings into one `Text` and left each row in column zero behind the
- * zero-width runs its neighbours had closed. And the directory rows, which draw the path alone where
+ * card, whose rows carry their own two-column indent, where main joined pre-coloured strings into one
+ * `Text` and left each row in column zero. And the directory rows, which draw the path alone where
  * main opened a colour run for a folder glyph the preset does not draw and closed it without a
  * character between.
  *
@@ -88,11 +87,10 @@ describe("file_search tool differential", () => {
 	/**
 	 * Every colour sequence that paints nothing, removed.
 	 *
-	 * Main joined pre-coloured strings into one `Text`, so a row carries the runs its neighbours
-	 * opened and closed with no character between them, and the absent folder glyph opens one more.
-	 * Nothing on any terminal draws differently for them. A pass over the row is exact where a regex
-	 * is not: an open followed straight by a reset paints nothing, and a reset with no open before it
-	 * closes nothing, and both appear here because the joined runs nest.
+	 * Main opens a colour for the folder glyph a directory row does not draw and closes it with no
+	 * character between. Nothing on any terminal draws differently for it. A pass over the row is exact
+	 * where a regex is not: an open followed straight by a reset paints nothing, and a reset with no
+	 * open before it closes nothing.
 	 */
 	function withoutEmptyRuns(lines: readonly string[]): string[] {
 		const sequence = /\u001b\[(?:38;2;\d+;\d+;\d+|39)m/g;
@@ -460,12 +458,11 @@ describe("file_search tool differential", () => {
 				[EXPANDED, HOST_EXPANDED],
 			] as const) {
 				for (const width of [200, WIDTH] as const) {
-					const drawn = withoutEmptyRuns(viewLines(value, context, args, width));
-					const oracle = withoutEmptyRuns(unpad(oracleLines(value, options, args, width)));
+					const drawn = viewLines(value, context, args, width);
+					const oracle = unpad(oracleLines(value, options, args, width));
 					expect(drawn).toHaveLength(oracle.length);
 					// The head row is the same row one column left. Every row under it is the same
-					// row indented two columns under that head, where main left it in column zero
-					// behind the runs its single `Text` had closed.
+					// row indented two columns under that head, where main left it in column zero.
 					expect(drawn[0]).toBe(oracle[0]);
 					for (let row = 1; row < oracle.length; row++) {
 						expect(drawn[row]).toBe(`  ${oracle[row]}`);
@@ -473,10 +470,9 @@ describe("file_search tool differential", () => {
 				}
 			}
 		}
-		// The runs the normalization removes are main's: its body row opens the colours of every
-		// neighbouring run before the mark it draws, and the view's row opens only its own.
+		// Neither arm opens a run it does not use on the body row.
 		const rawEmpty = oracleLines(detailed({}), HOST_COLLAPSED, { input: "*.zig" }, 200);
-		expect(rawEmpty[1]).toContain(`${theme.fg("toolTitle", "")}${theme.fg("muted", "")}`);
+		expect(rawEmpty[1]).not.toContain(theme.fg("muted", ""));
 		expect(viewLines(detailed({}), COLLAPSED, { input: "*.zig" }, 200)[1]).not.toContain(theme.fg("muted", ""));
 		// Anti-vacuity: the card says which kind of empty it is, and says separately what the scan
 		// never reached and what it cut.

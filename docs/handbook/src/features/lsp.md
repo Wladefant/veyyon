@@ -84,21 +84,17 @@ Top-level keys:
 
 ### Capabilities
 
-The `capabilities` object enables optional server-specific features that Veyyon supports on a per-server basis:
+The `capabilities` object enables optional server-specific features:
 
 ```json
 {
   "capabilities": {
-    "flycheck": true,
-    "ssr": true,
-    "expandMacro": true,
-    "runnables": true,
-    "relatedTests": true
+    "flycheck": true
   }
 }
 ```
 
-All fields are boolean and optional. They are currently used by `rust-analyzer`.
+- `flycheck` (boolean): the `diagnostics` action requests the server's compiler check (`rust-analyzer/runFlycheck`, which runs `cargo check`) and waits for it to end, so compiler errors and lints appear with the server's own analysis. A single file runs the check for its package; a glob runs one check of every workspace per server. A check still running when the call's `timeout` is near is reported in the server notes, and the call returns the server's own analysis. The built-in `rust-analyzer` entry sets it.
 
 ## Common recipes
 

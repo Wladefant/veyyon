@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "@veyyon/coding-agent/utils/sixel";
 import type { TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "./helpers/require-theme";
 
 const SIXEL = "\x1bPqabc\x1b\\";
 
@@ -13,9 +14,8 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 	});
 	afterEach(() => {
 		if (originalForceProtocol === undefined) delete Bun.env.VEYYON_FORCE_IMAGE_PROTOCOL;
@@ -84,13 +84,13 @@ describe("BashExecutionComponent streaming throttle", () => {
 	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 	});
 
 	it("caps stored lines during streaming", () => {
 		const component = new BashExecutionComponent("test", ui, false);
+		onTestFinished(() => component.dispose());
 
 		// Flood with 500 lines in one chunk (exceeds STREAMING_LINE_CAP of 100)
 		const lines = Array.from({ length: 500 }, (_, i) => `line${i}`).join("\n");

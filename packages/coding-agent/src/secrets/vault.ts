@@ -31,7 +31,7 @@ import { isWellFormedUtf16 } from "@veyyon/utils/string-length";
 import { escapeTerminalText } from "@veyyon/utils/terminal-safe";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { applyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAcl } from "@veyyon/utils/windows-acl";
-import { moveNoReplace, replaceWithRollback } from "./atomic-path";
+import { moveNoReplace, removePathIfSameInode, replaceWithRollback, sameInode } from "./atomic-path";
 import { noteSecretsCondition } from "./notices";
 import {
 	buildNamePlaceholder,
@@ -656,10 +656,6 @@ function canonicalVaultPathSync(vaultPath: string): string {
 	}
 }
 
-function sameInode(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">): boolean {
-	return left.dev === right.dev && left.ino === right.ino;
-}
-
 function snapshotOf(stat: Stats, contentHash = ""): VaultFileSnapshot {
 	return {
 		dev: stat.dev,
@@ -1026,53 +1022,6 @@ async function assertExpectedVaultPath(
 	}
 }
 
-async function removePathIfSameInode(target: string, identity: Pick<Stats, "dev" | "ino">): Promise<void> {
-	let current: Stats;
-	try {
-		current = await fs.lstat(target);
-	} catch (error) {
-		if (isMissingPath(error)) return;
-		throw error;
-	}
-	if (!current.isFile() || !sameInode(current, identity)) return;
-
-	// Rename first so the pathname and inode are consumed in one kernel operation. An
-	// lstat-then-rm sequence can unlink a different file installed between those calls.
-	const quarantinePath = `${target}.${randomUUID()}.removing`;
-	let moved: boolean;
-	try {
-		moved = moveNoReplace(target, quarantinePath);
-	} catch (error) {
-		try {
-			await fs.lstat(target);
-		} catch (pathError) {
-			if (isMissingPath(pathError)) return;
-		}
-		throw error;
-	}
-	if (!moved) {
-		throw new Error("A vault cleanup quarantine path already exists. Refusing to remove either entry.");
-	}
-
-	const quarantined = await fs.lstat(quarantinePath);
-	if (!quarantined.isFile() || !sameInode(quarantined, identity)) {
-		let restored: boolean;
-		try {
-			restored = moveNoReplace(quarantinePath, target);
-		} catch (error) {
-			throw new Error(
-				`A racing vault cleanup entry could not be restored safely (${safeError(error)}). Refusing to continue.`,
-			);
-		}
-		if (!restored) {
-			throw new Error("A racing vault cleanup entry was isolated but its original path is occupied.");
-		}
-		throw new Error("A vault cleanup entry changed before removal. It was restored without deleting its bytes.");
-	}
-
-	await fs.rm(quarantinePath);
-}
-
 async function retireDisplacedVault(
 	scope: VaultScope,
 	displacedPath: string,
@@ -1097,7 +1046,7 @@ async function retireDisplacedVault(
 	} finally {
 		await handle.close();
 	}
-	await removePathIfSameInode(displacedPath, identity);
+	await removePathIfSameInode(displacedPath, identity, "vault");
 }
 
 /** Persist a rename after its staged file has already been synced. */
@@ -1191,8 +1140,8 @@ async function writeVaultAtomically(
 		}
 	} finally {
 		if (!installed && stagedStat !== null) {
-			await removePathIfSameInode(temporaryPath, stagedStat).catch(() => {});
-			await removePathIfSameInode(windowsBackupPath, stagedStat).catch(() => {});
+			await removePathIfSameInode(temporaryPath, stagedStat, "vault").catch(() => {});
+			await removePathIfSameInode(windowsBackupPath, stagedStat, "vault").catch(() => {});
 		}
 	}
 }
@@ -2166,6 +2115,33 @@ export class SecretVault {
 	}
 
 	/**
+	 * Edit the first live entry named `wanted`, walking scopes narrowest first, so the entry edited
+	 * is the one a placeholder would have spent. Every scope the walk opens has its expired entries
+	 * pruned. `edit` returns the holder scope's new entries and the entry to report.
+	 */
+	async #editFirstHolder(
+		wanted: string,
+		now: number,
+		edit: (
+			target: VaultEntry,
+			live: VaultEntry[],
+			scope: VaultScope,
+		) => { entries: VaultEntry[]; result: VaultEntry },
+	): Promise<ScopedVaultEntry | null> {
+		for (const scope of VAULT_SCOPES_NARROWEST_FIRST) {
+			const edited = await this.#withScopeLocked<VaultEntry | null>(scope, (current, exists) => {
+				const live = current.filter(entry => !isExpired(entry, now));
+				const target = live.find(entry => entry.name === wanted);
+				if (target !== undefined) return edit(target, live, scope);
+				// Nothing to edit here, so the only reason to write is a prune that dropped something.
+				return { entries: live, result: null, write: exists && live.length !== current.length };
+			});
+			if (edited !== null) return { ...edited, scope };
+		}
+		return null;
+	}
+
+	/**
 	 * Push an entry's expiry out from now.
 	 *
 	 * Measured from now rather than from the old expiry, so extending a secret that is nearly
@@ -2175,29 +2151,11 @@ export class SecretVault {
 		const wanted = normaliseSecretName(name);
 		if (ttl !== null) assertValidNumericTtl(ttl);
 		const now = this.#now();
-		for (const scope of VAULT_SCOPES_NARROWEST_FIRST) {
-			const updated = await this.#withScopeLocked<VaultEntry | null>(scope, (current, exists) => {
-				const live = current.filter(entry => !isExpired(entry, now));
-				const target = live.find(entry => entry.name === wanted);
-				if (target === undefined) {
-					return {
-						entries: live,
-						result: null,
-						write: exists && live.length !== current.length,
-					};
-				}
-				if (target.expiresAt === null && ttl === null) {
-					return { entries: live, result: target };
-				}
-				const next: VaultEntry = { ...target, createdAt: now, expiresAt: expiryFrom(now, ttl) };
-				return {
-					entries: replaceVaultEntry(live, next),
-					result: next,
-				};
-			});
-			if (updated !== null) return { ...updated, scope };
-		}
-		return null;
+		return this.#editFirstHolder(wanted, now, (target, live) => {
+			if (target.expiresAt === null && ttl === null) return { entries: live, result: target };
+			const next: VaultEntry = { ...target, createdAt: now, expiresAt: expiryFrom(now, ttl) };
+			return { entries: replaceVaultEntry(live, next), result: next };
+		});
 	}
 
 	/**
@@ -2222,27 +2180,13 @@ export class SecretVault {
 		// and, more importantly, cannot leave a scope locked while it is being explained.
 		const wanted = normaliseSecretName(name);
 		assertStorableValue(value);
-		const now = this.#now();
-		for (const scope of VAULT_SCOPES_NARROWEST_FIRST) {
-			const updated = await this.#withScopeLocked<VaultEntry | null>(scope, (current, exists) => {
-				const live = current.filter(entry => !isExpired(entry, now));
-				const target = live.find(entry => entry.name === wanted);
-				if (target === undefined) {
-					return {
-						entries: live,
-						result: null,
-						write: exists && live.length !== current.length,
-					};
-				}
-				// Only the value. Spreading the target rather than rebuilding the entry is what keeps
-				// `createdAt` and `expiresAt` out of this write: an edit that re-dated the entry would
-				// be `add` under another name.
-				const next: VaultEntry = { ...target, value };
-				return { entries: replaceVaultEntry(live, next), result: next };
-			});
-			if (updated !== null) return { ...updated, scope };
-		}
-		return null;
+		return this.#editFirstHolder(wanted, this.#now(), (target, live) => {
+			// Only the value. Spreading the target rather than rebuilding the entry is what keeps
+			// `createdAt` and `expiresAt` out of this write: an edit that re-dated the entry would
+			// be `add` under another name.
+			const next: VaultEntry = { ...target, value };
+			return { entries: replaceVaultEntry(live, next), result: next };
+		});
 	}
 
 	/**
@@ -2262,40 +2206,27 @@ export class SecretVault {
 		// Both names are validated BEFORE the lock, so a bad name fails fast without contending.
 		const wanted = normaliseSecretName(from);
 		const renamed = normaliseSecretName(to);
-		const now = this.#now();
-		for (const scope of VAULT_SCOPES_NARROWEST_FIRST) {
-			const found = await this.#withScopeLocked<boolean>(scope, (current, exists) => {
-				const live = current.filter(entry => !isExpired(entry, now));
-				const target = live.find(entry => entry.name === wanted);
-				// Nothing to rename here, so the only reason to write is a prune that dropped something.
-				const pruneOnly = {
-					entries: live,
-					result: false,
-					write: exists && live.length !== current.length,
-				};
-				if (target === undefined) return pruneOnly;
-				// Renaming a secret to the name it already has is an answer, not a write.
-				if (renamed === wanted) return { ...pruneOnly, result: true };
-				if (live.some(entry => entry.name === renamed)) {
-					throw new Error(
-						`The ${scope} vault already has a secret named ${renamed}. Renaming ${wanted} onto it would ` +
-							`destroy that credential. Remove ${renamed} first if that is what you want.`,
-					);
-				}
-				const next: VaultEntry = { ...target, name: renamed };
-				// Rename every copy of the old name, then collapse them the way any other in-place
-				// replacement does: the entry keeps its position and malformed duplicates do not survive.
-				return {
-					entries: replaceVaultEntry(
-						live.map(entry => (entry.name === wanted ? next : entry)),
-						next,
-					),
-					result: true,
-				};
-			});
-			if (found) return { scope, name: renamed };
-		}
-		return null;
+		const edited = await this.#editFirstHolder(wanted, this.#now(), (target, live, scope) => {
+			// Renaming a secret to the name it already has is an answer, not a write.
+			if (renamed === wanted) return { entries: live, result: target };
+			if (live.some(entry => entry.name === renamed)) {
+				throw new Error(
+					`The ${scope} vault already has a secret named ${renamed}. Renaming ${wanted} onto it would ` +
+						`destroy that credential. Remove ${renamed} first if that is what you want.`,
+				);
+			}
+			const next: VaultEntry = { ...target, name: renamed };
+			// Rename every copy of the old name, then collapse them the way any other in-place
+			// replacement does: the entry keeps its position and malformed duplicates do not survive.
+			return {
+				entries: replaceVaultEntry(
+					live.map(entry => (entry.name === wanted ? next : entry)),
+					next,
+				),
+				result: next,
+			};
+		});
+		return edited === null ? null : { scope: edited.scope, name: renamed };
 	}
 
 	/** Live entries as the obfuscator wants them: name, value, and the placeholder. */

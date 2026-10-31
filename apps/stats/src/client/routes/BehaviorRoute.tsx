@@ -3,15 +3,14 @@ import { useMemo, useState } from "react";
 import { Bar, Line } from "react-chartjs-2";
 import { getBehaviorDashboardStats } from "../api";
 import {
-	barDatasetStyle,
 	buildAggregateTimeSeries,
 	buildSharedPlugins,
 	buildSharedScales,
 	buildTopNByModelSeries,
 	CHART_THEMES,
-	lineDatasetStyle,
 	MODEL_COLORS,
-	styleDatasets,
+	timeChartData,
+	timeChartOptions,
 } from "../components/chart-shared";
 import {
 	DetailChartEmpty,
@@ -215,7 +214,7 @@ function BehaviorChartPanel({ behaviorSeries }: { behaviorSeries: BehaviorTimeSe
 		});
 	}, [chartTheme, byModel]);
 
-	const { sharedScaleBase, yScale } = useMemo(() => {
+	const scales = useMemo(() => {
 		return buildSharedScales({ chartTheme, formatY: formatRateAxis });
 	}, [chartTheme]);
 
@@ -223,45 +222,11 @@ function BehaviorChartPanel({ behaviorSeries }: { behaviorSeries: BehaviorTimeSe
 		return METRIC_OPTIONS.find(m => m.value === metric)?.title ?? "";
 	}, [metric]);
 
-	const lineData = useMemo(() => {
-		if (!byModel) return null;
-		return {
-			labels: chartData.labels,
-			datasets: styleDatasets(chartData, i => lineDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
-		};
-	}, [chartData, byModel]);
+	const { lineData, barData } = useMemo(() => timeChartData(chartData, byModel), [chartData, byModel]);
 
-	const lineOptions = useMemo(() => {
-		return {
-			responsive: true,
-			maintainAspectRatio: false,
-			interaction: { mode: "index" as const, intersect: false },
-			plugins: sharedPlugins,
-			scales: { x: sharedScaleBase, y: yScale },
-		};
-	}, [sharedPlugins, sharedScaleBase, yScale]);
-
-	const barData = useMemo(() => {
-		if (byModel) return null;
-		return {
-			labels: chartData.labels,
-			datasets: styleDatasets(chartData, i => barDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
-		};
-	}, [chartData, byModel]);
-
-	const barOptions = useMemo(() => {
-		return {
-			responsive: true,
-			maintainAspectRatio: false,
-			interaction: { mode: "index" as const, intersect: false },
-			plugins: sharedPlugins,
-			scales: {
-				x: { ...sharedScaleBase, stacked: true },
-				y: { ...yScale, stacked: true },
-			},
-			layout: { padding: { top: 8 } },
-		};
-	}, [sharedPlugins, sharedScaleBase, yScale]);
+	const { lineOptions, barOptions } = useMemo(() => {
+		return timeChartOptions(sharedPlugins, scales, { paddingTop: 8 });
+	}, [sharedPlugins, scales]);
 
 	const byModelOptions = [
 		{ value: false, label: "All Models" },

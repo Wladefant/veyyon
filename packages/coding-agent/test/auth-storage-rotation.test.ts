@@ -6,9 +6,9 @@ import { type OAuthCredential, type UsageProvider, withAuth } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as oauth from "@veyyon/ai/oauth";
 import type { OAuthCredentials, OAuthProviderId } from "@veyyon/ai/oauth/types";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createApiKeyResolver } from "../src/config/api-key-resolver";
 
 describe("AuthStorage account rotation", () => {
@@ -290,10 +290,7 @@ describe("AuthStorage account rotation", () => {
 			},
 		]);
 
-		const model = getBundledModel("openai-codex", "gpt-5.5");
-		if (!model) {
-			throw new Error("Expected bundled Codex test model to exist");
-		}
+		const model = requireBundledModel("openai-codex", "gpt-5.5");
 
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		const attemptedKeys: string[] = [];

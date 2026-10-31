@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 describe("SessionManager usage statistics", () => {
@@ -12,15 +13,7 @@ describe("SessionManager usage statistics", () => {
 			api: "openai-completions",
 			provider: "github-copilot",
 			model: "gpt-4o",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				premiumRequests: 1,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15, premiumRequests: 1 },
 			stopReason: "stop",
 			timestamp: 2,
 		});
@@ -30,15 +23,7 @@ describe("SessionManager usage statistics", () => {
 			toolName: "task",
 			content: [{ type: "text", text: "task output" }],
 			details: {
-				usage: {
-					input: 2,
-					output: 3,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 5,
-					premiumRequests: 2,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 2, output: 3, totalTokens: 5, premiumRequests: 2 },
 			},
 			isError: false,
 			timestamp: 3,
@@ -91,15 +76,7 @@ describe("SessionManager usage statistics", () => {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			model: "claude-haiku-4.5",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				premiumRequests: 0.33,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15, premiumRequests: 0.33 },
 			stopReason: "stop",
 			timestamp: 2,
 		});
@@ -109,15 +86,7 @@ describe("SessionManager usage statistics", () => {
 			toolName: "task",
 			content: [{ type: "text", text: "task output" }],
 			details: {
-				usage: {
-					input: 2,
-					output: 3,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 5,
-					premiumRequests: 3,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 2, output: 3, totalTokens: 5, premiumRequests: 3 },
 			},
 			isError: false,
 			timestamp: 3,
@@ -136,14 +105,7 @@ describe("SessionManager usage statistics", () => {
 			api: "openai-completions",
 			provider: "openai",
 			model: "gpt-4o",
-			usage: {
-				input: 10,
-				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 			stopReason: "stop",
 			timestamp: 2,
 		});

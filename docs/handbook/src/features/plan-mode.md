@@ -50,6 +50,12 @@ Statuses: `active`, `paused`, `budget-limited`, `complete`, `dropped`.
 
 When goal mode is active, the agent can call the `goal` tool with ops: `create`, `get`, `complete`, `resume`, `drop`. The tool never accepts a budget argument. The interactive Settings UI configures `goal.modelBudgetsEnabled`, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per `goal.continuationModes`.
 
+### Continuation
+
+When a turn settles and the composer is empty, goal mode waits 800 ms and sends a hidden continuation prompt. A draft or attached image in the composer holds the continuation; deleting the draft without sending it releases the hold, and the continuation is sent 800 ms later. A turn that ends without a tool call does not finish the goal; only the goal tool's `complete` op does. The continuation after such a turn states how many turns in a row ended without a tool call and directs the model to start an untried approach with a tool call.
+
+Goal mode stops sending continuations and prints a warning after 3 consecutive turns without a tool call, or after 3 consecutive turns that end in a provider error. Send a message to resume. A message clears the stop and the count of turns without a tool call; the failed-turn count clears when a turn completes.
+
 ### Example
 
 ```console

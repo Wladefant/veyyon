@@ -25,12 +25,8 @@ const CTRL_W = "\x17";
 const HOME = "\x01";
 const DELETE_FORWARD = "\x04";
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 function frameText(comp: SettingsSelectorComponent): string {
-	return comp.render(160).map(strip).join("\n");
+	return comp.render(160).map(stripVTControlCharacters).join("\n");
 }
 
 beforeAll(async () => {

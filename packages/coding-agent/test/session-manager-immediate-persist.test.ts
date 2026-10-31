@@ -1,43 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
-
-function assistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
+const makeTempDir = useTempDirs();
 
 function readJsonl(file: string): Array<Record<string, unknown>> {
 	return fs
@@ -73,7 +41,7 @@ describe("SessionManager immediate JSONL persistence", () => {
 		manager.appendMessage({ role: "user", content: "queued before assistant", timestamp: Date.now() });
 		expect(fs.existsSync(sessionFile)).toBe(false);
 
-		manager.appendMessage(assistantMessage("hello"));
+		manager.appendMessage(createAssistantMessage("hello"));
 		expect(fs.existsSync(sessionFile)).toBe(true);
 
 		let entries = readJsonl(sessionFile);

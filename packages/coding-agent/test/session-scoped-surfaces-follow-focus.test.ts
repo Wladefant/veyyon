@@ -100,7 +100,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -141,7 +141,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			status: "running",
 		});
 		await m.focusAgentSession(id);
-		await t.waitForRender();
+		await t.waitForRender(m.ui);
 	}
 
 	/**
@@ -172,7 +172,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 		vi.advanceTimersByTime(150);
 		vi.useRealTimers();
 		m.ui.requestRender();
-		await t.waitForRender();
+		await t.waitForRender(m.ui);
 	}
 
 	describe("the todo HUD", () => {
@@ -186,7 +186,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 				{ name: "Todos", tasks: [{ content: "Ship the parser rewrite", status: "in_progress" }] },
 			]);
 			await m.reloadTodos();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			const mainTodos = m.todoContainer.render(WIDTH).join("\n");
 			expect(Bun.stripANSI(mainTodos)).toContain("Ship the parser rewrite");
@@ -198,7 +198,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			expect(m.todoContainer.render(WIDTH)).toEqual([]);
 
 			await m.unfocusSession();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			// Exact bytes, styling included: the restored board is the same frame,
 			// not merely the same words.
@@ -211,7 +211,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			mainSession?.setTodoPhases([{ name: "Todos", tasks: [{ content: "Parent work", status: "pending" }] }]);
 			childSession?.setTodoPhases([{ name: "Todos", tasks: [{ content: "Child work", status: "in_progress" }] }]);
 			await m.reloadTodos();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			await focusChild();
 
@@ -220,7 +220,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			expect(focused).not.toContain("Parent work");
 
 			await m.unfocusSession();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			const restored = Bun.stripANSI(m.todoContainer.render(WIDTH).join("\n"));
 			expect(restored).toContain("Parent work");
@@ -237,7 +237,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			const { mode: m, terminal: t } = booted();
 			mainSession?.setTodoPhases([{ name: "Todos", tasks: [{ content: "Parent work", status: "pending" }] }]);
 			await m.reloadTodos();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 			const mainTodos = m.todoContainer.render(WIDTH).join("\n");
 
 			await focusChild();
@@ -249,7 +249,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			// slept on: the chain is microtask-only, so no wall clock is involved.
 			for (let i = 0; i < 20 && m.focusedAgentId !== undefined; i++) await Promise.resolve();
 			expect(m.focusedAgentId).toBeUndefined();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			expect(m.todoContainer.render(WIDTH).join("\n")).toBe(mainTodos);
 		});
@@ -293,7 +293,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 		it("does not follow the view into a focused agent", async () => {
 			const { mode: m, terminal: t } = booted();
 			m.showPinnedError("Provider returned 529 overloaded");
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 			expect(Bun.stripANSI(m.errorBannerContainer.render(WIDTH).join("\n"))).toContain("529 overloaded");
 
 			await focusChild();
@@ -307,11 +307,11 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			const { mode: m, terminal: t } = booted();
 			await focusChild();
 			m.showPinnedError("Agent turn failed");
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 			expect(Bun.stripANSI(m.errorBannerContainer.render(WIDTH).join("\n"))).toContain("Agent turn failed");
 
 			await m.unfocusSession();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			expect(m.errorBannerContainer.render(WIDTH)).toEqual([]);
 			expect(t.getViewport().join("\n")).not.toContain("Agent turn failed");
@@ -346,7 +346,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			expect(m.statusLine.agentCount).toBe(1);
 
 			await m.unfocusSession();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			expect(m.statusLine.agentCount).toBe(3);
 		});
@@ -389,7 +389,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 			expect(focusedBand).not.toContain("dequeue");
 
 			await m.unfocusSession();
-			await t.waitForRender();
+			await t.waitForRender(m.ui);
 
 			// Exact bytes: the restored band is the same row, not merely one that
 			// mentions the same words.

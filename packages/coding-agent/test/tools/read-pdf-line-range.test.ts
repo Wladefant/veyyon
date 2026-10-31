@@ -14,14 +14,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as markit from "@veyyon/coding-agent/utils/markit";
 import { __resetDirsFromEnvForTests, removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
+import { restoreEnv } from "../../../utils/test/helpers/restore-global";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -62,10 +56,7 @@ describe("read PDF with a line-range selector", () => {
 		const session = makeSession(testDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call", { path: `${pdfPath}:120-122` });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		// The requested window must surface. Pre-fix the read silently returned
 		// the head of the document (lines 1-200 head-truncated) instead.
@@ -82,10 +73,7 @@ describe("read PDF with a line-range selector", () => {
 		const session = makeSession(testDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call", { path: `${pdfPath}:50-52,160-162` });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		expect(text).toContain("pdf line 50");
 		expect(text).toContain("pdf line 52");
@@ -101,10 +89,7 @@ describe("read PDF with a line-range selector", () => {
 		const session = makeSession(testDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call", { path: pdfPath });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		expect(text).toContain("pdf line 1");
 		expect(text).toContain("pdf line 3");
@@ -123,18 +108,12 @@ describe("read PDF with a line-range selector", () => {
 			const tool = new ReadTool(makeSession(testDir));
 
 			const full = await tool.execute("full", { path: pdfPath });
-			const fullText = full.content
-				.filter(c => c.type === "text")
-				.map(c => c.text)
-				.join("\n");
+			const fullText = toolResultText(full);
 			expect(fullText).toContain("pdf line 1");
 			expect(fullText).toContain("pdf line 3");
 
 			const selector = await tool.execute("selector", { path: `${pdfPath}:2-3` });
-			const selectorText = selector.content
-				.filter(c => c.type === "text")
-				.map(c => c.text)
-				.join("\n");
+			const selectorText = toolResultText(selector);
 			expect(selectorText).toContain("pdf line 2");
 			expect(selectorText).toContain("pdf line 3");
 

@@ -55,8 +55,6 @@ const MAX_MESSAGE_LENGTH = 1200;
  * a 400 from a malformed request, a 405 from a URL that is not an MCP endpoint,
  * a 413. Those are the statuses a misconfigured entry produces, so they are
  * exactly the ones an operator needs a fix for.
- * next step whatsoever. Those are the statuses a misconfigured entry produces, so
- * they are exactly the ones an operator needs a fix for.
  */
 function remedyFor(status: number): string {
 	if (status === 401 || status === 403) {
@@ -89,4 +87,21 @@ export function mcpHttpFailureMessage(url: string, status: number, body: string,
 	if (authHints) message += ` [${authHints}]`;
 	message += `. ${remedyFor(status)}`;
 	return truncate(message, MAX_MESSAGE_LENGTH);
+}
+
+/** The response headers that carry a server's auth challenge, echoed in a failure. */
+const AUTH_CHALLENGE_HEADERS = ["WWW-Authenticate", "Mcp-Auth-Server"] as const;
+
+/**
+ * The error for a non-OK MCP HTTP response: {@link mcpHttpFailureMessage} of its status, its body and
+ * the auth challenge it carries. Reads the body.
+ */
+export async function mcpHttpFailure(url: string, response: Response): Promise<Error> {
+	const body = await response.text();
+	const hints: string[] = [];
+	for (const name of AUTH_CHALLENGE_HEADERS) {
+		const value = response.headers.get(name);
+		if (value) hints.push(`${name}: ${value}`);
+	}
+	return new Error(mcpHttpFailureMessage(url, response.status, body, hints.length > 0 ? hints.join("; ") : undefined));
 }

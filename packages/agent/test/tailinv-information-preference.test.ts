@@ -13,48 +13,14 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
+import type { SessionEntry } from "@veyyon/agent-core/compaction";
 import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, prepareCompaction } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { ToolResultMessage } from "@veyyon/ai";
+import { assistant, messageEntries, readResult, user } from "./support/compaction-session";
 
-let idCounter = 0;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function entry(message: AgentMessage): SessionMessageEntry {
-	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-08-06T00:00:00.000Z", message };
-}
-
-const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
-
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-	role: "assistant",
-	content,
-	timestamp: 1,
-	provider: "mock",
-	model: "mock",
-	api: "mock",
-	usage: usage(),
-	stopReason: "stop",
-});
+const { entry } = messageEntries();
 
 const withCall = (id: string, path: string) => assistant([{ type: "toolCall", id, name: "read", arguments: { path } }]);
-
-const result = (toolCallId: string, text: string, isError = false): ToolResultMessage => ({
-	role: "toolResult",
-	toolCallId,
-	toolName: "read",
-	content: [{ type: "text", text }],
-	isError,
-	timestamp: 1,
-});
 
 function messageOf(e: SessionEntry): AgentMessage {
 	if (e.type !== "message") throw new Error("fixture entries are all message entries");
@@ -75,16 +41,15 @@ const sum = (messages: readonly AgentMessage[]) => messages.reduce((total, m) =>
  * uses, so the cut lands exactly on turn A's user message.
  */
 function twoResultSession(textA: string, textB: string, isErrorB = false) {
-	idCounter = 0;
 	const entries: SessionEntry[] = [
 		entry(user("old question")),
 		entry(assistant([{ type: "text", text: "old answer" }])),
 		entry(user("please read A")),
 		entry(withCall("cA", "a.txt")),
-		entry(result("cA", textA)),
+		entry(readResult("cA", textA)),
 		entry(user("now read B")),
 		entry(withCall("cB", "b.txt")),
-		entry(result("cB", textB, isErrorB)),
+		entry(readResult("cB", textB, isErrorB)),
 	];
 	// The tail the budget must force a choice inside: turns A and B whole.
 	const tail = entries.slice(2).map(messageOf);

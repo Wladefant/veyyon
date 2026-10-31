@@ -2,39 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
-
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 // Only the deterministic, fast disk reads — plain file line/range reads and
 // directory listings — are non-abortable: a turn interrupt that fires mid-read
@@ -48,7 +20,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 	beforeEach(() => {
 		testDir = path.join(os.tmpdir(), `read-fs-noabort-${Snowflake.next()}`);
 		fs.mkdirSync(testDir, { recursive: true });
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -59,8 +31,8 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		const filePath = path.join(testDir, "range.txt");
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
-		const result = await tool.execute("call-range", { path: `${filePath}:20-22` }, abortedSignal());
-		const output = getTextOutput(result);
+		const result = await tool.execute("call-range", { path: `${filePath}:20-22` }, AbortSignal.abort());
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(output).toContain("line-20");
@@ -71,8 +43,8 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		const filePath = path.join(testDir, "multi.txt");
 		fs.writeFileSync(filePath, Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n"));
 
-		const result = await tool.execute("call-multi", { path: `${filePath}:2-3,30-31` }, abortedSignal());
-		const output = getTextOutput(result);
+		const result = await tool.execute("call-multi", { path: `${filePath}:2-3,30-31` }, AbortSignal.abort());
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(output).toContain("line-2");
@@ -84,8 +56,8 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 			fs.writeFileSync(path.join(testDir, `f-${i}.txt`), "");
 		}
 
-		const result = await tool.execute("call-dir", { path: testDir }, abortedSignal());
-		const output = getTextOutput(result);
+		const result = await tool.execute("call-dir", { path: testDir }, AbortSignal.abort());
+		const output = toolResultText(result);
 
 		expect(result.isError).toBeFalsy();
 		expect(result.details?.isDirectory).toBe(true);
@@ -105,7 +77,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 		fs.writeFileSync(filePath, "hello\nworld\n");
 
 		await expect(
-			tool.execute("call-conflicts", { path: `${filePath}:conflicts` }, abortedSignal()),
+			tool.execute("call-conflicts", { path: `${filePath}:conflicts` }, AbortSignal.abort()),
 		).rejects.toBeInstanceOf(ToolAbortError);
 	});
 });

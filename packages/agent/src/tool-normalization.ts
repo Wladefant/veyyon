@@ -176,8 +176,10 @@ function normalizeTool(
 	pruneDescriptions: boolean,
 ): Tool {
 	const intentMode = resolveIntentMode(tool.intent);
+	const spec = specWithoutReplacedFields(tool);
+	const wireParameters = toolWireSchema(tool) as TSchema;
 	const doInjectIntent =
-		injectIntent && intentMode !== "omit" && !schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD);
+		injectIntent && intentMode !== "omit" && !schemaDefinesProperty(wireParameters, INTENT_FIELD);
 	// When the full catalog is rendered into the system prompt, ship the tool
 	// specs without their descriptions (top-level + nested schema annotations)
 	// so they are not duplicated on the wire. Strip the STABLE wire schema (the
@@ -185,20 +187,57 @@ function normalizeTool(
 	// re-inject `i` (without its hint, which `describeIntent: false` omits) so
 	// intent tracing keeps the field while no descriptions ride the wire.
 	if (pruneDescriptions) {
-		let parameters = stripSchemaDescriptions(toolWireSchema(tool)) as TSchema;
+		let parameters = stripSchemaDescriptions(wireParameters) as TSchema;
 		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
-		return { ...tool, parameters, description: "" };
+		return { ...spec, parameters, description: "" } as Tool;
 	}
-	let parameters = toolWireSchema(tool) as TSchema;
+	let parameters = wireParameters;
 	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 	const description = tool.description ?? "";
 	const examplesBlock = exampleDialect
-		? renderToolExamples({ ...tool, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
+		? renderToolExamples(exampleTool(spec, parameters), exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 		: "";
 	// Every agent normalizes its own tool list, so an appended examples block would otherwise
 	// leave one copy of each description per live agent.
 	const finalDescription = examplesBlock ? internString(`${description}\n\n${examplesBlock}`) : description;
-	return { ...tool, parameters, description: finalDescription };
+	return { ...spec, parameters, description: finalDescription } as Tool;
+}
+
+/**
+ * The tool `renderToolExamples` renders a call of: `spec`, with `parameters` behind an accessor and
+ * supplied again as `wireParameters`. `parameters` is the wire schema already, and `toolWireSchema`
+ * serves a supplied `wireParameters` as it is; handed as a data property it would convert the wire
+ * schema again, and the schema `i` was injected into is a new object on every launch, so no stamp
+ * from an earlier conversion applies.
+ */
+function exampleTool(spec: Record<PropertyKey, unknown>, parameters: TSchema): Tool {
+	return {
+		...spec,
+		get parameters() {
+			return parameters;
+		},
+		wireParameters: parameters as Record<string, unknown>,
+	} as Tool;
+}
+
+/** The fields {@link normalizeTool} replaces with their wire form; copying them would build each one for nothing. */
+const REPLACED_FIELDS: ReadonlySet<PropertyKey> = new Set(["parameters", "wireParameters", "description"]);
+
+/**
+ * The own enumerable properties of `tool` a spread copies, without the {@link REPLACED_FIELDS}.
+ *
+ * A wrapped tool forwards every property through an enumerable accessor, so spreading it reads
+ * `parameters`, which builds the schema the caller is about to replace with its wire form, and
+ * `description`, which several tools render from a prompt template on every read.
+ */
+function specWithoutReplacedFields(tool: AnyAgentTool): Record<PropertyKey, unknown> {
+	const spec: Record<PropertyKey, unknown> = {};
+	for (const key of Reflect.ownKeys(tool)) {
+		if (REPLACED_FIELDS.has(key)) continue;
+		if (!Object.prototype.propertyIsEnumerable.call(tool, key)) continue;
+		spec[key] = (tool as unknown as Record<PropertyKey, unknown>)[key];
+	}
+	return spec;
 }
 
 function resolveIntentMode(intent: AgentTool["intent"]): "require" | "optional" | "omit" {

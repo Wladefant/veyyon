@@ -30,64 +30,49 @@ import {
 import { applyTextEditsToString } from "./edits";
 import { resolveFormatOptions } from "./format-options";
 import { getConfig, splitServers } from "./servers";
-import type { ServerConfig, TextEdit } from "./types";
+import type { LspClient, ServerConfig, TextEdit } from "./types";
 import { fileToUri, summarizeDiagnosticMessages } from "./utils";
 
 /**
- * Sync in-memory file content to all applicable LSP servers.
- * Sends didOpen (if new) or didChange (if already open).
- *
- * @param absolutePath - Absolute path to the file
- * @param content - The new file content
- * @param cwd - Working directory for LSP config resolution
- * @param servers - Servers to sync to
+ * Runs `action` against the client of every server in `servers`, the LSP half of `splitServers`.
+ * A server that fails does not stop the others.
  */
-async function syncFileContent(
+async function forEachServerClient(
+	cwd: string,
+	servers: Array<[string, ServerConfig]>,
+	signal: AbortSignal | undefined,
+	action: (client: LspClient) => Promise<void>,
+): Promise<void> {
+	throwIfAborted(signal);
+	await Promise.allSettled(
+		servers.map(async ([, serverConfig]) => {
+			throwIfAborted(signal);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
+			throwIfAborted(signal);
+			await action(client);
+		}),
+	);
+}
+
+/** Sends didOpen, or didChange when the file is already open, with `content` to every server. */
+function syncFileContent(
 	absolutePath: string,
 	content: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
 	signal?: AbortSignal,
 ): Promise<void> {
-	throwIfAborted(signal);
-	await Promise.allSettled(
-		servers.map(async ([_serverName, serverConfig]) => {
-			throwIfAborted(signal);
-			if (serverConfig.createClient) {
-				return;
-			}
-			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
-			throwIfAborted(signal);
-			await syncContent(client, absolutePath, content, signal);
-		}),
-	);
+	return forEachServerClient(cwd, servers, signal, client => syncContent(client, absolutePath, content, signal));
 }
 
-/**
- * Notify all LSP servers that a file was saved.
- * Assumes content was already synced via syncFileContent.
- *
- * @param absolutePath - Absolute path to the file
- * @param cwd - Working directory for LSP config resolution
- * @param servers - Servers to notify
- */
-async function notifyFileSaved(
+/** Sends didSave to every server. The content was already synced by `syncFileContent`. */
+function notifyFileSaved(
 	absolutePath: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
 	signal?: AbortSignal,
 ): Promise<void> {
-	throwIfAborted(signal);
-	await Promise.allSettled(
-		servers.map(async ([_serverName, serverConfig]) => {
-			throwIfAborted(signal);
-			if (serverConfig.createClient) {
-				return;
-			}
-			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
-			await notifySaved(client, absolutePath, signal);
-		}),
-	);
+	return forEachServerClient(cwd, servers, signal, client => notifySaved(client, absolutePath, signal));
 }
 
 /**

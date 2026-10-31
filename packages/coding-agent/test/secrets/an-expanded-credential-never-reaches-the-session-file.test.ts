@@ -7,7 +7,7 @@
  * placeholder. Everything downstream of that expansion holds plaintext and has to be treated as
  * such.
  *
- * THE BUG. `#recordToolExecutionStart` persisted `summarizeToolArguments(event.args)` verbatim, and
+ * THE BUG. The tool start marker persisted `summarizeToolArguments(event.args)` verbatim, and
  * `event.args` are post-expansion. A `printf '%s' '#DOGFOOD_HASH#' | sha256sum` in a live drive was
  * written to the session JSONL as `printf '%s' '<the real credential>' | sha256sum`. That put the
  * plaintext credential in the same directory as the encrypted vault, in a file that `/share`,

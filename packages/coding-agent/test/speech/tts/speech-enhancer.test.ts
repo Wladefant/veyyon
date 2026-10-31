@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ApiKeyResolver } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { BlockAccumulator, SpeechEnhancer } from "@veyyon/coding-agent/speech/tts/speech-enhancer";
+import { requireBundledModel } from "../../../../agent/test/helpers";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -11,8 +11,7 @@ afterEach(() => {
 
 describe("SpeechEnhancer rewriting", () => {
 	it("uses a reasoning-safe rewrite budget when the catalog disables reasoning", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get(path: string) {
@@ -41,8 +40,7 @@ describe("SpeechEnhancer rewriting", () => {
 	});
 
 	it("obfuscates enhanced speech text immediately before the nested rewrite request", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get(path: string) {
@@ -78,8 +76,7 @@ describe("SpeechEnhancer rewriting", () => {
 	});
 
 	it("keeps a complete placeholder when speech bounding cuts through a secret", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) =>
@@ -114,8 +111,7 @@ describe("SpeechEnhancer rewriting", () => {
 	});
 
 	it("re-reads the speech sanitizer after credential resolution", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) =>
@@ -153,8 +149,7 @@ describe("SpeechEnhancer rewriting", () => {
 	});
 
 	it("re-sanitizes speech for a credential retry", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get: (path: string) =>

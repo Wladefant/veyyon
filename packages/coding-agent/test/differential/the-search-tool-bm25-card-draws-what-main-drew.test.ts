@@ -245,9 +245,8 @@ describe("search_tool_bm25 tool differential", () => {
 			const drawn = viewLines(empty, COLLAPSED);
 			const oracle = oracleLines(empty, HOST_COLLAPSED);
 			// Same warning row and the same sentence in both arms. Main opened a plain text block, so
-			// the header wrapped onto a second row and the message started in column zero behind the
-			// zero-width runs the wrap had closed; the host cuts the header to the width it has and
-			// indents the message under it.
+			// the header wrapped onto a second row and the message started in column zero; the host
+			// cuts the header to the width it has and indents the message under it.
 			expect(drawn).toHaveLength(2);
 			expect(drawn[1]).toBe(`  ${theme.fg("muted", message)}`);
 			expect(oracle).toHaveLength(3);

@@ -77,6 +77,33 @@ function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 	return `Command timed out after ${secs} seconds. ${reset}`;
 }
 
+/** The prefix of the name each cell is compiled under. */
+const CELL_FILE_PREFIX = "js-cell-";
+/** A cell's compiled name, with any path in front of it: one cell's, or an earlier cell's that defined a helper. */
+const CELL_FILE = new RegExp(`(?:[^\\s()]*/)?${CELL_FILE_PREFIX}[0-9a-f-]{36}\\.js`);
+const CELL_FILES = new RegExp(CELL_FILE.source, "g");
+const STACK_FRAME = /^\s+at /;
+
+/**
+ * A thrown value as the cell's reader needs it: the error text, then the stack from the innermost frame down to the
+ * last frame of cell code, with each cell named `<cell>`. The frames under that one dispatched the cell. A stack with
+ * no cell frame, from a cell that did not parse or a thrown non-Error the host wrapped, holds only harness frames.
+ */
+function cellErrorText(error: unknown): string {
+	if (!(error instanceof Error)) return errorMessage(error);
+	const lines = (error.stack ?? error.message).split("\n");
+	const firstFrame = lines.findIndex(line => STACK_FRAME.test(line));
+	if (firstFrame < 0) return lines.join("\n");
+	let end = firstFrame;
+	for (let i = lines.length - 1; i >= firstFrame; i--) {
+		if (STACK_FRAME.test(lines[i]!) && CELL_FILE.test(lines[i]!)) {
+			end = i + 1;
+			break;
+		}
+	}
+	return lines.slice(0, end).join("\n").replace(CELL_FILES, "<cell>");
+}
+
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputSink = new OutputSink({
@@ -128,7 +155,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			artifactsDir: options.artifactsDir,
 			reset: options.reset,
 			code,
-			filename: `js-cell-${crypto.randomUUID()}.js`,
+			filename: `${CELL_FILE_PREFIX}${crypto.randomUUID()}.js`,
 			timeoutMs: acquireBudgetMs,
 			runState: {
 				signal,
@@ -162,8 +189,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			}
 			return await finish(undefined, true);
 		}
-		const message = error instanceof Error ? (error.stack ?? error.message) : errorMessage(error);
-		outputSink.push(message);
+		outputSink.push(cellErrorText(error));
 		return await finish(1, false);
 	}
 }

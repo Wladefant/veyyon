@@ -10,7 +10,7 @@
  */
 
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -94,6 +94,8 @@ export class TabBar implements Component {
 	#hover = new HoverController<string>();
 	/** Per-render tab hit zones: 0-based line + [start, end) columns. */
 	#hitZones: { line: number; start: number; end: number; index: number }[] = [];
+	/** First tab row a windowed {@link renderVertical} shows; moves only far enough to keep the active tab in view. */
+	#verticalScroll = 0;
 
 	/** Callback fired when the active tab changes */
 	onTabChange?: (tab: Tab, index: number) => void;
@@ -173,7 +175,7 @@ export class TabBar implements Component {
 		const len = this.#tabs.length;
 		if (len === 0) return;
 		for (let step = 1; step <= len; step++) {
-			const index = (((this.#activeIndex + delta * step) % len) + len) % len;
+			const index = wrapIndex(this.#activeIndex + delta * step, len);
 			if (!this.#tabs[index]?.muted) {
 				this.setActiveIndex(index);
 				return;
@@ -297,15 +299,25 @@ export class TabBar implements Component {
 	 * prefixed with `cursor`; labels that overflow fall back to `short`, then
 	 * truncate. Hit zones cover each full row, so `tabAt`/`setHoverTab` work
 	 * exactly as after a horizontal `render`.
+	 *
+	 * A column with more tabs than `maxRows` shows a window of `maxRows` rows (at
+	 * least one) that scrolls only far enough to keep the active tab in it, and
+	 * `tabAt` reads rows of that window.
 	 */
-	renderVertical(width: number, cursor = "> "): readonly string[] {
+	renderVertical(width: number, cursor = "> ", maxRows = Number.POSITIVE_INFINITY): readonly string[] {
 		// Same zero-width contract as the horizontal bar, and the same reason.
 		if (!(width >= 1)) return [""];
 		const maxWidth = Math.max(1, width);
 		const cursorW = visibleWidth(cursor);
+		const count = this.#tabs.length;
+		const visible = clampLow(maxRows >= count ? count : Math.floor(maxRows), 1, count);
+		if (this.#activeIndex < this.#verticalScroll) this.#verticalScroll = this.#activeIndex;
+		else if (this.#activeIndex >= this.#verticalScroll + visible)
+			this.#verticalScroll = this.#activeIndex - visible + 1;
+		this.#verticalScroll = clampLow(this.#verticalScroll, 0, count - visible);
 		this.#hitZones = [];
 		const lines: string[] = [];
-		for (let i = 0; i < this.#tabs.length; i++) {
+		for (let i = this.#verticalScroll; i < Math.min(count, this.#verticalScroll + visible); i++) {
 			const tab = this.#tabs[i];
 			// Muted tabs never take the active highlight (matches render()).
 			const active = i === this.#activeIndex && !tab.muted;
@@ -318,7 +330,7 @@ export class TabBar implements Component {
 			// Infinite or multi-million width, and `repeat` throws a RangeError on
 			// Infinity — a throw here takes down the whole frame, not just the bar.
 			text += padding(maxWidth - visibleWidth(text));
-			this.#hitZones.push({ line: i, start: 0, end: maxWidth, index: i });
+			this.#hitZones.push({ line: lines.length, start: 0, end: maxWidth, index: i });
 			lines.push(this.#paintTab(tab, i, text));
 		}
 		return lines.length > 0 ? lines : [""];

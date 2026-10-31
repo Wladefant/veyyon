@@ -6,6 +6,7 @@ import { getPreset, resolvePresetSegments } from "@veyyon/coding-agent/modes/ter
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { segmentContext } from "../../../../helpers/segment-context";
 
 /**
  * WHY: the launch card paints the composer footline about a second before the
@@ -79,11 +80,8 @@ describe("what the branch says about the working tree", () => {
 });
 
 describe("the live git segment and the card render one branch", () => {
-	function segmentContext(branch: string | null, status: SegmentContext["git"]["status"]): SegmentContext {
-		return {
-			git: { branch, status, pr: null },
-			options: {},
-		} as unknown as SegmentContext;
+	function gitContext(branch: string | null, status: SegmentContext["git"]["status"]): SegmentContext {
+		return segmentContext({ git: { branch, status, pr: null } });
 	}
 
 	it("emits exactly what the card emits, for every dirtiness the live row can be in", () => {
@@ -100,12 +98,12 @@ describe("the live git segment and the card render one branch", () => {
 			[{ staged: 0, unstaged: 0, untracked: 5, truncated: true }, true],
 		] as const) {
 			const where = `status ${JSON.stringify(status)}`;
-			expect(renderSegment("git", segmentContext("main", status)).content, where).toBe(renderBranch("main", dirty));
+			expect(renderSegment("git", gitContext("main", status)).content, where).toBe(renderBranch("main", dirty));
 		}
 	});
 
 	it("hides the segment when there is neither a branch nor a status", () => {
-		expect(renderSegment("git", segmentContext(null, null))).toMatchObject({ content: "", visible: false });
+		expect(renderSegment("git", gitContext(null, null))).toMatchObject({ content: "", visible: false });
 	});
 });
 

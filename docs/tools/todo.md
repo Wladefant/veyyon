@@ -9,7 +9,8 @@
   - `packages/coding-agent/src/tools/index.ts`: registers tool, exposes session hooks, gates availability.
   - `packages/coding-agent/src/modes/terminal/controllers/event-controller.ts`: updates the visible todo UI on tool completion.
   - `packages/coding-agent/src/session/agent-session.ts`: stores cached phases, strips done/dropped tasks on session resume, emits failure reminders.
-  - `packages/coding-agent/src/modes/terminal/controllers/todo-command-controller.ts`: `/todo` command path, custom-entry persistence, transcript reminder injection.
+  - `packages/coding-agent/src/slash-commands/helpers/todo.ts`: the `/todo` command for every surface (`runTodoCommand`): verb parsing, fuzzy task and phase matching, custom-entry persistence, transcript reminder injection.
+  - `packages/coding-agent/src/modes/terminal/controllers/todo-command-controller.ts`: the TUI surface of `/todo`: todo panel redraw, clipboard and `$EDITOR`.
   - `packages/coding-agent/src/tools/core/render-utils.ts`: collapsed-preview cap for renderer trees.
 
 ## Inputs
@@ -112,14 +113,14 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `event-controller` updates the visible todo panel from successful results.
   - On error, `event-controller` shows `Todo update failed...`; the visible panel may stay stale until a later successful call.
 - Background work / cancellation
-  - Session-level auto-clear of `completed`/`abandoned` tasks was removed (the timer mutated canonical phases between tool calls). The TUI todo widget can still clear closed entries after `tasks.todoClearDelay` (display-only, `packages/coding-agent/src/modes/terminal/interactive-mode.ts`), but that timer is off by default and only runs when the setting is given a non-negative value.
+  - The session never clears `completed`/`abandoned` tasks on a timer. The TUI todo widget clears closed entries after `tasks.todoClearDelay` (display-only, `packages/coding-agent/src/modes/terminal/controllers/anchored-blocks.ts`); the timer is off by default and runs only when the setting holds a non-negative value.
 
 ## Limits & Caps
 - `init.list`: applies to a single op (`todoSchema`). The params object carries exactly one op.
 - `init.list[*].items`: `minItems: 1`.
 - `append.items`: non-empty enforced per op at runtime (`Missing items for append operation`); the schema carries no `minItems` on the flat `items` field.
 - Renderer collapsed preview: `PREVIEW_LIMITS.COLLAPSED_ITEMS = 8` (`packages/coding-agent/src/tools/core/render-utils.ts`).
-- Auto-clear delay: `tasks.todoClearDelay` default `-1`, which never clears; `0` clears immediately and any positive value is a delay in seconds. At the default no timer is armed at all. Display-only: applied by the TUI widget (`packages/coding-agent/src/modes/terminal/interactive-mode.ts`); the setting is inert at the session level.
+- Auto-clear delay: `tasks.todoClearDelay` default `-1`, which never clears; `0` clears immediately and any positive value is a delay in seconds. At the default no timer is armed at all. Display-only: applied by the TUI widget (`packages/coding-agent/src/modes/terminal/controllers/anchored-blocks.ts`); the session does not read the setting.
 - Tool execution mode: `concurrency = "exclusive"`, `strict = true`, `loadMode = "discoverable"`.
 
 ## Errors

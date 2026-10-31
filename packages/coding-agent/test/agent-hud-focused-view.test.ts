@@ -123,7 +123,7 @@ describe("the agent HUD while the view is focused on an agent", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -166,13 +166,13 @@ describe("the agent HUD while the view is focused on an agent", () => {
 	 * clock or the paint it scheduled is discarded with the fake timers.
 	 */
 	async function spawnDetached(id: string, index: number, description: string): Promise<void> {
-		if (!eventBus) throw new Error("eventBus not booted");
+		if (!eventBus || !mode || !terminal) throw new Error("eventBus not booted");
 		vi.useFakeTimers();
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, index, description));
 		vi.advanceTimersByTime(150);
 		vi.useRealTimers();
-		mode?.ui.requestRender();
-		await terminal?.waitForRender();
+		mode.ui.requestRender();
+		await terminal.waitForRender(mode.ui);
 	}
 
 	it("scopes the HUD to the viewed session and names the view and the way out", async () => {
@@ -199,9 +199,9 @@ describe("the agent HUD while the view is focused on an agent", () => {
 			session: childSession,
 			status: "running",
 		});
-		if (!mode) throw new Error("mode not booted");
+		if (!mode || !terminal) throw new Error("mode not booted");
 		await mode.focusAgentSession("AuthLoader");
-		await terminal?.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const focusedHud = hudText();
 		const focusedFrame = viewportText();
@@ -228,7 +228,7 @@ describe("the agent HUD while the view is focused on an agent", () => {
 
 		// Leaving restores the driving session's scope, unchanged.
 		await mode.unfocusSession();
-		await terminal?.waitForRender();
+		await terminal.waitForRender(mode.ui);
 		const restoredHud = hudText();
 		const restoredFrame = viewportText();
 		dumpFrame("MAIN VIEW HUD RESTORED (after esc)", restoredHud.split("\n"));

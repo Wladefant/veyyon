@@ -1,20 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { isOpenAICompletionsProgressChunk, streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
+import type { FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
 
 const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 function getRequestSignal(input: string | URL | Request, init: RequestInit | undefined): AbortSignal | undefined {
 	if (init?.signal) {
@@ -418,7 +413,7 @@ describe("provider integration", () => {
 				createKeepaliveOnlyCompletionsResponse(openAICompletionsModel.id, getRequestSignal(input, init)),
 			);
 
-		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			streamFirstEventTimeoutMs: 1_000,
@@ -461,7 +456,7 @@ describe("provider integration", () => {
 			});
 		};
 
-		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 			onPayload: payload => {

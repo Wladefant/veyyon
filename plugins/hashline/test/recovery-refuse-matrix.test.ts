@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery refuse matrix: many divergence patterns return null.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/r.ts";
 
 describe("Recovery refuse matrix", () => {
 	it("refuses when each anchor line of a multi-line SWAP has diverged", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D"]);
-		const v1 = text(["A-x", "B-x", "C-x", "D"]);
+		const v0 = linesText(["A", "B", "C", "D"]);
+		const v1 = linesText(["A-x", "B-x", "C-x", "D"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({
@@ -29,7 +26,7 @@ describe("Recovery refuse matrix", () => {
 
 	it("refuses unknown tag regardless of current text matching snapshot", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B"]);
+		const v0 = linesText(["A", "B"]);
 		store.record(PATH, v0);
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -44,7 +41,7 @@ describe("Recovery refuse matrix", () => {
 		const store = new InMemorySnapshotStore();
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
-			currentText: text(["A"]),
+			currentText: linesText(["A"]),
 			fileHash: "abcd",
 			edits: parsePatch("SWAP 1.=1:\n+X").edits,
 		});
@@ -53,8 +50,8 @@ describe("Recovery refuse matrix", () => {
 
 	it("accepts when only non-anchor lines diverged", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["KEEP", "mid", "TAIL"]);
-		const v1 = text(["KEEP", "mid", "TAIL-DRIFT"]);
+		const v0 = linesText(["KEEP", "mid", "TAIL"]);
+		const v1 = linesText(["KEEP", "mid", "TAIL-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({

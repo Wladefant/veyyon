@@ -46,26 +46,7 @@ import {
 	pruneToolOutputs,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
-
-function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
+import { createAssistantMessage } from "./helpers";
 
 const LONG_TEXT = "the quick brown fox jumps over the lazy dog. ".repeat(400);
 
@@ -103,7 +84,7 @@ const IMAGE_BLOCK: ImageContent = { type: "image", data: "AAAA", mimeType: "imag
 
 describe("estimateTokens memoization", () => {
 	test("does not re-tokenize an unchanged message object on a second call", () => {
-		const message = assistantMessage([{ type: "text", text: LONG_TEXT }]);
+		const message = createAssistantMessage([{ type: "text", text: LONG_TEXT }]);
 		const byteLengthSpy = vi.spyOn(Buffer, "byteLength");
 
 		const first = estimateTokens(message);
@@ -118,7 +99,7 @@ describe("estimateTokens memoization", () => {
 	});
 
 	test("keeps default and excludeEncryptedReasoning estimates independently cached and correct", () => {
-		const message = assistantMessage([
+		const message = createAssistantMessage([
 			{ type: "thinking", thinking: "hidden reasoning", thinkingSignature: "s".repeat(2000) },
 			{ type: "text", text: "visible answer" },
 		]);
@@ -136,8 +117,8 @@ describe("estimateTokens memoization", () => {
 	});
 
 	test("does not share a cache slot across distinct message objects with identical content", () => {
-		const a = assistantMessage([{ type: "text", text: LONG_TEXT }]);
-		const b = assistantMessage([{ type: "text", text: LONG_TEXT }]);
+		const a = createAssistantMessage([{ type: "text", text: LONG_TEXT }]);
+		const b = createAssistantMessage([{ type: "text", text: LONG_TEXT }]);
 
 		const byteLengthSpy = vi.spyOn(Buffer, "byteLength");
 		estimateTokens(a);
@@ -219,7 +200,7 @@ describe("estimateTokens after an in-place rewrite", () => {
 	});
 
 	test("shrinking only the encrypted reasoning payload moves the default estimate and not the floor", () => {
-		const message = assistantMessage([
+		const message = createAssistantMessage([
 			{ type: "thinking", thinking: "hidden reasoning", thinkingSignature: "s".repeat(4000) },
 			{ type: "text", text: "visible answer" },
 		]);
@@ -263,14 +244,15 @@ describe("estimateTokens after an in-place rewrite", () => {
 		},
 		{
 			label: "assistant text",
-			make: () => assistantMessage([{ type: "text", text: LONG_TEXT }]),
+			make: () => createAssistantMessage([{ type: "text", text: LONG_TEXT }]),
 			shrink: message => {
 				(message as AssistantMessage).content = [{ type: "text", text: "short" }];
 			},
 		},
 		{
 			label: "assistant tool-call arguments",
-			make: () => assistantMessage([{ type: "toolCall", id: "c1", name: "read", arguments: { body: LONG_TEXT } }]),
+			make: () =>
+				createAssistantMessage([{ type: "toolCall", id: "c1", name: "read", arguments: { body: LONG_TEXT } }]),
 			shrink: message => {
 				(message as AssistantMessage).content = [{ type: "toolCall", id: "c1", name: "read", arguments: {} }];
 			},

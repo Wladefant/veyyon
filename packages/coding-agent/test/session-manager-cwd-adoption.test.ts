@@ -2,16 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { getAgentDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
+import { getAgentDir, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
+const makeTempDir = useTempDirs();
 
 // The DEFAULT session dir resolves under the agent dir, not under any temp dir a
 // test passes in. `SessionManager.open` and `getDefaultSessionDir` both go there,
@@ -39,7 +34,6 @@ afterEach(async () => {
 	if (dirOverrides !== undefined) restoreDirOverrides(dirOverrides);
 	dirOverrides = undefined;
 	agentRoot = undefined;
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
 });
 
 /**

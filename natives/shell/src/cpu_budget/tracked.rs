@@ -130,7 +130,7 @@ impl TrackedBudget {
 		}) / 1_000
 	}
 
-	/// Lower (or, at level 0, restore) member scheduling priority. Unix
+	/// Set member scheduling priority to the absolute nice `level`. Unix
 	/// only; on Windows this backend never runs, so the lever is a no-op.
 	#[cfg(unix)]
 	pub fn renice(&self, level: i32) {
@@ -143,7 +143,7 @@ impl TrackedBudget {
 		}
 	}
 
-	/// Lower (or, at level 0, restore) member scheduling priority. Unix
+	/// Set member scheduling priority to the absolute nice `level`. Unix
 	/// only; on Windows this backend never runs, so the lever is a no-op.
 	#[cfg(not(unix))]
 	#[expect(

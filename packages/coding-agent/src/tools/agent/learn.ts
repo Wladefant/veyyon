@@ -1,14 +1,15 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, lazy } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage } from "@veyyon/utils";
 import { sanitizeSkillName, writeManagedSkill } from "../../autolearn/managed-skills";
 import { isNameClaimedByAuthoredSkill } from "../../extensibility/skills";
 import { localBackend } from "../../memory/local-backend";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState } from "./memory-session";
 
-const learnSchema = lazy(() =>
+const learnSchema = toolSchema("learn", () =>
 	type({
 		memory: type("string").describe("the durable, self-contained lesson to remember (what, when, why)"),
 		"context?": type("string").describe("optional source context for the lesson"),
@@ -40,6 +41,9 @@ export class LearnTool implements AgentTool<typeof learnSchema.value> {
 	readonly description = toolsPrompts["tools/learn"].text;
 	get parameters(): typeof learnSchema.value {
 		return learnSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return learnSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "essential" as const;
@@ -90,10 +94,7 @@ export class LearnTool implements AgentTool<typeof learnSchema.value> {
 				throw new Error("Lesson was empty after sanitization; nothing stored.");
 			}
 		} else {
-			const state = this.session.getHindsightSessionState?.();
-			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
-			}
+			const state = requireHindsightSessionState(this.session);
 			state.enqueueRetain(params.memory, params.context);
 			memoryMessage = "Lesson queued for retention";
 		}

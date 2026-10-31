@@ -17,11 +17,7 @@ import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions
 import type { Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function sseResponse(events: unknown[]): Response {
-	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
-	return new Response(payload, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
+import { sseResponse } from "./helpers/fetch-mock";
 
 /** Official-endpoint GPT-5.6 on the Chat Completions wire. */
 function officialChatModel(): Model<"openai-completions"> {

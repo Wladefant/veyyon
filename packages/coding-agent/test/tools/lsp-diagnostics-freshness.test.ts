@@ -9,8 +9,9 @@ import { fileToUri } from "@veyyon/coding-agent/lsp/utils";
 import { createLspWritethrough } from "@veyyon/coding-agent/lsp/writethrough";
 import type { DeferredDiagnosticsEntry, ToolSession } from "@veyyon/coding-agent/tools";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
-import { type ptree, TempDir } from "@veyyon/utils";
-import { driveFakeTime, installFakeTime } from "../helpers/fake-time";
+import * as utils from "@veyyon/utils";
+import { atomicWriteFileSync, type ptree, TempDir } from "@veyyon/utils";
+import { driveFakeTime, installFakeTime } from "../../../utils/test/helpers/fake-time";
 
 const TEST_SERVER: ServerConfig = {
 	command: "test-lsp",
@@ -52,8 +53,23 @@ function createClient(cwd: string, config: ServerConfig): LspClient {
 }
 
 function publishDiagnostics(client: LspClient, uri: string, diagnostics: Diagnostic[], version: number | null): void {
-	client.diagnostics.set(uri, { diagnostics, version });
-	client.diagnosticsVersion += 1;
+	lspClient.recordPublishedDiagnostics(client, uri, { diagnostics, version });
+}
+
+/**
+ * Fake time for a write driven by `driveFakeTime`, with the writethrough's disk commit run through the
+ * blocking atomic writer.
+ *
+ * `driveFakeTime` advances fake time while the event loop waits, and the writethrough arms its 5000ms
+ * operation budget before it commits to disk. An asynchronous commit that took a few hundred real
+ * milliseconds spent that budget: the sync and the diagnostics wait were skipped and the write returned
+ * undefined. A blocking commit holds the event loop, so it spends no fake time.
+ */
+function installFakeClock(): void {
+	installFakeTime();
+	vi.spyOn(utils, "atomicWriteFilePreservingMode").mockImplementation(async (filePath, data) =>
+		atomicWriteFileSync(filePath, data, { fsync: false, mode: 0o644 }),
+	);
 }
 
 describe("LSP diagnostics freshness", () => {
@@ -168,7 +184,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -211,7 +227,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -253,7 +269,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -311,7 +327,7 @@ describe("LSP diagnostics freshness", () => {
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
 		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -347,7 +363,7 @@ describe("LSP diagnostics freshness", () => {
 		const filePath = path.join(tempDir.path(), "write-tool.ts");
 		const uri = fileToUri(filePath);
 		const client = createClient(tempDir.path(), TEST_SERVER);
-		installFakeTime();
+		installFakeClock();
 
 		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
 		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
@@ -434,11 +450,10 @@ describe("LSP diagnostics freshness", () => {
 				bunDiagnostic.code = 2867;
 				const syntaxDiagnostic = createDiagnostic("';' expected.");
 				syntaxDiagnostic.code = 1005;
-				mockClient.diagnostics.set(uri, {
+				lspClient.recordPublishedDiagnostics(mockClient, uri, {
 					version: 1,
 					diagnostics: [moduleDiagnostic, bunDiagnostic, syntaxDiagnostic],
 				});
-				mockClient.diagnosticsVersion += 1;
 			});
 
 			const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
@@ -453,5 +468,155 @@ describe("LSP diagnostics freshness", () => {
 		} finally {
 			orphanDir.removeSync();
 		}
+	});
+});
+
+/**
+ * A server that offers `textDocument/diagnostic` and never publishes (tsgo) gave every write the whole
+ * publish wait and then reported no diagnostics, so a write that broke the types read as clean. These
+ * tests drive the write path against such a server and pin: the pulled report for the written version is
+ * returned without the wait, a pull the server asks to have sent again is sent again, a pull that yields
+ * no full report falls back to publishes after one request, and a pull that never answers ends at the
+ * wait budget with no timer left armed. They do not cover a server that splits one file's diagnostics
+ * between pulls and publishes: the first full report or version-matched publish wins.
+ */
+describe("LSP diagnostics from a server that answers pulls", () => {
+	let tempDir: TempDir;
+	let filePath: string;
+	let uri: string;
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@veyyon-lsp-pull-");
+		filePath = path.join(tempDir.path(), "example.ts");
+		uri = fileToUri(filePath);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+		tempDir.removeSync();
+	});
+
+	function after<T>(ms: number, value: T): Promise<T> {
+		const { promise, resolve } = Promise.withResolvers<T>();
+		setTimeout(() => resolve(value), ms);
+		return promise;
+	}
+
+	function failAfter(ms: number, error: Error): Promise<never> {
+		const { promise, reject } = Promise.withResolvers<never>();
+		setTimeout(() => reject(error), ms);
+		return promise;
+	}
+
+	function fullReport(version: number): { kind: "full"; items: Diagnostic[] } {
+		return { kind: "full", items: [createDiagnostic(`pulled error in version ${version}`)] };
+	}
+
+	/**
+	 * Installs one server offering pulls. `answer` receives the document version the write synced and the
+	 * zero-based attempt; `publish` runs when the file is saved. `pulls` counts the pulls sent and
+	 * `firstPullAt` is the fake time of the first one: the write's real file I/O also advances fake time,
+	 * so a wait is measured from the first pull, which is sent when the wait starts.
+	 */
+	function installPullServer(
+		answer: (version: number, attempt: number) => Promise<unknown>,
+		publish?: (client: LspClient) => void,
+	): { client: LspClient; pulls: () => number; firstPullAt: () => number | undefined } {
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		client.serverCapabilities = { diagnosticProvider: { interFileDependencies: true, workspaceDiagnostics: false } };
+		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		installFakeClock();
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined, missingServers: [] });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.diagnostics.delete(syncedUri);
+			const openFile = mockClient.openFiles.get(syncedUri);
+			if (openFile) openFile.version += 1;
+		});
+		vi.spyOn(lspClient, "notifySaved").mockImplementation(async mockClient => {
+			publish?.(mockClient);
+		});
+		let attempts = 0;
+		let firstPullAt: number | undefined;
+		vi.spyOn(lspClient, "sendRequest").mockImplementation(async (mockClient, method, params) => {
+			if (method !== "textDocument/diagnostic") throw new Error(`unexpected request ${method}`);
+			expect(params).toEqual({ textDocument: { uri } });
+			firstPullAt ??= Date.now();
+			return answer(mockClient.openFiles.get(uri)?.version ?? 0, attempts++);
+		});
+		return { client, pulls: () => attempts, firstPullAt: () => firstPullAt };
+	}
+
+	function write(content = "export const value: number = 'x';\n"): Promise<FileDiagnosticsResult | undefined> {
+		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
+		return driveFakeTime(writethrough(filePath, content));
+	}
+
+	it("returns the pulled report for the written version without waiting out the publish wait", async () => {
+		const { client, firstPullAt } = installPullServer(version => after(30, fullReport(version)));
+		const result = await write();
+
+		// The publish path waited 3000ms and returned nothing; a report answered at 30ms is returned before
+		// the 100ms poll interval ends.
+		expect(Date.now() - (firstPullAt() ?? Number.NEGATIVE_INFINITY)).toBeLessThan(100);
+		expect(result?.errored).toBe(true);
+		expect(result?.messages.some(m => m.includes("pulled error in version 2"))).toBe(true);
+		// Code actions read this cache for their diagnostic context.
+		expect(client.diagnostics.get(uri)).toEqual({ diagnostics: fullReport(2).items, version: 2 });
+		// The poll that the pull cut short leaves no timer behind to hold the event loop open.
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it.each([
+		[-32802, "ServerCancelled"],
+		[-32801, "ContentModified"],
+	])("sends the pull again when the server answers %p (%s)", async code => {
+		const { pulls } = installPullServer((version, attempt) =>
+			attempt === 0
+				? failAfter(10, new lspClient.LspResponseError(code, "retrigger"))
+				: after(10, fullReport(version)),
+		);
+		const result = await write();
+
+		expect(result?.messages.some(m => m.includes("pulled error in version 2"))).toBe(true);
+		expect(pulls()).toBe(2);
+	});
+
+	it.each([
+		["a MethodNotFound error", () => failAfter(10, new lspClient.LspResponseError(-32601, "no such method"))],
+		["a transport error", () => failAfter(10, new Error("LSP request textDocument/diagnostic timed out"))],
+		["an unchanged report", () => after(10, { kind: "unchanged", resultId: "1" })],
+		["a null answer", () => after(10, null)],
+	])("falls back to publishes after one pull that yields %s", async (_label, answer) => {
+		// The publish lands several poll intervals after the failed pull, so a pull sent again in between
+		// is counted.
+		const { pulls } = installPullServer(answer, client => {
+			setTimeout(() => {
+				publishDiagnostics(
+					client,
+					uri,
+					[createDiagnostic("published error")],
+					client.openFiles.get(uri)?.version ?? null,
+				);
+			}, 400);
+		});
+		const result = await write();
+
+		expect(result?.messages.some(m => m.includes("published error"))).toBe(true);
+		expect(pulls()).toBe(1);
+	});
+
+	it("ends at the wait budget with no timer armed when the pull never answers", async () => {
+		const { firstPullAt } = installPullServer(() => Promise.withResolvers<never>().promise);
+		const result = await write();
+		const elapsed = Date.now() - (firstPullAt() ?? Number.NEGATIVE_INFINITY);
+
+		expect(elapsed).toBeGreaterThanOrEqual(3000);
+		expect(elapsed).toBeLessThan(3200);
+		expect(result?.messages).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

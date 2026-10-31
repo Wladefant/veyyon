@@ -38,13 +38,14 @@ import { REMOTE_COMPACTION_PRESERVE_KEY, resolveServerCompactionTransport } from
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 interface CompactServer {
 	baseUrl: string;
@@ -106,8 +107,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		// Same gate as the green-path suite: the transport resolves, so the
 		// setting really is what drives the remote attempt.
 		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
@@ -127,14 +127,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 				provider: "openai",
 				model: model.id,
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 },
 				timestamp: Date.now(),
 			});
 		}
@@ -150,14 +143,7 @@ describe("compaction.remote on, endpoint failing: one compact request, one local
 				provider: requestModel.provider,
 				model: requestModel.id,
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 150,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 				timestamp: Date.now(),
 			};
 			const stream = new AssistantMessageEventStream();

@@ -27,6 +27,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
 import * as highlightModule from "@veyyon/coding-agent/theme/highlight";
@@ -41,14 +42,7 @@ const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} 
 /** An SGR the highlighter never writes, prefixed to every row the batch returns. */
 const FROM_BATCH = "\x1b[53m";
 
-const usage = {
-	input: 10,
-	output: 2,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 12,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 10, output: 2, totalTokens: 12 };
 
 let entryCounter = 0;
 function entry(message: AgentMessage): SessionMessageEntry {

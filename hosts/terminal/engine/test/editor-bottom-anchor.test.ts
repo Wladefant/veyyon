@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
+import { viewportRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -39,10 +40,6 @@ function rows(prefix: string, n: number): string[] {
 	return Array.from({ length: n }, (_, i) => `${prefix}${i}`);
 }
 
-function viewportText(term: VirtualTerminal): string[] {
-	return term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-}
-
 describe("editor bottom anchor on transient prompt collapse", () => {
 	it("re-anchors the editor at the viewport bottom after a tall prompt collapses", async () => {
 		const height = 10;
@@ -77,7 +74,7 @@ describe("editor bottom anchor on transient prompt collapse", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			const view = viewportText(term);
+			const view = viewportRows(term);
 			const editorRow = view.indexOf(">");
 			expect(editorRow).toBeGreaterThanOrEqual(0);
 			// Every row below the editor must be empty (no transcript below it),
@@ -128,7 +125,7 @@ describe("editor bottom anchor on transient prompt collapse", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			const view = viewportText(term);
+			const view = viewportRows(term);
 			expect(view[height - 1]).toBe(">");
 		} finally {
 			tui.stop();
@@ -165,7 +162,7 @@ describe("editor bottom anchor on transient prompt collapse", () => {
 				tui.requestRender();
 				await scheduler.drain(term);
 
-				const view = viewportText(term);
+				const view = viewportRows(term);
 				const editorRow = view.indexOf(">");
 				expect(editorRow).toBeGreaterThanOrEqual(0);
 				const blanksBelow = view.length - 1 - editorRow;

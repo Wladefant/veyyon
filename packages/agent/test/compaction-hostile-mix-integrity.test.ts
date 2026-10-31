@@ -37,20 +37,10 @@ import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
 import { DEFAULT_COMPACTION_SETTINGS, estimateTokens, prepareCompaction } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 let idCounter = 0;
-
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function messageEntry(message: AgentMessage): SessionMessageEntry {
 	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-07-25T00:00:00.000Z", message };
@@ -64,7 +54,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

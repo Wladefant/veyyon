@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { startMemoryStartupTask } from "@veyyon/coding-agent/memory/local";
 import {
@@ -24,14 +25,6 @@ const GLOBAL_KIND = "memory_consolidate_global";
 const PROJECT_CWD = "/repo";
 const GLOBAL_KEY = `global:${PROJECT_CWD}`;
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>(res => {
-		resolve = res;
-	});
-	return { promise, resolve };
-}
-
 function createMemoryTestModel(): Model {
 	return {
 		provider: "openai",
@@ -48,14 +41,7 @@ function assistantText(text: string): AssistantMessage {
 		api: "openai-responses",
 		provider: "openai",
 		model: "test-model",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
@@ -278,7 +264,7 @@ describe("memories/storage", () => {
 			"memories.threadScanLimit": 64,
 			"memories.phase2HeartbeatSeconds": 1,
 		});
-		const settled = deferred();
+		const settled = Promise.withResolvers<void>();
 		const session = {
 			sessionManager: {
 				getSessionFile: () => currentSessionFile,

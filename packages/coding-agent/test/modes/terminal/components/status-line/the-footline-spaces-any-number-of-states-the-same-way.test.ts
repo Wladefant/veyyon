@@ -40,18 +40,13 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/state-grammar";
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { SYMBOL_PRESETS } from "@veyyon/coding-agent/theme/symbols";
-import {
-	createTheme,
-	getBuiltinThemes,
-	getThemeByName,
-	setThemeInstance,
-	type Theme,
-	theme,
-} from "@veyyon/coding-agent/theme/theme";
+import { createTheme, getBuiltinThemes, setThemeInstance, type Theme, theme } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { visibleWidth } from "@veyyon/utils/width";
 import { NO_SESSION_FACTS } from "../../../../../src/modes/terminal/components/status-line/session-facts";
+import { requireTheme } from "../../../../helpers/require-theme";
+import { segmentContext } from "../../../../helpers/segment-context";
 
 /** The context patch that turns one base mode on, keyed by its id in the table. */
 const ACTIVATORS: Record<string, Partial<SegmentContext>> = {
@@ -72,39 +67,17 @@ interface Load {
 }
 
 function makeContext(load: Load): SegmentContext {
-	return {
+	return segmentContext({
 		facts: {
 			...NO_SESSION_FACTS,
 			approvalMode: load.rung,
 			approvalBypassed: load.bypassed,
 			goalModelBudgets: true,
-			goal: load.withBudget
-				? {
-						id: "g",
-						objective: "o",
-						status: "active",
-						tokensUsed: 12_345,
-						tokenBudget: 50_000,
-						timeUsedSeconds: 0,
-						turnsCompleted: 0,
-						createdAt: 0,
-						updatedAt: 0,
-					}
-				: null,
+			goal: load.withBudget ? { objective: "o", status: "active", tokensUsed: 12_345, tokenBudget: 50_000 } : null,
 		},
-		activeRepo: null,
 		width: 160,
-		options: {},
-		compactThinkingLevel: false,
-		planMode: null,
-		prewalk: null,
-		loopMode: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		activeMs: 0,
 		...(load.mode ? ACTIVATORS[load.mode] : {}),
-	} as unknown as SegmentContext;
+	});
 }
 
 /** Every load the segment can be under: mode × bypass × rung, plus the budgeted goal. */
@@ -141,8 +114,7 @@ let priorTheme: Theme | undefined;
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	priorTheme = await getThemeByName("dark");
-	if (!priorTheme) throw new Error("theme unavailable");
+	priorTheme = await requireTheme("dark");
 	setThemeInstance(priorTheme);
 });
 

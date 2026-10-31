@@ -39,10 +39,6 @@ function usageReport(percent: number): unknown[] {
 	];
 }
 
-function plain(text: string): string {
-	return stripVTControlCharacters(text);
-}
-
 describe("StatusLineComponent usage refresh", () => {
 	beforeEach(async () => {
 		resetSettingsForTest();
@@ -143,12 +139,12 @@ describe("StatusLineComponent usage refresh", () => {
 		vi.advanceTimersByTime(2_000);
 		await flushMicrotasks();
 
-		expect(plain(component.renderQuietLine(80) ?? "")).not.toContain("5h");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).not.toContain("5h");
 
 		late.resolve(usageReport(42));
 		await flushMicrotasks();
 
-		expect(plain(component.renderQuietLine(80) ?? "")).toContain("5h 42%");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("5h 42%");
 	});
 
 	// Each field of the OAuth identity names a different usage pool, so rotating any one of them
@@ -238,13 +234,13 @@ describe("StatusLineComponent usage refresh", () => {
 		await flushMicrotasks();
 
 		// New session's status line must NOT be overwritten with old session's 88%
-		expect(plain(component.renderQuietLine(80) ?? "")).not.toContain("5h 88%");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).not.toContain("5h 88%");
 
 		// New deferred resolves with 22%
 		newDeferred.resolve(usageReport(22));
 		await flushMicrotasks();
 
-		expect(plain(component.renderQuietLine(80) ?? "")).toContain("5h 22%");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("5h 22%");
 	});
 
 	it("does not allow a post-timeout late response from a prior session to overwrite new session data", async () => {
@@ -289,12 +285,12 @@ describe("StatusLineComponent usage refresh", () => {
 		oldDeferred.resolve(usageReport(95));
 		await flushMicrotasks();
 
-		expect(plain(component.renderQuietLine(80) ?? "")).not.toContain("5h 95%");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).not.toContain("5h 95%");
 
 		// New request resolves
 		newDeferred.resolve(usageReport(15));
 		await flushMicrotasks();
 
-		expect(plain(component.renderQuietLine(80) ?? "")).toContain("5h 15%");
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("5h 15%");
 	});
 });

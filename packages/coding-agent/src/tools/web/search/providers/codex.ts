@@ -72,7 +72,7 @@ function getBundledCodexModels(): CodexSearchModel[] {
 			models.push(model as CodexSearchModel);
 		}
 	}
-	return models;
+	return ids;
 }
 
 function getDefaultModelCandidates(): string[] {

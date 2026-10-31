@@ -32,6 +32,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool, CHALLENGE_WAIT_MAX_MS } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 /** Past a wait's bound, what an open or run may add: its navigation, the probes and the page snapshot. */
@@ -85,16 +86,12 @@ function serve(request: http.IncomingMessage, response: http.ServerResponse): vo
 	response.end(PAGES[url.pathname] ?? "<!doctype html><title>blank</title>");
 }
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 function notices(body: string): number {
 	return body.split("Challenge:").length - 1;
 }
 
 async function run(name: string, code: string): Promise<string> {
-	return text(await tool.execute("run", { action: "run", name, code }));
+	return toolResultText(await tool.execute("run", { action: "run", name, code }));
 }
 
 /** An open of `pathname` in tab `name`, already on about:blank so no browser start is timed, with its wall time. */
@@ -102,7 +99,7 @@ async function timedOpen(name: string, pathname: string, timeout?: number): Prom
 	await tool.execute("open", { action: "open", name, url: "about:blank" });
 	const started = performance.now();
 	const result = await tool.execute("open", { action: "open", name, url: `${base}${pathname}`, timeout });
-	return { body: text(result), ms: performance.now() - started };
+	return { body: toolResultText(result), ms: performance.now() - started };
 }
 
 beforeAll(async () => {
@@ -183,7 +180,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an interstitial check", () => {
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("a challenge that needs a person", () => {
 	it("is handed to a person once per page, by open, by run and by a failed run", async () => {
-		const opened = text(await tool.execute("open", { action: "open", name: "hold", url: `${base}/hold` }));
+		const opened = toolResultText(await tool.execute("open", { action: "open", name: "hold", url: `${base}/hold` }));
 		expect(notices(opened)).toBe(1);
 		expect(opened).toContain(
 			"Challenge: HUMAN press-and-hold check on the page, which needs a person (evidence: element #px-captcha). This tool does not solve CAPTCHAs: open this tab with visible: true",
@@ -225,7 +222,9 @@ return "loaded";`,
 	}, 60_000);
 
 	it("is not reported for an article about CAPTCHAs", async () => {
-		const body = text(await tool.execute("open", { action: "open", name: "article", url: `${base}/article` }));
+		const body = toolResultText(
+			await tool.execute("open", { action: "open", name: "article", url: `${base}/article` }),
+		);
 		expect(body).toContain("Title: How CAPTCHAs work");
 		expect(notices(body)).toBe(0);
 	}, 60_000);
@@ -242,7 +241,9 @@ return "loaded";`,
 		];
 		const reported: Record<string, string | null> = {};
 		for (const pathname of pages) {
-			const body = text(await tool.execute("open", { action: "open", name: "frames", url: `${base}${pathname}` }));
+			const body = toolResultText(
+				await tool.execute("open", { action: "open", name: "frames", url: `${base}${pathname}` }),
+			);
 			reported[pathname] = /Challenge: ([^(]+) on the page/.exec(body)?.[1]?.trim() ?? null;
 		}
 		expect(reported).toEqual({

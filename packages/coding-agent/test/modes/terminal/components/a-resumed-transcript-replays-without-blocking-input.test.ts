@@ -30,12 +30,11 @@
  * row below the transcript; the suite pins that for one appended row only.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
 import type { ToolExecutionHandle } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
@@ -44,14 +43,14 @@ import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type Component, Container, Text, TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import type { CustomBlock } from "@veyyon/wire/presentation";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "../../../helpers/test-agent-session";
 
 const WIDTH = 120;
 const ui = {
@@ -61,14 +60,7 @@ const ui = {
 	terminal: { columns: WIDTH },
 } as unknown as TUI;
 
-const usage = {
-	input: 10,
-	output: 2,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 12,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 10, output: 2, totalTokens: 12 };
 
 function assistant(content: AssistantMessage["content"], stopReason: "stop" | "toolUse" | "error"): AssistantMessage {
 	return {
@@ -553,16 +545,7 @@ describe("InteractiveMode.replayInitialMessages", () => {
 		tempDir = TempDir.createSync("@veyyon-sliced-replay-");
 		const dir = tempDir.path();
 		await Settings.init({ inMemory: true, cwd: dir, overrides: { "display.transitions": "off" } });
-		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-		agentSession = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(dir, dir),
-			settings: Settings.isolated(),
-			modelRegistry,
-		});
+		({ authStorage, session: agentSession } = await createTestAgentSession(dir));
 		for (let turn = 0; turn < turns; turn++) {
 			agentSession.sessionManager.appendMessage({ role: "user", content: `resumed question ${turn}`, timestamp: 1 });
 			agentSession.sessionManager.appendMessage(

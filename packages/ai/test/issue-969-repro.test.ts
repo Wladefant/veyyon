@@ -4,18 +4,11 @@ import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const testContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
 };
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
 
 function customOpenAICompatModel(): Model<"openai-completions"> {
 	return buildModel({
@@ -43,7 +36,7 @@ describe("issue #969 — custom thinking metadata must preserve explicit xhigh",
 		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 				payload = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-969",
 						object: "chat.completion.chunk",

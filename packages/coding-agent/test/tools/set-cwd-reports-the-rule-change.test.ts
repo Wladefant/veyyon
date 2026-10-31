@@ -35,12 +35,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { SetCwdTool, type SetCwdToolDetails } from "@veyyon/coding-agent/tools/fs/set-cwd";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { Component } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -50,13 +51,6 @@ import { makeToolSession } from "../helpers/tool-session";
  */
 async function renderToText(component: Component | undefined): Promise<string> {
 	return component ? Bun.stripANSI(component.render(120).join("\n")) : "";
-}
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 describe("set_cwd rule reporting", () => {
@@ -102,7 +96,7 @@ describe("set_cwd rule reporting", () => {
 		await fs.writeFile(path.join(inner, "AGENTS.md"), body);
 
 		const { tool } = toolAt(outer);
-		const text = textOf(await tool.execute("s1", { path: inner }));
+		const text = toolResultText(await tool.execute("s1", { path: inner }));
 
 		expect(text).toContain(path.join(inner, "AGENTS.md"));
 		expect(text).toContain("now in effect");
@@ -127,7 +121,7 @@ describe("set_cwd rule reporting", () => {
 
 		const { tool } = toolAt(outer);
 		const result = await tool.execute("s1", { path: sibling });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		const details = result.details as SetCwdToolDetails;
 
 		expect(text).toContain("No longer in effect");
@@ -148,7 +142,7 @@ describe("set_cwd rule reporting", () => {
 
 		expect(details.rulesApplied).toEqual([]);
 		expect(details.rulesDropped).toEqual([]);
-		expect(textOf(result)).toContain("unchanged");
+		expect(toolResultText(result)).toContain("unchanged");
 	});
 
 	it("stays the same size no matter how large the rule file is", async () => {
@@ -158,7 +152,7 @@ describe("set_cwd rule reporting", () => {
 		await fs.writeFile(path.join(inner, "AGENTS.md"), `HUGE RULE\n${"x".repeat(40_000)}`);
 
 		const { tool } = toolAt(outer);
-		const text = textOf(await tool.execute("s1", { path: inner }));
+		const text = toolResultText(await tool.execute("s1", { path: inner }));
 
 		expect(text.length).toBeLessThan(1_000);
 		expect(text).toContain(path.join(inner, "AGENTS.md"));
@@ -176,8 +170,8 @@ describe("set_cwd rule reporting", () => {
 
 		expect(details.rulesApplied).toEqual([]);
 		expect(details.rulesDropped).toEqual([]);
-		expect(textOf(result)).toContain("unchanged");
-		expect(textOf(result)).not.toContain("now in effect");
+		expect(toolResultText(result)).toContain("unchanged");
+		expect(toolResultText(result)).not.toContain("now in effect");
 	});
 
 	it("reports both halves when a move swaps one project's rules for another's", async () => {
@@ -190,7 +184,7 @@ describe("set_cwd rule reporting", () => {
 
 		const { tool } = toolAt(outer);
 		const result = await tool.execute("s1", { path: sibling });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		const details = result.details as SetCwdToolDetails;
 
 		expect(details.rulesApplied).toEqual([path.join(sibling, "AGENTS.md")]);
@@ -209,7 +203,7 @@ describe("set_cwd rule reporting", () => {
 		await fs.writeFile(path.join(inner, "AGENTS.md"), "Inner rule.");
 
 		const { tool } = toolAt(outer);
-		const text = textOf(await tool.execute("s1", { path: inner }));
+		const text = toolResultText(await tool.execute("s1", { path: inner }));
 
 		expect(text).toContain(`Moved cwd: ${path.resolve(outer)} → ${path.resolve(inner)}`);
 	});
@@ -223,7 +217,7 @@ describe("set_cwd rule reporting", () => {
 
 		const { tool } = toolAt(outer);
 		const result = await tool.execute("s1", { path: sibling });
-		const theme = (await getThemeByName("titanium"))!;
+		const theme = await requireTheme("titanium");
 		const rendered = await renderToText(toolRenderers.set_cwd?.renderResult?.(result, {} as never, theme));
 
 		expect(rendered).toContain("+1 -1 rule files");
@@ -236,7 +230,7 @@ describe("set_cwd rule reporting", () => {
 
 		const { tool } = toolAt(outer);
 		const result = await tool.execute("s1", { path: sibling });
-		const theme = (await getThemeByName("titanium"))!;
+		const theme = await requireTheme("titanium");
 		const rendered = await renderToText(toolRenderers.set_cwd?.renderResult?.(result, {} as never, theme));
 
 		expect(rendered).toContain("+1 rule file");
@@ -253,8 +247,8 @@ describe("set_cwd rule reporting", () => {
 		const result = await tool.execute("s1", { path: outer });
 		const details = result.details as SetCwdToolDetails;
 
-		expect(textOf(result)).toContain("The rule files in effect are unchanged.");
-		expect(textOf(result)).toContain("do not retry it");
+		expect(toolResultText(result)).toContain("The rule files in effect are unchanged.");
+		expect(toolResultText(result)).toContain("do not retry it");
 		expect(details.rulesApplied).toEqual([]);
 	});
 
@@ -268,7 +262,7 @@ describe("set_cwd rule reporting", () => {
 		await fs.writeFile(path.join(inner, "AGENTS.md"), "Inner rule: this package uses spaces.");
 
 		const { tool } = toolAt(outer);
-		const text = textOf(await tool.execute("s1", { path: inner }));
+		const text = toolResultText(await tool.execute("s1", { path: inner }));
 
 		expect(text).toContain(path.join(inner, "AGENTS.md"));
 		expect(text).not.toContain(path.join(outer, "AGENTS.md"));

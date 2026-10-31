@@ -45,6 +45,7 @@ import {
 } from "@veyyon/agent-core/telemetry";
 import type { AssistantMessage, Message, Model, ToolResultMessage, Usage, UserMessage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const MODEL: Model = buildModel({
 	id: "mock-model",
@@ -88,15 +89,7 @@ function onlySpan(): ReadableSpan {
 }
 
 function makeUsage(over: Partial<Usage> = {}): Usage {
-	return {
-		input: 100,
-		output: 40,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 140,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...over,
-	};
+	return { ...emptyUsage(), input: 100, output: 40, totalTokens: 140, ...over };
 }
 
 function collector(): { warnings: AgentTelemetryWarning[]; onTelemetryWarning: (w: AgentTelemetryWarning) => void } {

@@ -85,11 +85,11 @@ describe("what masking must not change", () => {
 	/** The point of strict parsing: a stray flag fails closed rather than being
 	 * silently dropped. Masking must not become a hole for that. */
 	it("still rejects an unknown flag", async () => {
-		await expect(parse(["set", "--nope"])).rejects.toThrow(/Unknown option/);
+		await expect(parse(["set", "--nope"])).rejects.toThrow("Unknown flag: --nope");
 	});
 
 	it("still rejects a short flag that is not a number", async () => {
-		await expect(parse(["set", "-x"])).rejects.toThrow(/Unknown option/);
+		await expect(parse(["set", "-x"])).rejects.toThrow("Unknown flag: -x");
 	});
 
 	it("leaves a bare dash alone", async () => {

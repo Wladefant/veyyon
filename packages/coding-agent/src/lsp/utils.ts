@@ -98,7 +98,7 @@ export function severityToString(severity?: DiagnosticSeverity): string {
 /**
  * Sort diagnostics by severity, then by location and message.
  */
-export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
+function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	return diagnostics.sort((a, b) => {
 		const aSeverity = a.severity ?? 1;
 		const bSeverity = b.severity ?? 1;
@@ -111,6 +111,23 @@ export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 		if (aCol !== bCol) return aCol - bCol;
 		return a.message.localeCompare(b.message);
 	});
+}
+
+/**
+ * `diagnostics` with each repeat of a range and message removed, sorted by {@link sortDiagnostics}.
+ * Servers that check one file can report the same problem; the first report of each is kept.
+ */
+export function uniqueSortedDiagnostics(diagnostics: readonly Diagnostic[]): Diagnostic[] {
+	const seen = new Set<string>();
+	const unique: Diagnostic[] = [];
+	for (const diagnostic of diagnostics) {
+		const { start, end } = diagnostic.range;
+		const key = `${start.line}:${start.character}:${end.line}:${end.character}:${diagnostic.message}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(diagnostic);
+	}
+	return sortDiagnostics(unique);
 }
 
 /**
@@ -149,43 +166,44 @@ export function formatDiagnostic(diagnostic: Diagnostic, filePath: string): stri
  * Format diagnostics grouped by severity.
  */
 export function formatDiagnosticsSummary(diagnostics: Diagnostic[]): string {
-	const counts = { error: 0, warning: 0, info: 0, hint: 0 };
+	const counts: SeverityCounts = { error: 0, warning: 0, info: 0, hint: 0 };
 
 	for (const d of diagnostics) {
 		const sev = severityToString(d.severity);
 		if (sev in counts) {
-			counts[sev as keyof typeof counts]++;
+			counts[sev as keyof SeverityCounts]++;
 		}
 	}
 
+	return formatSeverityCounts(counts);
+}
+
+interface SeverityCounts {
+	error: number;
+	warning: number;
+	info: number;
+	hint: number;
+}
+
+/** `2 error(s), 1 hint(s)` for the severities present, or `no issues`. */
+function formatSeverityCounts(counts: SeverityCounts): string {
 	const parts: string[] = [];
 	if (counts.error > 0) parts.push(`${counts.error} error(s)`);
 	if (counts.warning > 0) parts.push(`${counts.warning} warning(s)`);
 	if (counts.info > 0) parts.push(`${counts.info} info(s)`);
 	if (counts.hint > 0) parts.push(`${counts.hint} hint(s)`);
-
 	return parts.length > 0 ? parts.join(", ") : "no issues";
 }
 
 export function summarizeDiagnosticMessages(messages: string[]): { summary: string; errored: boolean } {
-	const counts = { error: 0, warning: 0, info: 0, hint: 0 };
+	const counts: SeverityCounts = { error: 0, warning: 0, info: 0, hint: 0 };
 	for (const message of messages) {
 		const match = message.match(/\[(error|warning|info|hint)\]/i);
 		if (!match) continue;
-		const key = match[1].toLowerCase() as keyof typeof counts;
+		const key = match[1].toLowerCase() as keyof SeverityCounts;
 		counts[key] += 1;
 	}
-
-	const parts: string[] = [];
-	if (counts.error > 0) parts.push(`${counts.error} error(s)`);
-	if (counts.warning > 0) parts.push(`${counts.warning} warning(s)`);
-	if (counts.info > 0) parts.push(`${counts.info} info(s)`);
-	if (counts.hint > 0) parts.push(`${counts.hint} hint(s)`);
-
-	return {
-		summary: parts.length > 0 ? parts.join(", ") : "no issues",
-		errored: counts.error > 0,
-	};
+	return { summary: formatSeverityCounts(counts), errored: counts.error > 0 };
 }
 
 // =============================================================================

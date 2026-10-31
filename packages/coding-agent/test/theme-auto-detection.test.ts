@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import * as nativesModule from "@veyyon/natives";
 import { MacOSAppearance } from "@veyyon/natives";
+import { restorePlatform, setPlatform } from "../../utils/test/helpers/platform-override";
 
-const originalPlatform = process.platform;
 const originalColorfgbg = Bun.env.COLORFGBG;
 const originalZellij = Bun.env.ZELLIJ;
 
@@ -14,11 +14,7 @@ type ThemeTestGlobals = {
 };
 
 const withThemeTestGlobals = (globals: ThemeTestGlobals = {}) => {
-	Object.defineProperty(process, "platform", {
-		value: globals.platform ?? "darwin",
-		configurable: true,
-		writable: true,
-	});
+	setPlatform(globals.platform ?? "darwin");
 
 	if (globals.colorfgbg === undefined) delete Bun.env.COLORFGBG;
 	else Bun.env.COLORFGBG = globals.colorfgbg;
@@ -29,11 +25,7 @@ const withThemeTestGlobals = (globals: ThemeTestGlobals = {}) => {
 	return {
 		[Symbol.dispose]() {
 			themeModule.stopThemeWatcher();
-			Object.defineProperty(process, "platform", {
-				value: originalPlatform,
-				configurable: true,
-				writable: true,
-			});
+			restorePlatform();
 			if (originalColorfgbg === undefined) delete Bun.env.COLORFGBG;
 			else Bun.env.COLORFGBG = originalColorfgbg;
 			if (originalZellij === undefined) delete Bun.env.ZELLIJ;

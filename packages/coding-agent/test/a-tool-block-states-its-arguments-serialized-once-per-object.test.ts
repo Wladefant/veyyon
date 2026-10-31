@@ -6,8 +6,11 @@
  *
  * The class: a lazily derived block field that disagrees with the block built without a producer,
  * goes stale when the arguments change, is paid again on every rebuild with the same arguments, or
- * leaks its sources into the copies a transcript makes of a block. Every case drives a real
- * `ToolExecutionProducer` and compares its block with `buildToolExecutionBlock` or with a copy.
+ * leaks its sources into the copies a transcript makes of a block; and arguments JSON cannot hold
+ * that stall the render while `JSON.stringify` walks a cycle to its depth limit before it throws.
+ * Every case drives a real `ToolExecutionProducer` and compares its block with
+ * `buildToolExecutionBlock` or with a copy. The transcript builder and the event bridge state a tool
+ * call's arguments through the same `serializeToolInput` when given no renderer.
  *
  * Not covered: the memory a kept block retains, which the shared accessor exists to bound. That is a
  * heap measurement rather than an assertion.
@@ -39,6 +42,17 @@ function numberedArgs(): { toJSON(): { serialization: number } } {
 	return { toJSON: () => ({ serialization: ++serializations }) };
 }
 
+/** Fresh cyclic arguments in each shape the serializer walks: self, deep, array, and an array of cycles. */
+function cyclicArgs(): unknown[] {
+	const self: Record<string, unknown> = { name: "loop" };
+	self.self = self;
+	const deep: { b: { c: Record<string, unknown> } } = { b: { c: {} } };
+	deep.b.c.back = deep;
+	const list: unknown[] = [1];
+	list.push(list);
+	return [self, deep, list, [self, deep]];
+}
+
 describe("a tool block's input", () => {
 	for (const variant of VARIANTS) {
 		it(`states ${variant.label}, as the block built without a producer does`, () => {
@@ -48,6 +62,19 @@ describe("a tool block's input", () => {
 			expect(eager.input).toBe(variant.input);
 		});
 	}
+
+	it("states cyclic arguments as unserializable without walking the cycle to the depth limit", () => {
+		// Under Bun 1.4.3 an indented stringify spent 250-850 ms in each of these before it threw; with
+		// the cycle check it throws in microseconds. The bound sits far from both.
+		const started = performance.now();
+		for (const args of cyclicArgs()) {
+			const producer = new ToolExecutionProducer({ toolName: "probe", args, toolCallId: "call-1" });
+			const eager = buildToolExecutionBlock({ toolName: "probe", args, toolCallId: "call-1" });
+			expect(producer.block.input).toBe("[unserializable]");
+			expect(eager.input).toBe("[unserializable]");
+		}
+		expect(performance.now() - started).toBeLessThan(200);
+	});
 
 	it("is serialized once per arguments object across rebuilt blocks", () => {
 		const producer = new ToolExecutionProducer({ toolName: "probe", args: numberedArgs(), toolCallId: "call-1" });

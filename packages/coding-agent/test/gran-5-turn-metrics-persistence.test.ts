@@ -22,14 +22,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
 import { captureAssistantTurnMetrics } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function assistantWithTurnMetrics(): AssistantMessage {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const turnMetrics = captureAssistantTurnMetrics({
 		level: "ultra",
 		startedAt: 1_700_000_000_000,
@@ -37,13 +37,13 @@ function assistantWithTurnMetrics(): AssistantMessage {
 		status: "ok",
 		ttftMs: 500, // 1500ms generation window
 		usage: {
+			...emptyUsage(),
 			input: 100,
 			output: 300,
 			cacheRead: 20,
 			cacheWrite: 10,
 			totalTokens: 430,
 			reasoningTokens: 40,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		upstreamProvider: "Anthropic",
 	});
@@ -54,14 +54,7 @@ function assistantWithTurnMetrics(): AssistantMessage {
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 100,
-			output: 300,
-			cacheRead: 20,
-			cacheWrite: 10,
-			totalTokens: 430,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 100, output: 300, cacheRead: 20, cacheWrite: 10, totalTokens: 430 },
 		stopReason: "stop",
 		timestamp: 1_700_000_002_000,
 		ttft: 500,

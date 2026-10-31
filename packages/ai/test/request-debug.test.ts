@@ -8,6 +8,7 @@ import type { AssistantMessage, FetchImpl, Model, ModelSpec } from "@veyyon/ai/t
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { wrapFetchForRequestDebug } from "@veyyon/ai/utils/request-debug";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const enc = new TextEncoder();
@@ -214,14 +215,7 @@ describe("VEYYON_REQ_DEBUG request/response recording", () => {
 					provider: "test",
 					api: "req-debug-test",
 					model: "debug-model",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				};

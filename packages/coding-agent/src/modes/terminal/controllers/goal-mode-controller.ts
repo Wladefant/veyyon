@@ -35,17 +35,14 @@ export type GoalModeControllerContext = Pick<
 >;
 
 /**
- * The three questions about the mode's own submission bookkeeping that goal mode
- * has to ask and that no context member answers, because the answers live in
- * private state the mode owns.
+ * What goal mode asks of the interactive mode that no context member answers, because the
+ * answers live in private state the mode owns.
  */
 export interface GoalModeHost {
 	/** The session is mid-turn, compacting, or draining post-turn maintenance. */
 	isAutoSubmitBlocked(): boolean;
 	/** A submission is queued and has not started yet. */
 	hasPendingSubmission(): boolean;
-	/** The queued submission is a visible user turn rather than a synthetic one. */
-	hasPendingVisibleUserSubmission(): boolean;
 	/** Plan mode is enabled or paused; goal mode refuses to activate while it is. */
 	isPlanModeActive(): boolean;
 	/** Run `work` behind a spinner in the status area. */
@@ -59,6 +56,14 @@ export interface GoalModeHost {
  * let the goal spin forever.
  */
 const GOAL_FAILED_TURN_LIMIT = 3;
+
+/**
+ * Consecutive goal turns that end without a tool call before goal mode stops driving on its own.
+ * A turn that only says what it will do next ("I'll do it.") is not the end of the goal, so the
+ * next continuation still opens; a model that does nothing but talk turn after turn must not let
+ * the goal spin forever.
+ */
+const GOAL_IDLE_TURN_LIMIT = 3;
 
 /** How long the composer stays idle before goal mode opens a continuation turn. */
 const GOAL_CONTINUATION_DELAY_MS = 800;
@@ -77,7 +82,7 @@ type GoalContinuationBlock =
 	| "continuation-mode-off"
 	| "plan-mode"
 	| "goal-mode-off"
-	| "suppressed"
+	| "stopped"
 	| "busy"
 	| "submission-pending"
 	| "draft-in-composer"
@@ -179,12 +184,14 @@ export class GoalModeController {
 	#continuationTimer: NodeJS.Timeout | undefined;
 	#turnHadToolCalls = false;
 	#failedTurns = 0;
+	/** Consecutive settled turns, of any origin, that made no tool call. */
+	#idleTurns = 0;
 	#turnRetrying = false;
-	#continuationTurnInFlight = false;
-	#suppressNextContinuation = false;
-	#userContinuationSuppressed = false;
-	#userTurnInFlight = false;
+	/** Goal mode stood down after a bounded run of failed or idle turns, and said so. */
+	#stoppedDriving = false;
 	#continuationBusyUntil: number | undefined;
+	/** The pending continuation was held only by a draft or images in the composer. */
+	#heldForComposer = false;
 	#unsubscribe?: () => void;
 
 	constructor(context: GoalModeControllerContext, host: GoalModeHost) {
@@ -198,25 +205,29 @@ export class GoalModeController {
 	}
 
 	/**
-	 * A visible user turn was queued: the operator is driving, so the goal stops
-	 * opening turns of its own until a turn resumes execution.
+	 * A visible user turn was queued or started. It cancels a pending continuation, and a message
+	 * is how the operator restarts a goal that stood down. The message is fresh instruction, so the
+	 * idle tally starts over; it does not revive a dead provider, so the failed-turn tally stays
+	 * until a turn lands.
 	 */
 	noteVisibleUserTurnStarted(): void {
-		this.#userTurnInFlight = true;
-		this.#userContinuationSuppressed = true;
+		this.#stoppedDriving = false;
+		this.#idleTurns = 0;
 		this.#cancelContinuation();
 	}
 
 	/** A queued visible user turn was cancelled, so the goal may drive again. */
 	noteVisibleUserTurnCancelled(): void {
-		this.resetContinuationSuppression();
-		this.#userTurnInFlight = false;
 		this.scheduleContinuation();
 	}
 
-	/** The goal's own continuation turn has settled, whether it ran or was cancelled. */
-	noteContinuationTurnSettled(): void {
-		this.#continuationTurnInFlight = false;
+	/**
+	 * The composer's draft changed. A continuation held because the composer had a draft is armed
+	 * again once the composer is empty, so a draft deleted without being sent does not strand the goal.
+	 */
+	noteComposerChanged(): void {
+		if (!this.#heldForComposer || this.#composerHold()) return;
+		this.scheduleContinuation();
 	}
 
 	/** Subscribe goal bookkeeping to the session currently displayed. */
@@ -252,10 +263,11 @@ export class GoalModeController {
 		this.#cancelContinuation();
 	}
 
-	/** Clear the suppression a visible user turn installed. */
-	resetContinuationSuppression(): void {
-		this.#suppressNextContinuation = false;
-		this.#userContinuationSuppressed = false;
+	/** Drive again from a clean slate: no stand-down, and no failed or idle turns counted. */
+	#resumeDriving(): void {
+		this.#stoppedDriving = false;
+		this.#failedTurns = 0;
+		this.#idleTurns = 0;
 	}
 
 	/** Repaint the status-line goal badge. */
@@ -280,9 +292,7 @@ export class GoalModeController {
 		this.paused = false;
 		this.#previousTools = undefined;
 		this.#turnHadToolCalls = false;
-		this.#continuationTurnInFlight = false;
-		this.resetContinuationSuppression();
-		this.#userTurnInFlight = false;
+		this.#resumeDriving();
 		this.#cancelContinuation();
 		this.updateStatus();
 	}
@@ -546,20 +556,27 @@ export class GoalModeController {
 		}
 		if (this.#host.isPlanModeActive()) return "plan-mode";
 		if (!this.enabled || this.paused) return "goal-mode-off";
-		if (this.#suppressNextContinuation || this.#userContinuationSuppressed) return "suppressed";
+		if (this.#stoppedDriving) return "stopped";
 		// The one transient block: mid-turn, compacting, or draining post-turn maintenance, each of
 		// which ends on its own. Asked at fire time only — at arm time the turn that scheduled this
 		// tick is still settling, which is what the delay is for.
 		if (phase === "fire" && this.#host.isAutoSubmitBlocked()) return "busy";
 		if (this.#host.hasPendingSubmission()) return "submission-pending";
-		if (this.#context.editor.getText().trim().length > 0) return "draft-in-composer";
-		if ((this.#context.editor.pendingImages?.length ?? 0) > 0) return "images-attached";
+		const composerHold = this.#composerHold();
+		if (composerHold) return composerHold;
 		const state = this.#context.session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return "goal-not-active";
 		return undefined;
 	}
 
-	#reportContinuationBlock(reason: GoalContinuationBlock, phase: "arm" | "fire"): void {
+	#composerHold(): "draft-in-composer" | "images-attached" | undefined {
+		if (this.#context.editor.getText().trim().length > 0) return "draft-in-composer";
+		if ((this.#context.editor.pendingImages?.length ?? 0) > 0) return "images-attached";
+		return undefined;
+	}
+
+	#holdContinuation(reason: GoalContinuationBlock, phase: "arm" | "fire"): void {
+		this.#heldForComposer = reason === "draft-in-composer" || reason === "images-attached";
 		if (GOAL_CONTINUATION_QUIET_BLOCKS.has(reason)) return;
 		logger.debug("Goal mode is not opening a continuation turn", {
 			reason,
@@ -572,12 +589,12 @@ export class GoalModeController {
 		this.#cancelContinuation();
 		const blocked = this.#continuationBlock("arm");
 		if (blocked) {
-			this.#reportContinuationBlock(blocked, "arm");
+			this.#holdContinuation(blocked, "arm");
 			return;
 		}
-		const prompt = this.#context.session.goalRuntime.buildContinuationPrompt();
+		const prompt = this.#context.session.goalRuntime.buildContinuationPrompt(this.#idleTurns);
 		if (!prompt) {
-			this.#reportContinuationBlock("no-prompt", "arm");
+			this.#holdContinuation("no-prompt", "arm");
 			return;
 		}
 		this.#continuationTimer = setTimeout(() => {
@@ -590,7 +607,7 @@ export class GoalModeController {
 					return;
 				}
 				this.#continuationBusyUntil = undefined;
-				this.#reportContinuationBlock("busy", "fire");
+				this.#holdContinuation("busy", "fire");
 				this.#context.showWarning(
 					"Goal mode stopped waiting for the session to go idle. Send a message to resume it.",
 				);
@@ -598,12 +615,11 @@ export class GoalModeController {
 			}
 			this.#continuationBusyUntil = undefined;
 			if (blockedNow) {
-				this.#reportContinuationBlock(blockedNow, "fire");
+				this.#holdContinuation(blockedNow, "fire");
 				return;
 			}
 			const submit = this.#context.onInputCallback;
 			if (!submit) return;
-			this.#continuationTurnInFlight = true;
 			submit(
 				this.#context.startPendingSubmission({
 					text: prompt,
@@ -615,6 +631,7 @@ export class GoalModeController {
 	}
 
 	#cancelContinuation(): void {
+		this.#heldForComposer = false;
 		if (this.#continuationTimer) {
 			clearTimeout(this.#continuationTimer);
 			this.#continuationTimer = undefined;
@@ -643,12 +660,6 @@ export class GoalModeController {
 		}
 		if (event.type === "tool_execution_start") {
 			this.#turnHadToolCalls = true;
-			// A visible user turn pauses autonomous goal continuation unless the
-			// turn actually resumes execution. Merely producing prose is not
-			// evidence that the user intended goal mode to take control again.
-			if (this.#userTurnInFlight || this.#host.hasPendingVisibleUserSubmission()) {
-				this.resetContinuationSuppression();
-			}
 			return;
 		}
 		if (event.type === "message_start" && event.message.role === "user" && !event.message.synthetic) {
@@ -664,11 +675,10 @@ export class GoalModeController {
 			}
 			const activating = !this.enabled && event.state?.enabled === true;
 			if (activating) {
-				this.resetContinuationSuppression();
-				// Enter on a clean slate. Failures from before the goal existed are not
-				// this goal's, and carrying them in stood a goal down on its first
-				// error instead of its third.
-				this.#failedTurns = 0;
+				// Enter on a clean slate. Failures and idle turns from before the goal existed are
+				// not this goal's, and carrying them in stood a goal down on its first error instead
+				// of its third.
+				this.#resumeDriving();
 			}
 			this.enabled = event.state?.enabled === true;
 			this.paused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
@@ -681,7 +691,6 @@ export class GoalModeController {
 		if (event.type !== "agent_end") {
 			return;
 		}
-		this.#userTurnInFlight = false;
 		// A retry that never resumed (aborted, cancelled) must not make the NEXT turn
 		// inherit this one's tool-call evidence.
 		this.#turnRetrying = false;
@@ -699,26 +708,36 @@ export class GoalModeController {
 			// The continuation stays owed, and the tolerance is bounded.
 			this.#failedTurns += 1;
 			if (this.#failedTurns >= GOAL_FAILED_TURN_LIMIT) {
-				this.#continuationTurnInFlight = false;
-				this.#suppressNextContinuation = true;
-				this.#context.showWarning(
-					`Goal mode stopped driving after ${formatCount("failed turn", this.#failedTurns)}. Send a message to resume it.`,
-				);
+				this.#standDown(`Goal mode stopped driving after ${formatCount("failed turn", this.#failedTurns)}.`);
 				return;
 			}
 			this.scheduleContinuation();
 			return;
 		}
 		this.#failedTurns = 0;
-		if (this.#continuationTurnInFlight) {
-			this.#suppressNextContinuation = !this.#turnHadToolCalls;
-			this.#continuationTurnInFlight = false;
-		}
 		if (this.#context.session.getGoalModeState()?.mode === "exiting") {
 			await this.#exit({ reason: "completed", silent: true });
 			return;
 		}
+		if (this.enabled) {
+			// A turn that ends in prose ("I'll do it.") has not finished the goal; only the goal tool
+			// does that. The continuation stays owed, and the run of turns that only talk is bounded.
+			this.#idleTurns = this.#turnHadToolCalls ? 0 : this.#idleTurns + 1;
+			if (this.#idleTurns >= GOAL_IDLE_TURN_LIMIT) {
+				this.#standDown(
+					`Goal mode stopped driving after ${formatCount("turn", this.#idleTurns)} without a tool call.`,
+				);
+				return;
+			}
+		}
 		this.scheduleContinuation();
+	}
+
+	/** Stop opening continuation turns until the operator sends a message, and say why. */
+	#standDown(reason: string): void {
+		this.#cancelContinuation();
+		this.#stoppedDriving = true;
+		this.#context.showWarning(`${reason} Send a message to resume it.`);
 	}
 
 	async #enter(options: { objective?: string; resume?: boolean; silent?: boolean }): Promise<void> {
@@ -743,7 +762,7 @@ export class GoalModeController {
 		await this.#context.session.setActiveToolsByName(goalTools);
 		this.#context.session.setGoalModeState(state);
 		this.enabled = true;
-		this.resetContinuationSuppression();
+		this.#resumeDriving();
 		this.updateStatus();
 		if (this.#context.session.isStreaming) {
 			await this.#context.session.sendGoalModeContext({ deliverAs: "steer" });
@@ -776,9 +795,7 @@ export class GoalModeController {
 		this.enabled = false;
 		this.paused = options?.paused ?? false;
 		this.#previousTools = undefined;
-		this.#continuationTurnInFlight = false;
-		this.resetContinuationSuppression();
-		this.#userTurnInFlight = false;
+		this.#resumeDriving();
 		this.#cancelContinuation();
 		this.updateStatus();
 		if (!options?.silent) {
@@ -900,7 +917,6 @@ export class GoalModeController {
 
 	async #startFromObjective(objective: string): Promise<void> {
 		await this.#enter({ objective, silent: true });
-		this.resetContinuationSuppression();
 		if (!this.#context.session.isStreaming && this.#context.onInputCallback) {
 			this.#context.onInputCallback(this.#context.startPendingSubmission({ text: objective }));
 		}
@@ -911,7 +927,7 @@ export class GoalModeController {
 		this.#context.session.setGoalModeState(state);
 		this.enabled = true;
 		this.paused = false;
-		this.resetContinuationSuppression();
+		this.#resumeDriving();
 		this.updateStatus();
 		if (this.#context.session.isStreaming) {
 			await this.#context.session.sendGoalModeContext({ deliverAs: "steer" });

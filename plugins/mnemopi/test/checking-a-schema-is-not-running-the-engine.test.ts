@@ -28,35 +28,23 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-	createModuleReachCache,
 	dynamicImportSpecifiersIn,
-	type ModuleReachResolution,
 	moduleReach,
-	moduleReachCount,
 	moduleSpecifiersIn,
 	typeOnlyModuleSpecifiersIn,
 } from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const {
+	resolution: RESOLUTION,
+	cache: CACHE,
+	reach,
+	reachedNames,
+	runtimeImportsOf,
+} = packageModuleReach(REPO_ROOT, SRC);
 
 /**
  * A path inside THIS package, repo-relative. Pinned as a literal, every row below asserted about a
@@ -163,9 +151,32 @@ describe("asking whether a model is configured is not calling one", () => {
 	 * RE-MEASURED 2026-10-15 at 217: `ai/registry/oauth/token-response.ts`, the shared reader that requires
 	 * a token endpoint's JSON to be an object, reached through `ai/registry/oauth/nous-research.ts`. Not a
 	 * mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-24 at 218: `catalog/wire/opencode-go.ts`, the OpenCode Go endpoint rules and the
+	 * envelope a Console login's key is carried in, reached through `catalog/provider-models/openai-compat.ts`.
+	 * Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-24 at 219: `utils/collapse-whitespace.ts`, a zero-import leaf, reached through
+	 * `ai/utils/http-inspector.ts`, which flattens a quoted HTML title onto one line through it. Not a
+	 * mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-25 at 221: `ai/prompts/tool-choice/any.md` and `ai/prompts/tool-choice/named.md`,
+	 * the request text that asks for a tool call a wire cannot force, reached through `ai/prompts/registry.ts`.
+	 * Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-28 at 222: `catalog/provider-models/ollama-native.ts`, the one reader of Ollama's
+	 * `/api/tags` and `/api/show` answers that the local and cloud catalogs share, reached through
+	 * `catalog/provider-models/ollama.ts`. Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-28 at 223: `ai/providers/anthropic-tool-choice.ts`, the Anthropic `tool_choice`
+	 * mapping moved out of `ai/stream.ts`, reached through it. It imports only types. Not a mnemopi edge.
+	 *
+	 * RE-MEASURED 2026-10-29 at 219: the Kimi request headers moved out of the Kimi login,
+	 * `ai/registry/oauth/kimi.ts`, into `ai/utils/kimi-headers.ts`, so the chat client no longer loads the
+	 * login, which left this reach with the four modules only it brought. Not a mnemopi edge.
 	 */
-	it("local-llm reaches at most 217 modules", () => {
-		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(217);
+	it("local-llm reaches at most 219 modules", () => {
+		expect(reach("core/local-llm.ts")).toBeLessThanOrEqual(219);
 	});
 
 	/**

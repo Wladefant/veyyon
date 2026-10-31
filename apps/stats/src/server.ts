@@ -1,8 +1,7 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "@veyyon/utils";
+import { isEnoent, privateTempDir } from "@veyyon/utils";
 import { $ } from "bun";
 import {
 	getBehaviorDashboardStats,
@@ -37,7 +36,9 @@ const IS_BUN_COMPILED =
 const IS_PREBUILT = IS_BUN_COMPILED || Boolean(process.env.VEYYON_BUNDLED || Bun.env.VEYYON_BUNDLED);
 const USE_EMBEDDED_CLIENT = EMBEDDED_CLIENT_ARCHIVE !== null || IS_PREBUILT;
 
-const EMBEDDED_CLIENT_DIR_ROOT = path.join(os.tmpdir(), "veyyon-stats-client");
+// The extracted dashboard is served to the browser, so it is extracted into the user's private temp directory:
+// under a shared name another account could place its own `index.html` there first.
+const EMBEDDED_CLIENT_SUBDIR = "stats-client";
 let embeddedClientDirPromise: Promise<string> | null = null;
 
 function sanitizeArchivePath(archivePath: string): string | null {
@@ -75,7 +76,7 @@ async function getEmbeddedClientDir(): Promise<string> {
 
 	embeddedClientDirPromise = (async () => {
 		const bundleHash = Bun.hash(EMBEDDED_CLIENT_ARCHIVE).toString(16);
-		const outputDir = path.join(EMBEDDED_CLIENT_DIR_ROOT, bundleHash);
+		const outputDir = path.join(privateTempDir(), EMBEDDED_CLIENT_SUBDIR, bundleHash);
 		const markerPath = path.join(outputDir, "index.html");
 		try {
 			const marker = await fs.stat(markerPath);

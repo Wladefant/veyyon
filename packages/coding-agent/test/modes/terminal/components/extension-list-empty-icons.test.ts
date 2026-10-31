@@ -9,11 +9,11 @@ import type { ExtensionKind, ExtensionRow } from "@veyyon/coding-agent/extensibi
 import { ExtensionList } from "@veyyon/coding-agent/modes/terminal/components/extensions/extension-list";
 import type { ThemeJson } from "@veyyon/coding-agent/theme/color";
 import { getDefaultThemes } from "@veyyon/coding-agent/theme/defaults";
-import { createTheme, getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { createTheme, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const titanium = getDefaultThemes().titanium as ThemeJson;
-const originalTheme = await getThemeByName("dark");
-if (!originalTheme) throw new Error("Expected the dark theme fixture");
+const originalTheme = await requireTheme("dark");
 const extension: ExtensionRow = {
 	id: "tool:reader",
 	kind: "tool",

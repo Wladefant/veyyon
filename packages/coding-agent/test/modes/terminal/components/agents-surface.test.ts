@@ -277,8 +277,8 @@ describe("agent.agents settings surface", () => {
 			const { component, selectRow } = await openRoster();
 			selectRow("designer");
 			component.handleInput("\n");
-			const row = paneLines(component).find(line => labelOf(line) === "Agents");
-			if (row === undefined) throw new Error(`no Agents row:\n${paneLines(component).join("\n")}`);
+			const row = paneLines(component).find(line => labelOf(line) === "Can spawn");
+			if (row === undefined) throw new Error(`no Can spawn row:\n${paneLines(component).join("\n")}`);
 			return row;
 		};
 
@@ -308,7 +308,7 @@ describe("agent.agents settings surface", () => {
 		settings.set("agent.model", ["anthropic/claude-sonnet-4"]);
 		settings.set("agent.thinkingLevel", "high");
 		const { component, selectRow } = await openRoster();
-		// The helpers lead the list; the agents scroll into the window below them.
+		// The subagents lead the list, above the helpers.
 		selectRow("designer");
 		const lines = paneLines(component);
 

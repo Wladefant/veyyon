@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { SearchToolDetails, SearchToolInput } from "@veyyon/coding-agent/tools/search/search";
@@ -16,6 +15,7 @@ import type {
 import type { Component } from "@veyyon/tui";
 import { removeWithRetries, sanitizeText } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../helpers/require-theme";
 import { useFullColor } from "../helpers/theme-assertions";
 
 /**
@@ -558,9 +558,7 @@ describe("structureSearchRenderer", () => {
 	useFullColor();
 
 	it("renders matched groups with railed lines and no tree connectors", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const result = {
 			content: [{ type: "text", text: "" }],
@@ -600,9 +598,7 @@ describe("structureSearchRenderer", () => {
 	});
 
 	it("truncates collapsed results and appends a dim summary row on the rail", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		// Ten three-line groups: far more than the collapsed line budget, so the
 		// collapsed view must drop whole groups and account for the rest in one row.
@@ -654,9 +650,7 @@ describe("structureSearchRenderer", () => {
 	});
 
 	it("budgets body width against outputBlockContentWidth so lines do not overflow the outer width", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 
 		const result = {
 			content: [{ type: "text", text: "" }],

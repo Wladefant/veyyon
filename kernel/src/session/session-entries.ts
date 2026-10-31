@@ -221,3 +221,19 @@ export interface UsageStatistics {
 	premiumRequests: number;
 	cost: number;
 }
+
+/** The usage of a session that has spent nothing: every counter zero. A fresh object per call. */
+export function emptyUsageStatistics(): UsageStatistics {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		orchestrationInput: 0,
+		orchestrationOutput: 0,
+		orchestrationCacheRead: 0,
+		premiumRequests: 0,
+		cost: 0,
+	};
+}

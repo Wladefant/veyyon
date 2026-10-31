@@ -33,7 +33,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -50,6 +50,7 @@ import {
 } from "@veyyon/kernel/session/settle-continuation";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** A question the agent asks, followed by the options it offers. */
 const QUESTION_WITH_OPTIONS = [
@@ -76,14 +77,7 @@ function assistantMessage(text: string): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 100,
-			output: 20,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 120,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 		timestamp: Date.now() + stopsBuilt++,
 	};
 }
@@ -261,8 +255,7 @@ describe("a reply that asks the user something ends the turn", () => {
 			authStorage.setRuntimeApiKey("anthropic", "test-key");
 			sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected built-in anthropic model to exist");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 			const agent = new Agent({
 				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -308,10 +301,11 @@ describe("a reply that asks the user something ends the turn", () => {
 			await delay(20);
 			session.agent.emitExternalEvent({ type: "agent_end", messages: [msg] });
 			await session.waitForIdle();
-			// The `agent_end` tail runs off the event, not off the emit, so an
-			// assertion taken straight after the emit would see nothing and every
-			// negative control here would pass for the wrong reason.
-			await delay(200);
+			// The `agent_end` tail runs off the event, not off the emit, so an assertion taken straight
+			// after the emit would see nothing and every negative control here would pass for the
+			// wrong reason. The tail and every continuation it schedules are post-prompt work, so the
+			// outcome is read once none is left.
+			while (session.hasPostPromptWork) await delay(5);
 		}
 
 		/** Arm the evidence ledger with an unproven write, as a real turn would. */

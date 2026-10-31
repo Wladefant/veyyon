@@ -16,6 +16,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	planTurnPersistence,
 	sameMessageContent,
@@ -29,14 +30,7 @@ function assistant(overrides: Partial<Extract<AgentMessage, { role: "assistant" 
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop" as const,
 		timestamp: 1_700_000_000_000,
 		...overrides,

@@ -19,10 +19,11 @@ import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessag
 import { Flag, is, recover } from "@veyyon/ai/error";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-import { createAssistantMessage, createUserMessage } from "./helpers";
+import { createAssistantMessage, createUserMessage, identityConverter } from "./helpers";
 
 declare module "@veyyon/session" {
 	interface CustomAgentMessages {
@@ -35,11 +36,6 @@ declare module "@veyyon/session" {
 			timestamp: number;
 		};
 	}
-}
-
-// Simple identity converter for tests - just passes through standard messages
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 describe("agentLoop with AgentMessage", () => {
@@ -2459,14 +2455,7 @@ it("recovers from provider whitespace loop recovery without duplicating assistan
 					api: model.api,
 					provider: model.provider,
 					model: model.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				});
@@ -3738,14 +3727,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 					api: "cursor-agent",
 					provider: "cursor",
 					model: "cursor-composer-2.5",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				};
@@ -3831,14 +3813,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 						api: "cursor-agent",
 						provider: "cursor",
 						model: "cursor-composer-2.5",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "toolUse",
 						timestamp: Date.now(),
 					};
@@ -3852,14 +3827,7 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 						api: "cursor-agent",
 						provider: "cursor",
 						model: "cursor-composer-2.5",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: emptyUsage(),
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};

@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
-import type { TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -14,7 +12,9 @@ import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { messageText } from "./helpers/tool-result-text";
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
@@ -33,11 +33,6 @@ type Harness = {
 	settings: Settings;
 };
 
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
-
 function getToolChoiceName(choice: unknown): string | undefined {
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
@@ -46,22 +41,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	if (toolChoice.type === "tool") return toolChoice.name;
 	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
 	return undefined;
-}
-
-function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) {
-		return "";
-	}
-	if (typeof message.content === "string") {
-		return message.content;
-	}
-	if (!Array.isArray(message.content)) {
-		return "";
-	}
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
 }
 
 /**
@@ -117,10 +96,10 @@ describe("AgentSession eager task prelude", () => {
 		agentKind?: "main" | "sub",
 		enabledAgentNames: string[] = SPAWNABLE_AGENTS,
 		promptRefreshGate?: Promise<void>,
+		todoWireName?: string,
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${harnesses.length}.db`));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
@@ -159,6 +138,7 @@ describe("AgentSession eager task prelude", () => {
 			settings,
 		};
 		const todoTool = todoEnabled ? new TodoTool(toolSession) : undefined;
+		if (todoTool && todoWireName !== undefined) Object.assign(todoTool, { customWireName: todoWireName });
 		const tools: AgentTool[] = todoTool
 			? [todoTool as unknown as AgentTool, mockTaskTool, mockBashTool]
 			: [mockTaskTool, mockBashTool];
@@ -183,10 +163,10 @@ describe("AgentSession eager task prelude", () => {
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 					messageRoles: context.messages.map(message => message.role),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageTexts: context.messages.map(messageText),
 					systemPrompt: context.systemPrompt?.join("\n\n") ?? "",
 					lastMessageRole: lastMessage.role,
-					lastMessageText: getMessageText(lastMessage),
+					lastMessageText: messageText(lastMessage),
 				});
 				const response = createAssistantMessage("done");
 				const stream = new AssistantMessageEventStream();
@@ -385,6 +365,43 @@ describe("AgentSession eager task prelude", () => {
 		const reminder = turn(observedCalls[0]).texts[0] ?? "";
 		expect(reminder).toContain("`delegate`");
 		expect(reminder).not.toContain("`task`");
+	});
+
+	it("cites the todo tool by its wire name in the eager todo reminder", async () => {
+		const { session, observedCalls } = await createHarness(
+			{ "agent.delegation": "off", "todo.enabled": true, "todo.eager": "preferred", "todo.reminders": false },
+			undefined,
+			undefined,
+			undefined,
+			SPAWNABLE_AGENTS,
+			undefined,
+			"plan_board",
+		);
+
+		await session.prompt("refactor the parser across modules");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "user"]);
+		const reminder = turn(observedCalls[0]).texts[0] ?? "";
+		expect(reminder).toContain("`plan_board`");
+		expect(reminder).not.toContain("`todo`");
+	});
+
+	/**
+	 * Delegation is resolved against the registered task tool, which a narrowed tool set keeps
+	 * registered while it stops offering it. A reminder to call a tool missing from the request's
+	 * tool list asks for a call the provider cannot accept.
+	 */
+	it("sends no eager reminder when the task tool is registered but not offered", async () => {
+		const { session, observedCalls } = await createHarness();
+		await session.setActiveToolsByName(["bash"]);
+
+		await session.prompt("refactor the parser across modules");
+
+		expect(observedCalls).toHaveLength(1);
+		expect(observedCalls[0]?.toolNames).toEqual(["bash"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
 	/**

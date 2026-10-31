@@ -31,20 +31,18 @@
  * covers at the commit-record level.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { countDestructivePaints } from "../../../../../../hosts/terminal/engine/test/helpers/destructive-paints";
 import { settleFrames } from "../../../../../../hosts/terminal/engine/test/helpers/settle-frames";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "../../../helpers/test-agent-session";
 
 const WIDTH = 100;
 const HEIGHT = 30;
@@ -69,14 +67,7 @@ function assistantText(text: string, timestamp: number) {
 		api: "anthropic" as const,
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		timestamp,
 	};
 }
@@ -135,16 +126,7 @@ describe("dismissing the hero over a resumed transcript replays nothing", () => 
 			tempDir = TempDir.createSync("@pi-hero-dismiss-resumed-");
 			const dir = tempDir.path();
 			await Settings.init({ inMemory: true, cwd: dir });
-			authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
-			const modelRegistry = new ModelRegistry(authStorage);
-			const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-			session = new AgentSession({
-				agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-				sessionManager: SessionManager.create(dir, dir),
-				settings: Settings.isolated(),
-				modelRegistry,
-			});
+			({ authStorage, session } = await createTestAgentSession(dir));
 			for (let turn = 0; turn < turns; turn++) {
 				session.sessionManager.appendMessage({
 					role: "user",

@@ -18,36 +18,27 @@
  */
 import "./helpers/tool-views-preload";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 const TURNS = 12;
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 interface Detached {
 	cards: WeakRef<object>[];
@@ -102,7 +93,7 @@ async function runAndRebuild(mode: InteractiveMode, terminal: VirtualTerminal): 
 			result: { content: [{ type: "text", text: `output ${turn}` }] },
 		});
 	}
-	await terminal.waitForRender();
+	await terminal.waitForRender(mode.ui);
 	// A read starting now anchors its images to the last assistant block, the final turn's segment.
 	await send({ type: "tool_execution_start", toolCallId: "call_read", toolName: "read", args: { path: "notes.md" } });
 
@@ -115,7 +106,7 @@ async function runAndRebuild(mode: InteractiveMode, terminal: VirtualTerminal): 
 		if (next instanceof AssistantMessageComponent) detached.segments.push(new WeakRef(next));
 	}
 	mode.rebuildChatFromMessages();
-	await terminal.waitForRender();
+	await terminal.waitForRender(mode.ui);
 	return detached;
 }
 
@@ -169,24 +160,17 @@ describe("a long agent run releases the cards a rebuild detached", () => {
 		const dir = tempDir.path();
 		await Settings.init({ inMemory: true, cwd: dir, overrides: { "startup.quiet": true } });
 
-		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Main"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(dir, dir),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(dir, {
+			systemPrompt: ["Main"],
+			settings: { "startup.quiet": true },
+		}));
 
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, new EventBus());
 		terminal = new VirtualTerminal(120, 40);
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {

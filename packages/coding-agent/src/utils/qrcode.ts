@@ -360,43 +360,10 @@ export class QrCode {
 		const size = this.size;
 		const mods = this.#modules;
 
-		// Rule 1 + Rule 3 — adjacent same-color runs, finder-like patterns (rows).
-		for (let y = 0; y < size; y++) {
-			let runColor = false;
-			let runLen = 0;
-			const history = [0, 0, 0, 0, 0, 0, 0];
-			for (let x = 0; x < size; x++) {
-				if (mods[y]![x] === runColor) {
-					runLen++;
-					if (runLen === 5) result += PENALTY_N1;
-					else if (runLen > 5) result++;
-				} else {
-					this.#finderAddHistory(runLen, history);
-					if (!runColor) result += finderCountPatterns(history) * PENALTY_N3;
-					runColor = mods[y]![x]!;
-					runLen = 1;
-				}
-			}
-			result += this.#finderTerminate(runColor, runLen, history) * PENALTY_N3;
-		}
-		// Rule 1 + Rule 3 — columns.
-		for (let x = 0; x < size; x++) {
-			let runColor = false;
-			let runLen = 0;
-			const history = [0, 0, 0, 0, 0, 0, 0];
-			for (let y = 0; y < size; y++) {
-				if (mods[y]![x] === runColor) {
-					runLen++;
-					if (runLen === 5) result += PENALTY_N1;
-					else if (runLen > 5) result++;
-				} else {
-					this.#finderAddHistory(runLen, history);
-					if (!runColor) result += finderCountPatterns(history) * PENALTY_N3;
-					runColor = mods[y]![x]!;
-					runLen = 1;
-				}
-			}
-			result += this.#finderTerminate(runColor, runLen, history) * PENALTY_N3;
+		// Rule 1 + Rule 3 — adjacent same-color runs and finder-like patterns, along each row and column.
+		for (let line = 0; line < size; line++) {
+			result += this.#linePenalty(size, i => mods[line]![i]!);
+			result += this.#linePenalty(size, i => mods[i]![line]!);
 		}
 
 		// Rule 2 — 2x2 blocks of one color.
@@ -416,6 +383,28 @@ export class QrCode {
 		const k = Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1;
 		result += k * PENALTY_N4;
 		return result;
+	}
+
+	/** Rule 1 and Rule 3 penalties along one row or column; `at(i)` is its `i`th module. */
+	#linePenalty(size: number, at: (i: number) => boolean): number {
+		let result = 0;
+		let runColor = false;
+		let runLen = 0;
+		const history = [0, 0, 0, 0, 0, 0, 0];
+		for (let i = 0; i < size; i++) {
+			const color = at(i);
+			if (color === runColor) {
+				runLen++;
+				if (runLen === 5) result += PENALTY_N1;
+				else if (runLen > 5) result++;
+			} else {
+				this.#finderAddHistory(runLen, history);
+				if (!runColor) result += finderCountPatterns(history) * PENALTY_N3;
+				runColor = color;
+				runLen = 1;
+			}
+		}
+		return result + this.#finderTerminate(runColor, runLen, history) * PENALTY_N3;
 	}
 
 	#finderAddHistory(runLen: number, history: number[]): void {

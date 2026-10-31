@@ -375,7 +375,7 @@ describe("a tool execution is keyed by its call id", () => {
 		expect(bridge.runningToolCalls.size).toBe(0);
 	});
 
-	test("formats tool input using defaultToolText for strings, objects, and unserializable args", () => {
+	test("states tool input as text for strings, as indented JSON for objects, and as unserializable for a cycle", () => {
 		const { source, presentation } = connect();
 		source.emit({ type: "tool_execution_start", toolCallId: "s1", toolName: "raw", args: "string-input" });
 		source.emit({ type: "tool_execution_start", toolCallId: "s2", toolName: "obj", args: { num: 123 } });

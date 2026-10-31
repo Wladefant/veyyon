@@ -206,8 +206,7 @@ export async function rewriteImports(code: string): Promise<string> {
 		return code;
 	}
 
-	type Edit = { start: number; end: number; text: string };
-	const edits: Edit[] = [];
+	const edits: SourceEdit[] = [];
 
 	// Top-level static `import` declarations become `await __veyyon_import__(...)` calls.
 	for (const node of ast.program.body) {
@@ -218,24 +217,40 @@ export async function rewriteImports(code: string): Promise<string> {
 
 	// Dynamic `import(...)` expressions (anywhere) get their callee swapped for `__veyyon_import__`
 	// so the specifier resolves against the session cwd instead of the worker module's URL.
+	pushDynamicImportCalleeEdits(ast, DYNAMIC_IMPORT_CALLEE, edits);
+	return applyEdits(code, edits);
+}
+
+interface SourceEdit {
+	start: number;
+	end: number;
+	text: string;
+}
+
+/** `code` with each edit's span replaced by its text, built front to back. Spans never overlap. */
+function applyEdits(code: string, edits: SourceEdit[]): string {
+	if (edits.length === 0) return code;
+	edits.sort((a, b) => a.start - b.start);
+	let result = "";
+	let cursor = 0;
+	for (const edit of edits) {
+		result += code.slice(cursor, edit.start) + edit.text;
+		cursor = edit.end;
+	}
+	return result + code.slice(cursor);
+}
+
+/** An edit replacing the `import` callee of every dynamic `import(...)` call in `ast` with `callee`. */
+function pushDynamicImportCalleeEdits(ast: unknown, callee: string, edits: SourceEdit[]): void {
 	walkNodes(ast, node => {
 		if (node.type !== "CallExpression") return;
 		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
-		const callee = call.callee;
-		if (callee?.type !== "Import" || typeof callee.start !== "number" || typeof callee.end !== "number") return;
-		edits.push({ start: callee.start, end: callee.end, text: DYNAMIC_IMPORT_CALLEE });
+		const target = call.callee;
+		if (target?.type !== "Import" || typeof target.start !== "number" || typeof target.end !== "number") return;
+		edits.push({ start: target.start, end: target.end, text: callee });
 	});
-
-	if (edits.length === 0) return code;
-
-	// Splice from the back so earlier offsets stay valid.
-	edits.sort((a, b) => b.start - a.start);
-	let result = code;
-	for (const edit of edits) {
-		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
-	}
-	return result;
 }
+
 export async function collectModuleSourceSpecifiers(code: string): Promise<string[]> {
 	const ast = await parseProgram(code);
 	if (!ast) return [];
@@ -260,8 +275,7 @@ export async function rewriteModuleSourceSpecifiers(
 	const ast = await parseProgram(code);
 	if (!ast) return code;
 
-	type Edit = { start: number; end: number; text: string };
-	const edits: Edit[] = [];
+	const edits: SourceEdit[] = [];
 
 	for (const node of ast.program.body) {
 		if (
@@ -278,13 +292,7 @@ export async function rewriteModuleSourceSpecifiers(
 		edits.push({ start: source.start, end: source.end, text: JSON.stringify(next) });
 	}
 
-	if (edits.length === 0) return code;
-	edits.sort((a, b) => b.start - a.start);
-	let result = code;
-	for (const edit of edits) {
-		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
-	}
-	return result;
+	return applyEdits(code, edits);
 }
 
 export async function rewriteDynamicImports(code: string, callee = "__veyyon_import__"): Promise<string> {
@@ -292,25 +300,9 @@ export async function rewriteDynamicImports(code: string, callee = "__veyyon_imp
 	const ast = await parseProgram(code);
 	if (!ast) return code;
 
-	type Edit = { start: number; end: number; text: string };
-	const edits: Edit[] = [];
-	walkNodes(ast, node => {
-		if (node.type !== "CallExpression") return;
-		const call = node as unknown as { callee?: { type?: string; start?: number; end?: number } };
-		const callCallee = call.callee;
-		if (callCallee?.type !== "Import" || typeof callCallee.start !== "number" || typeof callCallee.end !== "number") {
-			return;
-		}
-		edits.push({ start: callCallee.start, end: callCallee.end, text: callee });
-	});
-
-	if (edits.length === 0) return code;
-	edits.sort((a, b) => b.start - a.start);
-	let result = code;
-	for (const edit of edits) {
-		result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
-	}
-	return result;
+	const edits: SourceEdit[] = [];
+	pushDynamicImportCalleeEdits(ast, callee, edits);
+	return applyEdits(code, edits);
 }
 
 function collectBindingNames(pattern: unknown, names: string[]): void {

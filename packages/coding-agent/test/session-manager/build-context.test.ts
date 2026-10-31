@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext, getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import type {
 	BranchSummaryEntry,
@@ -23,14 +24,7 @@ function msg(id: string, parentId: string | null, role: "user" | "assistant", te
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-test",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: 1,
 		},
@@ -669,14 +663,7 @@ describe("buildSessionContext", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude-test",
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 					stopReason: "aborted",
 					timestamp: 1,
 				},
@@ -712,14 +699,7 @@ describe("buildSessionContext", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude-test",
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 					stopReason: "aborted",
 					timestamp: 1,
 				},
@@ -735,14 +715,7 @@ describe("buildSessionContext", () => {
 			// tool results live on a sibling branch (off this path), so its tool_use is
 			// dangling mid-conversation. An earlier turn whose result IS on-path must be
 			// left untouched.
-			const usage = {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			};
+			const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 			const asst = (id: string, parentId: string, content: unknown[], stopReason: string): SessionMessageEntry =>
 				({
 					type: "message",

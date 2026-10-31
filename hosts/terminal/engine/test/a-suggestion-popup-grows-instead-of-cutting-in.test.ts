@@ -20,8 +20,8 @@
 //
 // The cases drive the real `Editor` through its real autocomplete path (provider -> Tab -> popup ->
 // render -> routeMouse) against a hand-ticked `MotionClock`. The provider resolves on a microtask,
-// so no case needs a wall clock except the one that must go through the 100ms input debounce, which
-// is the only production path that rebuilds the list without closing the popup.
+// and a keystroke into an open popup refreshes it on the same microtask path, so no case needs a
+// wall clock.
 //
 // WHAT IT DOES NOT CATCH: which row a given suggestion lands on (SelectList's layout, proven where
 // it lives), and the ambient gate that decides `enabled`/`ground` in the product — that is
@@ -33,12 +33,13 @@
 // while the popup is on screen, so a stale flag cannot be seen). A second host that arms well before
 // it paints, or paints a block it has disarmed, is where those two would show.
 
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { Editor } from "@veyyon/tui/components/editor";
 import type { AutocompleteItem, AutocompleteProvider } from "@veyyon/utils/autocomplete";
 import { MOTION, MotionClock } from "@veyyon/utils/motion";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { Chalk } from "chalk";
+import { drainMicrotasks } from "../../../../packages/utils/test/helpers/drain-microtasks";
 import { defaultEditorTheme, defaultSelectListTheme } from "./test-themes";
 
 const FRAME = 1000 / 60;
@@ -93,7 +94,7 @@ const PROVIDER: AutocompleteProvider = {
 
 /** Let every pending microtask run; the provider is a resolved promise, not a timer. */
 async function flush(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 function advance(clock: MotionClock, ms: number, from = 0): number {
@@ -247,18 +248,12 @@ describe("a suggestion popup grows instead of cutting in", () => {
 		advance(clock, MOTION.enter.duration * 2);
 		expect(popup.height()).toBe(plain.height());
 
-		// The one production path that rebuilds the popup's list without closing it is the debounced
-		// refresh after a printable key. Its 100ms timer is driven, not waited on. The keystroke also
-		// narrows the list, so the twin with no motion is what says how tall the popup should now be —
-		// a reveal armed by render, or re-armed by a refresh, would be part way up from one row.
-		vi.useFakeTimers();
-		try {
-			popup.editor.handleInput("o");
-			plain.editor.handleInput("o");
-			vi.advanceTimersByTime(140);
-		} finally {
-			vi.useRealTimers();
-		}
+		// The one production path that rebuilds the popup's list without closing it is the refresh
+		// after a printable key. The keystroke also narrows the list, so the twin with no motion is
+		// what says how tall the popup should now be — a reveal armed by render, or re-armed by a
+		// refresh, would be part way up from one row.
+		popup.editor.handleInput("o");
+		plain.editor.handleInput("o");
 		await flush();
 		expect(popup.editor.isShowingAutocomplete()).toBe(true);
 		expect(plain.height()).toBeGreaterThan(1);
@@ -280,14 +275,8 @@ describe("a suggestion popup grows instead of cutting in", () => {
 		advance(clock, MOTION.enter.duration * 2);
 		expect(popup.height()).toBe(plain.height());
 
-		vi.useFakeTimers();
-		try {
-			popup.editor.handleInput("u");
-			plain.editor.handleInput("u");
-			vi.advanceTimersByTime(140);
-		} finally {
-			vi.useRealTimers();
-		}
+		popup.editor.handleInput("u");
+		plain.editor.handleInput("u");
 		await flush();
 		expect(popup.editor.isShowingAutocomplete()).toBe(true);
 		expect(plain.height()).toBeGreaterThan(1);

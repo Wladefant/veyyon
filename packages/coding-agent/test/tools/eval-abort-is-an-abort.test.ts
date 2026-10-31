@@ -33,30 +33,11 @@
  * whether a real cancelled cell reaches it.
  */
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
-import { makeToolSession } from "../helpers/tool-session";
-
-function makeSession(): ToolSession {
-	return makeToolSession({
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
-	});
-}
-
-/** The text of every text block in a tool result, joined. */
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((block): block is { type: "text"; text: string } => block.type === "text")
-		.map(block => block.text)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 describe("EvalTool cancellation", () => {
 	afterAll(async () => {
@@ -67,7 +48,7 @@ describe("EvalTool cancellation", () => {
 		// THE HEADLINE REGRESSION. Resolving is what made a cancellation
 		// indistinguishable from a cell that threw, and `.resolves` here would have
 		// been the old behavior passing.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		const running = tool.execute(
 			"call-cancel-mid-cell",
@@ -86,7 +67,7 @@ describe("EvalTool cancellation", () => {
 		// backend returns an empty `result.output`, so on this path the fallback
 		// fired and the message was the bare constant "Command aborted": no mention
 		// of which cell, and nothing about the kernel state left behind.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		const running = tool.execute(
 			"call-cancel-after-output",
@@ -108,7 +89,7 @@ describe("EvalTool cancellation", () => {
 	it("names the interrupted cell by its title", async () => {
 		// So an operator reading a transcript can match the cancellation to the cell
 		// they see in it, rather than working out which of several calls stopped.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		const running = tool.execute(
 			"call-cancel-titled",
@@ -132,7 +113,7 @@ describe("EvalTool cancellation", () => {
 		// sequence had been interrupted partway and invited the reader to ask which
 		// of the other cells had run. The language is the fact that is actually
 		// actionable here: it says which kernel is holding the half-mutated state.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		const running = tool.execute(
 			"call-cancel-count",
@@ -151,7 +132,7 @@ describe("EvalTool cancellation", () => {
 	it("says so plainly when the cancelled cell had produced no output", async () => {
 		// The empty case has to state it rather than trail off, so silence in the
 		// message is never ambiguous between "nothing printed" and "we lost it".
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		const running = tool.execute(
 			"call-cancel-silent",
@@ -170,7 +151,7 @@ describe("EvalTool cancellation", () => {
 		// report an abort once it has run. An eval cell mutates kernel state that
 		// outlives the call, so a cell that executed and then reported a
 		// cancellation would leave the session changed with nothing saying so.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const controller = new AbortController();
 		controller.abort();
 
@@ -190,7 +171,7 @@ describe("EvalTool cancellation", () => {
 			code: "print(`ran=${globalThis.__preabortRan === true}`);",
 			timeout: 0,
 		});
-		expect(textOf(witness)).toContain("ran=false");
+		expect(toolResultText(witness)).toContain("ran=false");
 	});
 });
 
@@ -204,14 +185,14 @@ describe("EvalTool without a cancellation", () => {
 	});
 
 	it("resolves normally and produces its output", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-no-cancel", {
 			language: "js",
 			code: "print('finished cleanly');",
 			timeout: 0,
 		});
 
-		expect(textOf(result)).toContain("finished cleanly");
+		expect(toolResultText(result)).toContain("finished cleanly");
 		expect(result.details?.cells?.[0]?.status).toBe("complete");
 	});
 
@@ -219,7 +200,7 @@ describe("EvalTool without a cancellation", () => {
 		// The distinction the fix exists to create, asserted from the other side: a
 		// cell that throws must NOT come back as a cancellation, or the agent loop
 		// would stop on something it should retry.
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool
 			.execute("call-throwing-cell", {
 				language: "js",
@@ -229,7 +210,9 @@ describe("EvalTool without a cancellation", () => {
 			.catch(e => e);
 
 		expect(result).not.toBeInstanceOf(ToolAbortError);
-		expect(textOf(result as { content: Array<{ type: string; text?: string }> })).toContain("deliberate failure");
+		expect(toolResultText(result as { content: Array<{ type: string; text?: string }> })).toContain(
+			"deliberate failure",
+		);
 	});
 });
 
@@ -244,7 +227,7 @@ describe("EvalTool timeout stays a timeout", () => {
 	});
 
 	it("returns the backend's timeout annotation instead of throwing an abort", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool
 			.execute("call-timeout-not-abort", {
 				language: "js",
@@ -254,6 +237,6 @@ describe("EvalTool timeout stays a timeout", () => {
 			.catch(e => e);
 
 		expect(result).not.toBeInstanceOf(ToolAbortError);
-		expect(textOf(result as { content: Array<{ type: string; text?: string }> })).toContain("timed out");
+		expect(toolResultText(result as { content: Array<{ type: string; text?: string }> })).toContain("timed out");
 	});
 });

@@ -24,49 +24,16 @@
  * If any of these regress, a session's agents become un-enumerable from the
  * record and the suite fails.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import path from "node:path";
 import type { Usage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { AgentSpawnEntry, AgentSpawnRecord } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
-
-/** A real assistant turn — persistence gates on an assistant message existing. */
-function assistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
+const makeTempDir = useTempDirs();
 
 function usage(input: number, output: number, costTotal: number): Usage {
 	return {
@@ -92,7 +59,7 @@ describe("GRAN-2: parent records a navigable subagent_spawn index", () => {
 		if (!sessionFile) throw new Error("Expected a persisted session file path");
 
 		// A real turn so the session materializes, then the spawn index entry.
-		manager.appendMessage(assistantMessage("spawning an agent"));
+		manager.appendMessage(createAssistantMessage("spawning an agent"));
 		const childTranscript = path.join(sessionFile.slice(0, -6), "abc123.jsonl");
 		const record: AgentSpawnRecord = {
 			agentId: "abc123",
@@ -144,7 +111,7 @@ describe("GRAN-2: parent records a navigable subagent_spawn index", () => {
 		const manager = SessionManager.create(cwd, sessionDir);
 		const sessionFile = manager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected a persisted session file path");
-		manager.appendMessage(assistantMessage("spawning a fan-out"));
+		manager.appendMessage(createAssistantMessage("spawning a fan-out"));
 
 		const artifactsDir = sessionFile.slice(0, -6);
 		const ids = ["worker-0", "worker-1", "worker-2"];

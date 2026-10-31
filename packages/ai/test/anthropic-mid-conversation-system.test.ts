@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
-import type { AssistantMessage, DeveloperMessage, Message, Model, ModelSpec, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, DeveloperMessage, Message, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { userMessage } from "./helpers";
 
 /**
  * Claude Opus 4.8 and the Fable/Mythos 5 generation support mid-conversation
@@ -28,10 +30,6 @@ function makeModel(overrides: Partial<ModelSpec<"anthropic-messages">> = {}): Mo
 	} as ModelSpec<"anthropic-messages">);
 }
 
-function user(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function developer(text: string): DeveloperMessage {
 	return { role: "developer", content: [{ type: "text", text }], timestamp: Date.now() };
 }
@@ -43,14 +41,7 @@ function assistant(text: string, model: Model<"anthropic-messages">): AssistantM
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
@@ -60,7 +51,7 @@ describe("Anthropic mid-conversation system messages", () => {
 	it("maps a trailing developer message after a user turn to role: system", () => {
 		const model = makeModel();
 		const params = convertAnthropicMessages(
-			[user("review utils.py"), developer("Use parameterized SQL.")],
+			[userMessage("review utils.py"), developer("Use parameterized SQL.")],
 			model,
 			false,
 		);
@@ -84,7 +75,7 @@ describe("Anthropic mid-conversation system messages", () => {
 			],
 			timestamp: Date.now(),
 		};
-		const params = convertAnthropicMessages([user("hi"), visualDeveloper], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), visualDeveloper], model, false);
 		// Placement qualifies (follows user, last entry), but system content is
 		// text-only on the wire — the image-bearing turn must stay role: user.
 		expect(params.map(p => p.role)).toEqual(["user", "user"]);
@@ -92,14 +83,14 @@ describe("Anthropic mid-conversation system messages", () => {
 
 	it("maps developer messages to system on Claude Mythos 5", () => {
 		const model = makeModel({ id: "claude-mythos-5", name: "Claude Mythos 5" });
-		const params = convertAnthropicMessages([user("hi"), developer("Use project rules.")], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), developer("Use project rules.")], model, false);
 		expect(params.map(p => p.role)).toEqual(["user", "system"]);
 	});
 
 	it("maps a developer message that precedes an assistant turn to role: system", () => {
 		const model = makeModel();
 		const params = convertAnthropicMessages(
-			[user("hi"), developer("Be terse."), assistant("ok", model)],
+			[userMessage("hi"), developer("Be terse."), assistant("ok", model)],
 			model,
 			false,
 		);
@@ -113,7 +104,7 @@ describe("Anthropic mid-conversation system messages", () => {
 	it("keeps a developer message following an assistant turn as user (must follow a user turn)", () => {
 		const model = makeModel();
 		const params = convertAnthropicMessages(
-			[user("hi"), assistant("hello", model), developer("Switch to German.")],
+			[userMessage("hi"), assistant("hello", model), developer("Switch to German.")],
 			model,
 			false,
 		);
@@ -123,7 +114,7 @@ describe("Anthropic mid-conversation system messages", () => {
 
 	it("never emits a developer message in the first position as system", () => {
 		const model = makeModel();
-		const params = convertAnthropicMessages([developer("Global rule."), user("hi")], model, false);
+		const params = convertAnthropicMessages([developer("Global rule."), userMessage("hi")], model, false);
 		// First entry cannot be a system message; followed by user, not assistant.
 		expect(params.map(p => p.role)).toEqual(["user", "user"]);
 	});
@@ -131,7 +122,7 @@ describe("Anthropic mid-conversation system messages", () => {
 	it("upgrades only the trailing developer message in a consecutive run", () => {
 		const model = makeModel();
 		const params = convertAnthropicMessages(
-			[user("hi"), developer("Rule A."), developer("Rule B."), assistant("ok", model)],
+			[userMessage("hi"), developer("Rule A."), developer("Rule B."), assistant("ok", model)],
 			model,
 			false,
 		);
@@ -145,7 +136,7 @@ describe("Anthropic mid-conversation system messages", () => {
 	it("upgrades a developer message that follows tool results (a user-role param)", () => {
 		const model = makeModel();
 		const messages: Message[] = [
-			user("run the build"),
+			userMessage("run the build"),
 			{
 				...assistant("", model),
 				content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { cmd: "build" } }],
@@ -166,13 +157,13 @@ describe("Anthropic mid-conversation system messages", () => {
 
 	it("does not use the system role on models older than Opus 4.8", () => {
 		const model = makeModel({ id: "claude-opus-4-5-20251101", name: "Claude Opus 4.5" });
-		const params = convertAnthropicMessages([user("hi"), developer("Be terse.")], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), developer("Be terse.")], model, false);
 		expect(params.map(p => p.role)).toEqual(["user", "user"]);
 	});
 
 	it("does not use the system role on non-first-party endpoints", () => {
 		const model = makeModel({ baseUrl: "https://openrouter.ai/api/v1", provider: "openrouter" });
-		const params = convertAnthropicMessages([user("hi"), developer("Be terse.")], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), developer("Be terse.")], model, false);
 		expect(params.map(p => p.role)).toEqual(["user", "user"]);
 	});
 
@@ -182,13 +173,13 @@ describe("Anthropic mid-conversation system messages", () => {
 			name: "Claude Sonnet 4.6",
 			compat: { supportsMidConversationSystem: true },
 		});
-		const params = convertAnthropicMessages([user("hi"), developer("Be terse.")], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), developer("Be terse.")], model, false);
 		expect(params.map(p => p.role)).toEqual(["user", "system"]);
 	});
 
 	it("honors an explicit compat override disabling the feature on Opus 4.8", () => {
 		const model = makeModel({ compat: { supportsMidConversationSystem: false } });
-		const params = convertAnthropicMessages([user("hi"), developer("Be terse.")], model, false);
+		const params = convertAnthropicMessages([userMessage("hi"), developer("Be terse.")], model, false);
 		expect(params.map(p => p.role)).toEqual(["user", "user"]);
 	});
 });

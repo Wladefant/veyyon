@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl } from "@veyyon/ai";
 import { completeSimple } from "@veyyon/ai/stream";
 import "@veyyon/ai/usage/defaults";
@@ -32,13 +31,15 @@ import {
 } from "./config";
 import { mnemopiEmbedClient } from "./embed-client";
 import {
+	createBankMemory,
+	dedupeScopedTargets,
 	getMnemopiScopedBanks,
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
 	loadMnemopi,
 	loadMnemopiCore,
+	type MnemopiScopedMemory,
 	MnemopiSessionState,
-	requireMnemopi,
 	requireMnemopiCore,
 	setMnemopiSessionState,
 } from "./state";
@@ -292,19 +293,14 @@ export const mnemopiBackend: MemoryBackend = {
 	},
 };
 
-interface MnemopiStatsTarget {
-	bank: string;
-	memory: Mnemopi;
-}
-
 function createStatsTargets(
 	agentDir: string,
 	session: AgentSession | undefined,
-): { targets: MnemopiStatsTarget[]; owned: Mnemopi[] } {
+): { targets: readonly MnemopiScopedMemory[]; owned: Mnemopi[] } {
 	const state = getMnemopiSessionState(session);
 	if (state) {
 		return {
-			targets: dedupeStatsTargets([state.getScopedRetainTarget(), ...state.getScopedRecallTargets()]),
+			targets: dedupeScopedTargets([state.getScopedRetainTarget(), ...state.getScopedRecallTargets()]),
 			owned: [],
 		};
 	}
@@ -312,45 +308,12 @@ function createStatsTargets(
 	const config = loadMnemopiConfig(session.settings, agentDir);
 	const targets = getMnemopiScopedBanks(config).map(bank => ({
 		bank,
-		memory: createStatsMemory(config, bank),
+		memory: createBankMemory(config, bank, { reconcile: false }),
 	}));
 	return { targets, owned: targets.map(target => target.memory) };
 }
 
-function createStatsMemory(config: MnemopiBackendConfig, bank: string): Mnemopi {
-	const providerOptions = config.providerOptions as Record<string, unknown>;
-	const { Mnemopi } = requireMnemopi();
-	return new Mnemopi({
-		dbPath: resolveBankDbPath(config, bank),
-		bank,
-		sessionId: bank,
-		authorId: "coding-agent",
-		authorType: "agent",
-		channelId: bank,
-		...providerOptions,
-		reconcile: false,
-	} as ConstructorParameters<typeof Mnemopi>[0]);
-}
-
-function resolveBankDbPath(config: MnemopiBackendConfig, bank: string): string {
-	const sharedBank = config.globalBank ?? config.baseBank ?? "default";
-	if (bank === sharedBank) return config.dbPath;
-	const { BankManager } = requireMnemopiCore();
-	return new BankManager(path.dirname(config.dbPath)).getBankDbPath(bank);
-}
-
-function dedupeStatsTargets(targets: readonly MnemopiStatsTarget[]): MnemopiStatsTarget[] {
-	const seen = new Set<string>();
-	const unique: MnemopiStatsTarget[] = [];
-	for (const target of targets) {
-		if (seen.has(target.bank)) continue;
-		seen.add(target.bank);
-		unique.push(target);
-	}
-	return unique;
-}
-
-function renderMnemopiStats(targets: readonly MnemopiStatsTarget[]): string {
+function renderMnemopiStats(targets: readonly MnemopiScopedMemory[]): string {
 	const lines = [
 		"# Mnemopi Memory Stats",
 		"",
@@ -369,7 +332,7 @@ function renderMnemopiStats(targets: readonly MnemopiStatsTarget[]): string {
 }
 
 function summarizeMnemopiStatus(
-	targets: readonly MnemopiStatsTarget[],
+	targets: readonly MnemopiScopedMemory[],
 	session: AgentSession | undefined,
 ): MemoryBackendStatus {
 	let workingCount = 0;

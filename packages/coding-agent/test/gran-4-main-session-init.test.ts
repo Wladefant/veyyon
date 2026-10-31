@@ -22,37 +22,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { SessionInitEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 const CUSTOM_PROMPT = "You are the MAIN test agent guarding GRAN-4.";
-
-function assistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
 
 function initEntries(entries: readonly { type: string }[]): SessionInitEntry[] {
 	return entries.filter((e): e is SessionInitEntry => e.type === "session_init");
@@ -119,7 +97,7 @@ describe("GRAN-4: main session records its exact system prompt + tools", () => {
 		const liveTools = session.getActiveToolNames();
 
 		// Force the buffered session_init to disk with a real assistant turn, then reload.
-		manager.appendMessage(assistantMessage("hello from main"));
+		manager.appendMessage(createAssistantMessage("hello from main"));
 		manager.flushSync();
 		await session.dispose();
 
@@ -144,14 +122,14 @@ describe("GRAN-4: main session records its exact system prompt + tools", () => {
 		if (!sessionFile) throw new Error("Expected a persisted session file path");
 
 		const first = await createAgentSession(baseOptions(cwd, manager));
-		manager.appendMessage(assistantMessage("first turn"));
+		manager.appendMessage(createAssistantMessage("first turn"));
 		manager.flushSync();
 		await first.session.dispose();
 
 		// Resume the persisted session — hasExistingSession is now true.
 		const resumeManager = await SessionManager.open(sessionFile, sessionDir);
 		const resumed = await createAgentSession(baseOptions(cwd, resumeManager));
-		resumeManager.appendMessage(assistantMessage("second turn"));
+		resumeManager.appendMessage(createAssistantMessage("second turn"));
 		resumeManager.flushSync();
 		await resumed.session.dispose();
 

@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import {
 	MEMORY_RETAIN_MAX_BYTES,
 	MEMORY_RETAIN_MAX_ITEM_BYTES,
@@ -10,10 +10,10 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { abortedPartway } from "../core/aborted-partway";
 import { throwIfAborted } from "../core/tool-errors";
-import { requireMnemopiSessionState } from "./memory-session";
+import { requireHindsightSessionState, requireMnemopiSessionState, servesMemoryTools } from "./memory-session";
 import { retainToolView } from "./memory-view";
 
-const memoryRetainSchema = lazy(() =>
+const memoryRetainSchema = toolSchema("memory_retain", () =>
 	type({
 		items: type({
 			content: type("string").atMostLength(MEMORY_RETAIN_MAX_ITEM_BYTES).describe("information to remember"),
@@ -89,6 +89,9 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 	get parameters(): typeof memoryRetainSchema.value {
 		return memoryRetainSchema.value;
 	}
+	get wireParameters(): Record<string, unknown> {
+		return memoryRetainSchema.wire;
+	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly summary = "Store important facts in long-term memory";
@@ -97,9 +100,7 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): MemoryRetainTool | null {
-		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
-		return new MemoryRetainTool(session);
+		return servesMemoryTools(session) ? new MemoryRetainTool(session) : null;
 	}
 
 	/**
@@ -147,10 +148,7 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 			};
 		}
 
-		const state = this.session.getHindsightSessionState?.();
-		if (!state) {
-			throw new Error("Hindsight backend is not initialised for this session.");
-		}
+		const state = requireHindsightSessionState(this.session);
 
 		// Atomically enqueue the whole call. A full queue rejects before retaining
 		// any item, rather than reporting a partial success the caller cannot

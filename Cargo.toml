@@ -274,6 +274,7 @@ clap_mangen = "0.3"
 # Text Processing & Parsing
 # ──────────────────────────────────────────────────────────────────────────────
 regex = "1"
+pcre2 = "0.2"
 # The escaping half of `regex`, which is where `regex::escape` actually lives. Depended on
 # directly by veyyon-grep-kernel so the one owner of literal escaping does not pull the whole
 # engine in behind it; it is already in the graph under grep-regex, so this costs no build time.

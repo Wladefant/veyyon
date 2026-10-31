@@ -1,13 +1,7 @@
-// Subpath import, NOT the `@veyyon/utils` barrel: the barrel pulls in `env.ts`, which loads
-// dotenv at import time, and this module is reachable from the JS eval process entry where
-// that must not happen before profile bootstrap. `test/.../process-entry-import.test.ts`
-// fails if this becomes a barrel import again.
-import { isAbortError } from "@veyyon/utils/abortable";
-import { errorMessage } from "@veyyon/utils/type-guards";
 import { ToolError } from "../../tools/core/tool-errors";
+import { errorFromPayload, toErrorPayload } from "./error-payload";
 import { JsRuntime, type RuntimeHooks } from "./shared/runtime";
 import type {
-	EvalRunErrorPayload,
 	EvalWorkerInbound,
 	EvalWorkerOutbound,
 	EvalWorkerTransport,
@@ -60,27 +54,6 @@ export type WorkerCoreOptions =
 /** Finished-cell filenames retained for attributing rejections that surface after the run settled. */
 const RECENT_CELL_FILES_MAX = 256;
 
-function errorPayload(error: unknown): EvalRunErrorPayload {
-	if (error instanceof Error) {
-		return {
-			name: error.name,
-			message: error.message,
-			stack: error.stack,
-			isAbort: isAbortError(error),
-			isToolError: error.name === "ToolError" || error instanceof ToolError,
-		};
-	}
-	return { message: errorMessage(error) };
-}
-
-function errorFromPayload(payload: EvalRunErrorPayload): Error {
-	const ctor = payload.isToolError ? ToolError : Error;
-	const error = new ctor(payload.message);
-	if (payload.name) error.name = payload.name;
-	if (payload.stack) error.stack = payload.stack;
-	return error;
-}
-
 /**
  * Fold rejections floated by cell code into the run result: an otherwise
  * successful run fails with the first floating rejection (an unawaited promise
@@ -93,13 +66,13 @@ function foldFloatingRejections(active: ActiveRun, result: RunResult, hooks: Run
 	let folded = result;
 	let reported = rejections;
 	if (result.ok) {
-		const error = errorPayload(rejections[0]);
+		const error = toErrorPayload(rejections[0]);
 		error.message = `Unhandled rejection (missing await?): ${error.message}`;
 		folded = { type: "result", runId: active.runId, ok: false, error };
 		reported = rejections.slice(1);
 	}
 	for (const reason of reported) {
-		const payload = errorPayload(reason);
+		const payload = toErrorPayload(reason);
 		hooks.onText(`[unhandled rejection] ${payload.name ?? "Error"}: ${payload.message}\n`);
 	}
 	return folded;
@@ -192,7 +165,7 @@ export class WorkerCore {
 					type: "log",
 					level: "warn",
 					msg: "Unhandled rejection from a finished eval cell (missing await?)",
-					meta: { filename: recent, error: errorPayload(reason) },
+					meta: { filename: recent, error: toErrorPayload(reason) },
 				});
 				return true;
 			}
@@ -210,7 +183,7 @@ export class WorkerCore {
 				type: "log",
 				level: "warn",
 				msg: "Unhandled rejection during concurrent eval runs; cannot attribute to a cell",
-				meta: { error: errorPayload(reason) },
+				meta: { error: toErrorPayload(reason) },
 			});
 			return true;
 		}
@@ -227,7 +200,7 @@ export class WorkerCore {
 					// Inline fallback delivers messages on a microtask. A sync throw
 					// from ensureRuntime/setCwd would otherwise become a process-fatal
 					// unhandledRejection on the main thread.
-					this.#transport.send({ type: "init-failed", error: errorPayload(error) });
+					this.#transport.send({ type: "init-failed", error: toErrorPayload(error) });
 				}
 				return;
 			case "run":
@@ -287,7 +260,7 @@ export class WorkerCore {
 				type: "log",
 				level: "warn",
 				msg: "JS eval subprocess could not enter the session cwd",
-				meta: { cwd, error: errorPayload(error) },
+				meta: { cwd, error: toErrorPayload(error) },
 			});
 		}
 	}
@@ -308,7 +281,7 @@ export class WorkerCore {
 			runtime.displayValue(value, hooks);
 			result = { type: "result", runId, ok: true };
 		} catch (error) {
-			result = { type: "result", runId, ok: false, error: errorPayload(error) };
+			result = { type: "result", runId, ok: false, error: toErrorPayload(error) };
 		}
 		try {
 			// One event-loop turn so rejections the cell already floated surface

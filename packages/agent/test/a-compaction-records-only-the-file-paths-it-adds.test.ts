@@ -20,7 +20,9 @@
  * reads no `readFiles` on the new records and carries only its own window's paths forward.
  */
 import { describe, expect, it } from "bun:test";
+
 import type { AgentMessage } from "@veyyon/agent-core";
+
 import {
 	type CompactionDetails,
 	type CompactionEntry,
@@ -33,29 +35,16 @@ import {
 	type SessionEntry,
 	type SessionMessageEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+
+import type { AssistantMessage, ToolCall, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel } from "./helpers";
 
 const SETTINGS = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 };
 const TIMESTAMP = "2026-09-25T00:00:00.000Z";
 
 let counter = 0;
 const nextId = (prefix: string) => `${prefix}-${counter++}`;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function model() {
-	const found = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!found) throw new Error("expected a bundled compaction model");
-	return found;
-}
 
 function messageEntry(message: AgentMessage): SessionMessageEntry {
 	return { type: "message", id: nextId("entry"), parentId: null, timestamp: TIMESTAMP, message };
@@ -69,7 +58,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		api: "anthropic-messages",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }
@@ -141,7 +130,7 @@ async function compactPath(
 ): Promise<{ entry: CompactionEntry; preparation: CompactionPreparation }> {
 	const preparation = prepareCompaction(path, SETTINGS);
 	if (!preparation) throw new Error("expected the path to compact");
-	const result = await compact(preparation, model(), "test-key", undefined, undefined, {
+	const result = await compact(preparation, anthropicModel(), "test-key", undefined, undefined, {
 		completeImpl: async () => assistant([{ type: "text", text: `Summary ${++summaries} of the work so far.` }]),
 	});
 	const entry: CompactionEntry = {

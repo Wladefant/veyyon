@@ -35,12 +35,12 @@ import {
 	createOpenAICodexDirectRequest,
 	streamOpenAICodexResponses,
 } from "@veyyon/ai/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
+import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { supportsAllTurnsReasoningContext } from "@veyyon/catalog/identity";
 import { getBundledModels } from "@veyyon/catalog/models";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
 import * as piUtils from "@veyyon/utils";
-import { createCodexModel } from "./helpers";
+import { createCodexModel, createCodexTestContext, createCodexTestToken, providerSessionStateForTest } from "./helpers";
 
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
 const originalWebSocket = global.WebSocket;
@@ -53,21 +53,6 @@ afterEach(() => {
 	global.WebSocket = originalWebSocket;
 	vi.restoreAllMocks();
 });
-
-function createCodexTestToken(accountId = "acc_test"): string {
-	const payload = Buffer.from(
-		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-		"utf8",
-	).toBase64();
-	return `aaa.${payload}.bbb`;
-}
-
-function createCodexTestContext(): Context {
-	return {
-		systemPrompt: ["You are a helpful assistant."],
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
 
 function createCodexSse(events: Array<Record<string, unknown>>): string {
 	return `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
@@ -350,7 +335,7 @@ describe("Responses Lite all_turns invariant suite", () => {
 			const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 				apiKey: createCodexTestToken(),
 				sessionId: "ws-test-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 				responsesLite: true,
 			}).result();
 
@@ -390,7 +375,7 @@ describe("Responses Lite all_turns invariant suite", () => {
 			const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
 				apiKey: createCodexTestToken(),
 				sessionId: "ws-ineligible-session",
-				providerSessionState: new Map<string, ProviderSessionState>(),
+				providerSessionState: providerSessionStateForTest(),
 				responsesLite: true,
 				reasoning: "medium",
 			}).result();
@@ -408,7 +393,7 @@ describe("Responses Lite all_turns invariant suite", () => {
 
 		it("preserves reasoning.context === all_turns in stateful delta WebSocket turn", async () => {
 			const model = createCodexModel("gpt-5.6-terra", { preferWebsockets: true });
-			const providerSessionState = new Map<string, ProviderSessionState>();
+			const providerSessionState = providerSessionStateForTest();
 			const sentFrames: Array<Record<string, unknown>> = [];
 
 			class DeltaWs extends MockWebSocket {
@@ -475,7 +460,7 @@ describe("Responses Lite all_turns invariant suite", () => {
 
 		it("retains reasoning.context === all_turns during full-replay fallback after previous_response_not_found", async () => {
 			const model = createCodexModel("gpt-5.6-terra", { preferWebsockets: true });
-			const providerSessionState = new Map<string, ProviderSessionState>();
+			const providerSessionState = providerSessionStateForTest();
 			const sentFrames: Array<Record<string, unknown>> = [];
 			let simulateStaleOnNextTurn = false;
 

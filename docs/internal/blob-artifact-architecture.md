@@ -6,7 +6,7 @@ This document describes how coding-agent stores large payloads outside session J
 
 The runtime uses two different persistence mechanisms for different data shapes:
 
-- **Content-addressed blobs** (`blob:sha256:<hash>` for images, `blobtext:sha256:<hash>` for text): global storage used to externalize large payloads out of persisted session entries — image base64 and provider image data URLs (`blob:`), and any oversized string field such as a large tool result (`blobtext:`). The two namespaces are disjoint (`blobtext:` does not start with `blob:`) but share one on-disk store, so both are protected together by GC. Externalization is lossless: the full bytes live in the blob file and the JSONL line keeps only the short ref, restored exactly on load.
+- **Content-addressed blobs** (`blob:sha256:<hash>` for images, `blobtext:sha256:<hash>` for text): profile-level storage used to externalize large payloads out of persisted session entries — image base64 and provider image data URLs (`blob:`), and any oversized string field such as a large tool result (`blobtext:`). The two namespaces are disjoint (`blobtext:` does not start with `blob:`) but share one on-disk store, so both are protected together by GC. Externalization is lossless: the full bytes live in the blob file and the JSONL line keeps only the short ref, restored exactly on load.
 - **Session-scoped artifacts** (files under `<sessionFile-without-.jsonl>/`): per-session text files used for full tool outputs and agent outputs.
 
 They are intentionally separate:
@@ -18,7 +18,7 @@ They are intentionally separate:
 
 ### Blob store boundary (global)
 
-`SessionManager` constructs `BlobStore(getBlobsDir())`, so blob files live in a shared global blob directory, not in a session folder.
+`SessionManager` selects its `BlobStore` from the session file's location (`blobsDirForSessionDir`): the `blobs` directory beside the `sessions` root that holds the file. A file outside any `sessions` root, or under a root with no `blobs` directory beside it, uses the active profile's store (`getBlobsDir()`). A session file opened from another profile therefore reads and writes that profile's store, where that profile's garbage collection counts its payloads as referenced. Blob files live in that shared directory, not in a session folder.
 
 Blob file naming:
 
@@ -28,7 +28,7 @@ Blob file naming:
 
 Implications:
 
-- same binary content across sessions resolves to the same hash/path,
+- same binary content across sessions that share a store resolves to the same hash/path,
 - writes are idempotent at the content level,
 - blobs can outlive any individual session file.
 
@@ -96,12 +96,13 @@ Key behaviors:
    - image block `data` is stored as decoded binary bytes,
    - provider data URLs are stored as the original UTF-8 data URL string,
    - persisted values are replaced with `blob:sha256:<hash>`.
+5. **Cycles**: a value that loops back to one of its own ancestors is written as `CIRCULAR_MARKER` (`"[Circular]"`, from `@veyyon/utils/json`, the marker `stringifyJsonSafe` also writes), because a JSON line cannot hold a cycle. The walk tracks the ancestor chain from the entry down, so an object reached twice without a loop persists whole both times.
 
 This keeps session JSONL compact while preserving recoverability.
 
 ### 2) Session load rehydration path
 
-When opening a session (`setSessionFile`), after migrations, `SessionManager` runs `resolveBlobRefsInEntries()`.
+When a session is opened (`setSessionFile`, and `SessionManager.open`, which parses the file once and hands the entries over), after migrations, `SessionManager` runs `resolveBlobRefsInEntries()` against the store beside the file's `sessions` root.
 
 For message/custom-message image blocks with `blob:sha256:<hash>` and for persisted provider `image_url` fields with blob refs:
 
@@ -112,13 +113,14 @@ For message/custom-message image blocks with `blob:sha256:<hash>` and for persis
 
 For any string field whose value is a `blobtext:sha256:<hash>` ref (large tool results and other oversized text externalized in step 2), the same pass reads the blob and restores the exact original string in place. A string ref is resolved at its parent slot (an array index or object key), because a child call receives the string by value and cannot rewrite the slot it lives in.
 
-The same walk points every other string of 64 characters or more, and every restored payload, at one shared copy of its text, so a text the file writes in several places is held once in memory. A result codec's rebuilt fields run after the walk and are not shared. The pass empties its pool and its list of blob sites before it returns, so a finished load holds no reference to the entries it restored.
+The same walk points every repeated string, and every restored payload, at one shared copy of its text, so a text the file writes in several places is held once in memory. A string of 64 characters or more (`MIN_POOLED_LENGTH`) is pooled across the whole load. A shorter one is pooled with the values of the same key until that key holds `MAX_SHORT_VALUES_PER_KEY` (256) distinct values, so `role`, `api` or a tool name repeat as one string while ids and timestamps stop being pooled; a one-character string is not pooled. A result codec's rebuilt fields run after the walk and are not shared. The pass empties its pool and its list of blob sites before it returns, so a finished load holds no reference to the entries it restored.
 
 If a blob is missing:
 
-- image-block resolution logs a warning and keeps the original `blob:sha256:` ref string in memory,
-- provider `image_url` resolution logs a warning and keeps the original ref string,
-- `blobtext:` resolution logs a warning and keeps the original ref string (a session copied without its blob dir still opens),
+- the image block, provider `image_url` or `blobtext:` field keeps its original ref string in memory, so restoring the blobs directory restores the content (a session copied without its blob dir still opens),
+- the blob store logs each missing blob the first time the process finds it missing,
+- the load logs one `Session payloads missing from the blob store` warning with the count and, when the caller passes `operatorNotices`, posts an operator notice stating how many payloads are missing,
+- a request built from those entries carries a sentence in place of each unresolved ref (`replaceLostBlobPayloads`),
 - load continues.
 
 ### 3) Tool output spill/truncation path
@@ -138,7 +140,8 @@ Behavior:
 Practical effect:
 
 - UI/tool return shows bounded output,
-- full sanitized output is preserved in artifact file and referenced as `artifact://<id>` when file-backed artifact mirroring succeeded.
+- full sanitized output is preserved in artifact file and referenced as `artifact://<id>` when file-backed artifact mirroring succeeded,
+- the artifact file has no size cap by default (`ARTIFACT_DEFAULT_MAX_BYTES = 0`); a sink built with `artifactMaxBytes > 0` keeps a head window (`artifactHeadBytes`, 3 MiB by default) and a rolling tail on disk, separated by one `[ARTIFACT TRUNCATED: …]` line.
 
 If file sink creation fails (I/O error, missing path, etc.), sink falls back to in-memory truncation only; full output is not persisted.
 
@@ -150,25 +153,28 @@ If file sink creation fails (I/O error, missing path, etc.), sink falls back to 
 
 ### `artifact://<id>`
 
-Handled by `ArtifactProtocolHandler` over registered active session artifact directories:
+Handled by `ArtifactProtocolHandler` (`resolveArtifactFile`) over registered active session artifact directories:
 
 - requires a numeric ID,
-- searches each registered artifacts directory for filename prefix `<id>.`,
-- returns raw text (`text/plain`) from the matched `.log` file,
-- when missing, error includes available numeric artifact IDs from existing artifact files.
+- scans the calling session's artifacts directory first and returns a hit there without looking further,
+- otherwise searches each registered artifacts directory for filename prefix `<id>.`,
+- returns raw text (`text/plain`) from the matched file; a path-only caller (search, bash URL expansion) receives the path and size without the bytes,
+- rejects full resolution of a file over 8 MiB (`MAX_INLINE_ARTIFACT_BYTES`) with an error that names line selectors (`artifact://<id>:1-3000`) and the file path.
 
 Failure behavior:
 
 - if no artifact directories are registered: throws `No session - artifacts unavailable`,
 - if registered directories exist but none are present on disk: throws `No artifacts directory found`,
-- if ID is not numeric: throws `artifact:// ID must be numeric, got: <id>`.
+- if ID is not numeric: throws `artifact:// ID must be numeric, got: <id>`,
+- if the ID resolves in more than one registered directory: throws `Artifact <id> is ambiguous: …` with the candidate paths,
+- if the ID is not found: throws `Artifact <id> not found. Available: …` with the existing IDs, newest first.
 
 ### `agent://<id>`
 
-Handled by `AgentProtocolHandler` over registered active session artifact directories and `<artifactsDir>/<id>.md`:
+Handled by `AgentProtocolHandler` over `<artifactsDir>/<id>.md` in every registered active session artifact directory:
 
 - plain form returns markdown text,
-- `/path` or `?q=` forms perform JSON extraction,
+- `/path` or `?q=` forms perform JSON extraction and return `application/json`,
 - path and query extraction cannot be combined,
 - if extraction requested, file content must parse as JSON.
 
@@ -176,6 +182,7 @@ Failure behavior:
 
 - if no artifact directories are registered: throws `No session - agent outputs unavailable`,
 - if registered directories exist but none are present on disk: throws `No artifacts directory found`,
+- if the output ID exists in more than one registered directory: throws `Ambiguous agent output: <id>` with the candidate paths,
 - missing output throws `Not found: <id>` with available `.md` output IDs when directory listing succeeds.
 
 Read tool integration:
@@ -189,12 +196,13 @@ Read tool integration:
 
 - `ArtifactManager` scans existing `{id}.*.log` files on first allocation and continues numbering.
 - `AgentOutputManager` scans existing `.md` output IDs and continues numbering.
-- `SessionManager` rehydrates blob refs to base64/data URLs on load.
+- `SessionManager` rehydrates `blob:` refs to base64/data URLs and `blobtext:` refs to the original text on load.
 
 ### Fork
 
-`SessionManager.fork()` creates a new session file with new session ID and `parentSession` link, then returns old/new file paths. Artifact copying is handled by `AgentSession.fork()`:
+`SessionManager.fork()` creates a new session file in the same session directory with a new session ID and `parentSession` link, then returns old/new file paths. Artifact copying is handled by `SessionSwitch.fork()`, which `AgentSession.fork()` delegates to:
 
+- returns without forking when a `session_before_switch` hook cancels,
 - flushes current session first,
 - attempts recursive copy of old artifact directory to new artifact directory,
 - missing old directory is tolerated,
@@ -207,27 +215,33 @@ ID implications after fork:
 
 Blob implications after fork:
 
-- blobs are global and content-addressed, so no blob directory copy is required.
+- the new file sits in the same session directory, so it uses the same blob store and no blob copy is required.
 
 ### Move to new cwd
 
-`SessionManager.moveTo()` relocates both session file and artifact directory with rollback logic if a later step fails, but the destination depends on how storage was chosen: an explicit `targetSessionDir` wins; a session created with an explicit `sessionDir` stays pinned in place; a managed cwd-encoded directory is re-derived for the new cwd under the same sessions root; anything else re-roots into the default session directory for the new cwd. This preserves artifact identity while relocating session scope.
+`SessionManager.moveTo()` relocates both session file and artifact directory with rollback logic if a later step fails, but the destination depends on how storage was chosen: an explicit `targetSessionDir` wins; a session created with an explicit `sessionDir` stays pinned in place; a managed cwd-encoded directory is re-derived for the new cwd under the same sessions root; anything else re-roots into the default session directory for the new cwd. This preserves artifact identity while relocating session scope. Blob files are not moved: the store is selected from the file's location, so a move that stays under one `sessions` root keeps the same store.
 
 ## Failure handling and fallback paths
 
-| Case                                                      | Behavior                                                             |
-| --------------------------------------------------------- | -------------------------------------------------------------------- |
-| Blob file missing during image-block rehydration          | Warn and keep `blob:sha256:` ref string in memory                    |
-| Blob file missing during provider `image_url` rehydration | Warn and keep `blob:sha256:` ref string in memory                    |
-| Blob file missing during `blobtext:` text rehydration     | Warn and keep `blobtext:sha256:` ref string in memory                |
-| Blob read ENOENT via `BlobStore.get`                      | Returns `null`                                                       |
-| Artifact directory missing (`ArtifactManager.listFiles`)  | Returns empty list (allocation can start fresh)                      |
-| No registered artifact dirs (`artifact://`)               | Throws `No session - artifacts unavailable`                          |
-| No registered artifact dirs (`agent://`)                  | Throws `No session - agent outputs unavailable`                      |
-| Registered artifact dirs missing on disk                  | Throws explicit `No artifacts directory found`                       |
-| Artifact ID not found                                     | Throws with available IDs listing                                    |
-| OutputSink artifact writer init fails                     | Continues with bounded in-memory output only                         |
-| Non-persistent `saveArtifact`                             | Stores text in `SessionManager` memory map; not file-backed URL data |
+| Case                                                        | Behavior                                                             |
+| ----------------------------------------------------------- | -------------------------------------------------------------------- |
+| Blob file missing during image-block rehydration            | Keep `blob:sha256:` ref string in memory; counted as lost            |
+| Blob file missing during provider `image_url` rehydration   | Keep `blob:sha256:` ref string in memory; counted as lost            |
+| Blob file missing during `blobtext:` text rehydration       | Keep `blobtext:sha256:` ref string in memory; counted as lost        |
+| Lost payloads after a load                                  | One warning with the count, plus an operator notice                  |
+| Blob read ENOENT via `BlobStore.get`                        | Returns `null`                                                       |
+| Blob store write fails during persistence                   | Keeps the payload inline in the JSONL line                           |
+| Persisted value loops back to an ancestor                   | Writes `[Circular]` at the loop; the entry persists                  |
+| Artifact directory missing (`ArtifactManager.listFiles`)    | Returns empty list (allocation can start fresh)                      |
+| Artifact directory unreadable (`ArtifactManager.listFiles`) | Logs a warning and returns empty list                                |
+| No registered artifact dirs (`artifact://`)                 | Throws `No session - artifacts unavailable`                          |
+| No registered artifact dirs (`agent://`)                    | Throws `No session - agent outputs unavailable`                      |
+| Registered artifact dirs missing on disk                    | Throws explicit `No artifacts directory found`                       |
+| Artifact ID not found                                       | Throws with available IDs listing, newest first                      |
+| Artifact ID or agent output ID in several registered dirs   | Throws an ambiguity error listing the candidate paths                |
+| Artifact over 8 MiB resolved in full                        | Throws; names line selectors and the file path                       |
+| OutputSink artifact writer init fails                       | Continues with bounded in-memory output only                         |
+| Non-persistent `saveArtifact`                               | Stores text in `SessionManager` memory map; not file-backed URL data |
 
 ## Binary blob externalization vs text-output artifacts
 
@@ -238,17 +252,17 @@ The two systems intersect only indirectly: both reduce session JSONL bloat, but 
 
 ## Implementation files
 
-- [`kernel/src/session/blob-store.ts`](../../kernel/src/session/blob-store.ts): blob reference format, hashing, put/get, externalize/resolve helpers.
+- [`kernel/src/session/blob-store.ts`](../../kernel/src/session/blob-store.ts): blob reference format, hashing, put/get, store selection (`blobsDirForSessionDir`), externalize/resolve helpers.
 - [`kernel/src/session/artifacts.ts`](../../kernel/src/session/artifacts.ts): session artifact directory model and numeric artifact ID/path allocation.
 - [`src/session/streaming-output.ts`](../../packages/coding-agent/src/session/streaming-output.ts): `OutputSink` truncation/spill-to-file behavior and summary metadata.
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): `BlobStore`/`ArtifactManager` construction, persistence-transform and blob-rehydration call sites, session fork/move interactions.
-- [`kernel/src/session/session-persistence.ts`](../../kernel/src/session/session-persistence.ts): `prepareEntryForPersistence()`: large-string externalization to `blobtext:` refs, transient-field stripping, and synchronous image-blob externalization.
+- [`kernel/src/session/session-persistence.ts`](../../kernel/src/session/session-persistence.ts): `prepareEntryForPersistence()`: large-string externalization to `blobtext:` refs, transient-field stripping, synchronous image-blob externalization, and the cycle marker.
 - [`kernel/src/session/session-loader.ts`](../../kernel/src/session/session-loader.ts): `resolveBlobRefsInEntries()`: blob-ref rehydration to base64 / data URLs on load.
-- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): artifact directory copy during interactive fork.
+- [`src/session/runtime/session-switch.ts`](../../packages/coding-agent/src/session/runtime/session-switch.ts): artifact directory copy during interactive fork.
 - [`src/internal-urls/artifact-protocol.ts`](../../packages/coding-agent/src/internal-urls/artifact-protocol.ts): `artifact://` resolver.
 - [`src/internal-urls/agent-protocol.ts`](../../packages/coding-agent/src/internal-urls/agent-protocol.ts): `agent://` resolver + JSON extraction.
 - [`src/internal-urls/router.ts`](../../packages/coding-agent/src/internal-urls/router.ts): internal URL router wiring.
 - [`src/task/output-manager.ts`](../../packages/coding-agent/src/task/output-manager.ts): session-scoped agent output ID allocation for `agent://`.
 - [`src/task/executor.ts`](../../packages/coding-agent/src/task/executor.ts): agent output artifact writes (`<id>.md`) and session JSONL sidecars.
 
-*Verified against `354b7f411c38e21bf78413c938743fb798245f5b` on 2026-09-26.*
+*Verified against `3cf2367afbafa65b899cd5d34272e85ea6e27865` on 2026-10-29.*

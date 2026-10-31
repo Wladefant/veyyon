@@ -1,5 +1,6 @@
 import type { Usage } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { type ToolSchema, toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { lazy } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { $envpos } from "@veyyon/utils/env";
@@ -108,7 +109,7 @@ export interface TaskItem {
 	successorOf?: string;
 }
 
-export const taskSchema = lazy(() =>
+export const taskSchema = toolSchema("task", () =>
 	type({
 		"name?": "string",
 		agent: "string = 'deep'",
@@ -119,7 +120,7 @@ export const taskSchema = lazy(() =>
 		"+": "delete",
 	}),
 );
-const taskSchemaNoIsolation = lazy(() =>
+const taskSchemaNoIsolation = toolSchema("task:flat", () =>
 	type({
 		"name?": "string",
 		agent: "string = 'deep'",
@@ -129,14 +130,14 @@ const taskSchemaNoIsolation = lazy(() =>
 		"+": "delete",
 	}),
 );
-const taskSchemaBatch = lazy(() =>
+const taskSchemaBatch = toolSchema("task:batch", () =>
 	type({
 		context: "string",
 		tasks: taskItemSchemaIsolated.value.array(),
 		"+": "delete",
 	}),
 );
-const taskSchemaBatchNoIsolation = lazy(() =>
+const taskSchemaBatchNoIsolation = toolSchema("task:batch:flat", () =>
 	type({
 		context: "string",
 		tasks: taskItemSchema.value.array(),
@@ -153,7 +154,7 @@ export type TaskSchema = typeof taskSchema.value;
 /** Active task tool parameter schema for the current isolation / batch flags */
 export type TaskToolSchemaInstance = DynamicTaskSchema | BaseType;
 
-const taskSchemaCache = new Map<string, BaseType>();
+const taskSchemaCache = new Map<string, ToolSchema<BaseType>>();
 
 function taskAgentSchemaRule(defaultAgent: string | undefined, enabledAgentNames?: readonly string[]) {
 	const trimmedDefault = defaultAgent?.trim();
@@ -237,23 +238,40 @@ export function getTaskSchema(options: {
 	defaultAgent?: string;
 	enabledAgentNames?: readonly string[];
 }): TaskToolSchemaInstance {
+	return getTaskToolSchema(options).value;
+}
+
+/** The {@link getTaskSchema} schema for `options`, held with its wire form. */
+export function getTaskToolSchema(options: {
+	isolationEnabled: boolean;
+	batchEnabled: boolean;
+	defaultAgent?: string;
+	enabledAgentNames?: readonly string[];
+}): ToolSchema<TaskToolSchemaInstance> {
 	const hasDefaultAgent = Object.hasOwn(options, "defaultAgent");
 	const defaultAgent = hasDefaultAgent ? options.defaultAgent : DEFAULT_SPAWN_AGENT;
 	const enabledAgentNames = options.enabledAgentNames;
 	if (enabledAgentNames === undefined && defaultAgent === DEFAULT_SPAWN_AGENT) {
-		if (options.batchEnabled)
-			return options.isolationEnabled ? taskSchemaBatch.value : taskSchemaBatchNoIsolation.value;
-		return options.isolationEnabled ? taskSchema.value : taskSchemaNoIsolation.value;
+		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
+		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
 	const encodedNames =
 		enabledAgentNames === undefined
 			? "unconstrained"
 			: enabledAgentNames.map(name => `${name.length}:${name}`).join(",");
 	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${defaultAgent === undefined ? "unset" : `set:${defaultAgent.length}:${defaultAgent}`}:agents:${encodedNames}`;
-	const cached = taskSchemaCache.get(key);
-	if (cached) return cached;
-	const schema = createTaskSchema({ ...options, defaultAgent, enabledAgentNames });
-	taskSchemaCache.set(key, schema);
+	let schema = taskSchemaCache.get(key);
+	if (schema === undefined) {
+		schema = toolSchema(`task:${key}`, () =>
+			createTaskSchema({
+				isolationEnabled: options.isolationEnabled,
+				batchEnabled: options.batchEnabled,
+				defaultAgent,
+				enabledAgentNames,
+			}),
+		);
+		taskSchemaCache.set(key, schema);
+	}
 	return schema;
 }
 

@@ -14,22 +14,12 @@ import {
 } from "@veyyon/mnemopi/core/local-llm-config";
 import { Mnemopi } from "@veyyon/mnemopi/core/memory";
 import { withMnemopiRuntimeOptions } from "@veyyon/mnemopi/core/runtime-options";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
 
-function restoreEnv(): void {
-	for (const key in process.env) {
-		if (!(key in OLD_ENV)) delete process.env[key];
-	}
-	for (const key in OLD_ENV) {
-		const value = OLD_ENV[key];
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
-
 afterEach(() => {
-	restoreEnv();
+	restoreEnvSnapshot(OLD_ENV);
 	resetHostLlmBackendForTests();
 });
 

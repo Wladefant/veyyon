@@ -7,18 +7,12 @@ import { ToolError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { SetCwdTool } from "@veyyon/coding-agent/tools/fs/set-cwd";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * SetCwdTool: successful re-root, reject file/missing, exact previous/cwd details.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SetCwdTool adversarial", () => {
 	let tmpDir: string;
@@ -61,7 +55,7 @@ describe("SetCwdTool adversarial", () => {
 		expect(path.resolve(details.previous)).toBe(path.resolve(tmpDir));
 		expect(path.resolve(details.cwd)).toBe(path.resolve(child));
 		expect(details.requested).toBe(child);
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text.length).toBeGreaterThan(0);
 	});
 

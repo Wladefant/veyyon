@@ -27,7 +27,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, isFsError } from "./fs-error";
+import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
 
 export interface AtomicWriteOptions {
 	/**
@@ -214,16 +214,6 @@ function assertRegularFileTarget(stats: fs.Stats, target: string): void {
 		`Refusing to write ${target}: it is ${nonRegularKind(stats)}, and an atomic write would replace it with a regular file. ` +
 			`Point the write at a regular file path instead.`,
 	);
-}
-
-/** How {@link assertRegularFileTarget} describes an entry that is not a regular file. */
-function nonRegularKind(stats: fs.Stats): string {
-	if (stats.isDirectory()) return "a directory";
-	if (stats.isSymbolicLink()) return "a symbolic link";
-	if (stats.isFIFO()) return "a named pipe (FIFO)";
-	if (stats.isSocket()) return "a socket";
-	if (stats.isBlockDevice() || stats.isCharacterDevice()) return "a device node";
-	return "not a regular file";
 }
 
 /** Blocking twin of {@link resolveWriteTarget}; see that function for the reasoning. */

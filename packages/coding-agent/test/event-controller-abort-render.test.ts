@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
 import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
@@ -25,14 +26,7 @@ function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assist
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "aborted",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: Date.now(),
 		...overrides,
 	};

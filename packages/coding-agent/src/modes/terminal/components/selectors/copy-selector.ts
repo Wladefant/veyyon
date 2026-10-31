@@ -2,7 +2,7 @@ import { type Component, Text } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { formatMoreLines } from "@veyyon/utils/format";
 import { matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -17,7 +17,7 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -144,9 +144,9 @@ export class CopySelectorComponent implements Component {
 		);
 
 		if (matchesSelectUp(keyData)) {
-			this.#cursorId = flat[idx === 0 ? flat.length - 1 : idx - 1]!.target.id;
+			this.#cursorId = flat[wrapIndex(idx - 1, flat.length)]!.target.id;
 		} else if (matchesSelectDown(keyData)) {
-			this.#cursorId = flat[idx === flat.length - 1 ? 0 : idx + 1]!.target.id;
+			this.#cursorId = flat[wrapIndex(idx + 1, flat.length)]!.target.id;
 		} else if (matchesSelectPageUp(keyData)) {
 			this.#cursorId = flat[Math.max(0, idx - this.#treeRows)]!.target.id;
 		} else if (matchesSelectPageDown(keyData)) {
@@ -175,18 +175,14 @@ export class CopySelectorComponent implements Component {
 						0,
 						flat.findIndex(n => n.target.id === this.#cursorId),
 					);
-					const next = delta < 0 ? (idx === 0 ? flat.length - 1 : idx - 1) : idx === flat.length - 1 ? 0 : idx + 1;
-					this.#cursorId = flat[next]!.target.id;
+					this.#cursorId = flat[wrapIndex(idx + delta, flat.length)]!.target.id;
 					this.#onRequestRender?.();
 				}
 			},
 			listRowStart: this.#listRowStart,
 			hitRows: this.#hitRows,
 			onHoverRow: index => {
-				if (index !== this.#hover.key) {
-					this.#hover.set(index);
-					this.#onRequestRender?.();
-				}
+				if (this.#hover.set(index)) this.#onRequestRender?.();
 			},
 			onClickRow: index => {
 				const node = this.#flatten()[index];
@@ -275,10 +271,9 @@ export class CopySelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const flat = this.#flatten();
@@ -289,37 +284,31 @@ export class CopySelectorComponent implements Component {
 		const selected = flat[cursorIdx]?.target;
 
 		// Tree + one blank separator + preview, so the two panes share the body
-		// budget minus that separator. `modalHeight - 8` put the body TWO rows over
-		// what the card shows (it reserves nine at this sizing, and the separator is
-		// a tenth), and the shell truncates the overrun silently — the bottom of the
-		// preview, which is the pane you are reading before you copy.
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		// rows the plan shows minus that separator. `modalHeight - 8` put the body
+		// TWO rows over what the card shows, and the shell truncates the overrun
+		// silently — the bottom of the preview, which is the pane you are reading
+		// before you copy. A short card sheds its padding before it shows fewer tree
+		// rows, and a card too short for a line under the preview heading gives
+		// every row to the tree rather than draw a heading with nothing under it.
+		const chrome = planModalChrome(dims, {
 			shortcuts: COPY_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: MIN_TREE_ROWS + 2,
 		});
-		const available = Math.max(MIN_TREE_ROWS + 1, chrome.maxBodyRows - 1);
-		const treeRows = clampLow(flat.length, 1, Math.floor(available / 2));
+		const rows = chrome.maxBodyRows;
+		const splitTreeRows = clampLow(flat.length, 1, Math.floor((rows - 1) / 2));
+		const previewRows = rows - 1 - splitTreeRows;
+		const showPreview = previewRows >= 2;
+		const treeRows = showPreview ? splitTreeRows : clampLow(flat.length, 1, rows);
 		this.#treeRows = treeRows;
-		const previewRows = Math.max(1, available - treeRows);
 		const inner = dims.contentWidth;
 
-		const body = [
-			...this.#renderTree(inner, flat, cursorIdx, treeRows),
-			"",
-			...this.#renderPreview(inner, selected, previewRows),
-		];
+		const tree = this.#renderTree(inner, flat, cursorIdx, treeRows);
+		const body = showPreview ? [...tree, "", ...this.#renderPreview(inner, selected, previewRows)] : tree;
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Copy to clipboard",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts: COPY_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

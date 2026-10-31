@@ -850,8 +850,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			isAutoSubmitBlocked: () => this.#isAutoSubmitBlocked(),
 			isPlanModeActive: () => this.planModeEnabled || this.planModePaused,
 			hasPendingSubmission: () => this.#pendingSubmittedInput !== undefined,
-			hasPendingVisibleUserSubmission: () =>
-				this.#pendingSubmittedInput !== undefined && !this.#pendingSubmittedInput.customType,
 			withProgress: (label, work) => this.#withGuidedGoalProgress(label, work),
 		});
 		this.#workingLoader = new WorkingLoaderController(this);
@@ -1498,14 +1496,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async applyCwdChange(newCwd: string): Promise<void> {
 		// The mode-independent half lives on the session, because this is not the
-		// only way a session moves. Three paths reach here: `/move`, which calls
-		// `sessionManager.moveTo` directly; resuming a session that belongs to
-		// another project; and the `cwd_changed` event, which the `set_cwd` tool
-		// raises through `AgentSession.setCwd`. Only the third goes through
-		// `setCwd`, so this cannot simply be dropped in favour of it, and `setCwd`
-		// cannot be left as the sole owner either. Both call the one owner, which
-		// skips a repeat of the same destination so the third path does the work
-		// once rather than twice.
+		// only way a session moves. Two paths reach here: resuming a session that
+		// belongs to another project, and the `cwd_changed` event, which
+		// `AgentSession.setCwd` (`/cd`, the `set_cwd` tool) and
+		// `AgentSession.moveToCwd` (`/move`) raise once their transaction is
+		// recorded. The resume path goes through neither, so this cannot be dropped
+		// in favour of them. Both call the one owner, which skips a repeat of the
+		// same destination so the event path does the work once rather than twice.
 		//
 		// It reloads project settings, reapplies provider globals, clears the plugin
 		// root cache, resets capabilities, refreshes the ssh tool, and rebuilds the
@@ -1753,9 +1750,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmittedInput = undefined;
 		this.clearOptimisticUserMessage();
 		this.#workingLoader.clearPendingMessage();
-		if (submission.customType === "goal-continuation") {
-			this.#goalMode.noteContinuationTurnSettled();
-		}
 		this.#workingLoader.stop(true);
 		if (!submission.customType) {
 			this.editor.pendingImages = submission.images ? [...submission.images] : [];
@@ -1782,9 +1776,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
 		if (wasPendingSubmission) {
 			this.#pendingSubmittedInput = undefined;
-		}
-		if (input.customType === "goal-continuation") {
-			this.#goalMode.noteContinuationTurnSettled();
 		}
 
 		const quiesced = !this.session.isStreaming && !this.streamingComponent;
@@ -2012,7 +2003,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Disconnect everything that can still turn session state into a frame or
 	 * turn a keystroke into session work: the loading/mic/clock animations, the
-	 * anchored motion frame, the todo/observer/goal timers, voice input, extension terminal input
+	 * anchored motion frame, the transcript's spinners, rails and shimmers, the todo/observer/goal
+	 * timers, voice input, extension terminal input
 	 * listeners and hook widgets, the event bus, the agent/bash subscriptions,
 	 * the event controller, the status line, the resize hook, and the session
 	 * event subscription. Everything here is idempotent, and the method itself
@@ -2040,6 +2032,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#clockTimer = undefined;
 		}
 		this.#anchoredBlocks.freeze();
+		this.chatContainer.stopAnimations();
 		this.#goalMode.cancelContinuation();
 		this.#voiceController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
@@ -2526,6 +2519,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#refreshComposerShortcuts();
 	}
 
+	noteComposerChanged(): void {
+		this.#goalMode.noteComposerChanged();
+	}
+
 	/** Remove the startup welcome card (and its spacers) — the first real
 	 *  keystroke ends the hero moment. Idempotent; the bottom anchor stays so
 	 *  the composer does not jump until a conversation turn scrolls in. The
@@ -2646,8 +2643,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	// Command handling
-	handleExportCommand(text: string): Promise<void> {
-		return this.#commandController.handleExportCommand(text);
+	handleExportCommand(outputPath: string | undefined): Promise<void> {
+		return this.#commandController.handleExportCommand(outputPath);
 	}
 
 	async handleDumpCommand(): Promise<void> {
@@ -2739,8 +2736,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleRenameCommand(title);
 	}
 
-	handleMemoryCommand(text: string): Promise<void> {
-		return this.#commandController.handleMemoryCommand(text);
+	handleMemoryCommand(args: string): Promise<void> {
+		return this.#commandController.handleMemoryCommand(args);
 	}
 
 	handleSTTToggle(): Promise<void> {
@@ -2764,14 +2761,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
 	}
 
-	async handleMCPCommand(text: string): Promise<void> {
+	async handleMCPCommand(args: string): Promise<void> {
 		const { MCPCommandController } = await import("./controllers/mcp-command-controller");
-		await new MCPCommandController(this).handle(text);
+		await new MCPCommandController(this).handle(args);
 	}
 
-	async handleSSHCommand(text: string): Promise<void> {
+	async handleSSHCommand(args: string): Promise<void> {
 		const { SSHCommandController } = await import("./controllers/ssh-command-controller");
-		await new SSHCommandController(this).handle(text);
+		await new SSHCommandController(this).handle(args);
 	}
 
 	handleCompactCommand(
@@ -2873,7 +2870,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.showSecretList();
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean; query?: string }): void {
 		this.#openSelector(selectors => selectors.showModelSelector(options));
 	}
 
@@ -3113,13 +3110,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#extensionUiController.initHooksAndCustomTools();
 	}
 
-	emitCustomToolSessionEvent(
-		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
-		previousSessionFile?: string,
-	): Promise<void> {
-		return this.#extensionUiController.emitCustomToolSessionEvent(reason, previousSessionFile);
-	}
-
 	setHookWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void {
 		this.#extensionUiController.setHookWidget(key, content, options);
 	}
@@ -3191,10 +3181,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showExtensionError(extensionPath: string, error: string): void {
 		this.#extensionUiController.showExtensionError(extensionPath, error);
-	}
-
-	showToolError(toolName: string, error: string): void {
-		this.#extensionUiController.showToolError(toolName, error);
 	}
 
 	#subscribeToAgent(): void {

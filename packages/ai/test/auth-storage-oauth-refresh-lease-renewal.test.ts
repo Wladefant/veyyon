@@ -6,6 +6,7 @@ import { AuthStorage, type CredentialDisabledEvent } from "@veyyon/ai/auth-stora
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
+import { driveFakeTime, installFakeTime } from "../../utils/test/helpers/fake-time";
 
 const SOURCE_ID = "auth-storage-oauth-refresh-lease-renewal-test";
 
@@ -15,43 +16,6 @@ const SOURCE_ID = "auth-storage-oauth-refresh-lease-renewal-test";
  * that instant. Keep this in sync if the source constant changes.
  */
 const LEASE_RENEW_TICK_MS = 5_000;
-
-/**
- * Fake timers for the renewal loop's deadline and for the refreshes below that wait out a tick:
- * `setTimeout` and `Date` are faked, and `Bun.sleep` is routed onto a fake `setTimeout` so a
- * pending sleep counts in `vi.getTimerCount()` like any other timer.
- */
-function installFakeTime(): void {
-	vi.useFakeTimers();
-	vi.spyOn(Bun, "sleep").mockImplementation(((ms: number) => {
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, ms);
-		return promise;
-	}) as typeof Bun.sleep);
-}
-
-/** Settle `work` by alternating a real event-loop turn with a 10ms step of fake time. */
-async function driveFakeTime<T>(work: Promise<T>): Promise<T> {
-	let settled = false;
-	// Handled now, not after the loop: a rejection left unhandled across a turn fails the test.
-	const outcome = work.then(
-		value => ({ ok: true as const, value }),
-		(error: unknown) => ({ ok: false as const, error }),
-	);
-	void outcome.then(() => {
-		settled = true;
-	});
-	for (let step = 0; !settled; step++) {
-		if (step === 10_000) throw new Error("work did not settle within 100s of fake time");
-		const turn = Promise.withResolvers<void>();
-		setImmediate(turn.resolve);
-		await turn.promise;
-		if (!settled) vi.advanceTimersByTime(10);
-	}
-	const result = await outcome;
-	if (!result.ok) throw result.error;
-	return result.value;
-}
 
 /**
  * Both fenced refresh paths renew the lease through ONE helper

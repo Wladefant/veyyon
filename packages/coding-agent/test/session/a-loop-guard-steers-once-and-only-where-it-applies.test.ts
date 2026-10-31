@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, AssistantMessageEvent, Model, ToolResultMessage } from "@veyyon/ai";
 import { GEMINI_HEADER_RUNAWAY_THRESHOLD, isGeminiThinkingModel } from "@veyyon/ai/utils/thinking-loop";
-import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import { SETTINGS_SCHEMA, Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomMessage } from "@veyyon/coding-agent/session/messages";
 import { GEMINI_TOOL_REMINDER_TYPE, TOOL_CALL_LOOP_REDIRECT_TYPE } from "@veyyon/coding-agent/session/nudges";
@@ -160,14 +160,7 @@ function assistant(content: AssistantMessage["content"], timestamp = 1_000): Ass
 		api: "openai-responses",
 		provider: "openai",
 		model: "test",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp,
 	};

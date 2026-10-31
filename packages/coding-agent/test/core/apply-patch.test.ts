@@ -400,6 +400,26 @@ describe("applyPatch", () => {
 		);
 	});
 
+	test("a repeated nested @@ anchor is resolved by the hunk's line number, never by one behind its scope", async () => {
+		const filePath = path.join(tempDir, "twice.ts");
+		const original = "class A {\n  foo() {\n    return 1;\n  }\n  foo() {\n    return 2;\n  }\n}\n";
+		const insertAt = (line: number) =>
+			applyPatch(
+				{ path: "twice.ts", op: "update", diff: `@@ -${line},1 +${line},1 @@ class A\n@@ foo()\n+    // note\n` },
+				{ cwd: tempDir, dryRun: true },
+			);
+		await Bun.write(filePath, original);
+
+		expect((await insertAt(5)).change.newContent).toBe(
+			"class A {\n  foo() {\n    return 1;\n  }\n  foo() {\n    // note\n    return 2;\n  }\n}\n",
+		);
+		expect((await insertAt(2)).change.newContent).toBe(
+			"class A {\n  foo() {\n    // note\n    return 1;\n  }\n  foo() {\n    return 2;\n  }\n}\n",
+		);
+		// Line 1 is `class A` itself, so it names neither `foo()`: the anchor stays ambiguous.
+		await expect(insertAt(1)).rejects.toThrow("Found 2 matches for context 'foo()'");
+	});
+
 	test("unicode dash matching", async () => {
 		const filePath = path.join(tempDir, "unicode.py");
 		await Bun.write(filePath, "import asyncio  # local import \u2013 avoids top\u2011level dep\n");

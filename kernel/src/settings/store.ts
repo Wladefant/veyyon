@@ -18,20 +18,19 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
-import {
-	findShadowedGlobalConfigFiles,
-	getAgentDir,
-	getGlobalConfigFilePath,
-	getProjectDir,
-	MAIN_CONFIG_FILENAMES,
-} from "@veyyon/utils/dirs";
+import { getAgentDir, getProjectDir } from "@veyyon/utils/dirs";
 import { withFileLock } from "@veyyon/utils/file-lock";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import {
+	findShadowedGlobalConfigFiles,
+	getGlobalConfigFilePath,
+	MAIN_CONFIG_FILENAMES,
+} from "@veyyon/utils/global-config";
 import * as logger from "@veyyon/utils/logger";
 import { expandTilde } from "@veyyon/utils/path";
 import { type QuarantinedFile, quarantineUnparseableFile } from "@veyyon/utils/quarantine-file";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
-import { syncYamlTextToSettings } from "@veyyon/utils/yaml-sync";
+import { parseYaml, syncYamlTextToSettings } from "@veyyon/utils/yaml-sync";
 import { YAML } from "bun";
 import { UNSET_NUMBER } from "./optional-number";
 import {
@@ -1237,7 +1236,7 @@ export class SettingsStore {
 		}
 
 		try {
-			const parsed = YAML.parse(content);
+			const parsed = parseYaml(content);
 			// A blank or comments-only file parses to null/undefined: that is a
 			// legitimately empty settings file, so an empty view is the truth.
 			if (parsed === null || parsed === undefined) {
@@ -1278,7 +1277,7 @@ export class SettingsStore {
 		const quarantinePath = await quarantineUnparseableFile(filePath, content, error);
 		if (!quarantinePath) return;
 		if (!this.#quarantined.some(entry => entry.path === filePath)) {
-			this.#quarantined.push({ path: filePath, quarantinePath });
+			this.#quarantined.push({ path: filePath, quarantinePath, reason: errorMessage(error) });
 		}
 	}
 
@@ -1335,7 +1334,7 @@ export class SettingsStore {
 		}
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(content);
+			parsed = parseYaml(content);
 		} catch (error) {
 			throw new Error(`Failed to parse config overlay ${filePath}: ${errorMessage(error)}`);
 		}
@@ -1668,8 +1667,8 @@ function mutateTree(tree: RawSettings, segments: readonly string[], value: unkno
  * Report a config file that exists but is ignored because a higher-precedence
  * one exists too.
  *
- * `dirs` finds these but cannot report them: it sits below the logger, which
- * imports it. This is the layer that has somewhere to say it, so it says it
+ * `@veyyon/utils/global-config` finds these but cannot report them: it sits below
+ * the logger, which reaches it through `dirs`. This is the layer that has somewhere to say it, so it says it
  * here rather than letting a whole settings file be silently dead.
  */
 function reportShadowedConfigFiles(): void {

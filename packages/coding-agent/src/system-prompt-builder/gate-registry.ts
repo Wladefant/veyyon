@@ -251,17 +251,6 @@ export function promptGateFor(setting: string): PromptGateEntry | undefined {
 }
 
 /**
- * The line to show an operator who flipped a gate this session cannot pick up.
- *
- * A flip that changes nothing and says nothing is the silent case: the settings UI shows the
- * new value, the prompt keeps the old text, and there is no way to tell from the outside. The
- * wording lives here rather than at the call site so the reason a gate is frozen and the
- * sentence explaining it cannot drift apart.
- *
- * Returns `undefined` for a live gate and for a setting that does not touch the prompt, so a
- * caller can ask about every setting change without deciding first.
- */
-/**
  * The runtime sections a gate decides, or none.
  *
  * A function taking the WIDE `PromptGate` type, not `gate.sections?.length` at the call site. The
@@ -274,6 +263,17 @@ export function gateSections(gate: PromptGate): readonly string[] {
 	return gate.sections ?? [];
 }
 
+/**
+ * The line to show an operator who flipped a gate this session cannot pick up.
+ *
+ * A flip that changes nothing and says nothing is the silent case: the settings UI shows the
+ * new value, the prompt keeps the old text, and there is no way to tell from the outside. The
+ * wording lives here rather than at the call site so the reason a gate is frozen and the
+ * sentence explaining it cannot drift apart.
+ *
+ * Returns `undefined` for a live gate and for a setting that does not touch the prompt, so a
+ * caller can ask about every setting change without deciding first.
+ */
 export function frozenGateNotice(setting: string): string | undefined {
 	const gate = promptGateFor(setting);
 	if (gate === undefined || gate.liveness.kind === "live") return undefined;

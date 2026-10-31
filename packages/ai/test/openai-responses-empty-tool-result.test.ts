@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { buildResponsesInput, supportsFreeformApplyPatch } from "@veyyon/ai/providers/openai-shared";
 import type { Context, ImageContent, ModelSpec, TextContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const model = buildModel({
 	id: "test-vision",
@@ -16,15 +17,6 @@ const model = buildModel({
 	maxTokens: 16000,
 } satisfies ModelSpec<"openai-responses">);
 
-const zeroUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function makeContext(content: (TextContent | ImageContent)[]): Context {
 	return {
 		messages: [
@@ -34,7 +26,7 @@ function makeContext(content: (TextContent | ImageContent)[]): Context {
 				api: "openai-responses",
 				provider: "openai",
 				model: "test-vision",
-				usage: zeroUsage,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			},

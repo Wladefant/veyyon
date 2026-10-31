@@ -6,8 +6,8 @@
  * This is a session collaborator. It holds the abort controllers `isCompacting` reads and the
  * threshold notice already announced, and reaches the session through {@link CompactionSession} and
  * {@link CompactionHost}. The summary request is `CompactionSummarizer`'s and what follows a pass
- * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The post-turn check
- * that triggers a pass is `TurnContextCheck`'s; the pre-prompt and mid-run checks stay with the session.
+ * (the bar, the dead-end rescue tiers, the next turn) is `CompactionRecovery`'s. The checks that
+ * trigger a pass, before a prompt, between provider calls and after a turn, are `TurnContextCheck`'s.
  */
 import { type AgentMessage, resolveTelemetry } from "@veyyon/agent-core";
 import {
@@ -18,6 +18,7 @@ import {
 	type CompactionSettings,
 	DEFAULT_COMPACTION_SETTINGS,
 	DEFAULT_RESERVE_TOKENS,
+	endsAtCompaction,
 	formatCompactionThreshold,
 	getRemoteCompactionPreserveData,
 	prepareCompaction,
@@ -54,6 +55,7 @@ import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { GoalAbortReason } from "../../goals/state";
 import { compactionModelCandidates } from "../agent-session-model-targets";
 import type { AgentSessionEvent, ContextUsageBreakdown } from "../agent-session-types";
+import { SESSION_STATE_MESSAGE_TYPE } from "../nudges";
 import {
 	type AutoCompactionReason,
 	CompactionRecovery,
@@ -67,6 +69,14 @@ import {
 	type CompactionSummarizerSession,
 } from "./compaction-summarizer";
 import type { NonMessageBreakdown } from "./context-accounting";
+
+/**
+ * Hidden blocks the session restates on its own after a compaction drops them, so they are never sent
+ * to the summary model: the session-state block goes back into the context as the compaction is applied
+ * (`afterHistoryCompacted`). A history span holding nothing else is not a history, and summarizing it
+ * is a model request that produces nothing.
+ */
+const RESTATED_BLOCK_TYPES: ReadonlySet<string> = new Set([SESSION_STATE_MESSAGE_TYPE]);
 
 /** What {@link CompactionRuntime} reads from the session's public surface. */
 export interface CompactionSession extends CompactionSummarizerSession, CompactionRecoverySession {
@@ -220,13 +230,13 @@ export class CompactionRuntime {
 			);
 			const pathEntries = this.#session.sessionManager.getBranch();
 			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(effectiveSettings), {
+				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});
 			if (!preparation) {
 				// Check why we can't compact
-				const lastEntry = pathEntries[pathEntries.length - 1];
-				if (lastEntry?.type === "compaction") {
+				if (endsAtCompaction(pathEntries, RESTATED_BLOCK_TYPES)) {
 					throw new Error("Already compacted");
 				}
 				// The window being full and this returning nothing were once the
@@ -624,6 +634,7 @@ export class CompactionRuntime {
 			const pathEntries = this.#session.sessionManager.getBranch();
 
 			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(compactionSettings), {
+				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});

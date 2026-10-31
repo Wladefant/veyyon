@@ -1,3 +1,4 @@
+import { CIRCULAR_MARKER } from "@veyyon/utils/json";
 import { isNonEmptyString } from "@veyyon/utils/type-guards";
 import {
 	type BlobStore,
@@ -61,6 +62,11 @@ function shouldExternalizeImagePayload(
  *   except signed/encrypted blocks and signature keys, which persist verbatim
  * - Externalizes oversized image payloads to blob refs
  * - Drops the transient `jsonlEvents` field
+ * - Writes {@link CIRCULAR_MARKER} where a value loops back to one of its own
+ *   ancestors, which a JSON line cannot hold: the walk would recurse until the
+ *   stack overflowed and the entry would never reach the file. `ancestors` is the
+ *   chain from the entry down to `obj`, so an object reached twice without a loop
+ *   persists whole both times
  * - Returns the original value when nothing changed (structural sharing), and
  *   copies an array or object only from its first changed child on
  *
@@ -73,7 +79,7 @@ function shouldExternalizeImagePayload(
  * synchronous blob-store path (`fs.writeFileSync`), so blob bytes are in the
  * kernel page cache before the JSONL line referencing them is written.
  */
-function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string): unknown {
+function truncateForPersistence(obj: unknown, blobStore: BlobStore, ancestors: object[], key?: string): unknown {
 	if (obj === null || obj === undefined) return obj;
 	if (shouldExternalizeImagePayload(obj, key)) {
 		return { ...obj, data: externalizeImageDataSync(blobStore, obj.data, obj.mimeType) };
@@ -117,17 +123,22 @@ function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string
 		return obj;
 	}
 
-	if (Array.isArray(obj)) return prepareArray(obj, blobStore, key);
-	if (typeof obj === "object") return prepareObject(obj as Record<string, unknown>, blobStore);
-	return obj;
+	if (typeof obj !== "object") return obj;
+	if (ancestors.includes(obj)) return CIRCULAR_MARKER;
+	ancestors.push(obj);
+	const prepared = Array.isArray(obj)
+		? prepareArray(obj, blobStore, ancestors, key)
+		: prepareObject(obj as Record<string, unknown>, blobStore, ancestors);
+	ancestors.pop();
+	return prepared;
 }
 
 /** `items` with each item prepared under the array's own key, or `items` itself when no item changed. */
-function prepareArray(items: unknown[], blobStore: BlobStore, key: string | undefined): unknown[] {
+function prepareArray(items: unknown[], blobStore: BlobStore, ancestors: object[], key: string | undefined): unknown[] {
 	let result: unknown[] | undefined;
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i];
-		const prepared = truncateForPersistence(item, blobStore, key);
+		const prepared = truncateForPersistence(item, blobStore, ancestors, key);
 		if (result === undefined) {
 			if (prepared === item) continue;
 			result = items.slice(0, i);
@@ -138,7 +149,7 @@ function prepareArray(items: unknown[], blobStore: BlobStore, key: string | unde
 }
 
 /** `source` with each field prepared under its own key, or `source` itself when no field changed. */
-function prepareObject(source: Record<string, unknown>, blobStore: BlobStore): unknown {
+function prepareObject(source: Record<string, unknown>, blobStore: BlobStore, ancestors: object[]): unknown {
 	const keys = Object.keys(source);
 	let entries: Array<readonly [string, unknown]> | undefined;
 	for (let i = 0; i < keys.length; i++) {
@@ -152,7 +163,7 @@ function prepareObject(source: Record<string, unknown>, blobStore: BlobStore): u
 		// and throughput) and in child agent transcripts plus externalized
 		// blobs, whose GC retention is proven in gc-cli.test.ts (GRAN-7).
 		const dropped = childKey === "jsonlEvents";
-		const prepared = dropped ? undefined : truncateForPersistence(value, blobStore, childKey);
+		const prepared = dropped ? undefined : truncateForPersistence(value, blobStore, ancestors, childKey);
 		if (entries === undefined) {
 			if (!dropped && prepared === value) continue;
 			entries = [];
@@ -264,5 +275,9 @@ function stripReplayedReasoningSignatures(entry: FileEntry): FileEntry {
  * `resolveBlobRefsInEntries` on load, except a replayed reasoning signature, which replay never reads.
  */
 export function prepareEntryForPersistence(entry: FileEntry, blobStore: BlobStore): FileEntry {
-	return truncateForPersistence(stripReplayedReasoningSignatures(slimToolResultEntry(entry)), blobStore) as FileEntry;
+	return truncateForPersistence(
+		stripReplayedReasoningSignatures(slimToolResultEntry(entry)),
+		blobStore,
+		[],
+	) as FileEntry;
 }

@@ -22,13 +22,13 @@
  * instead of assuming the full width.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const BG_CLOSE = "\x1b[49m";
 const WIDTH = 100;
 /**
@@ -83,16 +83,15 @@ interface Highlight {
 
 /** The highlighted region of the row containing `needle`, or undefined if it has none. */
 function highlightOf(dashboard: AgentDashboard, needle: string): Highlight | undefined {
-	const line = dashboard.render(WIDTH).find(row => row.replace(ANSI_PATTERN, "").includes(needle));
+	const line = dashboard.render(WIDTH).find(row => stripVTControlCharacters(row).includes(needle));
 	if (!line) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	const start = line.indexOf(bgOpen());
 	if (start < 0) return undefined;
 	const end = line.indexOf(BG_CLOSE, start);
 	if (end < 0) throw new Error("the selection background was opened and never closed");
-	const strip = (text: string) => text.replace(ANSI_PATTERN, "");
-	const rest = strip(line.slice(end + BG_CLOSE.length));
+	const rest = stripVTControlCharacters(line.slice(end + BG_CLOSE.length));
 	return {
-		span: strip(line.slice(start + bgOpen().length, end)),
+		span: stripVTControlCharacters(line.slice(start + bgOpen().length, end)),
 		tail: rest.slice(0, rest.lastIndexOf("│")),
 	};
 }
@@ -166,7 +165,7 @@ describe("The selected row's fill", () => {
 		const filledRows = dashboard
 			.render(WIDTH)
 			.filter(line => line.includes(bgOpen()))
-			.map(line => line.replace(ANSI_PATTERN, ""));
+			.map(line => stripVTControlCharacters(line));
 
 		expect(filledRows.filter(line => line.includes("Kestrel") || line.includes("Otter"))).toHaveLength(1);
 		expect(filledRows.filter(line => line.includes("Live ("))).toHaveLength(1);

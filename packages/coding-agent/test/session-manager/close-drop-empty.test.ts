@@ -1,17 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { isEnoent, TempDir } from "@veyyon/utils";
-
-async function fileExists(p: string): Promise<boolean> {
-	try {
-		await Bun.file(p).stat();
-		return true;
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		throw err;
-	}
-}
+import { pathExistsOrThrow, TempDir } from "@veyyon/utils";
 
 describe("SessionManager close() drops empty metadata-only sessions", () => {
 	// Repro of issue #4571: saveDraft(text) materializes the JSONL so the
@@ -32,7 +22,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 
 	/**
@@ -51,7 +41,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		expect(await session.consumeDraft()).toBe("unsent");
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 
 	// `plan.defaultOnStartup` records a `mode_change` before the composer
@@ -72,7 +62,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 
 	it("drops a resumed draft-only session after consumeDraft removes the sidecar", async () => {
@@ -84,7 +74,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		const sessionFile = firstRun.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await firstRun.close();
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 
 		const resumed = SessionManager.create(tempDir.path(), tempDir.path());
 		await resumed.setSessionFile(sessionFile);
@@ -92,7 +82,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		await resumed.saveDraft("");
 		await resumed.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 
 	// A draft still on disk at close time is the whole reason the session
@@ -107,12 +97,12 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		const draftPath = path.join(session.getArtifactsDir()!, "draft.txt");
-		expect(await fileExists(draftPath)).toBe(true);
+		expect(await pathExistsOrThrow(draftPath)).toBe(true);
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
-		expect(await fileExists(draftPath)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(draftPath)).toBe(true);
 	});
 
 	// Real conversations must survive close() unconditionally.
@@ -129,7 +119,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	it("keeps an explicitly ensured empty session discoverable after close", async () => {
@@ -142,7 +132,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	it("keeps an explicitly ensured empty session after its draft is consumed on resume", async () => {
@@ -154,7 +144,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		const sessionFile = firstRun.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await firstRun.close();
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 
 		const resumed = SessionManager.create(tempDir.path(), tempDir.path());
 		await resumed.setSessionFile(sessionFile);
@@ -162,7 +152,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 		await resumed.saveDraft("");
 		await resumed.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	it("keeps a handoff custom message even before the next user turn", async () => {
@@ -176,7 +166,7 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	// Never-materialized sessions (no draft ever saved, no assistant reply)
@@ -188,10 +178,10 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected persistent session file path");
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 });

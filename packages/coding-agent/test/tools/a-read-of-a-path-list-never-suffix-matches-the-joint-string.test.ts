@@ -19,13 +19,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
-
-function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 describe("a read of a path list", () => {
 	let tmpDir: string;
@@ -46,7 +40,7 @@ describe("a read of a path list", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated({ "read.summarize.enabled": false }),
 		};
-		return new ReadTool(session).execute("call", { path: target }).then(resultText);
+		return new ReadTool(session).execute("call", { path: target }).then(toolResultText);
 	}
 
 	it("reads the entries it names, not a deeper file named by the joint string", async () => {

@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery DEL first line when later lines drifted.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/df.ts";
 
 describe("Recovery DEL first accept", () => {
 	it("deletes first line with late drift", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
-		const v1 = text(["A", "B", "C-DRIFT"]);
+		const v0 = linesText(["A", "B", "C"]);
+		const v1 = linesText(["A", "B", "C-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({

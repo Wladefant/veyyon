@@ -18,14 +18,7 @@ import {
 	pruneMarkitConversionCache,
 } from "@veyyon/coding-agent/utils/markit-cache";
 import { __resetDirsFromEnvForTests, getAgentDir, Snowflake, setAgentDir } from "@veyyon/utils";
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
+import { restoreEnv } from "../../../utils/test/helpers/restore-global";
 
 /**
  * markitConversionCacheKey derives the on-disk cache filename for a converted document. It had no

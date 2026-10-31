@@ -27,6 +27,7 @@ import {
 	listSessionsReadOnly,
 } from "@veyyon/kernel/session/session-listing";
 import { MemorySessionStorage } from "@veyyon/kernel/session/session-storage";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 const DIR = "/sessions/project";
 const INDEX = `${DIR}/.session-list-index.json`;
@@ -38,17 +39,6 @@ const SHOWN: ReadonlySet<Kind> = new Set(["user", "escalated", "titled"]);
 /** Sub-millisecond pairs are equal to the order, which compares whole-millisecond Dates. */
 const MTIMES = [1_000.2, 1_000.7, 2_000, 3_000.5];
 const STAMPS = ["2026-07-20T00:00:00.000Z", "2026-07-21T00:00:00.000Z", "2026-07-21T00:00:00.000Z", undefined];
-
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-	};
-}
 
 function sessionText(kind: Kind, id: string, stamp: string | undefined): string {
 	if (kind === "corrupt") return "{ not a session header\n";

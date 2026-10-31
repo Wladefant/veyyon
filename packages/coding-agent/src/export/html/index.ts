@@ -6,6 +6,7 @@ import type { AgentState } from "@veyyon/agent-core";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { APP_NAME, isEnoent, logger } from "@veyyon/utils";
 import { atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { expandTilde } from "@veyyon/utils/path";
 import { sessionFileStem } from "@veyyon/utils/session-file";
 import { projectSessionEntriesForExport } from "../../presentation/web-tool-display";
 import type { SecretObfuscator } from "../../secrets/obfuscator";
@@ -54,6 +55,12 @@ export function getTemplate(): string {
 
 export interface ExportOptions {
 	outputPath?: string;
+	/**
+	 * Directory a relative `outputPath`, and the generated default file name, resolve against; a
+	 * leading `~` expands to the home directory. The returned path is then absolute. Omit to resolve
+	 * against the process working directory.
+	 */
+	cwd?: string;
 	/**
 	 * Which color palette the export ships with.
 	 * - `"web"` (default) — the veyyon brand identity (collab-web pink/purple),
@@ -469,7 +476,8 @@ async function finishExport(sessionFile: string, sessionData: SessionData, opts:
 		? redactSessionDataForShare(opts.obfuscator, sessionData)
 		: sessionData;
 	const palette = opts.palette ?? (opts.themeName ? "theme" : "web");
-	const outputPath = opts.outputPath || `${APP_NAME}-session-${sessionFileStem(path.basename(sessionFile))}.html`;
+	const named = opts.outputPath || `${APP_NAME}-session-${sessionFileStem(path.basename(sessionFile))}.html`;
+	const outputPath = opts.cwd === undefined ? named : path.resolve(opts.cwd, expandTilde(named));
 	await writeExportFile(outputPath, redacted, palette, opts.themeName);
 	return outputPath;
 }

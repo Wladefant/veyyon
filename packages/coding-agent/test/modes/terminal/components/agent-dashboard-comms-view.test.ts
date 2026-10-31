@@ -13,6 +13,7 @@
  * messages. Every fold is announced with the count it hid, and Ctrl+O unfolds.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { codeNameFor } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-activity";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -22,7 +23,6 @@ import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 /** Right arrow: Live -> Comms. */
 const RIGHT = "\x1b[C";
 const UP = "\x1b[A";
@@ -76,7 +76,7 @@ function commsCard(options: { expandKeys?: readonly ["ctrl+o"] } = {}): {
 		expandKeys: options.expandKeys ?? ["ctrl+o"],
 	});
 	dashboard.handleInput(RIGHT);
-	return { dashboard, frame: () => dashboard.render(120).join("\n").replace(ANSI_PATTERN, "") };
+	return { dashboard, frame: () => stripVTControlCharacters(dashboard.render(120).join("\n")) };
 }
 
 describe("Comms stream", () => {
@@ -91,6 +91,22 @@ describe("Comms stream", () => {
 		expect(shown).toContain(codeNameFor(0));
 		expect(shown).toContain(codeNameFor(1));
 		expect(shown).toContain("found the caller in executor.ts");
+		dashboard.dispose();
+	});
+
+	/** Two views, so a step past either end lands on the other one. */
+	test("opens from Live on Left as well as Right, and Right from Comms returns to Live", async () => {
+		await IrcBus.global().send({ from: "0-Sub", to: "1-Sub", body: "visible only in comms" });
+		const dashboard = new AgentDashboard({ terminalHeight: 40, expandKeys: ["ctrl+o"] });
+		const frame = () => stripVTControlCharacters(dashboard.render(120).join("\n"));
+
+		const live = frame().includes("visible only in comms");
+		dashboard.handleInput("\x1b[D");
+		const afterLeft = frame().includes("visible only in comms");
+		dashboard.handleInput(RIGHT);
+		const afterRight = frame().includes("visible only in comms");
+
+		expect({ live, afterLeft, afterRight }).toEqual({ live: false, afterLeft: true, afterRight: false });
 		dashboard.dispose();
 	});
 
@@ -203,7 +219,7 @@ describe("Truncation and Ctrl+O", () => {
 		dashboard.handleInput(RIGHT);
 
 		dashboard.handleInput("\x0f");
-		const shown = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(shown).toContain("6 more lines");
 		expect(shown).not.toContain("body line 8");

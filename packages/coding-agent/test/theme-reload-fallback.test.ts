@@ -5,7 +5,6 @@ import * as path from "node:path";
 import {
 	FALLBACK_THEME_NAME,
 	getCurrentThemeName,
-	getThemeByName,
 	isThemeWatcherActive,
 	onThemeChange,
 	setColorBlindMode,
@@ -17,6 +16,7 @@ import {
 } from "@veyyon/coding-agent/theme/theme";
 import { getCustomThemesDir, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { requireTheme } from "./helpers/require-theme";
 
 /**
  * Contract for the single theme-reload owner (`applyTheme`).
@@ -50,8 +50,7 @@ function writeCustomTheme(name: string, contents: string): void {
 }
 
 beforeAll(async () => {
-	const t = await getThemeByName(FALLBACK_THEME_NAME);
-	if (!t) throw new Error(`Expected the ${FALLBACK_THEME_NAME} theme to exist`);
+	const t = await requireTheme(FALLBACK_THEME_NAME);
 	dark = t;
 });
 

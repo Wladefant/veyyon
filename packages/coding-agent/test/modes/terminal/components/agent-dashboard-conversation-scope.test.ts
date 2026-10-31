@@ -16,6 +16,7 @@
  * render-only host view.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { codeNameFor } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-activity";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -23,8 +24,6 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geometry: StubbedStdoutGeometry;
 
@@ -91,7 +90,7 @@ describe("Live roster scoping", () => {
 	test("renders only the rows of the conversation it was opened for", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40, scope: "session-a" });
 
-		const shown = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(shown).toContain(codeNameFor(0));
 		expect(shown).toContain("reviewer");
@@ -104,7 +103,7 @@ describe("Live roster scoping", () => {
 	test("renders the other conversation's rows when opened for that conversation", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40, scope: "session-b" });
 
-		const shown = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(shown).toContain(codeNameFor(0));
 		expect(shown).toContain("scout");
@@ -121,7 +120,7 @@ describe("Live roster scoping", () => {
 	test("shows every agent when the card states no scope", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 
-		const shown = dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 
 		expect(shown).toContain("reviewer");
 		expect(shown).toContain("scout");

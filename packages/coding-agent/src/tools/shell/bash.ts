@@ -8,6 +8,7 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import type {
 	ClientBridgeTerminalExitStatus,
 	ClientBridgeTerminalHandle,
@@ -109,19 +110,6 @@ export function wrapShellLineForClientTerminal(
 export { FLAGGED_BASH_PATTERNS } from "./bash-guard";
 
 /**
- * How the bash tool classifies one call.
- *
- * A named function rather than an inline class field so it can be exercised
- * without constructing a session. `BashTool.approval` is an instance field, so
- * a test reaching for `BashTool.prototype.approval` silently gets `undefined`
- * and measures the default tier instead of the guard: the suite passes while
- * proving nothing, which is the worst kind of green.
- *
- * The decisions are `critical` rather than `override`, because these are the
- * calls that must still stop in yolo, which is the mode every published
- * home-directory wipe happened in.
- */
-/**
  * The environment a bash call will actually run with: the process environment
  * with the call's own `env` argument spread over it, which is exactly what
  * `buildNonInteractiveEnv` hands the child.
@@ -172,6 +160,19 @@ export function extractEffectiveBashCommand(rawCommand: string, rawCwd?: string)
 	return { command, cwd };
 }
 
+/**
+ * How the bash tool classifies one call.
+ *
+ * A named function rather than an inline class field so it can be exercised
+ * without constructing a session. `BashTool.approval` is an instance field, so
+ * a test reaching for `BashTool.prototype.approval` silently gets `undefined`
+ * and measures the default tier instead of the guard: the suite passes while
+ * proving nothing, which is the worst kind of green.
+ *
+ * The decisions are `critical` rather than `override`, because these are the
+ * calls that must still stop in yolo, which is the mode every published
+ * home-directory wipe happened in.
+ */
 export function bashApprovalDecision(
 	args: unknown,
 	extraProtectedPaths: readonly string[] = [],
@@ -244,7 +245,7 @@ const bashCwdStatement = statementById("tool-policy/bash-cwd");
 if (!bashCwdStatement) throw new Error("Missing required tool-policy/bash-cwd prompt statement");
 const BASH_CWD_DESCRIPTION = bashCwdStatement.text.trim();
 
-const bashSchemaBase = lazy(() =>
+const bashSchemaBase = toolSchema("bash", () =>
 	type({
 		command: type("string").describe("command to execute"),
 		"env?": type({ "[string]": "string" }).describe("extra env vars"),
@@ -257,7 +258,7 @@ const bashSchemaBase = lazy(() =>
 	}),
 );
 
-const bashSchemaWithAsync = lazy(() =>
+const bashSchemaWithAsync = toolSchema("bash:async", () =>
 	type({
 		command: "string",
 		"env?": { "[string]": "string" },
@@ -578,7 +579,10 @@ export class BashTool
 		});
 	}
 	get parameters(): BashToolSchema {
-		return this.#asyncEnabled ? bashSchemaWithAsync.value : bashSchemaBase.value;
+		return (this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase).value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return (this.#asyncEnabled ? bashSchemaWithAsync : bashSchemaBase).wire;
 	}
 	// Non-pty calls run alongside each other (the executor isolates overlapping
 	// runs on the same shell session); pty takes over the terminal UI and must
@@ -695,19 +699,22 @@ export class BashTool
 		const signal = "signal" in result ? result.signal : undefined;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 
-		const outputLines = [formatResultOutput(result)];
+		const body = formatResultOutput(result);
 		const notices: string[] = [];
 		if (options.notices) {
 			for (const notice of options.notices) {
 				if (notice) notices.push(notice);
 			}
 		}
-		if (notices.length > 0) outputLines.push("", ...notices);
-		if (failedExit) outputLines.push("", formatExitCodeNotice(exitCode, signal));
-		const outputText = outputLines.join("\n");
+		const withNotices = (text: string): string => {
+			let annotated = text;
+			if (notices.length > 0) annotated = appendNotice(annotated, notices.join("\n"));
+			if (failedExit) annotated = appendNotice(annotated, formatExitCodeNotice(exitCode, signal));
+			return annotated;
+		};
 
 		// Aborts / timeouts / missing-status still propagate as thrown errors.
-		await this.#throwIfUnfinished(result, timeoutSec, outputText);
+		await this.#throwIfUnfinished(result, timeoutSec, withNotices(body));
 
 		const details: BashToolDetails = {};
 		if (timeoutSec === undefined) {
@@ -729,12 +736,14 @@ export class BashTool
 			if (signal !== undefined) details.signal = signal;
 		}
 		// Final defense at the tool-result boundary: no bash path (client bridge,
-		// head-retention spill, minimizer miss) may emit more than
-		// ~DEFAULT_MAX_BYTES inline. No-op for already-bounded output.
-		const cappedOutputText = await enforceInlineByteCap(outputText, {
-			// Scale the inline budget by how long this result will sit in context:
-			// an early result is re-read for the rest of the session, a late one
-			// barely at all.
+		// minimizer miss) may emit more than the inline budget, scaled by how long
+		// this result will sit in context. The body is capped before the notices and
+		// the exit code are appended, so they are never elided, and a body the sink
+		// already held to the budget is not cut again for the bytes a notice adds. A
+		// sink that spilled saved the full stream already, so a cut here points at that
+		// artifact rather than saving the sink's window as a second one.
+		const sinkArtifactId = result.artifactId;
+		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
 			saveArtifact:
 				"artifactError" in result && result.artifactError
@@ -742,9 +751,10 @@ export class BashTool
 					: full => saveBashOriginalArtifact(this.session, full),
 		});
 
-		const resultBuilder = toolResult(details)
-			.text(cappedOutputText)
-			.truncationFromSummary(result, { direction: "tail" });
+		const resultBuilder = toolResult(details).text(withNotices(cappedBody));
+		// The summary describes the sink's window. A body cut again here carries its own
+		// elision marker and artifact footer, which a summary notice would contradict.
+		if (cappedBody === body) resultBuilder.truncationFromSummary(result, { direction: "tail" });
 		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
 	}
@@ -1336,7 +1346,8 @@ export class BashTool
 			// the model can tell an abort from a plain failure. Cap first so a
 			// killed command's output cannot exceed the inline budget.
 			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
-			const message = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
+			const message =
+				isInteractiveResult(result) && out ? appendNotice(out, "[Command aborted]") : out || "Command aborted";
 			if (signal?.aborted) {
 				throw new ToolAbortError(`${message}${captureNotice}`);
 			}

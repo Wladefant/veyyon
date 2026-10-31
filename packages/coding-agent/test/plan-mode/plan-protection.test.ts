@@ -4,7 +4,8 @@ import type { SessionMessageEntry } from "@veyyon/agent-core/compaction/entries"
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@veyyon/agent-core/compaction/pruning";
 import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@veyyon/agent-core/compaction/shake";
 import type { ProtectedToolContext } from "@veyyon/agent-core/compaction/tool-protection";
-import type { AssistantMessage, TextContent, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, TextContent, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createPlanReadMatcher } from "@veyyon/coding-agent/plan-mode/plan-protection";
 
 function context(opts: { toolName?: string; callName?: string | undefined; path?: string }): ProtectedToolContext {
@@ -78,17 +79,6 @@ describe("createPlanReadMatcher", () => {
 
 // --- Integration: plan reads survive prune/shake, regular reads do not -------
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function entry(id: string, message: AssistantMessage | ToolResultMessage): SessionMessageEntry {
 	return { type: "message", id, parentId: null, timestamp: "2026-06-03T00:00:00.000Z", message };
 }
@@ -100,7 +90,7 @@ function readCall(toolCallId: string, path: string): SessionMessageEntry {
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	});

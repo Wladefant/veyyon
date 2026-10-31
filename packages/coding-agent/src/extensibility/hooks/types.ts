@@ -1,4 +1,4 @@
-import type { ImageContent, Message, Model, TextContent } from "@veyyon/ai";
+import type { ImageContent, Message, Model } from "@veyyon/ai";
 import type { HostView } from "@veyyon/kernel/registry/host-view";
 import type * as TypeBox from "@veyyon/kernel/registry/typebox";
 import type { ReadonlySessionManager, SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -6,12 +6,10 @@ import type { logger as PiLogger } from "@veyyon/utils";
 import type { Type } from "arktype";
 import type * as zod from "zod/v4";
 import type { ModelRegistry } from "../../config/model-registry";
-import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type * as PiCodingAgent from "../../index";
 import type { CustomMessagePayload, HookMessage } from "../../session/messages";
 import type { Theme } from "../../theme/theme";
-import type { BashToolDetails, ReadToolDetails, SearchToolDetails } from "../../tools";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -39,6 +37,7 @@ import type {
 	SessionTreeEvent,
 	TodoReminderEvent,
 	ToolCallEventResult,
+	ToolResultEvent,
 	ToolResultEventResult,
 	TtsrTriggeredEvent,
 	TurnEndEvent,
@@ -300,69 +299,15 @@ export interface ToolCallEvent {
 	input: Record<string, unknown>;
 }
 
-/**
- * Base interface for tool_result events.
- */
-interface ToolResultEventBase {
-	type: "tool_result";
-	/** Tool call ID */
-	toolCallId: string;
-	/** Tool input parameters */
-	input: Record<string, unknown>;
-	/** Full content array (text and images) */
-	content: (TextContent | ImageContent)[];
-	/** Whether the tool execution was an error */
-	isError?: boolean;
-}
-
-/** Tool result event for bash tool */
-export interface BashToolResultEvent extends ToolResultEventBase {
-	toolName: "bash";
-	details: BashToolDetails | undefined;
-}
-
-/** Tool result event for read tool */
-export interface ReadToolResultEvent extends ToolResultEventBase {
-	toolName: "read";
-	details: ReadToolDetails | undefined;
-}
-
-/** Tool result event for edit tool */
-export interface EditToolResultEvent extends ToolResultEventBase {
-	toolName: "edit";
-	details: EditToolDetails | undefined;
-}
-
-/** Tool result event for write tool */
-export interface WriteToolResultEvent extends ToolResultEventBase {
-	toolName: "write";
-	details: undefined;
-}
-
-/** Tool result event for workspace search */
-export interface SearchToolResultEvent extends ToolResultEventBase {
-	toolName: "search";
-	details: SearchToolDetails | undefined;
-}
-
-/** Tool result event for custom/unknown tools */
-export interface CustomToolResultEvent extends ToolResultEventBase {
-	toolName: string;
-	details: unknown;
-}
-
-/**
- * Event data for tool_result event.
- * Fired after a tool is executed. Hooks can modify the result.
- * Use toolName to discriminate and get typed details.
- */
-export type ToolResultEvent =
-	| BashToolResultEvent
-	| ReadToolResultEvent
-	| EditToolResultEvent
-	| WriteToolResultEvent
-	| SearchToolResultEvent
-	| CustomToolResultEvent;
+export type {
+	BashToolResultEvent,
+	CustomToolResultEvent,
+	EditToolResultEvent,
+	ReadToolResultEvent,
+	SearchToolResultEvent,
+	ToolResultEvent,
+	WriteToolResultEvent,
+} from "../shared-events";
 
 /**
  * Union of all hook event types.

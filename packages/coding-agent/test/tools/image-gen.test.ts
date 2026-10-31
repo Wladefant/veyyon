@@ -50,6 +50,31 @@ afterEach(async () => {
 	setPreferredImageProvider("auto");
 });
 
+/** A tool context whose registry holds an xAI OAuth token and whose requests go to `fetchMock`. */
+function xaiContext(fetchMock: typeof fetch): CustomToolContext {
+	return {
+		fetch: fetchMock,
+		sessionManager: {
+			getCwd: () => "/tmp",
+			getSessionId: () => "test-session",
+		} as unknown as ReadonlySessionManager,
+		modelRegistry: {
+			getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
+			getProviderBaseUrl: () => undefined,
+			getAll: () => [],
+			authStorage: {
+				hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
+				rotateSessionCredential: async () => false,
+			},
+			resolver: () => async () => "test-xai-token",
+		} as unknown as ModelRegistry,
+		model: undefined,
+		isIdle: () => true,
+		hasQueuedMessages: () => false,
+		abort: () => {},
+	};
+}
+
 describe("imageGenTool", () => {
 	it("registers without resolving image provider credentials", async () => {
 		const modelRegistry = {
@@ -564,6 +589,66 @@ describe("imageGenTool", () => {
 		expect(result.details?.imageCount).toBe(1);
 	});
 
+	it("sends no Codex routing hint, and drops the model's own, when the model is not a valid header value", async () => {
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const tokenPayload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+		).toString("base64");
+		const codexJwt = `header.${tokenPayload}.signature`;
+		const fetchMock: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			if (new URL(input.toString()).pathname.endsWith("/codex/models")) {
+				return new Response(JSON.stringify({ models: [] }));
+			}
+			requestHeaders = new Headers(init?.headers);
+			requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			const done = {
+				type: "response.output_item.done",
+				item: {
+					type: "image_generation_call",
+					result: Buffer.from("webp").toString("base64"),
+					status: "completed",
+				},
+			};
+			const completed = { type: "response.completed", response: { output: [], status: "completed", error: null } };
+			return new Response(`data: ${JSON.stringify(done)}\n\ndata: ${JSON.stringify(completed)}\n\n`, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as unknown as typeof fetch;
+		const model = {
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			id: "gpt-5.5-codex-é",
+			name: "GPT Codex",
+			baseUrl: "https://example-proxy.invalid/backend-api",
+			headers: { "x-codex-routing-hint": "model=caller-stated" },
+		} as unknown as Model;
+		const ctx: CustomToolContext = {
+			fetch: fetchMock,
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => codexJwt,
+				getApiKeyForProvider: async () => undefined,
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => codexJwt,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-codex-invalid-hint", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestBody?.model).toBe("gpt-5.5-codex-é");
+		expect(requestHeaders?.has("x-codex-routing-hint")).toBe(false);
+	});
+
 	it("routes xAI image generation with xAI-only aspect ratios", async () => {
 		setPreferredImageProvider("xai");
 		let requestUrl: string | undefined;
@@ -587,29 +672,13 @@ describe("imageGenTool", () => {
 			);
 		}) as unknown as typeof fetch;
 
-		const ctx: CustomToolContext = {
-			fetch: fetchMock,
-			sessionManager: {
-				getCwd: () => "/tmp",
-				getSessionId: () => "test-session",
-			} as unknown as ReadonlySessionManager,
-			modelRegistry: {
-				getApiKeyForProvider: async (provider: string) => (provider === "xai-oauth" ? "test-xai-token" : undefined),
-				getProviderBaseUrl: () => undefined,
-				getAll: () => [],
-				authStorage: {
-					hasNonEnvCredential: (provider: string) => provider === "xai-oauth",
-					rotateSessionCredential: async () => false,
-				},
-				resolver: () => async () => "test-xai-token",
-			} as unknown as ModelRegistry,
-			model: undefined,
-			isIdle: () => true,
-			hasQueuedMessages: () => false,
-			abort: () => {},
-		};
+		const result = await imageGenTool.execute(
+			"call-xai",
+			{ subject: "a cat", aspect_ratio: "3:2" },
+			undefined,
+			xaiContext(fetchMock),
+		);
 
-		const result = await imageGenTool.execute("call-xai", { subject: "a cat", aspect_ratio: "3:2" }, undefined, ctx);
 		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
 
 		expect(requestUrl).toBe("https://api.x.ai/v1/images/generations");
@@ -1000,5 +1069,29 @@ describe("imageGenTool", () => {
 		const savedPath = result.details?.imagePaths[0];
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-advertised-image"));
+	/**
+	 * A provider's refusal reaches the model as the provider's own words with the HTTP status, so the
+	 * model can tell a bad argument from an outage. Every image provider maps its non-OK response
+	 * through one helper; xAI drives it here.
+	 */
+	it.each([
+		[
+			"a JSON error body by its message",
+			JSON.stringify({ error: { message: "aspect ratio unsupported" } }),
+			"aspect ratio unsupported",
+		],
+		["a JSON body without a message as sent", JSON.stringify({ error: {} }), JSON.stringify({ error: {} })],
+		["a plain-text body as sent", "upstream unavailable", "upstream unavailable"],
+	])("reports %s", async (_case, body, detail) => {
+		setPreferredImageProvider("xai");
+		const fetchMock: typeof fetch = (async () =>
+			new Response(body, { status: 400, headers: { "retry-after": "7" } })) as unknown as typeof fetch;
+
+		const failure = imageGenTool.execute("call-xai-error", { subject: "a cat" }, undefined, xaiContext(fetchMock));
+
+		await expect(failure).rejects.toThrow(`xAI image request failed (400): ${detail}`);
+		const error = (await failure.catch((thrown: unknown) => thrown)) as { status?: number; headers?: Headers };
+		expect(error.status).toBe(400);
+		expect(error.headers?.get("retry-after")).toBe("7");
 	});
 });

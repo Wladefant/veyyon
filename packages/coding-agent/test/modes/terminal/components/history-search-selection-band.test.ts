@@ -17,6 +17,7 @@
  * never existed either way.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { HistorySearchComponent } from "@veyyon/coding-agent/modes/terminal/components/composer/history-search";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
@@ -24,7 +25,6 @@ import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const BG_OPEN = /\x1b\[48;(?:2;\d+;\d+;\d+|5;\d+)m/;
 const BG_CLOSE = "\x1b[49m";
 const WIDTH = 110;
@@ -85,16 +85,11 @@ function bandedRow(lines: readonly string[]): string {
 	return banded[0] as string;
 }
 
-/** The row with every escape removed, which is what the eye sees as cells. */
-function cells(line: string): string {
-	return line.replace(ANSI_PATTERN, "");
-}
-
 /** The cells covered by the band. */
 function bandCells(line: string): string {
 	const open = line.search(BG_OPEN);
 	const close = line.indexOf(BG_CLOSE);
-	return cells(line.slice(open, close));
+	return stripVTControlCharacters(line.slice(open, close));
 }
 
 describe("A result list short enough to need no scrollbar", () => {
@@ -140,7 +135,7 @@ describe("A result list long enough to draw a scrollbar", () => {
 	 */
 	test("leaves the gap and the bar outside the band", () => {
 		const banded = bandedRow(card(100, 0));
-		const after = cells(banded.slice(banded.indexOf(BG_CLOSE)));
+		const after = stripVTControlCharacters(banded.slice(banded.indexOf(BG_CLOSE)));
 
 		expect(after.slice(0, 1)).toBe(" ");
 		expect(after.slice(1, 2)).toMatch(BAR_GLYPHS);

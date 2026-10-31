@@ -31,7 +31,6 @@ import type {
 } from "../../../extensibility/extensions";
 import { runExtensionSetModel } from "../../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../../extensibility/extensions/get-commands-handler";
-import { createExtensionModelQuery } from "../../../extensibility/extensions/model-api";
 import type { TerminalWidgetContent } from "../../../extensibility/terminal-capability";
 import { sessionWorkerAccess } from "../../../native-control/telegram-control-bridge";
 import { toConfirmDialog, toPromptDialog, toSelectDialog } from "../../../presentation/overlay-builder";
@@ -235,12 +234,11 @@ export class ExtensionUiController {
 				this.ctx.shutdownRequested = true;
 			},
 			getContextUsage: () => this.ctx.session.getContextUsage(),
-			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
+			compact: instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
 			obfuscateProviderText: text => this.ctx.session.obfuscateProviderText(text),
 		};
 		const commandActions: ExtensionCommandContextActions = {
-			getContextUsage: () => this.ctx.session.getContextUsage(),
 			waitForIdle: () => this.ctx.session.agent.waitForIdle(),
 			reload: async () => {
 				await this.ctx.session.reload();
@@ -307,7 +305,6 @@ export class ExtensionUiController {
 
 				return { cancelled: false };
 			},
-			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
 			switchSession: async sessionPath => {
 				this.clearHookWidgets();
 				const result = await this.ctx.session.switchSession(sessionPath);
@@ -321,60 +318,6 @@ export class ExtensionUiController {
 		};
 
 		extensionRunner.initialize(actions, contextActions, commandActions, uiContext);
-	}
-
-	/**
-	 * Emit session event to all extension tools.
-	 */
-	async emitCustomToolSessionEvent(
-		reason: "start" | "switch" | "branch" | "tree" | "shutdown",
-		previousSessionFile?: string,
-	): Promise<void> {
-		const event = { reason, previousSessionFile };
-		const uiContext = this.ctx.session.extensionRunner?.getUIContext();
-		if (!uiContext) {
-			return;
-		}
-		for (const registeredTool of this.ctx.session.extensionRunner?.getAllRegisteredTools() ?? []) {
-			if (registeredTool.definition.onSession) {
-				try {
-					await registeredTool.definition.onSession(event, {
-						ui: uiContext,
-						getContextUsage: () => this.ctx.session.getContextUsage(),
-						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
-						hasUI: true,
-						cwd: this.ctx.sessionManager.getCwd(),
-						sessionManager: this.ctx.session.sessionManager,
-						modelRegistry: this.ctx.session.modelRegistry,
-						model: this.ctx.session.model,
-						models: createExtensionModelQuery(
-							this.ctx.session.modelRegistry,
-							this.ctx.session.settings,
-							() => this.ctx.session.model,
-						),
-						isIdle: () => !this.ctx.session.isStreaming,
-						hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
-						abort: () => {
-							abortDetached(this.ctx.session, "extension-ui-controller.abort", USER_INTERRUPT_LABEL);
-						},
-						shutdown: () => {
-							// Signal shutdown request
-						},
-						getSystemPrompt: () => this.ctx.session.systemPrompt,
-					});
-				} catch (err) {
-					this.showToolError(registeredTool.definition.name, errorMessage(err));
-				}
-			}
-		}
-	}
-
-	/**
-	 * Show a tool error in the chat.
-	 */
-	showToolError(toolName: string, error: string): void {
-		const errorText = new Text(theme.fg("error", `Tool "${toolName}" error: ${error}`), 1, 0);
-		this.ctx.present(errorText);
 	}
 
 	/**
@@ -849,13 +792,6 @@ export class ExtensionUiController {
 	}
 	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
 		await this.ctx.executeCompaction(instructionsOrOptions, false);
-	}
-
-	async #compactSession(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
-		const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
-		const options =
-			instructionsOrOptions && typeof instructionsOrOptions === "object" ? instructionsOrOptions : undefined;
-		await this.ctx.session.compact(instructions, options);
 	}
 
 	async #updateSessionName(name: string): Promise<void> {

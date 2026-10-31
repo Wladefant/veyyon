@@ -3,17 +3,7 @@ import { encodeResponse, encodeStream, parseRequest } from "@veyyon/ai/providers
 import type { AssistantMessage, AssistantMessageEvent, ToolResultMessage } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { Effort } from "@veyyon/catalog/effort";
-
-function emptyUsage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function makeStream(events: AssistantMessageEvent[]): AssistantMessageEventStream {
 	const s = new AssistantMessageEventStream();

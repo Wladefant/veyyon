@@ -25,12 +25,6 @@ const CONTEXT: Context = {
 	messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 type CaptureOptions = {
 	serviceTier?: ServiceTier;
 	providerSessionState?: Map<string, ProviderSessionState>;
@@ -41,7 +35,7 @@ function capturePayload(model: Model<"anthropic-messages">, opts: CaptureOptions
 	streamAnthropic(model, CONTEXT, {
 		apiKey: "sk-ant-oat-test",
 		isOAuth: true,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		serviceTier: opts.serviceTier,
 		providerSessionState: opts.providerSessionState,
 		onPayload: payload => resolve(payload),

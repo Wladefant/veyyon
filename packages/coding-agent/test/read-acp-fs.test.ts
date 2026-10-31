@@ -2,22 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 
 const BRIDGE_CONTENT = "// content from editor buffer\nexport function greet() { return 'bridge'; }\n";
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
 
 function createSession(cwd: string, bridge?: ClientBridge): ToolSession {
 	return {
@@ -74,7 +66,7 @@ describe("read tool ACP fs routing", () => {
 			const tool = new ReadTool(session);
 
 			const result = await tool.execute("call-1", { path: filePath });
-			const text = textOutput(result);
+			const text = toolResultText(result);
 
 			// Bridge content should appear in output
 			expect(text).toContain("content from editor buffer");
@@ -105,7 +97,7 @@ describe("read tool ACP fs routing", () => {
 		const tool = new ReadTool(session);
 
 		const result = await tool.execute("call-range", { path: `${filePath}:2+1` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("bridge two");
 		expect(text).not.toContain("Line 2 is beyond end");

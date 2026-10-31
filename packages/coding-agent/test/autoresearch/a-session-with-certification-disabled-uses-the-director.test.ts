@@ -19,10 +19,10 @@ import { closeAllAutoresearchStorages, openAutoresearchStorage } from "@veyyon/c
 import { certificationDegraded, certificationPairs, certifierFor } from "@veyyon/coding-agent/autoresearch/swarm";
 import { createCertifyArmsTool } from "@veyyon/coding-agent/autoresearch/tools/certify-arms";
 import { createInitExperimentTool } from "@veyyon/coding-agent/autoresearch/tools/init-experiment";
-import type { DashboardController } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
 import { TempDir } from "@veyyon/utils";
 import { $ } from "bun";
+import { dashboardStub } from "../helpers/autoresearch-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir();
@@ -35,16 +35,6 @@ function firstText(content: Array<{ type: string; text?: string }>): string {
 	const block = content.find((c): c is TextContent => c.type === "text");
 	if (!block) throw new Error("expected a text tool content block");
 	return block.text;
-}
-
-function dashboardStub(): DashboardController {
-	return {
-		clear(): void {},
-		requestRender(): void {},
-		showScreen: async (): Promise<void> => {},
-		showLauncher: async (): Promise<void> => {},
-		update(): void {},
-	};
 }
 
 function createCtx(cwd: string): ExtensionContext {

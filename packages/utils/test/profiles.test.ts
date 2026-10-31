@@ -4,13 +4,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
+import { DEFAULT_PROFILE_DIR_NAME, normalizeProfileName } from "@veyyon/utils/config-root";
 import {
 	__resetDirsFromEnvForTests,
 	__resetProfileSnapshotForTests,
 	APP_NAME,
 	assertRemovableProfileDir,
 	captureDirOverrides,
-	DEFAULT_PROFILE_DIR_NAME,
 	type DirOverridesSnapshot,
 	getActiveProfile,
 	getActiveProfileOrDefault,
@@ -23,7 +23,6 @@ import {
 	getSessionsDir,
 	getStatsDbPath,
 	listProfiles,
-	normalizeProfileName,
 	profileExists,
 	resolveProfileEnv,
 	restoreDirOverrides,
@@ -587,17 +586,23 @@ describe("profile path segment ownership", () => {
 		expect(getActiveProfileOrDefault()).toBe(DEFAULT_PROFILE_DIR_NAME);
 	});
 
-	it('dirs.ts builds every profile path from PROFILES_DIR_NAME, never a raw "profiles" literal', async () => {
-		// ONE PLACE lock: the profiles-directory segment has a single owner
-		// (PROFILES_DIR_NAME). A second raw "profiles" path literal reintroduced by
-		// a future path builder would drift on a rename, so the only permitted
-		// occurrence is the const declaration itself.
-		const dirsSource = await fs.readFile(path.join(import.meta.dir, "..", "src", "dirs.ts"), "utf-8");
-		// Code only, any quote style: prose naming the directory is not a path literal, and a
-		// single-quoted or template copy is the same drift as a double-quoted one.
-		const literals = withoutComments(dirsSource).match(/(["'`])profiles\1/g) ?? [];
-		expect(literals).toHaveLength(1);
-		expect(stringConstantsIn(dirsSource).filter(constant => constant.value === "profiles")).toEqual([
+	it('builds every profile path from PROFILES_DIR_NAME, never a raw "profiles" literal', async () => {
+		// ONE PLACE lock: the profiles-directory segment has a single owner (PROFILES_DIR_NAME in
+		// config-root.ts). The path builders span dirs.ts, config-root.ts and the global-config modules,
+		// so every module under src is swept: a second raw "profiles" path literal in any of them would
+		// drift on a rename, and the only permitted occurrence is the const declaration itself.
+		const srcDir = path.join(import.meta.dir, "..", "src");
+		const modules = (await fs.readdir(srcDir, { recursive: true })).filter(file => file.endsWith(".ts")).sort();
+		const holders: string[] = [];
+		for (const module of modules) {
+			const source = await fs.readFile(path.join(srcDir, module), "utf-8");
+			// Code only, any quote style: prose naming the directory is not a path literal, and a
+			// single-quoted or template copy is the same drift as a double-quoted one.
+			for (const _literal of withoutComments(source).match(/(["'`])profiles\1/g) ?? []) holders.push(module);
+		}
+		expect(holders).toEqual(["config-root.ts"]);
+		const configRootSource = await fs.readFile(path.join(srcDir, "config-root.ts"), "utf-8");
+		expect(stringConstantsIn(configRootSource).filter(constant => constant.value === "profiles")).toEqual([
 			{ name: "PROFILES_DIR_NAME", value: "profiles", exported: true },
 		]);
 	});

@@ -14,8 +14,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -28,6 +28,8 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 const WIDTH = 120;
 
@@ -54,17 +56,10 @@ describe("focused agent transcript reconstruction", () => {
 		const dir = tempDir.path();
 		await Settings.init({ inMemory: true, cwd: dir, overrides: { "startup.quiet": true } });
 
-		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		mainSession = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Main"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(dir, dir),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session: mainSession } = await createTestAgentSession(dir, {
+			systemPrompt: ["Main"],
+			settings: { "startup.quiet": true },
+		}));
 
 		eventBus = new EventBus();
 		mode = new InteractiveMode(mainSession, "test", undefined, undefined, undefined, eventBus);
@@ -72,7 +67,7 @@ describe("focused agent transcript reconstruction", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -165,14 +160,7 @@ describe("focused agent transcript reconstruction", () => {
 					api: "anthropic",
 					provider: "anthropic",
 					model: "claude-sonnet-4-5",
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 				},
 			}),
 			JSON.stringify({
@@ -216,14 +204,7 @@ describe("focused agent transcript reconstruction", () => {
 					provider: "anthropic",
 					model: "claude-sonnet-4-5",
 					stopReason: "stop",
-					usage: {
-						input: 1,
-						output: 1,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 2,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 				},
 			}),
 		];
@@ -257,7 +238,7 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Focus the agent
 		await mode.focusAgentSession("Worker");
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Verify the transcript contains all user, assistant, and tool components
 		const children = mode.chatContainer.children;
@@ -273,7 +254,7 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Verify parking the agent does not eject the focused view
 		registry.setStatus("Worker", "parked");
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 		expect(mode.focusedAgentId).toBe("Worker");
 	});
 
@@ -479,8 +460,8 @@ describe("focused agent transcript reconstruction", () => {
 		registry.unregister("LiveWorker");
 
 		// Settle registry event and unfocus chain
-		for (let i = 0; i < 5; i++) await Promise.resolve();
-		await terminal.waitForRender();
+		await drainMicrotasks(5);
+		await terminal.waitForRender(mode.ui);
 
 		expect(mode.focusedAgentId).toBeUndefined();
 		expect(mode.viewSession).toBe(mainSession);

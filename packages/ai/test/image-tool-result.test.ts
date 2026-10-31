@@ -422,7 +422,7 @@ describe("Tool Results with Images", () => {
 			{ retry: 3, timeout: 30000 },
 		);
 
-		/** These two don't work, the model simply won't call the tool, works in pi
+		/* These two don't work, the model simply won't call the tool, works in pi
 		it.skipIf(!antigravityToken)(
 			"claude-sonnet-4-5 - should handle tool result with only image",
 			async () => {

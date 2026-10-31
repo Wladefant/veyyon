@@ -2,6 +2,7 @@ import "./warm-natives"; // load the native addon under the real platform before
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ENHANCED_PASTE_MODE, ProcessTerminal } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
+import { restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 /**
  * WHY. Veyyon wrote `CSI ? 5522 h` at every startup to arm kitty-style enhanced
@@ -54,14 +55,6 @@ const STATUS_MEANS_SUPPORTED: ReadonlyArray<[status: number, supported: boolean]
 	[3, true],
 	[4, false],
 ];
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 describe("an unconfirmed terminal mode is never set", () => {
 	let previousHeadless = false;

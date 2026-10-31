@@ -37,17 +37,12 @@
 // the third test below is what it does instead.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
 import { setTimeout } from "node:timers/promises";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
 import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/terminal/first-frame";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import {
 	getVisibleGround,
 	groundHairlineHex,
@@ -56,10 +51,10 @@ import {
 	setDetectedTerminalGround,
 } from "@veyyon/coding-agent/theme/ground-tints";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setTerminalHeadless, TempDir } from "@veyyon/utils";
 import { OSC11_RESET_BACKGROUND_SEQUENCE, osc11SetBackgroundSequence } from "@veyyon/utils/paint-ground";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 /** A ground a real terminal reports, and nothing like the theme's declared black. */
@@ -329,15 +324,8 @@ async function mountSession(): Promise<InteractiveMode> {
 	const paintGround = settings.get("tui.paintGround");
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
 	settings.set("tui.paintGround", paintGround);
-	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-	const session = new AgentSession({
-		agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-		settings: Settings.isolated({ "tui.paintGround": paintGround }),
-		modelRegistry,
+	const { authStorage, session } = await createTestAgentSession(tempDir.path(), {
+		settings: { "tui.paintGround": paintGround },
 	});
 	const mode = new InteractiveMode(session, "test");
 	opened.push(async () => {

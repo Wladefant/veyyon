@@ -16,6 +16,7 @@
 
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import type { ToolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { $env, prompt } from "@veyyon/utils";
 import type { ToolSession } from "..";
 import { toolsPrompts } from "../prompts/tools/rows";
@@ -34,7 +35,7 @@ import { homogeneousTriageRefusal, isHomogeneousTriageFanout } from "./delegatio
 import {
 	type AgentDefinition,
 	canSpawnAtDepth,
-	getTaskSchema,
+	getTaskToolSchema,
 	type TaskItem,
 	type TaskParams,
 	type TaskToolDetails,
@@ -44,7 +45,6 @@ import {
 import "../tools/agent/review";
 import { TOOL } from "../tools/core/builtin-names";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
-import { repairTaskParams } from "./repair-args";
 import { appendAdvisory, composeSpawnAdvisory } from "./spawn-advisory";
 import { type CallSpawn, type SpawnCall, SpawnScheduler } from "./spawn-scheduler";
 import { taskToolView } from "./task-view";
@@ -396,9 +396,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly #scheduler: SpawnScheduler;
 
 	get parameters(): TaskToolSchemaInstance {
+		return this.#schema().value;
+	}
+
+	get wireParameters(): Record<string, unknown> {
+		return this.#schema().wire;
+	}
+
+	#schema(): ToolSchema<TaskToolSchemaInstance> {
 		const isolationEnabled = this.session.settings.get("agent.isolation.mode") !== "none";
 		const catalog = this.#enabledAgents();
-		return getTaskSchema({
+		return getTaskToolSchema({
 			isolationEnabled,
 			batchEnabled: this.#isBatchEnabled(),
 			defaultAgent: catalog.defaultAgent,
@@ -468,7 +476,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const params = repairTaskParams(rawParams as TaskParams);
+		const params = rawParams as TaskParams;
 		const batchEnabled = this.#isBatchEnabled();
 		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
 		if (validationError) {

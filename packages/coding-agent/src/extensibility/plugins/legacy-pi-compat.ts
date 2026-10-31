@@ -677,14 +677,6 @@ function toGraphImportSpecifier(resolvedPath: string, mtimeTag: string | null): 
 }
 
 /**
- * Whether anything exists at `p`.
- *
- * A throwing `stat` is how "absent" arrives, which is the question being asked, and the callers treat
- * false as "keep looking" rather than as a fact about the filesystem: every use is a candidate path in
- * a resolution walk that tries several. A permission error also lands here and reaches the same place,
- * because a path this process cannot examine is one it cannot load from either.
- */
-/**
  * Why every path probe in this file is silent about a fault.
  *
  * These are resolution WALKS: `findPackageRoot` and the node_modules search climb directory by

@@ -25,19 +25,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import type { AutocompleteProvider } from "@veyyon/utils/autocomplete";
-import { type } from "arktype";
-
-function makeTool(name: string): AgentTool {
-	return {
-		name,
-		label: name,
-		description: `Fake ${name}`,
-		parameters: type({}),
-		async execute() {
-			return { content: [{ type: "text" as const, text: "ok" }] };
-		},
-	};
-}
+import { createOkTool } from "./helpers/ok-tool";
 
 describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 	let tempDir: TempDir;
@@ -68,7 +56,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		// these tests, so build them once rather than per test.
 		registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		model = modelOrThrow(registry, "claude-sonnet-4-5");
-		tools = [makeTool("read")];
+		tools = [createOkTool("read")];
 	});
 
 	beforeEach(() => {

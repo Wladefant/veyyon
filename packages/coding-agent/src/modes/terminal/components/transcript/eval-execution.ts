@@ -3,7 +3,7 @@
  * Shares the same kernel session as the agent's eval tool.
  */
 
-import { Container, type Loader, Text, type TUI } from "@veyyon/tui";
+import { Container, Loader, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { highlightCode } from "../../../../theme/highlight";
 import { theme } from "../../../../theme/theme-binding";
@@ -30,9 +30,11 @@ export class EvalExecutionComponent extends Container {
 	#meta?: OutputMeta;
 	#expanded = false;
 	#contentContainer: Container;
+	#excludeFromContext: boolean;
+	#language: EvalExecutionLanguage;
 
 	#highlightLang(): "python" | "javascript" {
-		return this.language === "js" ? "javascript" : "python";
+		return this.#language === "js" ? "javascript" : "python";
 	}
 
 	#formatHeader(colorKey: ExecutionColorKey): Text {
@@ -44,16 +46,16 @@ export class EvalExecutionComponent extends Container {
 		);
 		return new Text(headerLines.join("\n"), 2, 0);
 	}
-
 	constructor(
 		private readonly code: string,
 		ui: TUI,
-		private readonly excludeFromContext = false,
-		private readonly language: EvalExecutionLanguage = "python",
+		excludeFromContext = false,
+		language: EvalExecutionLanguage = "python",
 	) {
 		super();
-
-		const colorKey: ExecutionColorKey = this.excludeFromContext ? "dim" : "pythonMode";
+		this.#excludeFromContext = excludeFromContext;
+		this.#language = language;
+		const colorKey: ExecutionColorKey = excludeFromContext ? "dim" : "pythonMode";
 		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
 		this.#contentContainer = contentContainer;
 		this.#loader = loader;
@@ -82,7 +84,6 @@ export class EvalExecutionComponent extends Container {
 	}
 
 	appendOutput(chunk: string): void {
-		// Chunk is pre-sanitized by OutputSink.push() — no need to sanitize again.
 		this.#output.push(chunk);
 		this.#updateDisplay();
 	}
@@ -98,7 +99,6 @@ export class EvalExecutionComponent extends Container {
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
 		}
-
 		this.#loader.stop();
 		this.#updateDisplay();
 	}
@@ -107,16 +107,13 @@ export class EvalExecutionComponent extends Container {
 		this.#setOutput(output);
 		this.#updateDisplay();
 	}
+
 	#updateDisplay(): void {
 		const availableLines = this.#output.lines();
 		const previewLogicalLines = availableLines.slice(-EXECUTION_PREVIEW_LINES);
 		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
-
-		this.#contentContainer.clear();
-
-		const colorKey: ExecutionColorKey = this.excludeFromContext ? "dim" : "pythonMode";
+		const colorKey: ExecutionColorKey = this.#excludeFromContext ? "dim" : "pythonMode";
 		this.#contentContainer.addChild(this.#formatHeader(colorKey));
-
 		if (availableLines.length > 0) {
 			if (this.#expanded) {
 				const displayText = availableLines.map(line => theme.fg("muted", line)).join("\n");
@@ -126,7 +123,6 @@ export class EvalExecutionComponent extends Container {
 				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, EXECUTION_PREVIEW_LINES));
 			}
 		}
-
 		if (this.#status === "running") {
 			this.#contentContainer.addChild(this.#loader);
 		} else {
@@ -143,7 +139,6 @@ export class EvalExecutionComponent extends Container {
 
 	#setOutput(output: string): void {
 		const clean = sanitizeText(output);
-		// The authoritative output replaces whatever streaming kept, so nothing is missing any more.
 		this.#output.replace(clean ? clampLines(clean.split("\n")) : []);
 	}
 
@@ -156,6 +151,3 @@ export class EvalExecutionComponent extends Container {
 	}
 }
 
-function clampLines(lines: string[]): string[] {
-	return lines.map(line => clampExecutionDisplayLine(line));
-}

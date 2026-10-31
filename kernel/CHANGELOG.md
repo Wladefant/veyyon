@@ -22,15 +22,46 @@
 - A persisted session entry keeps the `lineCount` its producer wrote beside a `content` string instead of recounting it from that string when another field of the same object is dropped or externalized, which recorded the shown head's line count for a mentioned file as the file's.
 
 ## [1.5.6] - 2026-10-10
+### Changed
+
+- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
+- `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
+- The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- `session/history-storage` exports `historyQueryTokens`, the tokenizer prompt history search matches with; no user-facing change.
+
+### Fixed
+
+- A session entry holding a value that loops back to one of its own ancestors, such as a tool result from a JS eval cell that displayed a cyclic object, reaches the session file with `"[Circular]"` at the loop instead of throwing `RangeError: Maximum call stack size exceeded` and leaving the entry out of the resumed session; the persistence pass over 400 entries takes 79 µs instead of 68 µs for the check.
+
+## [1.5.10] - 2026-10-25
+
+### Breaking Changes
+
+- `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.
+
+### Added
+
+- `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
+
+### Changed
+
+- A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
+- A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
+- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
+
+### Fixed
+
+- A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
+- A session file that ends inside a line, left by a write that was cut off, is rewritten whole on its first write after a resume instead of appended to, so the next entry no longer merges into the cut line and is no longer lost on the following resume.
+
+## [1.5.9] - 2026-10-22
 
 ### Breaking Changes
 
 - `SessionStorage.rewriteTailAtomic(path, headBytes, keepBytes, head, tail, options)` takes `headBytes`, the length of the file's first bytes `head` replaces, so a head of another length moves the kept bytes; it fails when `headBytes` exceeds `keepBytes`.
 - `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
-
-### Removed
-
-- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
 
 ### Changed
 
@@ -54,6 +85,40 @@
 - Eval display migration uses the registered result codec. Read-only history and resume loads do not write artifacts; writable flush stores complete recovery values before publishing the migrated session version ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Bump `CURRENT_SESSION_VERSION` from 3 to 4, migrating legacy v3 session transcripts with oversized eval `jsonOutputs` to versioned bounded previews while persisting full payloads to durable artifacts without data loss ([#451](https://github.com/Wladefant/veyyon/pull/451)).
 - Restore blob-backed display values before migration, publish the new session version only after all saves succeed, and reserve artifact IDs across independent writers and synchronous allocations. The registered eval-result codec owns display migration; read-only loads retain full values without writing, and writable flush saves recovery artifacts ([#451](https://github.com/Wladefant/veyyon/pull/451)).
+
+### Fixed
+
+- A session no longer moves compacted history out of memory after another window appended to its file, which read entries back from shifted offsets and failed compaction with "could not be read back from bytes".
+- A compacted entry whose recorded offset no longer holds its line is read back from where one scan of the session file finds its line, and is checked to be the same entry, instead of failing every later compaction for the life of the process.
+- A missing blob is logged once per process instead of once per reference on every open and every read-back of an entry, which logged one lost blob store as tens of thousands of warnings.
+- An append made while a write fault lasts no longer rewrites the whole session file on the caller's stack: the retry publishes on the disk chain and entries that arrive before it runs share it, so on a 146 MB session an append takes 0.1 ms instead of 570 ms and the longest event-loop stall falls from 1.3 s to 100 ms.
+- A write fault that lands while a recovery publish waits its turn no longer cancels that publish, which left every later entry in memory only and never written to a healthy disk.
+- Reading a session file back for another window's lines no longer parses the lines this session wrote, cutting the read from 304 ms to 107 ms on a 146 MB file.
+- `compactedHistoryEnd` and `contextCompaction` return the boundary the session context is built from, the newest compaction the branch's default model can read, so history a context sends after a resume onto another model is no longer moved out of memory and read back from disk on every build.
+
+### Removed
+
+- Removed the plugin-id helpers and installed-registry re-exports from `@veyyon/kernel/loader/plugins/marketplace/types` and `marketplace/registry`; import them from `@veyyon/kernel/loader/plugins/plugin-id` and `installed-registry`.
+
+## [1.5.6] - 2026-10-13
+
+### Breaking Changes
+
+- `SessionEntryIndex.entriesById()` is removed; `walkBranchPath`, `resolveContextLeaf` and `buildSessionContext` take any `SessionEntryLookup`, which `SessionEntryIndex` and a `Map<string, SessionEntry>` both satisfy.
+
+### Added
+
+- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+- `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
+- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
+- `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
+- `SessionLoadOptions.coolCompactedHistory` makes a streamed load move compacted history to disk as it reads and return the store and the session's usage totals as `cold`, and `SessionEntryIndex.rebuild` takes those totals instead of counting every entry.
+- `readColdEntry` returns an entry whose payloads are held in the session file as its line reads back, and leaves the entry's payloads in the file.
+- A `ToolResultCodec` can define `settle`, which a persisting `SessionManager` calls on a tool result it records, before writing it, to replace in place each `details` field `slim` drops with the form `restore` builds.
+- `SessionManagerStateSnapshot`, the type `SessionManager.captureState()` returns and `restoreState()` takes, is exported from `@veyyon/kernel/session/session-manager`.
+
+### Changed
+
 - `getRecentSessions` and `findMostRecentSession` scan session files newest first by mtime and stop once they hold the requested rows, instead of listing the whole directory through `.session-list-index.json` and rewriting it, cutting the welcome shortlist over 1,495 sessions from 37.8 ms to 17.1 ms in a fresh process and from 19.9 ms and 6.3 MiB of heap to 4.0 ms and 0.6 MiB warm (medians of 11 and 8 alternating runs).
 - 13 class members that read no instance state are module functions and constants instead of `#private` members, which shrinks the compiled bytecode of their classes; behavior is unchanged.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).

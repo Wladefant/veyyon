@@ -66,6 +66,7 @@ import {
 	Flag,
 	isUsageLimit,
 	stringify,
+	UNREACHABLE_PEER_ERRNOS,
 } from "@veyyon/ai/error/flags";
 import { classifyGatewayError } from "@veyyon/ai/error/gateway";
 import { GATEWAY_RULES } from "@veyyon/ai/error/registry";
@@ -208,7 +209,6 @@ describe("a classification names the rules that produced it", () => {
 	it("holds exactly the rules recorded here, so a new one is a decision", () => {
 		expect([...ruleNames].sort()).toEqual([
 			"abort-by-error-name",
-			"anthropic-connection-error",
 			"anthropic-connection-timeout",
 			"auth-failure-prose",
 			"aws-credential-chain",
@@ -237,6 +237,8 @@ describe("a classification names the rules that produced it", () => {
 			"timeout-without-http2-verdict",
 			"tool-choice-value-rejected",
 			"transport-vocabulary",
+			"unreachable-peer-code",
+			"unreachable-peer-wording",
 			"usage-limit-vocabulary",
 		]);
 	});
@@ -340,7 +342,7 @@ describe("a classification names the rules that produced it", () => {
 		for (const status of [undefined, 400, 401, 403, 404, 408, 413, 422, 429, 500, 502, 503, 504]) {
 			for (const api of [undefined, ...BUILTIN_API_IDS]) {
 				for (const http2 of [undefined, true, false]) {
-					for (const code of [undefined, "model_not_supported"]) {
+					for (const code of [undefined, "model_not_supported", ...UNREACHABLE_PEER_ERRNOS]) {
 						probes.push({ text: "", status, api, http2, code });
 					}
 				}

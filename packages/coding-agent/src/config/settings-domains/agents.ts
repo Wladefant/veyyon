@@ -321,7 +321,7 @@ export const AGENTS_SETTINGS = {
 			group: "Agents",
 			label: "Roster",
 			description:
-				"What each helper and each agent type runs. Helpers are the model calls features make on their own: advisor, plan mode, vision, commit messages, titles, memory and the rest. Subagents are the agent types the model may spawn: Enabled lets the model pick one, Disabled does not, and with no rows only the deep agent is enabled. Each page sets a Model and an Effort; an agent's page also sets which agents it may spawn. An unset value follows the level above, then the session's model and effort.",
+				"The model and effort each subagent and each helper runs. Subagents are the agent types the model may spawn; with no rows only the deep agent is enabled. Helpers are the model calls a feature makes on its own: advisor, plan mode, vision, commit messages, titles, memory and the rest. An agent's page also sets whether it can spawn agents. An unset value follows the level above, then the session's model and effort.",
 			keywords: [
 				"agents",
 				"roster",

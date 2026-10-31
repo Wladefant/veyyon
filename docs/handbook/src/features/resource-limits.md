@@ -92,6 +92,15 @@ oversight:
 
 If you cap a session at 1 core, veyyon stays responsive while the build under it crawls.
 
+## Priority
+
+Every process a session spawns starts at nice 10, below the terminal, the desktop and veyyon
+itself, whether or not any limit is set. A build or a parallel media job yields the CPU whenever
+the desktop needs it and runs at full speed on an idle machine. Children inherit the level. On
+Windows the level is `BELOW_NORMAL_PRIORITY_CLASS`. A veyyon started at a lower priority, for
+example with `nice -n 15 vey`, passes its own level down instead. Commands typed into
+`veyyon shell` and `!` commands run through the same shell and start at the same level.
+
 ## How it is enforced
 
 Each control file below is written on the group for the scope that declares it, so the machine
@@ -131,13 +140,15 @@ the CPU budget, not that it crashed.
 
 **macOS has no per-group CPU quota.** There the budget is policy only: new commands are rejected
 while the group is saturated, running members (including descendants of the adopted child, so a
-`make -j` compiler fleet is in the same set) are reniced, and `session.cpuLimitKill` still
+`make -j` compiler fleet is in the same set) are reniced to 19, and `session.cpuLimitKill` still
 kills. Nothing throttles. The settings row and the startup warning state this, and the same
 warning appears on any platform where no backend works. A configured limit never fails silently:
 if the group cannot be created, new commands are refused rather than run uncapped.
 
-Changing `session.cpuLimitCores` mid-session takes effect on the next command: the live quota is
-rewritten, and setting it back to 0 lifts it.
+A change to any `session.*` limit mid-session applies to the live budget at once, before the next
+command: the CPU quota, `memory.max` and `pids.max` on an existing group are rewritten, a raised
+write budget lifts its refusal, and setting a limit back to 0 lifts it. A process started after
+the change, such as a new eval kernel or MCP server, joins a group that holds the new value.
 
 ## Example
 

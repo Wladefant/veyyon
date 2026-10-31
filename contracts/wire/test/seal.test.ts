@@ -228,21 +228,24 @@ describe("key and token generation", () => {
 
 describe("one owner", () => {
 	/**
-	 * The lock. Both sides bind the frame type and nothing else: a private IV length, algorithm name
-	 * or layout reappearing in either module is the drift this move exists to prevent, and it would
-	 * present as every frame failing to authenticate rather than as anything that names the cause.
-	 * Each side seals and opens through the two functions it imports from here; an import nothing
-	 * uses fails `check:tools`, so a side that imports them seals with them. Not caught: a side that
-	 * keeps the imports for one path and seals by hand on another.
+	 * The lock. Every module that seals binds the frame type and nothing else: a private IV length,
+	 * algorithm name or layout reappearing in one is the drift this move exists to prevent, and it
+	 * would present as every frame failing to authenticate rather than as anything that names the
+	 * cause. The relay client, which the CLI and the browser guest both seal through, and the browser
+	 * codec the dev mock host uses each seal and open through the two functions they import from
+	 * here; an import nothing uses fails `check:tools`, so a module that imports them seals with
+	 * them. The CLI's `collab/crypto.ts` keeps no seal at all, which
+	 * `duplicated-helpers-have-one-owner.test.ts` pins. Not caught: a module that keeps the imports
+	 * for one path and seals by hand on another.
 	 */
 	it("neither side implements the layout again", async () => {
-		const sources = [
-			new URL("../../../packages/coding-agent/src/collab/crypto.ts", import.meta.url),
-			new URL("../../../clients/web/src/lib/codec.ts", import.meta.url),
+		const sources: [URL, string][] = [
+			[new URL("../src/relay-client.ts", import.meta.url), "./index"],
+			[new URL("../../../clients/web/src/lib/codec.ts", import.meta.url), "@veyyon/wire"],
 		];
 
-		for (const url of sources) {
-			const imported = namedImportsFrom(await Bun.file(url).text(), "@veyyon/wire");
+		for (const [url, specifier] of sources) {
+			const imported = namedImportsFrom(await Bun.file(url).text(), specifier);
 
 			expect(imported).toContain("sealFrame");
 			expect(imported).toContain("openFrame");

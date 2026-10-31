@@ -40,13 +40,12 @@ import {
 	type Usage,
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@veyyon/agent-core";
-import type { AssistantMessage, Model } from "@veyyon/ai";
 import { BlobStore, resolveImageDataSync } from "@veyyon/kernel/session/blob-store";
-import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clampLow, getBlobsDir, isEnoent, logger, VERSION } from "@veyyon/utils";
+import { formatModelString } from "../../config/model-resolver";
 import { Settings } from "../../config/settings";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../discovery/capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -56,8 +55,7 @@ import {
 	type ExtensionUIDialogOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
-import { runExtensionCompact, runExtensionSetModel } from "../../extensibility/extensions/compact-handler";
-import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
+import { sessionCommandActions, sessionExtensionActions } from "../../extensibility/extensions/session-actions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 // The owning module, not the `internal-urls` barrel: the barrel re-exports every protocol
@@ -72,6 +70,7 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/a
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
 import type { AgentSession } from "../../session/agent-session";
+import { findLastAssistantMessage } from "../../session/agent-session-message-shapes";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
 import {
 	type BackgroundHandoff,
@@ -1106,16 +1105,31 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "thinking_level_changed") {
+		if (event.type === "thinking_level_changed") {
+			try {
+				await this.#pushConfigOptionUpdate(record);
+			} catch (error) {
+				logger.warn("Failed to push thinking-level config_option_update", {
+					sessionId: record.session.sessionId,
+					error,
+				});
+			}
 			return;
 		}
-		try {
-			await this.#pushConfigOptionUpdate(record);
-		} catch (error) {
-			logger.warn("Failed to push thinking-level config_option_update", {
-				sessionId: record.session.sessionId,
-				error,
-			});
+		if (event.type === "cwd_changed") {
+			// Every working-directory change lands here: `/move`, `/cwd` and the agent's `set_cwd` tool.
+			// The session re-scoped its settings and prompt; the destination's file commands and plugins,
+			// and the config options its settings select, are this host's to reload and re-advertise.
+			try {
+				await this.#reloadPluginState(record);
+				await this.#pushConfigOptionUpdate(record);
+			} catch (error) {
+				logger.warn("Failed to refresh ACP session state after a cwd change", {
+					sessionId: record.session.sessionId,
+					cwd: event.cwd,
+					error,
+				});
+			}
 		}
 	}
 
@@ -1295,14 +1309,7 @@ export class AcpAgent implements Agent {
 		if (!progress || progress.textEmitted) {
 			return;
 		}
-		let lastAssistant: AssistantMessage | undefined;
-		for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-			const message = event.messages[mi]!;
-			if (message.role === "assistant") {
-				lastAssistant = message as AssistantMessage;
-				break;
-			}
-		}
+		const lastAssistant = findLastAssistantMessage(event.messages);
 		if (!lastAssistant) {
 			return;
 		}
@@ -1339,14 +1346,7 @@ export class AcpAgent implements Agent {
 		if (streamedDelivery && (await streamedDelivery)) {
 			return;
 		}
-		let lastAssistant: AssistantMessage | undefined;
-		for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-			const message = event.messages[mi]!;
-			if (message.role === "assistant") {
-				lastAssistant = message as AssistantMessage;
-				break;
-			}
-		}
+		const lastAssistant = findLastAssistantMessage(event.messages);
 		if (lastAssistant?.stopReason !== "error") {
 			return;
 		}
@@ -1418,9 +1418,9 @@ export class AcpAgent implements Agent {
 				name: "Model",
 				category: "model",
 				type: "select",
-				currentValue: currentModel ? toModelId(currentModel) : toModelId(models[0]),
+				currentValue: currentModel ? formatModelString(currentModel) : formatModelString(models[0]),
 				options: models.map(model => ({
-					value: toModelId(model),
+					value: formatModelString(model),
 					name: model.name,
 					description: `${model.provider}/${model.id}`,
 				})),
@@ -1447,7 +1447,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #setModelById(session: AgentSession, modelId: string): Promise<void> {
-		const model = session.getAvailableModels().find(candidate => toModelId(candidate) === modelId);
+		const model = session.getAvailableModels().find(candidate => formatModelString(candidate) === modelId);
 		if (!model) {
 			throw new Error(`Unknown ACP model: ${modelId}`);
 		}
@@ -1689,11 +1689,11 @@ export class AcpAgent implements Agent {
 	}
 
 	/**
-	 * Reload plugin/registry state for an ACP session. Mirrors the interactive
-	 * `/reload-plugins` and `/move` flows: invalidates the plugin-roots cache,
-	 * resets the capability cache, refreshes the session's slash-command state,
-	 * then re-advertises commands so the client sees newly installed/disabled
-	 * plugins.
+	 * Reload plugin/registry state for an ACP session, after `/reload-plugins`,
+	 * a plugin change, or any working-directory change: invalidates the
+	 * plugin-roots cache, resets the capability cache, refreshes the session's
+	 * slash-command state, then re-advertises commands so the client sees the
+	 * plugins and commands now in effect.
 	 */
 	async #reloadPluginState(record: ManagedSessionRecord): Promise<void> {
 		const cwd = record.session.sessionManager.getCwd();
@@ -1937,74 +1937,23 @@ export class AcpAgent implements Agent {
 			return;
 		}
 
+		const session = record.session;
+		const { actions, contextActions } = sessionExtensionActions(session, {
+			sendMessage: (message, options) => {
+				session.sendCustomMessage(message, options).catch((error: unknown) => {
+					logger.warn("ACP extension sendMessage failed", { error });
+				});
+			},
+			sendUserMessage: (content, options) => {
+				trackExtensionUserMessage(record, session.sendUserMessage(content, options));
+			},
+			shutdown: () => {},
+			abortSite: "acp-agent.session.abort",
+		});
 		extensionRunner.initialize(
-			{
-				sendMessage: (message, options) => {
-					record.session.sendCustomMessage(message, options).catch((error: unknown) => {
-						logger.warn("ACP extension sendMessage failed", { error });
-					});
-				},
-				sendUserMessage: (content, options) => {
-					trackExtensionUserMessage(record, record.session.sendUserMessage(content, options));
-				},
-				appendEntry: (customType, data) => {
-					record.session.sessionManager.appendCustomEntry(customType, data);
-				},
-				setLabel: (targetId, label) => {
-					record.session.sessionManager.appendLabelChange(targetId, label);
-				},
-				getActiveTools: () => record.session.getActiveToolNames(),
-				getAllTools: () => record.session.getAllToolNames(),
-				setActiveTools: toolNames => record.session.setActiveToolsByName(toolNames),
-				getCommands: () => getSessionSlashCommands(record.session),
-				setModel: (model, options) => runExtensionSetModel(record.session, model, options),
-				getThinkingLevel: () => record.session.thinkingLevel,
-				setThinkingLevel: (level, persist) => record.session.setThinkingLevel(level, persist),
-				getSessionName: () => record.session.sessionManager.getSessionName(),
-				setSessionName: async name => {
-					await record.session.sessionManager.setSessionName(name, "user");
-				},
-				...sessionWorkerAccess(() => record.session.sessionManager.getSessionId()),
-			},
-			{
-				getModel: () => record.session.model,
-				isIdle: () => !record.session.isStreaming,
-				abort: () => {
-					abortDetached(record.session, "acp-agent.session.abort", USER_INTERRUPT_LABEL);
-				},
-				hasPendingMessages: () => record.session.queuedMessageCount > 0,
-				shutdown: () => {},
-				getContextUsage: () => record.session.getContextUsage(),
-				getSystemPrompt: () => record.session.systemPrompt,
-				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
-			},
-			{
-				getContextUsage: () => record.session.getContextUsage(),
-				waitForIdle: () => record.session.agent.waitForIdle(),
-				newSession: async options => {
-					const success = await record.session.newSession({ parentSession: options?.parentSession });
-					if (success && options?.setup) {
-						await options.setup(record.session.sessionManager);
-					}
-					return { cancelled: !success };
-				},
-				branch: async entryId => {
-					const result = await record.session.branch(entryId);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await record.session.navigateTree(targetId, { summarize: options?.summarize });
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async sessionPath => {
-					const success = await record.session.switchSession(sessionPath);
-					return { cancelled: !success };
-				},
-				reload: async () => {
-					await record.session.reload();
-				},
-				compact: instructionsOrOptions => runExtensionCompact(record.session, instructionsOrOptions),
-			},
+			actions,
+			contextActions,
+			sessionCommandActions(session),
 			// Per-session getter: `record.session.sessionId` reads through to
 			// `sessionManager.getSessionId()` (it's a getter, not a field), so an
 			// extension command that calls `ctx.newSession` / `ctx.switchSession`
@@ -2348,14 +2297,7 @@ function resolveStopReason(
 	if (cancelRequested) {
 		return "cancelled";
 	}
-	let lastAssistant: AssistantMessage | undefined;
-	for (let mi = event.messages.length - 1; mi >= 0; mi -= 1) {
-		const message = event.messages[mi]!;
-		if (message.role === "assistant") {
-			lastAssistant = message as AssistantMessage;
-			break;
-		}
-	}
+	const lastAssistant = findLastAssistantMessage(event.messages);
 	const reason = lastAssistant?.stopReason;
 	switch (reason) {
 		case "aborted":
@@ -2457,10 +2399,6 @@ function setThinkingLevelById(session: AgentSession, value: string): void {
 		);
 	}
 	session.setThinkingLevel(thinkingLevel);
-}
-
-function toModelId(model: Model): string {
-	return `${model.provider}/${model.id}`;
 }
 
 function getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {

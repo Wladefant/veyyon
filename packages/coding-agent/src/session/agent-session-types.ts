@@ -139,6 +139,9 @@ export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
  */
 export const QUIESCENCE_RECHECK_MS = 1_000;
 
+/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume`, a handoff or a disposal. */
+export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
 	/**
@@ -178,12 +181,7 @@ export interface AgentSessionConfig {
 	 */
 	parentApprovalBypassed?: () => boolean;
 	/** Models to cycle through with Ctrl+P (from --models flags). */
-	scopedModels?: Array<{
-		model: Model;
-		thinkingLevel?: ConfiguredThinkingLevel;
-		/** True only when this entry carried an explicit `:effort` suffix. */
-		explicitThinkingLevel?: boolean;
-	}>;
+	scopedModels?: SessionScopedModel[];
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Origin of the initial selector, used to distinguish a session override from a saved default. */
@@ -473,6 +471,14 @@ export interface SessionHandoffOptions {
 	preserveAgentLineage?: boolean;
 	/** Summary model selected by the session's configured compaction candidates. */
 	summaryModel?: Model;
+}
+
+/** A model Ctrl+P cycles through, from the `--models` flags. */
+export interface SessionScopedModel {
+	model: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
+	/** True only when this entry carried an explicit `:effort` suffix. */
+	explicitThinkingLevel?: boolean;
 }
 
 /** Result from cycleModel() */

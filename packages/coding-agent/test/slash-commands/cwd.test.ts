@@ -15,10 +15,15 @@ import { TempDir } from "@veyyon/utils";
 function createRuntime(current: string) {
 	const showStatus = vi.fn();
 	const setText = vi.fn();
-	const setCwd = vi.fn(async (path: string) => path);
+	const moves: string[] = [];
+	const setCwd = vi.fn(async (path: string) => {
+		moves.push(path);
+		return path;
+	});
 	return {
 		showStatus,
 		setCwd,
+		moves,
 		runtime: {
 			ctx: {
 				collabGuest: false,
@@ -86,5 +91,19 @@ describe("/cwd slash command ephemeral hint", () => {
 		expect(out).toContain("Directory does not exist");
 		expect(out).toContain("relative paths resolve against the current session cwd");
 		expect(out).toContain(dir.path());
+	});
+});
+
+describe("/cwd reads its path the way /move does", () => {
+	it("/cwd strips outer double quotes from the path, as /move does", async () => {
+		using from = TempDir.createSync("@veyyon-cwd-from-");
+		using to = TempDir.createSync("@veyyon-cwd to-");
+		const h = createRuntime(from.path());
+
+		const handled = await executeBuiltinSlashCommand(`/cwd "${to.path()}"`, h.runtime);
+
+		expect(handled).toBe(true);
+		expect(h.moves).toEqual([to.path()]);
+		expect(lastStatus(h.showStatus)).toContain(`cwd set: ${from.path()} → ${to.path()}`);
 	});
 });

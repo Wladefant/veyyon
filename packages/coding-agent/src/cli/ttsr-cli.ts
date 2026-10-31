@@ -17,7 +17,6 @@ import { collapseWhitespace, errorMessage, escapeRegExp, logger, truncate } from
 import { getProjectDir } from "@veyyon/utils/dirs";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
-import type { TtsrSettings } from "../config/settings-schema";
 import { initializeWithSettings, loadCapability } from "../discovery";
 import { type Rule, ruleCapability } from "../discovery/capability/rule";
 import {
@@ -27,7 +26,16 @@ import {
 	ruleIsEnabled,
 } from "../discovery/capability/rule-buckets";
 import { buildRuleFromMarkdown, createSourceMeta } from "../discovery/helpers";
-import type { TtsrManager } from "../export/ttsr";
+import {
+	compileConditionPattern,
+	compileGlobalPathGlobs,
+	compileRuleScope,
+	matchesPathGlob,
+	normalizeGlobPath,
+	type ToolScope,
+	TtsrManager,
+	trimAstConditions,
+} from "../export/ttsr";
 import { EXIT_USAGE } from "./exit-codes";
 
 export type TtsrAction = "test" | "list" | "scan";
@@ -125,16 +133,11 @@ interface ScanRegexCondition {
 	regex: RegExp;
 }
 
-interface ScanScopePlan {
-	toolName?: string;
-	pathGlob?: Bun.Glob;
-}
-
 interface ScanRulePlan {
 	rule: Rule;
 	globalPathGlobs?: Bun.Glob[];
 	defaultToolScope: boolean;
-	scopes: ScanScopePlan[];
+	scopes: ToolScope[];
 	regexConditions: ScanRegexCondition[];
 	astConditions: string[];
 	astPrefilters: RegExp[];
@@ -247,11 +250,6 @@ async function evaluate(
 	return { triggered, notTriggered };
 }
 
-async function createTtsrManager(settings?: TtsrSettings): Promise<TtsrManager> {
-	const { TtsrManager } = await import("../export/ttsr");
-	return new TtsrManager(settings);
-}
-
 /**
  * The rules `ttsr scan` reports on: the enabled ones that carry a condition.
  *
@@ -271,7 +269,7 @@ async function loadProjectTtsrRules(cwd: string): Promise<{ rules: Rule[]; manag
 	const settingsInstance = await Settings.init({ cwd });
 	initializeWithSettings(settingsInstance);
 	const ttsrSettings = settingsInstance.getGroup("ttsr");
-	const manager = await createTtsrManager(ttsrSettings);
+	const manager = new TtsrManager(ttsrSettings);
 	const result = await loadCapability<Rule>(ruleCapability.id, { cwd });
 	bucketRules(result.items, manager, {
 		builtinRules: ttsrSettings.builtinRules,
@@ -311,7 +309,7 @@ async function readIsolatedRule(rulePath: string): Promise<Rule> {
 
 async function loadIsolatedRule(rulePath: string): Promise<{ rules: Rule[]; manager: TtsrManager }> {
 	const rule = await readIsolatedRule(rulePath);
-	const manager = await createTtsrManager({
+	const manager = new TtsrManager({
 		enabled: true,
 		contextMode: "discard",
 		interruptMode: "always",
@@ -476,59 +474,9 @@ async function runList(json: boolean, cwd: string): Promise<void> {
 	}
 }
 
-function normalizeScanPath(pathValue: string): string {
-	return pathValue.replaceAll("\\", "/");
-}
-
 function isWithinDirectory(child: string, parent: string): boolean {
 	const rel = path.relative(parent, child);
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function matchesScanGlob(glob: Bun.Glob, filePaths: string[] | undefined): boolean {
-	if (!filePaths || filePaths.length === 0) {
-		return false;
-	}
-	for (const filePath of filePaths) {
-		const normalized = normalizeScanPath(filePath);
-		if (glob.match(normalized)) {
-			return true;
-		}
-		const slashIndex = normalized.lastIndexOf("/");
-		const basename = slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
-		if (basename !== normalized && glob.match(basename)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-function compileScanPathGlobs(globs: Rule["globs"]): Bun.Glob[] | undefined {
-	if (!globs || globs.length === 0) {
-		return undefined;
-	}
-	const compiled = globs
-		.map(globPattern => globPattern.trim())
-		.filter(globPattern => globPattern.length > 0)
-		.map(globPattern => new Bun.Glob(globPattern));
-	return compiled.length > 0 ? compiled : undefined;
-}
-
-function parseScanToolScopeToken(token: string): ScanScopePlan | undefined {
-	const match = /^(?:(?<prefix>tool)(?::(?<tool>[a-z0-9_-]+))?|(?<bare>[a-z0-9_-]+))(?:\((?<path>[^)]+)\))?$/i.exec(
-		token,
-	);
-	if (!match) {
-		return undefined;
-	}
-	const groups = match.groups;
-	const hasToolPrefix = groups?.prefix !== undefined;
-	const toolName = (groups?.tool ?? (hasToolPrefix ? undefined : groups?.bare))?.trim().toLowerCase();
-	const pathPattern = groups?.path?.trim();
-	return {
-		toolName,
-		pathGlob: pathPattern ? new Bun.Glob(pathPattern) : undefined,
-	};
 }
 
 function compileAstPrefilter(pattern: string): RegExp | undefined {
@@ -544,41 +492,19 @@ function compileAstPrefilter(pattern: string): RegExp | undefined {
 	return token ? new RegExp(`\\b${escapeRegExp(token)}\\b`) : undefined;
 }
 
+/**
+ * Compile each rule as {@link TtsrManager} compiles it for a live session: the same condition,
+ * glob and scope rules, so a scan reports what a session would fire on.
+ */
 function compileScanRulePlans(rules: Rule[]): ScanRulePlan[] {
 	return rules.map(rule => {
-		const scopes: ScanScopePlan[] = [];
-		let defaultToolScope = !rule.scope || rule.scope.length === 0;
-		for (const rawScope of rule.scope ?? []) {
-			const token = rawScope.trim();
-			const normalizedToken = token.toLowerCase();
-			if (token.length === 0 || normalizedToken === "text" || normalizedToken === "thinking") {
-				continue;
-			}
-			if (normalizedToken === "tool" || normalizedToken === "toolcall") {
-				scopes.push({});
-				continue;
-			}
-			const scope = parseScanToolScopeToken(token);
-			if (!scope) {
-				continue;
-			}
-			if (!scope.toolName && !scope.pathGlob) {
-				defaultToolScope = true;
-				continue;
-			}
-			scopes.push(scope);
-		}
+		const scope = compileRuleScope(rule);
 		const regexConditions: ScanRegexCondition[] = [];
 		for (const pattern of rule.condition ?? []) {
-			try {
-				regexConditions.push({ pattern, regex: new RegExp(pattern) });
-			} catch {
-				// Same behavior as TtsrManager: invalid regex conditions are unusable.
-			}
+			const regex = compileConditionPattern(rule.name, pattern);
+			if (regex) regexConditions.push({ pattern, regex });
 		}
-		const astConditions = (rule.astCondition ?? [])
-			.map(pattern => pattern.trim())
-			.filter(pattern => pattern.length > 0);
+		const astConditions = trimAstConditions(rule.astCondition);
 		const astPrefilters: RegExp[] = [];
 		let astRequiresFullScan = false;
 		for (const pattern of astConditions) {
@@ -591,9 +517,9 @@ function compileScanRulePlans(rules: Rule[]): ScanRulePlan[] {
 		}
 		return {
 			rule,
-			globalPathGlobs: compileScanPathGlobs(rule.globs),
-			defaultToolScope,
-			scopes,
+			globalPathGlobs: compileGlobalPathGlobs(rule.globs),
+			defaultToolScope: scope.allowAnyTool,
+			scopes: scope.toolScopes,
 			regexConditions,
 			astConditions,
 			astPrefilters,
@@ -603,7 +529,7 @@ function compileScanRulePlans(rules: Rule[]): ScanRulePlan[] {
 }
 
 function scanRulePlanMatchesPath(plan: ScanRulePlan, filePaths: string[]): boolean {
-	return !plan.globalPathGlobs || plan.globalPathGlobs.some(pathGlob => matchesScanGlob(pathGlob, filePaths));
+	return !plan.globalPathGlobs || plan.globalPathGlobs.some(pathGlob => matchesPathGlob(pathGlob, filePaths));
 }
 
 function scanRulePlanMatchesToolScope(plan: ScanRulePlan, filePaths: string[]): boolean {
@@ -614,7 +540,7 @@ function scanRulePlanMatchesToolScope(plan: ScanRulePlan, filePaths: string[]): 
 		return true;
 	}
 	for (const scope of plan.scopes) {
-		if (scope.pathGlob && !matchesScanGlob(scope.pathGlob, filePaths)) {
+		if (scope.pathGlob && !matchesPathGlob(scope.pathGlob, filePaths)) {
 			continue;
 		}
 		if (!scope.toolName || scope.toolName === "edit" || scope.toolName === "write") {
@@ -719,7 +645,7 @@ async function scanAnyAstConditionMatches(
 
 async function discoverScanFiles(scanDir: string, cwd: string, gitignore: boolean): Promise<ScanFileCandidate[]> {
 	const globRoot = isWithinDirectory(scanDir, cwd) ? cwd : scanDir;
-	const relativeScanDir = normalizeScanPath(path.relative(globRoot, scanDir));
+	const relativeScanDir = normalizeGlobPath(path.relative(globRoot, scanDir));
 	const pattern = relativeScanDir === "" ? "**/*" : `${relativeScanDir}/**/*`;
 	try {
 		const result = await glob({
@@ -732,7 +658,7 @@ async function discoverScanFiles(scanDir: string, cwd: string, gitignore: boolea
 		const candidates: ScanFileCandidate[] = [];
 		for (const match of result.matches as GlobMatch[]) {
 			const absPath = path.resolve(globRoot, match.path);
-			const filePath = normalizeScanPath(path.relative(scanDir, absPath));
+			const filePath = normalizeGlobPath(path.relative(scanDir, absPath));
 			if (
 				filePath.length === 0 ||
 				filePath.startsWith("..") ||

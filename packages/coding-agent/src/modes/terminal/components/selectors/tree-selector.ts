@@ -4,9 +4,9 @@ import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyMatch } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
+import { wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { formatToolCallLabel } from "@veyyon/utils/tool-call-label";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TreeFilterMode } from "../../../../config/settings-schema";
@@ -15,7 +15,7 @@ import { theme } from "../../../../theme/theme-binding";
 import { shortenPath, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 import { canonicalizeMessage } from "../../../../utils/thinking-display";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -50,15 +50,15 @@ interface FlatNode {
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
 
-/**
- * Tree list component with selection and ASCII art visualization
- */
 /** Tool call info for lookup */
 interface ToolCallInfo {
 	name: string;
 	arguments: Record<string, unknown>;
 }
 
+/**
+ * Tree list component with selection and ASCII art visualization
+ */
 class TreeList implements Component {
 	#flatNodes: FlatNode[] = [];
 	#filteredNodes: FlatNode[] = [];
@@ -440,9 +440,7 @@ class TreeList implements Component {
 	 * suppressing it there left a row nothing could point at.
 	 */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hover.key === index) return false;
-		this.#hover.set(index);
-		return true;
+		return this.#hover.set(index);
 	}
 
 	/**
@@ -461,16 +459,14 @@ class TreeList implements Component {
 
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
 	handleWheel(delta: -1 | 1): void {
+		this.#stepSelection(delta);
+	}
+
+	/** Move the selection one entry, wrapping from either end of the list to the other. */
+	#stepSelection(delta: -1 | 1): void {
 		const total = this.#filteredNodes.length;
 		if (total === 0) return;
-		this.#selectedIndex =
-			delta < 0
-				? this.#selectedIndex === 0
-					? total - 1
-					: this.#selectedIndex - 1
-				: this.#selectedIndex === total - 1
-					? 0
-					: this.#selectedIndex + 1;
+		this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, total);
 	}
 
 	/** Move to the entry under the pointer and jump to it, exactly as Enter does. */
@@ -780,9 +776,9 @@ class TreeList implements Component {
 
 	handleInput(keyData: string): void {
 		if (matchesSelectUp(keyData)) {
-			this.#selectedIndex = this.#selectedIndex === 0 ? this.#filteredNodes.length - 1 : this.#selectedIndex - 1;
+			this.#stepSelection(-1);
 		} else if (matchesSelectDown(keyData)) {
-			this.#selectedIndex = this.#selectedIndex === this.#filteredNodes.length - 1 ? 0 : this.#selectedIndex + 1;
+			this.#stepSelection(1);
 		} else if (matchesKey(keyData, "left")) {
 			// Page up
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#maxVisibleLines);
@@ -807,13 +803,13 @@ class TreeList implements Component {
 			// Cycle filter backwards
 			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
 			const currentIndex = modes.indexOf(this.#filterMode);
-			this.#filterMode = modes[(currentIndex - 1 + modes.length) % modes.length];
+			this.#filterMode = modes[wrapIndex(currentIndex - 1, modes.length)];
 			this.#applyFilter();
 		} else if (matchesKey(keyData, "ctrl+o")) {
 			// Cycle filter forwards: default → no-tools → user-only → labeled-only → all → default
 			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
 			const currentIndex = modes.indexOf(this.#filterMode);
-			this.#filterMode = modes[(currentIndex + 1) % modes.length];
+			this.#filterMode = modes[wrapIndex(currentIndex + 1, modes.length)];
 			this.#applyFilter();
 		} else if (matchesKey(keyData, "alt+d")) {
 			this.#filterMode = "default";
@@ -889,7 +885,7 @@ const TREE_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "esc close", clickable: true, id: "close" },
 ];
 
-/** Rows the tree keeps even on a short terminal. */
+/** Tree rows a short card sheds its spare chrome to show. */
 const MIN_TREE_ROWS = 3;
 
 /** Label input component shown when editing a label */
@@ -1050,24 +1046,21 @@ export class TreeSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const query = this.#treeList.getSearchQuery();
 		const searchLine = query
 			? `${theme.fg("muted", "Search:")} ${theme.fg("accent", query)}`
 			: theme.fg("dim", "Type to search");
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: TREE_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
-			hasSearch: true,
+			searchLine,
+			minBodyRows: MIN_TREE_ROWS + 1,
 		});
 
 		let body: readonly string[];
@@ -1077,19 +1070,13 @@ export class TreeSelectorComponent implements Component {
 			// The tree owns the whole body minus the filter footer line the list
 			// appends for a non-default filter; the shell truncates an overrun
 			// silently, and the row it would eat is the one under the cursor.
-			this.#treeList.setMaxVisibleLines(Math.max(MIN_TREE_ROWS, chrome.maxBodyRows - 1));
+			this.#treeList.setMaxVisibleLines(Math.max(1, chrome.maxBodyRows - 1));
 			body = this.#treeList.render(dims.contentWidth);
 		}
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Session Tree",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			searchLine,
-			shortcuts: TREE_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

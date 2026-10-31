@@ -1,6 +1,8 @@
+import type { OpenAICompatibleModelRecord } from "../discovery/openai-compatible";
 import { isZeroCostXaiOAuthReference } from "../identity/reference";
 import { getBundledModels, getBundledProviders } from "../models";
 import type { Api, Model, ModelSpec } from "../types";
+import { toNonEmptyString, toPositiveNumber } from "../utils";
 
 /**
  * Project a built `Model` back to spec stage: `compat` becomes the verbatim
@@ -21,6 +23,35 @@ export function createBundledReferenceMap<TApi extends Api>(
 		references.set(model.id, toModelSpec(model as Model<TApi>));
 	}
 	return references;
+}
+
+/**
+ * Merge one OpenAI-compatible listing entry over a model's bundled reference: the listing supplies the
+ * name and any size caps it states, the reference everything else. Without a reference the listing's
+ * defaults stand.
+ */
+export function mapWithBundledReference<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	const name = toNonEmptyString(entry.name) ?? reference?.name ?? defaults.name;
+	if (!reference) {
+		return {
+			...defaults,
+			name,
+		};
+	}
+	return {
+		...reference,
+		id: defaults.id,
+		name,
+		api: defaults.api,
+		provider: defaults.provider,
+		baseUrl: defaults.baseUrl,
+		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
+		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
+	};
 }
 
 /**

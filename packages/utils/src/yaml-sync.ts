@@ -1,5 +1,5 @@
 import type * as YAML from "yaml";
-import { isRecord } from "./type-guards";
+import { errorMessage, isRecord } from "./type-guards";
 
 let yamlPackage: typeof YAML | undefined;
 
@@ -17,6 +17,32 @@ export function loadYaml(): typeof YAML {
 	// and `import` to the package's one `node` entry, so the bundle holds one copy.
 	yamlPackage ??= require("yaml") as typeof YAML;
 	return yamlPackage;
+}
+
+/**
+ * Parse YAML a person wrote. A syntax error is thrown as a `SyntaxError` stating its line and column:
+ * `Flow sequence in block collection must be sufficiently indented and end with a ] at line 3, column 1`.
+ *
+ * Bun's parser states a syntax error as `YAML Parse error: Unexpected token`, and the `line` and
+ * `column` it attaches are those of the JavaScript call site, not of the text. On that path only, the
+ * `yaml` package parses the same text again for the position of its first error, so a file that parses
+ * never evaluates that package. When the `yaml` package finds no error, Bun's message is kept.
+ *
+ * `Bun.YAML` is read as the global rather than imported from `"bun"`, so this module keeps no import of
+ * a Bun builtin.
+ */
+export function parseYaml(content: string): unknown {
+	try {
+		return Bun.YAML.parse(content) as unknown;
+	} catch (error) {
+		throw new SyntaxError(locateYamlSyntaxError(content) ?? errorMessage(error), { cause: error });
+	}
+}
+
+/** The `yaml` package's first error in `content` as `<reason> at line N, column M`, without its source excerpt. */
+function locateYamlSyntaxError(content: string): string | undefined {
+	const first = loadYaml().parseDocument(content).errors[0];
+	return first?.message.split("\n", 1)[0].replace(/:$/, "");
 }
 
 /** A step in a path into the document: a mapping key, or an index into a sequence. */

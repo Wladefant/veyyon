@@ -20,10 +20,9 @@
  * `onRejection` warning beside `onExpiry`, which reports a value the redactor could not process --
  * a failure, not a lapse, and not this setting's business.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -75,15 +74,15 @@ interface Arm {
  * The entry is seeded through a vault on a BACKDATED clock rather than by sleeping: `add` stamps
  * `createdAt` from the clock it was given, so a vault built in the past writes an entry already
  * part-way through its life by the time the session reads it on the real clock. `expiresAt` lands
- * exactly `expiresInMs` from now, which is what lets the mid-session arm wait for a known deadline
- * instead of guessing a sleep.
+ * exactly `expiresInMs` from now, which is what lets the mid-session arm move the process clock to
+ * a known deadline instead of sleeping until it.
  */
 async function boot(options: {
 	expiryWarnings: boolean;
 	lifetimeMs: number;
 	expiresInMs: number;
 	/** Runs after boot, before the notices are read, with the session's own obfuscator. */
-	afterBoot?: (probe: () => boolean, expiresAt: number) => Promise<void>;
+	afterBoot?: (probe: () => boolean, expiresAt: number) => void;
 }): Promise<Arm> {
 	const root = TempDir.createSync("expiry-warning-switch-");
 	try {
@@ -124,7 +123,7 @@ async function boot(options: {
 			// the `onExpiry` the SESSION installed, which is the gate under test. Reading it through
 			// the session's own obfuscator is what makes this end to end rather than a re-creation.
 			const probe = () => session.obfuscator?.hasNamedSecret(NAME) ?? false;
-			await options.afterBoot?.(probe, expiresAt);
+			options.afterBoot?.(probe, expiresAt);
 			return {
 				notices: notices.all().map(notice => notice.text),
 				protectionLive: session.obfuscator !== undefined,
@@ -143,21 +142,31 @@ function bootWithNearlyExpiredSecret(expiryWarnings: boolean): Promise<Arm> {
 	return boot({ expiryWarnings, lifetimeMs: LIFETIME_MS, expiresInMs: Math.floor(LIFETIME_MS * 0.05) });
 }
 
-/** Boot with the entry alive, then hold until it lapses under the running session. */
+/**
+ * Boot with the entry alive, then carry the process clock past its deadline under the running session.
+ *
+ * `setSystemTime` moves the clock `Date.now` reads, which is the clock the session's obfuscator was
+ * built on, so the lapse crosses the production expiry path without waiting it out. The entry sits
+ * 95% through its lifetime, past the startup warning threshold as in the other arms, with half a
+ * minute between boot and the deadline so a slow boot cannot find it already lapsed.
+ */
 function bootAndOutliveTheSecret(expiryWarnings: boolean): Promise<Arm> {
 	return boot({
 		expiryWarnings,
-		lifetimeMs: 60_000,
-		expiresInMs: 4_000,
-		afterBoot: async (probe, expiresAt) => {
+		lifetimeMs: 600_000,
+		expiresInMs: 30_000,
+		afterBoot: (probe, expiresAt) => {
 			// The precondition: it really was expanding while the session ran, so a later absence is
 			// a lapse and not a vault that was never read.
 			expect(probe()).toBe(true);
-			const remaining = expiresAt - Date.now();
-			if (remaining > 0) await sleep(remaining + 50);
-			// Crossing the deadline is not enough on its own: something has to ask, and this is the
-			// ordinary question a session asks before spending a placeholder.
-			expect(probe()).toBe(false);
+			setSystemTime(new Date(expiresAt + 1));
+			try {
+				// Crossing the deadline is not enough on its own: something has to ask, and this is the
+				// ordinary question a session asks before spending a placeholder.
+				expect(probe()).toBe(false);
+			} finally {
+				setSystemTime();
+			}
 		},
 	});
 }
@@ -201,7 +210,7 @@ describe("the unprompted expiry warning", () => {
 		expect(lapsed).toHaveLength(1);
 		expect(lapsed[0]).toContain(`#${NAME}#`);
 		expect(lapsed[0]).not.toContain(VALUE);
-	}, 30_000);
+	});
 
 	it("is silent about a mid-session lapse too, while still revoking it", async () => {
 		const arm = await bootAndOutliveTheSecret(false);
@@ -212,7 +221,7 @@ describe("the unprompted expiry warning", () => {
 		expect(arm.stillLive).toBe(false);
 		expect(arm.notices.filter(text => text.includes(LAPSED_MID_SESSION))).toEqual([]);
 		expect(arm.notices.filter(text => text.includes(NAME))).toEqual([]);
-	}, 30_000);
+	});
 
 	it("is the default, so a fresh install is warned", () => {
 		expect(Settings.isolated().get("secrets.expiryWarnings")).toBe(true);

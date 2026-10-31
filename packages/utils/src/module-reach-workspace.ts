@@ -35,7 +35,14 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ModuleReachResolution } from "./module-reach";
+import {
+	createModuleReachCache,
+	type ModuleReachCache,
+	type ModuleReachResolution,
+	moduleReach,
+	moduleReachCount,
+	moduleSpecifiersIn,
+} from "./module-reach";
 
 /** The conditions a source-resolving import may hide behind, in the order the bundler reads them. */
 const SOURCE_CONDITIONS = ["import", "types", "default", "bun", "node"] as const;
@@ -190,6 +197,41 @@ export function workspaceModuleReachResolution(repoRoot: string): ModuleReachRes
 		for (const [key, target] of pkg.exports) addExport(table, pkg, key, target);
 	}
 	return { packages: table.packages, aliases: table.aliases };
+}
+
+/** One package's module-reach measurements over the workspace resolution, every walk sharing one memo. */
+export interface PackageModuleReach {
+	/** The workspace resolution every walk uses. */
+	readonly resolution: ModuleReachResolution;
+	/** The memo every walk shares. See `ModuleReachCache`. */
+	readonly cache: ModuleReachCache;
+	/** How many modules a path under `src` instantiates, itself included. */
+	reach(relative: string): number;
+	/** The modules a path under `src` instantiates, as paths relative to `namesRelativeTo`, sorted. */
+	reachedNames(relative: string): string[];
+	/** The runtime specifiers the module at a path under `src` names. */
+	runtimeImportsOf(relative: string): string[];
+}
+
+/**
+ * Reach measurements for the package whose sources are under `src`, resolved against the workspace at
+ * `repoRoot` (see {@link workspaceModuleReachResolution} for why both are absolute and derived from
+ * `import.meta.dir`). `reachedNames` reports paths relative to `namesRelativeTo`, which is `repoRoot`
+ * unless given.
+ */
+export function packageModuleReach(repoRoot: string, src: string, namesRelativeTo = repoRoot): PackageModuleReach {
+	const resolution = workspaceModuleReachResolution(repoRoot);
+	const cache = createModuleReachCache();
+	return {
+		resolution,
+		cache,
+		reach: relative => moduleReachCount(path.join(src, relative), resolution, cache),
+		reachedNames: relative =>
+			[...moduleReach(path.join(src, relative), resolution, cache)]
+				.map(file => path.relative(namesRelativeTo, file))
+				.sort(),
+		runtimeImportsOf: relative => moduleSpecifiersIn(fs.readFileSync(path.join(src, relative), "utf-8")),
+	};
 }
 
 /** The resolution under construction. The first package to declare a name or a prefix keeps it. */

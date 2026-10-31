@@ -269,7 +269,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 				});
 				const harness = createHarness();
 
-				await harness.controller.handle("/mcp smithery-search redis");
+				await harness.controller.handle("smithery-search redis");
 
 				if (opened.length > 0) {
 					expect(opened).toEqual([AUTHORIZE_URL]);
@@ -297,7 +297,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			});
 			const harness = createHarness();
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(opened).toEqual([]);
 			expect(redisSearches()).toEqual(["stale-key"]);
@@ -312,7 +312,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			});
 			const harness = createHarness();
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(opened).toEqual([AUTHORIZE_URL]);
 			expect(redisSearches()).toEqual(["stale-key", "fresh-key"]);
@@ -327,7 +327,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			});
 			const harness = createHarness({ answers: [undefined] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(redisSearches()).toEqual(["stale-key"]);
 			expect(harness.warnings).toEqual(["Browser authorization failed: session refused. Falling back to API key."]);
@@ -344,7 +344,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			stubRegistry(() => []);
 			const harness = createHarness();
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(harness.transcript()).toContain("Smithery authentication required (required for smithery-search).");
 			expect(searches).toEqual([
@@ -360,7 +360,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			stubRegistry(() => []);
 			const harness = createHarness({ answers: ["  ", "bad-key", " good-key "] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(harness.errors).toEqual([
 				"Smithery API key cannot be empty.",
@@ -376,7 +376,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			stubRegistry(() => []);
 			const harness = createHarness({ answers: [undefined] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(redisSearches()).toEqual([]);
 			expect(harness.errors).toEqual([
@@ -401,7 +401,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 				answers: ["", " abc ", undefined, "   "],
 			});
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(harness.selectorOptions).toEqual([["1. other (stdio, uses 5)", "2. redis (stdio, uses 5)"]]);
 			expect(harness.prompts).toEqual([
@@ -425,10 +425,10 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			]);
 
 			await createHarness({ select: options => options[0], answers: ["", "1"] }).controller.handle(
-				"/mcp smithery-search redis",
+				"smithery-search redis",
 			);
 			await createHarness({ select: options => options[1], answers: ["", "2"] }).controller.handle(
-				"/mcp smithery-search redis",
+				"smithery-search redis",
 			);
 
 			expect(await writtenServers()).toEqual({
@@ -442,7 +442,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			searchReturning([result("remote", remote, [input("token", true)])]);
 			const harness = createHarness({ select: options => options[0], answers: ["", "abc"] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(await writtenServers()).toEqual({ remote });
 		});
@@ -460,7 +460,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 				searchReturning([result("redis", STDIO)]);
 				const harness = createHarness({ select: options => options[0], answers: [""] });
 
-				await harness.controller.handle("/mcp smithery-search redis");
+				await harness.controller.handle("smithery-search redis");
 
 				expect(harness.prompts).toEqual([`Server name for deploy (default: ${offered})`]);
 				expect(Object.keys(await writtenServers()).sort()).toEqual([...taken, offered].sort());
@@ -472,7 +472,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			searchReturning([result("redis", STDIO)]);
 			const harness = createHarness({ select: options => options[0], answers: ["redis", "cache"] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			expect(harness.prompts).toEqual([
 				"Server name for deploy (default: redis-3)",
@@ -488,7 +488,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			searchReturning([result("short", STDIO), result(long, STDIO)]);
 			const harness = createHarness({ select: options => options[1], answers: ["picked"] });
 
-			await harness.controller.handle("/mcp smithery-search redis");
+			await harness.controller.handle("smithery-search redis");
 
 			const label = harness.selectorOptions[0]?.[1] ?? "";
 			expect(label).toHaveLength(120);
@@ -524,7 +524,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 				searchReturning([result("redis", STDIO, [input("token", true)])]);
 				const harness = createHarness(cancellation.options);
 
-				await harness.controller.handle("/mcp smithery-search redis");
+				await harness.controller.handle("smithery-search redis");
 
 				expect(await writtenServers()).toEqual({});
 				expect(harness.statuses).toEqual(cancellation.status ? [cancellation.status] : []);
@@ -540,7 +540,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			stubRegistry(() => []);
 			const harness = createHarness();
 
-			await harness.controller.handle("/mcp smithery-login");
+			await harness.controller.handle("smithery-login");
 
 			expect(cachedKey).toBe("fresh-key");
 			expect(harness.transcript()).toContain(AUTHORIZE_URL);
@@ -553,7 +553,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			stubRegistry(() => []);
 			const harness = createHarness({ answers: [undefined] });
 
-			await harness.controller.handle("/mcp smithery-login");
+			await harness.controller.handle("smithery-login");
 
 			expect(cachedKey).toBeUndefined();
 			expect(harness.statuses).toEqual(["Smithery login cancelled."]);
@@ -574,7 +574,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			const harness = createHarness({ answers: [undefined] });
 			vi.useFakeTimers();
 
-			const login = harness.controller.handle("/mcp smithery-login");
+			const login = harness.controller.handle("smithery-login");
 			const signal = await polled.promise;
 			vi.advanceTimersByTime(299_999);
 			expect(signal.aborted).toBe(false);
@@ -609,7 +609,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 			let paused = Promise.withResolvers<void>();
 			waitOnFakeTimers(() => paused.resolve());
 
-			const login = harness.controller.handle("/mcp smithery-login");
+			const login = harness.controller.handle("smithery-login");
 			for (let pause = 0; pause < 2; pause++) {
 				await paused.promise;
 				paused = Promise.withResolvers<void>();
@@ -631,7 +631,7 @@ describe("a Smithery search adds the picked server after at most one fresh login
 				stubKeyFile(initial);
 				const harness = createHarness();
 
-				await harness.controller.handle("/mcp smithery-logout");
+				await harness.controller.handle("smithery-logout");
 
 				expect(cachedKey).toBeUndefined();
 				expect(harness.statuses).toEqual([status]);

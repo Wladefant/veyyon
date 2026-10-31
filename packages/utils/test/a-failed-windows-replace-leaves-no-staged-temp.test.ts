@@ -20,6 +20,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as atomicWrite from "../src/atomic-write";
 import { TempDir } from "../src/temp";
+import { restorePlatform, setPlatform } from "./helpers/platform-override";
 
 const ORIGINAL = "ORIGINAL-BYTES";
 const NEW = "NEW-BYTES";
@@ -146,15 +147,14 @@ function injectFaults(sync: boolean, plan: Plan, target: string): () => void {
 
 /** Runs `write` with the platform reading as win32, restoring it afterwards. */
 async function asWindows(write: () => Promise<void> | void): Promise<{ resolved: boolean; thrown: unknown }> {
-	const platform = process.platform;
-	Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+	setPlatform("win32");
 	try {
 		await write();
 		return { resolved: true, thrown: undefined };
 	} catch (thrown) {
 		return { resolved: false, thrown };
 	} finally {
-		Object.defineProperty(process, "platform", { configurable: true, value: platform });
+		restorePlatform();
 	}
 }
 

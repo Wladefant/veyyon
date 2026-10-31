@@ -1,11 +1,12 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { prompt } from "@veyyon/utils";
 import { loadCapability } from "../../discovery";
 import type { SSHHost } from "../../discovery/capability/ssh";
 import { sshCapability } from "../../discovery/capability/ssh";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { DEFAULT_MAX_BYTES, streamTailUpdates, TailBuffer } from "../../session/streaming-output";
 import type { SSHHostInfo } from "../../ssh/connection-manager";
@@ -20,7 +21,7 @@ import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { sshToolView } from "./ssh-view";
 
-const sshSchema = lazy(() =>
+const sshSchema = toolSchema("ssh", () =>
 	type({
 		host: type("string").describe("ssh host"),
 		command: type("string").describe("remote command"),
@@ -150,6 +151,9 @@ export class SshTool implements AgentTool<typeof sshSchema.value, SSHToolDetails
 	readonly label = "SSH";
 	get parameters(): typeof sshSchema.value {
 		return sshSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return sshSchema.wire;
 	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;

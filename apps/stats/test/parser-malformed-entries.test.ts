@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { initDb, insertMessageStats, insertToolCalls } from "@veyyon/stats/db";
 import { parseSessionFile } from "@veyyon/stats/parser";
 import { getSessionsDir } from "@veyyon/utils";
@@ -8,14 +9,7 @@ import { installStatsTestIsolation } from "./helpers/temp-agent";
 
 installStatsTestIsolation("@pi-stats-malformed-");
 
-const USAGE = {
-	input: 10,
-	output: 20,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 30,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 10, output: 20, totalTokens: 30 };
 
 function assistantEntry(id: string, message: Record<string, unknown>): string {
 	return JSON.stringify({

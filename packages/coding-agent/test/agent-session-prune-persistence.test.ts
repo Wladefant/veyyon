@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -13,6 +13,7 @@ import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import { HistoryProtocolHandler } from "../src/internal-urls/history-protocol";
 import { registerArtifactsDir } from "../src/internal-urls/registry-helpers";
+import { requireBundledModel } from "../../agent/test/helpers"
 
 /**
  * The per-turn stale-result pass (`#pruneStaleToolResults`) and the
@@ -45,14 +46,7 @@ describe("AgentSession per-turn prune", () => {
 	const NEW_READ_TEXT = "fresh file body";
 	const USELESS_TEXT = "match line\n".repeat(20000);
 
-	const usageZero = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usageZero = emptyUsage();
 
 	function assistantCall(id: string, name: string, args: Record<string, unknown>, timestamp: number) {
 		return {
@@ -71,8 +65,7 @@ describe("AgentSession per-turn prune", () => {
 		overrides: Record<string, unknown>,
 		activeSessionManager = sessionManager,
 	): Promise<void> {
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 		const modelRegistry = new ModelRegistry(authStorage);
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
@@ -151,14 +144,7 @@ describe("AgentSession per-turn prune", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 100,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 110,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });

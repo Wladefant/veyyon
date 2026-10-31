@@ -1,3 +1,4 @@
+import { toError } from "@veyyon/utils/type-guards";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface ResourceResult<T> {
@@ -85,7 +86,7 @@ export function useResource<T>(
 			if (controller.signal.aborted) {
 				return;
 			}
-			setError(err instanceof Error ? err : new Error(String(err)));
+			setError(toError(err));
 		} finally {
 			if (!controller.signal.aborted) {
 				setLoading(false);

@@ -13,8 +13,8 @@
  * somebody asking the turn to stop.
  */
 import { isAbortError } from "@veyyon/utils/abortable";
+import { PROVIDER_FINISH_ERROR_PATTERN } from "../classes";
 import { Flag } from "../flag";
-import { PROVIDER_FINISH_ERROR_PATTERN } from "../provider";
 import type { ErrorDomain, GatewayStructuralRule, GatewayVerdict, GatewayWordingRule } from "./types";
 
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;

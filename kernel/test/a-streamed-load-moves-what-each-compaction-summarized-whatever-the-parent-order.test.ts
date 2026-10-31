@@ -6,6 +6,7 @@ import { coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import { CURRENT_SESSION_VERSION, type FileEntry } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFileStream } from "@veyyon/kernel/session/session-loader";
 import { TempDir } from "@veyyon/utils";
+import { mulberry32 } from "../../packages/utils/test/helpers/mulberry32";
 
 /**
  * WHY: a streamed load moves the entries each compaction summarized out of memory as it reads that
@@ -24,18 +25,6 @@ import { TempDir } from "@veyyon/utils";
  * with the parent's id; and record-only entry kinds, which move as they are read whatever their
  * parents.
  */
-
-/** A deterministic generator, so a failing seed reproduces. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 const TIMESTAMP = "2026-01-01T00:00:00.000Z";
 

@@ -29,7 +29,7 @@
  * action), else it moves the ring to the next field.
  */
 import { extractPrintableText, isLoneLineFeed, matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clampLow, wrapIndex } from "@veyyon/utils/math";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { offsetAtVisualCol, truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -282,7 +282,7 @@ export class Form implements Component, Focusable, MouseRoutable {
 		const ring = this.#focusable();
 		if (ring.length === 0) return;
 		const current = ring.findIndex(field => field.id === this.#focusedId);
-		const next = ring[(current + step + ring.length) % ring.length]!;
+		const next = ring[wrapIndex(current + step, ring.length)]!;
 		this.focus(next.id);
 	}
 
@@ -624,11 +624,7 @@ function segmentedKey(field: FormSegmentedField, data: string): void {
 	// With nothing chosen, → is the first option and ← the last; the walk
 	// from -1 would otherwise land ← on the second to last.
 	const index =
-		current < 0
-			? delta > 0
-				? 0
-				: field.options.length - 1
-			: (current + delta + field.options.length) % field.options.length;
+		current < 0 ? (delta > 0 ? 0 : field.options.length - 1) : wrapIndex(current + delta, field.options.length);
 	const next = field.options[index]!;
 	if (next.value !== field.value) field.onChange(next.value);
 }

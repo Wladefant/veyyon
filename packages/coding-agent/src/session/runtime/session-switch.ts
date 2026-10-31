@@ -1,11 +1,13 @@
 /**
- * Session switching: loading another transcript into a live session, and putting the previous
- * transcript and runtime back when loading it fails part way.
+ * Session switching: starting a new or forked transcript, loading another transcript into a live
+ * session, and putting the previous transcript and runtime back when loading it fails part way.
  *
  * This is a session collaborator. It holds no state between switches and reaches the session only
- * through {@link SessionSwitchSession} and {@link SessionSwitchHost}. Every in-process switch (the
- * picker, `/resume`, an extension, RPC `switch_session`, a reload) runs through
- * {@link SessionSwitch.switchTo}, serialized behind the session's scope transitions.
+ * through {@link SessionSwitchSession} and {@link SessionSwitchHost}. Every in-process switch to a
+ * saved transcript (the picker, `/resume`, an extension, RPC `switch_session`, a reload) runs
+ * through {@link SessionSwitch.switchTo}, serialized behind the session's scope transitions;
+ * `/new` and `/drop` run through {@link SessionSwitch.startNew}, and `/fork` through
+ * {@link SessionSwitch.fork}.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -13,18 +15,19 @@ import type { Agent, AgentMessage, AgentState, ThinkingLevel } from "@veyyon/age
 import type { Model, ServiceTierByFamily } from "@veyyon/ai";
 import { createInterruptedTurnAbortMessage } from "@veyyon/kernel/session/exit-diagnostics";
 import { getRestorableSessionModels, type SessionContext } from "@veyyon/kernel/session/session-context";
+import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { foreignSessionFileProfile } from "@veyyon/kernel/session/session-listing";
 import type { SessionManager, SessionManagerStateSnapshot } from "@veyyon/kernel/session/session-manager";
-import { errorMessage, getActiveProfileOrDefault, logger } from "@veyyon/utils";
+import { errorMessage, getActiveProfileOrDefault, isEnoent, logger } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner, SessionBeforeSwitchResult } from "../../extensibility/extensions";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../../thinking";
-import type { CustomMessage } from "../messages";
 import { didSessionMessagesChange } from "../provider-replay-projection";
 import { startingServiceTierByFamily } from "../startup-model";
 import type { AdvisorRoster } from "./advisor-roster";
 import type { CheckpointRuntime, CheckpointSnapshot } from "./checkpoint-runtime";
+import type { NextTurnSnapshot } from "./next-turn-messages";
 import type { ProviderSessions } from "./provider-sessions";
 import type { ProviderWire } from "./provider-wire";
 import type { SessionScope } from "./session-scope";
@@ -34,8 +37,7 @@ import type { ToolDiscovery } from "./tool-discovery";
 
 /** Session fields a switch clears or replaces, and a failed switch puts back. */
 export interface SwitchedSessionFields {
-	readonly pendingNextTurnMessages: CustomMessage[];
-	readonly scheduledHiddenNextTurnGeneration: number | undefined;
+	readonly nextTurn: NextTurnSnapshot;
 	readonly baseSystemPrompt: string[];
 	readonly serviceTierByFamily: ServiceTierByFamily;
 }
@@ -46,7 +48,7 @@ export interface SessionSwitchSession {
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
 	readonly model: Model | undefined;
-	abort(options: { goalReason: "internal" }): Promise<void>;
+	abort(options?: { goalReason: "internal" }): Promise<void>;
 	buildDisplaySessionContext(): SessionContext;
 }
 
@@ -56,6 +58,7 @@ export interface SessionSwitchHost {
 	readonly wire: ProviderWire;
 	readonly providerSessions: ProviderSessions;
 	readonly memory: { rekey(): void };
+	readonly planMode: { resetReference(): void };
 	readonly discovery: ToolDiscovery;
 	readonly checkpoint: CheckpointRuntime;
 	readonly thinking: ThinkingRuntime;
@@ -73,6 +76,12 @@ export interface SessionSwitchHost {
 	/** Drops the queued next-turn asides and the scheduled hidden next turn. */
 	clearNextTurnMessages(): void;
 	setServiceTierByFamily(byFamily: ServiceTierByFamily): void;
+	/** The per-family tier map in its persisted form, `null` when no family carries a tier. */
+	serviceTierEntry(): ServiceTierByFamily | null;
+	/** Activate `toolNames` as a new transcript's starting tool set, without recording an MCP selection. */
+	applyToolNames(toolNames: string[]): Promise<void>;
+	/** Cancel the background jobs this session started. */
+	cancelOwnAsyncJobs(): void;
 	restoreMCPSelectionsForSessionContext(
 		sessionContext: SessionContext,
 		options?: { fallbackSelectedMCPToolNames?: Iterable<string> },
@@ -82,6 +91,25 @@ export interface SessionSwitchHost {
 	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
 	endConversation(): Promise<void>;
 	resetAllAdvisorRuntimes(): void;
+}
+
+/** A transcript model reference, `provider/id` split at its first slash. */
+interface TranscriptModelTarget {
+	readonly provider: string;
+	readonly id: string;
+}
+
+/** The first of `targets` that `available` lists, with its index; index -1 when none is. */
+function firstListed(
+	available: readonly Model[],
+	targets: readonly TranscriptModelTarget[],
+): { index: number; model: Model | undefined } {
+	for (let index = 0; index < targets.length; index++) {
+		const target = targets[index]!;
+		const model = available.find(m => m.provider === target.provider && m.id === target.id);
+		if (model) return { index, model };
+	}
+	return { index: -1, model: undefined };
 }
 
 /**
@@ -185,6 +213,137 @@ export class SessionSwitch {
 			});
 		}
 		return true;
+	}
+
+	/**
+	 * Start an empty transcript: the outgoing one is saved, or deleted with its artifacts when
+	 * `options.drop` is set. Listeners are preserved and continue receiving events.
+	 * @returns true if completed, false if a `session_before_switch` hook cancelled it
+	 */
+	async startNew(options?: NewSessionOptions): Promise<boolean> {
+		const discovery = this.#host.discovery;
+		const previousSessionFile = this.#session.sessionManager.getSessionFile();
+		const nextDiscoverySessionToolNames = discovery.mcpEnabled
+			? [...discovery.activeNonMCP(), ...discovery.defaultMCPTools()]
+			: undefined;
+
+		if (await this.#beforeSwitchCancelled("new")) return false;
+
+		await this.#host.whileDisconnectedFromAgent(() =>
+			this.#startNewTranscript(previousSessionFile, nextDiscoverySessionToolNames, options),
+		);
+
+		await this.#host.extensionRunner()?.emit({ type: "session_switch", reason: "new", previousSessionFile });
+		return true;
+	}
+
+	/** Saves or drops the outgoing transcript and starts an empty one. Runs with agent events detached. */
+	async #startNewTranscript(
+		previousSessionFile: string | undefined,
+		nextDiscoverySessionToolNames: string[] | undefined,
+		options: NewSessionOptions | undefined,
+	): Promise<void> {
+		const session = this.#session;
+		const host = this.#host;
+		const { sessionManager } = session;
+		await session.abort();
+		host.cancelOwnAsyncJobs();
+		host.providerSessions.closeAll("new session");
+		session.agent.reset();
+		if (options?.drop && previousSessionFile) {
+			// Detach the advisor recorder feed and drain its writer BEFORE deleting the old artifacts
+			// dir: `abort()` only stops the primary, so a still-running advisor turn could otherwise
+			// finish, emit `message_end`, and recreate `<old>/__advisor.jsonl`. The roster's
+			// resetSessionState below re-primes the advisor and re-attaches the feed at the new path.
+			await host.advisorRoster.closeRecorders();
+			try {
+				await sessionManager.dropSession(previousSessionFile);
+			} catch (err) {
+				logger.error("Failed to delete session during /drop", { err });
+			}
+		} else {
+			await sessionManager.flush();
+		}
+		await sessionManager.newSession(options);
+		// The transcript changed under this session: release what the conversation it left held.
+		await host.endConversation();
+
+		host.checkpoint.clear();
+		host.todo.setPhases([]);
+		host.providerSessions.freshId = undefined;
+		host.providerSessions.clearInheritedCacheKey("new-session");
+		host.providerSessions.sync();
+		host.memory.rekey();
+		host.resetMemoryContextForNewTranscript();
+		host.clearNextTurnMessages();
+
+		sessionManager.appendThinkingLevelChange(host.thinking.level, host.thinking.configuredLevel());
+		sessionManager.appendServiceTierChange(host.serviceTierEntry());
+		if (nextDiscoverySessionToolNames) {
+			await host.applyToolNames(nextDiscoverySessionToolNames);
+			const selectedMCPToolNames = host.discovery.selectedMCP();
+			if (selectedMCPToolNames.length > 0) sessionManager.appendMCPToolSelection(selectedMCPToolNames);
+		}
+		host.discovery.rememberSessionDefaults(sessionManager.getSessionFile());
+
+		host.todo.resetForNewContext();
+		host.planMode.resetReference();
+		host.advisorRoster.resetSessionState();
+	}
+
+	/**
+	 * Fork the current transcript into a new session file holding the same entries, with a copy of
+	 * its artifacts. The agent keeps its messages.
+	 * @returns true if completed, false if a hook cancelled it or the session does not persist
+	 */
+	async fork(): Promise<boolean> {
+		const { sessionManager } = this.#session;
+		const providerSessions = this.#host.providerSessions;
+		const previousSessionFile = sessionManager.getSessionFile();
+
+		if (await this.#beforeSwitchCancelled("fork")) return false;
+
+		// Flush so the fork copies every entry.
+		await sessionManager.flush();
+		const forkResult = await sessionManager.fork();
+		if (!forkResult) return false;
+
+		const oldArtifactDir = forkResult.oldSessionFile.slice(0, -6);
+		const newArtifactDir = forkResult.newSessionFile.slice(0, -6);
+		try {
+			const oldDirStat = await fs.promises.stat(oldArtifactDir);
+			if (oldDirStat.isDirectory()) {
+				await fs.promises.cp(oldArtifactDir, newArtifactDir, { recursive: true });
+			}
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("Failed to copy artifacts during fork", {
+					oldArtifactDir,
+					newArtifactDir,
+					error: errorMessage(err),
+				});
+			}
+		}
+
+		// The fork is a new session id.
+		providerSessions.freshId = undefined;
+		providerSessions.adoptInheritedCacheKey();
+		providerSessions.sync();
+		this.#host.memory.rekey();
+		this.#host.resetMemoryContextForNewTranscript();
+
+		await this.#host.extensionRunner()?.emit({ type: "session_switch", reason: "fork", previousSessionFile });
+		return true;
+	}
+
+	/** Whether a `session_before_switch` hook cancelled a `/new` or `/fork`. */
+	async #beforeSwitchCancelled(reason: "new" | "fork"): Promise<boolean> {
+		const extensionRunner = this.#host.extensionRunner();
+		if (!extensionRunner?.hasHandlers("session_before_switch")) return false;
+		const result = (await extensionRunner.emit({ type: "session_before_switch", reason })) as
+			| SessionBeforeSwitchResult
+			| undefined;
+		return result?.cancel === true;
 	}
 
 	/**
@@ -329,7 +488,7 @@ export class SessionSwitch {
 			host.providerSessions.closeAll("session reload");
 		}
 
-		this.#restoreTranscriptModel(sessionContext, switchingToDifferentSession);
+		await this.#restoreTranscriptModel(sessionContext, switchingToDifferentSession);
 		const closedTurnContext = this.#closeInterruptedTranscriptTurn();
 		this.#restoreTranscriptThinkingAndTier(closedTurnContext ?? sessionContext);
 
@@ -340,8 +499,8 @@ export class SessionSwitch {
 	}
 
 	/** Selects the newest model the transcript recorded that is still available, if any. */
-	#restoreTranscriptModel(sessionContext: SessionContext, switchingToDifferentSession: boolean): void {
-		const match = this.#findRestorableTranscriptModel(sessionContext);
+	async #restoreTranscriptModel(sessionContext: SessionContext, switchingToDifferentSession: boolean): Promise<void> {
+		const match = await this.#findRestorableTranscriptModel(sessionContext);
 		if (!match) return;
 		const currentModel = this.#session.model;
 		const shouldResetProviderState =
@@ -357,22 +516,28 @@ export class SessionSwitch {
 		}
 	}
 
-	#findRestorableTranscriptModel(sessionContext: SessionContext): Model | undefined {
-		const targetModelStrings = getRestorableSessionModels(
+	/**
+	 * The first transcript model the registry lists. The providers of preferred models it does not
+	 * list are discovered first: a model only a provider's listing has is absent until the
+	 * background refresh started at launch completes, and a switch inside that window would keep
+	 * the current model.
+	 */
+	async #findRestorableTranscriptModel(sessionContext: SessionContext): Promise<Model | undefined> {
+		const targets = getRestorableSessionModels(
 			sessionContext.models,
 			this.#session.sessionManager.getLastModelChangeRole(),
-		);
-		if (targetModelStrings.length === 0) return undefined;
-		const availableModels = this.#host.modelRegistry().getAvailable();
-		for (const targetModelStr of targetModelStrings) {
-			const slashIdx = targetModelStr.indexOf("/");
-			if (slashIdx <= 0) continue;
-			const provider = targetModelStr.slice(0, slashIdx);
-			const modelId = targetModelStr.slice(slashIdx + 1);
-			const match = availableModels.find(m => m.provider === provider && m.id === modelId);
-			if (match) return match;
-		}
-		return undefined;
+		).flatMap(value => {
+			const slashIdx = value.indexOf("/");
+			return slashIdx > 0 ? [{ provider: value.slice(0, slashIdx), id: value.slice(slashIdx + 1) }] : [];
+		});
+		if (targets.length === 0) return undefined;
+		const registry = this.#host.modelRegistry();
+		const listed = firstListed(registry.getAvailable(), targets);
+		const preferred = targets.slice(0, listed.index < 0 ? targets.length : listed.index);
+		if (preferred.length === 0) return listed.model;
+		const providers = new Set(preferred.map(target => target.provider));
+		await Promise.all(Array.from(providers, provider => registry.refreshProvider(provider, "online-if-uncached")));
+		return firstListed(registry.getAvailable(), targets).model;
 	}
 
 	/**

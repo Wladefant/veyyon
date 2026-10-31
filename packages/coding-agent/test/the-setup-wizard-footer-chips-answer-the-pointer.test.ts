@@ -36,6 +36,7 @@ import type {
 } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";
 import { SetupWizardComponent } from "@veyyon/coding-agent/modes/terminal/setup-wizard/wizard-overlay";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { sgrMotion, sgrPress } from "../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { useFullColor } from "./helpers/theme-assertions";
 
 const WIDTH = 100;
@@ -71,16 +72,6 @@ function makeContext(): SetupWizardContext {
 		refreshComposerShortcuts: () => {},
 		dismissWelcome: () => {},
 	} as unknown as SetupWizardContext;
-}
-
-/** SGR left press at a 0-based screen cell. */
-function press(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
-/** SGR motion with no button held, at a 0-based screen cell. */
-function motion(row: number, col: number): string {
-	return `\x1b[<35;${col + 1};${row + 1}M`;
 }
 
 interface Driven {
@@ -135,7 +126,7 @@ describe("the setup wizard footer chips", () => {
 		try {
 			run.frame();
 			const chip = run.cellOf("esc leave setup");
-			run.component.handleInput(press(chip.row, chip.col));
+			run.component.handleInput(sgrPress(chip.row, chip.col));
 			// The outro plays on the same clock the splash did; the run resolves at
 			// its end, which is the observable "setup is over".
 			vi.advanceTimersByTime(5_000);
@@ -151,14 +142,14 @@ describe("the setup wizard footer chips", () => {
 			run.frame();
 			expect(run.plain().some(line => line.includes("1/2"))).toBe(true);
 			const skip = run.cellOf("→ skip step");
-			run.component.handleInput(press(skip.row, skip.col));
+			run.component.handleInput(sgrPress(skip.row, skip.col));
 			vi.advanceTimersByTime(500);
 			expect(run.plain().some(line => line.includes("2/2"))).toBe(true);
 
 			// The back chip exists only from the second step on, which is itself the
 			// contract: clicking it on step one would have to mean nothing.
 			const back = run.cellOf("← back");
-			run.component.handleInput(press(back.row, back.col));
+			run.component.handleInput(sgrPress(back.row, back.col));
 			vi.advanceTimersByTime(500);
 			expect(run.plain().some(line => line.includes("1/2"))).toBe(true);
 			expect(run.plain().some(line => line.includes("← back"))).toBe(false);
@@ -175,12 +166,12 @@ describe("the setup wizard footer chips", () => {
 			const chip = run.cellOf("esc leave setup");
 			expect(run.frame()[chip.row]).not.toContain("48;");
 
-			run.component.handleInput(motion(chip.row, chip.col + 1));
+			run.component.handleInput(sgrMotion(chip.row, chip.col + 1));
 			const hovered = run.frame()[chip.row] ?? "";
 			expect(hovered).toContain("48;");
 
 			// One column left of the chip is the separator, which belongs to no chip.
-			run.component.handleInput(motion(chip.row, Math.max(0, chip.col - 2)));
+			run.component.handleInput(sgrMotion(chip.row, Math.max(0, chip.col - 2)));
 			expect(run.frame()[chip.row]).not.toContain("48;");
 		} finally {
 			run.dispose();
@@ -192,7 +183,7 @@ describe("the setup wizard footer chips", () => {
 		try {
 			run.frame();
 			const hint = run.cellOf("↑↓ select");
-			run.component.handleInput(press(hint.row, hint.col));
+			run.component.handleInput(sgrPress(hint.row, hint.col));
 			vi.advanceTimersByTime(500);
 			expect(run.plain().some(line => line.includes("1/2"))).toBe(true);
 			expect(run.ended()).toBe(false);
@@ -211,7 +202,7 @@ describe("the setup wizard footer chips", () => {
 		try {
 			run.frame();
 			const chip = run.cellOf("→ skip step");
-			run.component.handleInput(press(Math.max(0, chip.row - 4), chip.col));
+			run.component.handleInput(sgrPress(Math.max(0, chip.row - 4), chip.col));
 			vi.advanceTimersByTime(500);
 			expect(run.plain().some(line => line.includes("1/2"))).toBe(true);
 			expect(run.ended()).toBe(false);

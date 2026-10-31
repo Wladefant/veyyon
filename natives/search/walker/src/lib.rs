@@ -35,6 +35,7 @@ pub use cache::{
 	empty_recheck_ms, ensure_readable_dir, has_literal_prefix, has_literal_prefix_str,
 	invalidate_all, invalidate_path, invalidate_path_string, max_cache_entries, normalize_path,
 	normalize_relative_path, normalize_windows_path_str, parallel_for_each, parallel_for_each_init,
+	parallel_for_each_chunk_init,
 	release_expired_scans, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
 	with_walk_pool,
 };
@@ -1709,17 +1710,19 @@ where
 	parallel_for_each(candidates, operation)
 }
 
-/// Execute work for regular-file candidates with per-worker state.
-pub fn execute_candidates_init<S, E>(
+/// Execute work for regular-file candidates in chunks of at most `chunk_len`,
+/// with per-worker state, on the centralized walker pool.
+pub fn execute_candidate_chunks_init<S, E>(
 	candidates: &[FileCandidate],
+	chunk_len: usize,
 	init: impl Fn() -> S + Send + Sync,
-	operation: impl Fn(&mut S, &FileCandidate) -> std::result::Result<(), E> + Send + Sync,
+	operation: impl Fn(&mut S, &[FileCandidate]) -> std::result::Result<(), E> + Send + Sync,
 ) -> std::result::Result<(), E>
 where
 	S: Send,
 	E: Send,
 {
-	parallel_for_each_init(candidates, init, operation)
+	parallel_for_each_chunk_init(candidates, chunk_len, init, operation)
 }
 
 struct SerialCandidateVisitor<'a, S> {

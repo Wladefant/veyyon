@@ -20,6 +20,7 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -28,8 +29,6 @@ import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 import { useFullColor } from "../../../helpers/theme-assertions";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geo: StubbedStdoutGeometry;
 
@@ -53,7 +52,7 @@ afterEach(() => {
 function rowsOf(dashboard: AgentDashboard, callSign: string, width = 120): string[] {
 	return dashboard
 		.render(width)
-		.map(line => line.replace(ANSI_PATTERN, "").trimEnd())
+		.map(line => stripVTControlCharacters(line).trimEnd())
 		.filter(line => line.includes(callSign));
 }
 
@@ -207,7 +206,7 @@ describe("an interrupted or terminal agent settles to terminal display state", (
 			const lines = dashboard.render(narrowWidth);
 			for (const line of lines) {
 				// Strip ANSI to verify visible width constraint
-				const visible = line.replace(ANSI_PATTERN, "");
+				const visible = stripVTControlCharacters(line);
 				expect(visible.length).toBeLessThanOrEqual(narrowWidth);
 			}
 		} finally {
@@ -308,7 +307,7 @@ describe("an interrupted or terminal agent settles to terminal display state", (
 			dashboard.handleInput("x");
 			expect(currentOverlay).toBeDefined();
 			const lines = currentOverlay!.render(120);
-			const rendered = lines.map(l => l.replace(ANSI_PATTERN, "")).join("\n");
+			const rendered = lines.map(l => stripVTControlCharacters(l)).join("\n");
 			expect(rendered).toContain("Terminate agent?");
 			expect(rendered).toContain("Kestrel  reviewer · running");
 		} finally {
@@ -330,7 +329,7 @@ describe("an interrupted or terminal agent settles to terminal display state", (
 			dashboardNoType.handleInput("x");
 			expect(currentOverlay).toBeDefined();
 			const lines = currentOverlay!.render(120);
-			const rendered = lines.map(l => l.replace(ANSI_PATTERN, "")).join("\n");
+			const rendered = lines.map(l => stripVTControlCharacters(l)).join("\n");
 			expect(rendered).toContain("Terminate agent?");
 			// Must not contain leading ' · ' before status
 			expect(rendered).not.toContain(" · running");

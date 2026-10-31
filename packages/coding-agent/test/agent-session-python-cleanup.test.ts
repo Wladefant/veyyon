@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as fs from "node:fs";
 import type { TimerOptions } from "node:timers";
 import * as timersPromises from "node:timers/promises";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SessionKernel } from "@veyyon/coding-agent/eval/kernel-base";
 import * as pythonExecutor from "@veyyon/coding-agent/eval/py/executor";
@@ -13,6 +12,7 @@ import { createAgentSession, type ExtensionFactory, type WorkspaceTree } from "@
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, setAgentDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -63,8 +63,7 @@ class FakeKernel implements SessionKernel {
 }
 
 const getModel = () => {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected bundled model");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	return model;
 };
 

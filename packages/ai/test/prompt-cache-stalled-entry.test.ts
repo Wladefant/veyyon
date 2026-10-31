@@ -31,9 +31,10 @@ import {
 	verifyCacheUsage,
 } from "@veyyon/ai/cache";
 import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
+import type { FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import * as logger from "@veyyon/utils/logger";
+import { createCodexTestContext } from "./helpers";
 
 /** A key that has been alive long enough to have a comparable previous turn. */
 function warmExpectation(overrides: Partial<CacheExpectation> = {}): CacheExpectation {
@@ -170,13 +171,6 @@ function codexModel(): Model<"openai-codex-responses"> {
 	};
 }
 
-function codexContext(): Context {
-	return {
-		systemPrompt: ["You are a helpful assistant."],
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
-
 /** One complete Codex SSE turn reporting the given prompt accounting. */
 function codexTurn(cachedTokens: number, uncachedTokens: number): string {
 	return `${[
@@ -203,7 +197,7 @@ async function drainCodexTurn(
 	sessionState: Map<string, ProviderSessionState>,
 	sse: string,
 ): Promise<void> {
-	const stream = streamOpenAICodexResponses(model, codexContext(), {
+	const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
 		apiKey: codexToken(),
 		providerSessionState: sessionState,
 		promptCacheKey: "session-under-test",

@@ -5,13 +5,14 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession persistence-keys cache", () => {
@@ -32,10 +33,7 @@ describe("AgentSession persistence-keys cache", () => {
 			settings: Settings.isolated(),
 		};
 		const tools = await createTools(toolSession);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("bundled model claude-sonnet-4-5 not found");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			getApiKey: () => "fake-key",
 			initialState: { model, systemPrompt: [], tools },
@@ -119,13 +117,13 @@ describe("AgentSession persistence-keys cache", () => {
 		const msg1: AssistantMessage = createAssistantMessage("Msg 1");
 		session.agent.emitExternalEvent({ type: "message_end", message: msg1 });
 		await sessionManager.flush();
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 
 		// 2. Send second message (user)
 		const msg2: AgentMessage = { role: "user", content: [{ type: "text", text: "Msg 2" }], timestamp: 1002 };
 		session.agent.emitExternalEvent({ type: "message_end", message: msg2 });
 		await sessionManager.flush();
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 
 		let entries = sessionManager.getBranch().filter(e => e.type === "message");
 		expect(entries.length).toBe(2);
@@ -137,7 +135,7 @@ describe("AgentSession persistence-keys cache", () => {
 		expect(navResult.cancelled).toBe(false);
 
 		await sessionManager.flush();
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 
 		// Confirm rewind occurred (only msg1 remains)
 		entries = sessionManager.getBranch().filter(e => e.type === "message");
@@ -148,7 +146,7 @@ describe("AgentSession persistence-keys cache", () => {
 		// If cache wasn't invalidated on rewind, it remembers msg2 and wrongly skips it.
 		session.agent.emitExternalEvent({ type: "message_end", message: msg2 });
 		await sessionManager.flush();
-		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await drainMicrotasks(5);
 
 		// Cache must be invalidated, so the re-persist succeeds.
 		entries = sessionManager.getBranch().filter(e => e.type === "message");

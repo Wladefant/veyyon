@@ -1,20 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type {
-	AgentContext,
-	AgentLoopConfig,
-	AgentMessage,
-	AgentTool,
-	SoftToolRequirement,
-} from "@veyyon/agent-core/types";
-import type { Message, ToolChoice } from "@veyyon/ai";
+import type { AgentContext, AgentLoopConfig, AgentTool, SoftToolRequirement } from "@veyyon/agent-core/types";
+import type { ToolChoice } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
+import { createUserMessage, identityConverter } from "./helpers";
 
 const emptySchema = type({});
 

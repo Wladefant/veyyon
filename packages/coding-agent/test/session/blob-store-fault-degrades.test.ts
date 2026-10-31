@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import * as blobStoreModule from "@veyyon/kernel/session/blob-store";
 import { BlobStore } from "@veyyon/kernel/session/blob-store";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -73,14 +74,7 @@ function assistant(text: string): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "stop",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 

@@ -195,13 +195,15 @@ arrives as you wrote it.
 ### When a settings file has a syntax error
 
 If you edit a config file by hand and leave it with invalid YAML, veyyon cannot
-read it. It reports the file at startup and runs the session on
-defaults for whatever that file held:
+read it. It reports the file, the line and the column at startup and runs the
+session on defaults for whatever that file held. A run without the TUI, such as
+`veyyon -p`, writes the same report to stderr.
 
 ```text
-Could not read your settings, so this session is using defaults for them:
-  ~/.veyyon/profiles/default/agent/config.yml
+Could not read your settings, so this session uses defaults for them:
+  ~/.veyyon/profiles/default/agent/config.yml: Nested mappings are not allowed in compact mappings at line 3, column 13
     original kept at ~/.veyyon/profiles/default/agent/config.yml.corrupt
+Fix: correct the file and restart veyyon. A setting changed in this session rewrites the file; the kept copy still holds your settings.
 ```
 
 Your original file is copied to `<name>.corrupt` before anything else touches it,
@@ -220,8 +222,9 @@ Quoting the value fixes it:
 statusLine: "time: %H:%M"
 ```
 
-Fix the syntax in the original file, or copy the preserved file back over it and
-edit from there.
+Fix the syntax in the original file and restart. If a setting was changed in the
+session, the file now holds that session's settings: copy the preserved file back
+over it and edit from there.
 
 ### When a setting cannot be saved
 
@@ -249,7 +252,7 @@ Configure the default model, agent policy, helper models, and compaction model s
 | --- | --- |
 | Choose the model you talk to | `--model` / `/model` (persisted as `defaultModel`) |
 | Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
-| Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
+| Customize one agent | `agent.agents.<name>` or Settings → Agents → Roster |
 | Choose the model for context compaction | `compaction.model` |
 | Choose the model a feature runs (plan, advisor, titles, …) | `agent.helpers.<id>` or Settings → Agents → Roster → Helpers |
 | Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |

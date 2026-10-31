@@ -11,6 +11,7 @@ import type {
 	SessionSnapshot,
 } from "@veyyon/coding-agent/eval/js/worker-protocol";
 import { postmortem } from "@veyyon/utils";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 interface WorkerHarness {
@@ -359,7 +360,7 @@ describe("WorkerCore", () => {
 			await initializeWorker(second, { cwd, sessionId: "first-init-live-second", localRoots: {} });
 
 			// Drain the microtask queue so any latent fatal would surface.
-			for (let i = 0; i < 8; i++) await Promise.resolve();
+			await drainMicrotasks(8);
 			expect(fatal).toEqual([]);
 		} finally {
 			uninstall();

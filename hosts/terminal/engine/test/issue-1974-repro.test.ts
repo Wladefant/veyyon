@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type NativeScrollbackLiveRegion, TUI } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
+import { plainRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/1974
@@ -90,43 +92,8 @@ class VolatileLiveRegion implements Component, NativeScrollbackLiveRegion {
 	}
 }
 
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// The engine's own "a frame is owed" signal instead of a fixed sleep; see
-	// `hosts/terminal/engine/test/helpers/settle-frames.ts` for the flakes the sleep caused.
-	await settleFrames(term, tui);
-}
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const saved: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		saved[key] = Bun.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-		} else {
-			Bun.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in saved) {
-			const value = saved[key];
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
-
 function overrideProbe(term: VirtualTerminal, answer: boolean | undefined): void {
 	(term as unknown as { isNativeViewportAtBottom: () => boolean | undefined }).isNativeViewportAtBottom = () => answer;
-}
-
-function strip(rows: string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
 }
 
 const TMUX_ENV: Record<string, string | undefined> = {
@@ -155,7 +122,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 	it("commits a streaming reply's scrolled-off head to pane history exactly once", async () => {
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 8, 10_000);
 			// Real tmux/ProcessTerminal does not implement
 			// `isNativeViewportAtBottom`, so the renderer sees `undefined`
@@ -170,7 +137,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				// Stream the reply in chunks. Each chunk grows the live block
 				// by 5 rows — small enough that no single frame double-
@@ -179,7 +146,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				for (let chunk = 5; chunk <= markers.length; chunk += 5) {
 					stream.setLines(markers.slice(0, chunk));
 					tui.requestRender();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 				}
 
 				// `getScrollBuffer()` returns pane history + the active grid
@@ -187,7 +154,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				// way up). Each MARK-NNN must appear in that combined buffer
 				// exactly once — no gaps ("missing sections") and no
 				// duplicates ("repeating chunks").
-				const scrollback = strip(term.getScrollBuffer());
+				const scrollback = plainRows(term.getScrollBuffer());
 				const buffer = scrollback.join("\n");
 				const missing: string[] = [];
 				const duplicated: string[] = [];
@@ -200,7 +167,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 				expect(duplicated).toEqual([]);
 
 				// The visible viewport still shows the live tail.
-				const viewport = strip(term.getViewport());
+				const viewport = plainRows(term.getViewport());
 				expect(viewport.some(row => row.includes("MARK-039"))).toBe(true);
 			} finally {
 				tui.stop();
@@ -212,7 +179,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 	it("never emits ED3 (CSI 3 J) inside a tmux pane during streaming", async () => {
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 8, 10_000);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);
@@ -221,13 +188,13 @@ describe("issue #1974: tmux scrollback rendering", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				const writes = capture(term);
 				for (let chunk = 5; chunk <= 40; chunk += 5) {
 					stream.setLines(Array.from({ length: chunk }, (_unused, i) => `row-${String(i).padStart(3, "0")}`));
 					tui.requestRender();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 				}
 
 				// ED3 would either be a no-op or yank a scrolled tmux reader.
@@ -248,7 +215,7 @@ describe("issue #1974: tmux scrollback rendering", () => {
 		// the visible pane.
 		if (process.platform === "win32") return;
 
-		await withEnvPatch(TMUX_ENV, async () => {
+		await withEnv(TMUX_ENV, async () => {
 			const term = new VirtualTerminal(80, 10, 10_000);
 			overrideProbe(term, undefined);
 			const tui = new TUI(term);
@@ -261,19 +228,19 @@ describe("issue #1974: tmux scrollback rendering", () => {
 
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 
 				for (let chunk = 4; chunk <= markers.length; chunk += 4) {
 					stream.setLines(markers.slice(0, chunk));
 					tui.requestRender();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 				}
 
 				// `getScrollBuffer()` returns pane history followed by the
 				// active grid (the visible viewport). For "what is in pane
 				// history alone", chop off the last `rows` entries.
-				const fullBuffer = strip(term.getScrollBuffer());
-				const viewport = strip(term.getViewport());
+				const fullBuffer = plainRows(term.getScrollBuffer());
+				const viewport = plainRows(term.getViewport());
 				const history = fullBuffer.slice(0, Math.max(0, fullBuffer.length - viewport.length));
 
 				// Chrome must NEVER enter pane history (it sits below the live
@@ -312,18 +279,18 @@ describe("issue #1974: tmux scrollback rendering", () => {
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			stream.setLines(["same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(term.getCursor()).toEqual({ row: 3, col: 4 });
 
 			stream.setLines(["same", "same", "same", "same", `same${CURSOR_MARKER}`, "same"]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
-			expect(strip(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
+			expect(plainRows(term.getViewport())).toEqual(["same", "same", "same", "same", "same"]);
 			expect(term.getCursor()).toEqual({ row: 3, col: 4 });
 		} finally {
 			tui.stop();

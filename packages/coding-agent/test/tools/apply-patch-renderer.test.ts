@@ -8,13 +8,12 @@ import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { createToolExecution } from "../helpers/tool-execution";
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await themeModule.getThemeByName("dark");
-	expect(theme).toBeDefined();
-	return theme!;
+	return requireTheme("dark");
 }
 
 async function waitForRenderedText(

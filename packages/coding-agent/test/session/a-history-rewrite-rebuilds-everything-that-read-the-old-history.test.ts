@@ -24,11 +24,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { HistoryRewrites } from "@veyyon/coding-agent/session/runtime/history-rewrites";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /** The epilogue every pass that changed an entry runs, once and in this order. */
 const EPILOGUE = [
@@ -59,14 +60,7 @@ interface Scenario {
 
 const PNG: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 class Tape {
 	readonly #manager: SessionManager;
@@ -74,8 +68,7 @@ class Tape {
 
 	constructor(manager: SessionManager) {
 		this.#manager = manager;
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected the bundled anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		this.#apiInfo = { api: model.api, provider: model.provider, model: model.id };
 	}
 

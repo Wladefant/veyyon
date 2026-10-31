@@ -340,7 +340,7 @@ export function laneDepthOf(row: AgentLaneSettings, blanketMax: number, agentNam
  * The absolute task depth at which `agentName` may still spawn.
  *
  * The agent's own lane chain answers first, because that is the screen the
- * operator edits: `deep → Agents → Enabled` is the control, and the number
+ * operator edits: `deep → Can spawn → Enabled` is the control, and the number
  * here is read off it. Only an agent with NO chain and no migrated number is
  * the blanket ceiling's answer alone.
  */
@@ -371,7 +371,7 @@ export function resolveSessionMaxNestedSpawnDepth(settings: Settings, override?:
  *
  * Only the end-to-end delegate ships enabled. The other bundled agents and
  * user-authored agents are opt-in through onboarding or Settings → Agents →
- * Agents. Creating an agent definition makes it available to enable; it does
+ * Roster. Creating an agent definition makes it available to enable; it does
  * not grant the model permission to start it on its own.
  *
  * Compared after following a retirement, so an agent still carrying the old
@@ -687,7 +687,7 @@ export type SupersededAgentRowField = (typeof SUPERSEDED_AGENT_ROW_FIELDS)[numbe
  */
 const SUPERSEDED_FIELD_REPLACEMENT: Record<SupersededAgentRowField, string> = {
 	maxNestedSpawnDepth:
-		"Open Agents → Roster → that agent → Agents and turn each level on or off; the chain is the ceiling.",
+		"Open Agents → Roster → that agent → Can spawn and turn each level on or off; the chain is the ceiling.",
 };
 
 /**
@@ -704,7 +704,7 @@ function reportSupersededAgentRowField(agentName: string, field: SupersededAgent
 	reportedSupersededAgentFields.add(key);
 	logger.warn(
 		`Settings: agent.agents.${agentName}.${field} is "${String(value)}", which no screen writes any more — ` +
-			`the nested Agents chain replaced it. ${SUPERSEDED_FIELD_REPLACEMENT[field]}`,
+			`the Can spawn chain replaced it. ${SUPERSEDED_FIELD_REPLACEMENT[field]}`,
 		{ setting: `agent.agents.${agentName}.${field}`, value },
 	);
 }
@@ -751,7 +751,7 @@ export function resetSupersededAgentRowReports(): void {
  * with no row here is reported against that mark.
  */
 export const RETIRED_AGENT_MODEL_SETTINGS: Readonly<Record<string, string>> = {
-	"agent.modelByDepth": "Agents → Roster → that agent → Agents → Model",
+	"agent.modelByDepth": "Agents → Roster → that agent → Can spawn → Model",
 };
 
 /** Retired paths reported once each, rather than once per spawn. */

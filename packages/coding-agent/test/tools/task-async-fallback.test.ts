@@ -7,6 +7,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 const taskAgent: AgentDefinition = {
@@ -34,10 +35,6 @@ function createSession(
 	});
 }
 
-function getFirstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const content = result.content.find(part => part.type === "text");
-	return content?.type === "text" ? (content.text ?? "") : "";
-}
 function makeResult(id: string): SingleResult {
 	return {
 		index: 0,
@@ -93,7 +90,7 @@ describe("task execution mode and authorization failures", () => {
 		} as TaskParams);
 
 		expect(result.isError).toBe(true);
-		expect(getFirstText(result)).toBe(
+		expect(firstToolResultText(result)).toBe(
 			"Async task execution is enabled, but no AsyncJobManager is available. Disable async execution to run synchronously, or provide an AsyncJobManager.",
 		);
 		expect(result.details).toEqual({
@@ -188,7 +185,7 @@ describe("task execution mode and authorization failures", () => {
 		} as TaskParams);
 
 		expect(result.isError).toBe(true);
-		expect(getFirstText(result)).toBe("Cannot spawn 'task'. Allowed: reviewer");
+		expect(firstToolResultText(result)).toBe("Cannot spawn 'task'. Allowed: reviewer");
 		expect(result.details).toEqual({
 			projectAgentsDir: null,
 			results: [],
@@ -219,7 +216,7 @@ describe("task execution mode and authorization failures", () => {
 		} as TaskParams);
 
 		expect(result.isError).toBe(true);
-		expect(getFirstText(result)).toBe(
+		expect(firstToolResultText(result)).toBe(
 			"Cannot spawn task agent from within itself (recursion prevention). Use a different agent type.",
 		);
 		expect(result.details).toEqual({

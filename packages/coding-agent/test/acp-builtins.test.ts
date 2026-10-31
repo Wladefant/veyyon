@@ -21,10 +21,10 @@ interface FakeAcpBuiltinSession {
 	isStreaming: boolean;
 	sessionFile: string | undefined;
 	sessionId: string;
-	sessionName: string;
+	sessionName: string | undefined;
 	_todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+	agent: { _messages: unknown[]; appendMessage(message: unknown): void };
 	_switchedTo: string | undefined;
-	_movedFromEmptySessionFile: string | undefined;
 	toggleFastMode(): boolean;
 	setFastMode(enabled: boolean): boolean;
 	isFastModeEnabled(): boolean;
@@ -39,7 +39,6 @@ interface FakeAcpBuiltinSession {
 	model: { provider: string; id: string } | undefined;
 	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	switchSession(sessionPath: string): Promise<boolean>;
-	markMovedFromEmptySessionFile(sessionFile: string): void;
 	fork(): Promise<boolean>;
 	handoff(instr?: string): Promise<{ document: string; savedPath?: string } | undefined>;
 	exportToHtml(outputPath?: string): Promise<string>;
@@ -62,6 +61,7 @@ interface FakeAcpBuiltinSessionManager {
 	_cwd: string;
 	_entries: { type: string }[];
 	_customEntries: Array<{ customType: string; data: unknown }>;
+	_messages: unknown[];
 	_movedTo: string | undefined;
 	_flushed: boolean;
 	_droppedSessions: string[];
@@ -71,12 +71,14 @@ interface FakeAcpBuiltinSessionManager {
 	getEntries(): { type: string }[];
 	getBranch(): { type: string }[];
 	appendCustomEntry(customType: string, data?: unknown): string;
+	appendMessage(message: unknown): string;
 	flush(): Promise<void>;
 	moveTo(newCwd: string): Promise<void>;
 	setSessionFile(sessionFile: string): Promise<void>;
 	dropSession(sessionPath: string): Promise<void>;
 	getCwd(): string;
 	setSessionName(name: string, source: string): Promise<boolean>;
+	getSessionName(): string | undefined;
 }
 
 function createRuntime() {
@@ -91,8 +93,13 @@ function createRuntime() {
 		sessionId: "fake-session-id",
 		sessionName: "Fake Session",
 		_todoPhases: [],
+		agent: {
+			_messages: [],
+			appendMessage(message: unknown) {
+				this._messages.push(message);
+			},
+		},
 		_switchedTo: undefined,
-		_movedFromEmptySessionFile: undefined,
 		toggleFastMode() {
 			this.fastMode = !this.fastMode;
 			return this.fastMode;
@@ -123,9 +130,6 @@ function createRuntime() {
 			await fakeSessionManager.flush();
 			await fakeSessionManager.setSessionFile(this._switchedTo);
 			return true;
-		},
-		markMovedFromEmptySessionFile(sessionFile: string) {
-			this._movedFromEmptySessionFile = path.resolve(sessionFile);
 		},
 		async fork() {
 			return true;
@@ -167,6 +171,7 @@ function createRuntime() {
 		_cwd: "/tmp/project",
 		_entries: [] as { type: string }[],
 		_customEntries: [] as Array<{ customType: string; data: unknown }>,
+		_messages: [] as unknown[],
 		_movedTo: undefined as string | undefined,
 		_flushed: false,
 		_droppedSessions: [] as string[],
@@ -186,6 +191,10 @@ function createRuntime() {
 		appendCustomEntry(customType: string, data?: unknown): string {
 			this._customEntries.push({ customType, data });
 			return "fake-entry-id";
+		},
+		appendMessage(message: unknown): string {
+			this._messages.push(message);
+			return "fake-message-id";
 		},
 		async flush() {
 			this._flushed = true;
@@ -213,6 +222,9 @@ function createRuntime() {
 		async setSessionName(name: string, _source: string): Promise<boolean> {
 			this._sessionName = name;
 			return true;
+		},
+		getSessionName(): string | undefined {
+			return this._sessionName;
 		},
 	};
 	return {
@@ -249,6 +261,16 @@ describe("ACP builtin slash commands", () => {
 		const { output, runtime } = createRuntime();
 
 		const result = await executeAcpBuiltinSlashCommand("/force read inspect package.json", runtime);
+
+		expect(result).toEqual({ prompt: "inspect package.json" });
+		expect(runtime.session.forcedToolChoice).toBe("read");
+		expect(output).toEqual(["Next turn forced to use read."]);
+	});
+
+	it("forces a tool when a tab separates its name from the prompt", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/force read\tinspect package.json", runtime);
 
 		expect(result).toEqual({ prompt: "inspect package.json" });
 		expect(runtime.session.forcedToolChoice).toBe("read");
@@ -565,6 +587,19 @@ describe("ACP builtin slash commands", () => {
 });
 
 describe("session lifecycle commands", () => {
+	it("/session info: a named session prints its title", async () => {
+		const { output, runtime } = createRuntime();
+		await executeAcpBuiltinSlashCommand("/session info", runtime);
+		expect(output).toEqual(["Session: fake-session-id\nTitle: Fake Session\nCWD: /tmp/project"]);
+	});
+
+	it("/session info: a session with no title yet says it is untitled", async () => {
+		const { output, session, runtime } = createRuntime();
+		session.sessionName = undefined;
+		await executeAcpBuiltinSlashCommand("/session info", runtime);
+		expect(output).toEqual(["Session: fake-session-id\nTitle: (untitled)\nCWD: /tmp/project"]);
+	});
+
 	it("/session delete: returns in-memory usage when no sessionFile", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
@@ -594,16 +629,18 @@ describe("session lifecycle commands", () => {
 		expect(notified).toBe(true);
 	});
 
-	it("/rename: outputs precedence message when setSessionName returns false", async () => {
+	it("/rename: a title with nothing left once cleaned prints the terminal's message and renames nothing", async () => {
 		const { output, fakeSessionManager, runtime } = createRuntime();
 		let notified = false;
 		runtime.notifyTitleChanged = async () => {
 			notified = true;
 		};
+		// A user-sourced rename always replaces the title, so `false` means the cleaned title was empty.
 		fakeSessionManager.setSessionName = async () => false;
 		const result = await executeAcpBuiltinSlashCommand("/rename Bar", runtime);
 		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("takes precedence");
+		expect(output).toEqual(["Session name cannot be empty."]);
+		expect(fakeSessionManager._sessionName).toBeUndefined();
 		expect(notified).toBe(false);
 	});
 
@@ -661,6 +698,43 @@ describe("wave 3 commands", () => {
 		expect(fakeSessionManager._customEntries[0]?.customType).toBe("user_todo_edit");
 	});
 
+	it("/todo rm <phase>: tells the agent and the session file not to re-add what was removed", async () => {
+		const { session, fakeSessionManager, runtime } = createRuntime();
+		session._todoPhases = [
+			{ name: "Foundation", tasks: [{ content: "Scaffold crate", status: "completed" }] },
+			{ name: "Auth", tasks: [{ content: "Port credential store", status: "pending" }] },
+		];
+
+		await executeAcpBuiltinSlashCommand("/todo rm Auth", runtime);
+
+		expect(session._todoPhases.flatMap(phase => phase.tasks.map(task => task.content))).toEqual(["Scaffold crate"]);
+		const [reminder] = session.agent._messages as Array<{ role: string; content: Array<{ text: string }> }>;
+		expect(reminder?.role).toBe("developer");
+		expect(reminder?.content[0]?.text).toMatch(/Do NOT re-add them/);
+		expect(reminder?.content[0]?.text).toContain("# Foundation");
+		expect(fakeSessionManager._messages).toEqual(session.agent._messages);
+	});
+
+	it("/todo done: a quoted task is matched without its quotes", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Setup", tasks: [{ content: "Wire up router", status: "pending" }] }];
+
+		await executeAcpBuiltinSlashCommand('/todo done "wire up"', runtime);
+
+		expect(output[0]).toBe("Marked completed: Wire up router");
+		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("completed");
+	});
+
+	it("/todo start: a task whose text holds quotes is matched as typed", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Setup", tasks: [{ content: 'Rename "foo" to bar', status: "pending" }] }];
+
+		await executeAcpBuiltinSlashCommand('/todo start Rename "foo"', runtime);
+
+		expect(output[0]).toBe('Started: Rename "foo" to bar');
+		expect(session._todoPhases[0]?.tasks[0]?.status).toBe("in_progress");
+	});
+
 	it("/todo export: writes the default file under the active session cwd", async () => {
 		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-"));
 		try {
@@ -672,6 +746,22 @@ describe("wave 3 commands", () => {
 
 			const target = path.join(tempRoot, "TODO.md");
 			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Wrote todos to ${target}`);
+			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
+		} finally {
+			await removeWithRetries(tempRoot);
+		}
+	});
+
+	it("/todo export: creates the directories a missing path needs", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-nested-"));
+		try {
+			const { output, session, runtime } = createRuntime();
+			session._todoPhases = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+			const target = path.join(tempRoot, "plans", "next", "TODO.md");
+
+			await executeAcpBuiltinSlashCommand(`/todo export ${target}`, runtime);
+
 			expect(output[0]).toBe(`Wrote todos to ${target}`);
 			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
 		} finally {
@@ -845,10 +935,6 @@ describe("wave 3 commands", () => {
 		const { output, runtime, session, fakeSessionManager } = createRuntime();
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));
 		const moveToCwd = spyOn(session, "moveToCwd");
-		let configNotified = 0;
-		runtime.notifyConfigChanged = () => {
-			configNotified++;
-		};
 
 		try {
 			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
@@ -857,14 +943,35 @@ describe("wave 3 commands", () => {
 			expect(fakeSessionManager._movedTo).toBe(targetDir);
 			expect(fakeSessionManager.getCwd()).toBe(targetDir);
 			expect(session._switchedTo).toBeUndefined();
-			expect(session._movedFromEmptySessionFile).toBeUndefined();
 			expect(moveToCwd).toHaveBeenCalledTimes(1);
 			expect(moveToCwd).toHaveBeenCalledWith(targetDir);
-			expect(configNotified).toBe(1);
 			expect(output[0]).toContain(`Moved to ${targetDir}.`);
 		} finally {
 			await fs.rm(targetDir, { recursive: true, force: true });
 		}
+	});
+
+	it("/move: strips outer double quotes from the path, as the terminal does", async () => {
+		const { output, runtime, fakeSessionManager } = createRuntime();
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-quoted-"));
+
+		try {
+			const result = await executeAcpBuiltinSlashCommand(`/move "${targetDir}"`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(fakeSessionManager.getCwd()).toBe(targetDir);
+			expect(output).toEqual([`Moved to ${targetDir}.`]);
+		} finally {
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("/move: a quoted empty path prints usage", async () => {
+		const { output, runtime, fakeSessionManager } = createRuntime();
+		const result = await executeAcpBuiltinSlashCommand('/move ""', runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["Usage: /move <path>"]);
+		expect(fakeSessionManager._movedTo).toBeUndefined();
 	});
 
 	it("/move: reports a failed transaction and keeps the original cwd", async () => {

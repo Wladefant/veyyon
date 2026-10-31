@@ -46,12 +46,13 @@ import type {
 import { AskDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/ask-dialog";
 import type { ExtensionUiControllerContext } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
 import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
 import { AskTool, type AskToolInput } from "@veyyon/coding-agent/tools/agent/ask";
 import type { Component, OverlayHandle } from "@veyyon/tui";
 import { isRecord } from "@veyyon/utils";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** The shape that killed the session: everything but the text that gets rendered. */
@@ -220,8 +221,7 @@ describe("an unrenderable ask question is refused by every caller", () => {
 	};
 
 	beforeAll(async () => {
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("Failed to load dark theme");
+		const dark = await requireTheme("dark");
 		setThemeInstance(dark);
 	});
 

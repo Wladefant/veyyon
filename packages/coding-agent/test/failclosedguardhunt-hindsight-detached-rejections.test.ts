@@ -30,34 +30,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { HindsightSessionState } from "@veyyon/coding-agent/memory/hindsight/state";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import { logger } from "@veyyon/utils";
-
-/** One captured `logger.warn` call. */
-interface WarnEntry {
-	message: string;
-	fields?: Record<string, unknown>;
-}
-
-/** A live `logger.warn` capture plus its restore hook. */
-interface WarnCapture {
-	entries: WarnEntry[];
-	restore: () => void;
-}
-
-/**
- * Capture `logger.warn` so containment is asserted rather than assumed.
- *
- * Swallowing the rejection silently would also stop the crash, and would be the
- * wrong fix: an operator whose memory backend is broken has to be able to find
- * out. The warning is the loud half of the degradation.
- */
-function captureWarnings(): WarnCapture {
-	const entries: WarnEntry[] = [];
-	const spy = vi.spyOn(logger, "warn").mockImplementation(((message: string, fields?: Record<string, unknown>) => {
-		entries.push({ message, fields });
-	}) as unknown as typeof logger.warn);
-	return { entries, restore: () => spy.mockRestore() };
-}
+import { captureWarnings, type WarnCapture } from "./helpers/capture-warnings";
 
 /** Yield the event loop `turns` times so a floated rejection is observable, without a wall-clock delay. */
 async function drainEventLoop(turns = 4): Promise<void> {
@@ -131,6 +104,12 @@ function harness(options: { mentalModelsList?: () => Promise<unknown>; config?: 
 const AGENT_START: AgentSessionEvent = { type: "agent_start" } as AgentSessionEvent;
 const AGENT_END: AgentSessionEvent = { type: "agent_end", messages: [] } as unknown as AgentSessionEvent;
 
+/**
+ * `logger.warn` is captured so containment is asserted rather than assumed. Swallowing the
+ * rejection silently would also stop the crash, and would be the wrong fix: an operator whose
+ * memory backend is broken has to be able to find out. The warning is the loud half of the
+ * degradation.
+ */
 let warnings: WarnCapture | undefined;
 
 afterEach(() => {

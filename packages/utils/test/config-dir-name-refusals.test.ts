@@ -31,7 +31,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getConfigDirName, getConfigRootOverride, refreshDirsFromEnv } from "@veyyon/utils/dirs";
+import { getConfigDirName, getConfigRootOverride } from "@veyyon/utils/config-root";
+import { refreshDirsFromEnv } from "@veyyon/utils/dirs";
 
 const KEY = "VEYYON_CONFIG_DIR";
 
@@ -179,7 +180,7 @@ describe("the refusal on the module-load path", () => {
 	const repoRoot = path.resolve(import.meta.dir, "../../..");
 
 	/**
-	 * `getBaseConfigRoot` runs while `dirs.ts` is being imported, so a bad value must fail at
+	 * `getGlobalConfigRootDir` runs while `dirs.ts` is being imported, so a bad value must fail at
 	 * STARTUP with the explanation rather than reaching the first write. That ordering cannot
 	 * be observed from a process that has already imported the module successfully, so this
 	 * spawns a real one.

@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import {
 	classifyUnexpectedStop,
 	isUnexpectedStopCandidate,
 	parseUnexpectedStopClassification,
 } from "@veyyon/coding-agent/session/unexpected-stop-classifier";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function makeAssistantMessage(options: {
 	stopReason: AssistantMessage["stopReason"];
@@ -80,8 +80,7 @@ describe("isUnexpectedStopCandidate", () => {
 
 describe("classifyUnexpectedStop", () => {
 	it("uses a reasoning-safe online classifier budget when the catalog disables reasoning", async () => {
-		const baseModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!baseModel) throw new Error("Expected bundled Claude Sonnet 4.5 model");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false };
 		const settings = {
 			get(path: string) {

@@ -3,17 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createSessionTeardown } from "@veyyon/coding-agent/modes/terminal/session-teardown";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { isEnoent, TempDir } from "@veyyon/utils";
-
-async function fileExists(p: string): Promise<boolean> {
-	try {
-		await Bun.file(p).stat();
-		return true;
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		throw err;
-	}
-}
+import { pathExistsOrThrow, TempDir } from "@veyyon/utils";
 
 /** Every regular file under `dir`, recursively. */
 async function filesUnder(dir: string): Promise<string[]> {
@@ -51,13 +41,13 @@ describe("SessionManager draft", () => {
 		const artifactsDir = session.getArtifactsDir();
 		expect(artifactsDir).not.toBeNull();
 		const draftPath = path.join(artifactsDir!, "draft.txt");
-		expect(await fileExists(draftPath)).toBe(true);
+		expect(await pathExistsOrThrow(draftPath)).toBe(true);
 
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
 		await session.dropSession(sessionFile);
 
-		expect(await fileExists(draftPath)).toBe(false);
+		expect(await pathExistsOrThrow(draftPath)).toBe(false);
 	});
 
 	it("removes any stale draft when saving an empty string", async () => {
@@ -83,7 +73,7 @@ describe("SessionManager draft", () => {
 
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	it("is a no-op for in-memory sessions", async () => {
@@ -119,7 +109,7 @@ describe("SessionManager draft", () => {
 		const artifactsDir = session.getArtifactsDir();
 		if (!artifactsDir) throw new Error("Expected artifacts dir");
 		const draftPath = path.join(artifactsDir, "draft.txt");
-		expect(await fileExists(draftPath)).toBe(true);
+		expect(await pathExistsOrThrow(draftPath)).toBe(true);
 
 		const secret = "sk-live-SECRET123";
 		const teardown = createSessionTeardown({
@@ -134,7 +124,7 @@ describe("SessionManager draft", () => {
 		// The sensitive line is not restorable, and the earlier draft was cleared
 		// rather than left stale.
 		expect(await session.consumeDraft()).toBeNull();
-		expect(await fileExists(draftPath)).toBe(false);
+		expect(await pathExistsOrThrow(draftPath)).toBe(false);
 
 		// And the bytes are in no file the session owns, not merely absent from the
 		// sidecar path this test happens to know about.

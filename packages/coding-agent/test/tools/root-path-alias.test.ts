@@ -2,29 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { resolveToCwd } from "@veyyon/coding-agent/tools/core/path-utils";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 describe("tool path root alias", () => {
 	let tempDir: string;
@@ -64,7 +47,7 @@ describe("tool path root alias", () => {
 	});
 
 	it("searches from cwd when path is slash", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -79,12 +62,12 @@ describe("tool path root alias", () => {
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
 
-		expect(getText(result)).toContain("search.txt");
+		expect(toolResultText(result)).toContain("search.txt");
 		expect(details?.scopePath).toBe(".");
 	});
 
 	it("reads cwd when path is slash", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "read");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing read tool");
@@ -92,13 +75,13 @@ describe("tool path root alias", () => {
 		const result = await tool.execute("read-root-alias", {
 			path: "/",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("search.txt");
 		expect(text).toContain("sample.ts");
 	});
 
 	it("finds from cwd when pattern is slash", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing find tool");
@@ -111,7 +94,7 @@ describe("tool path root alias", () => {
 			result.details && typeof result.details === "object" && "result" in result.details
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(details?.scopePath).toBe(".");
 		expect(text).toContain("search.txt");
@@ -119,7 +102,7 @@ describe("tool path root alias", () => {
 	});
 
 	it("structure search searches cwd when path is slash", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		expect(tool).toBeDefined();
 		if (!tool) throw new Error("Missing search tool");
@@ -134,14 +117,14 @@ describe("tool path root alias", () => {
 				? (result.details as { result?: { scopePath?: string } }).result
 				: undefined;
 
-		expect(getText(result)).toContain("sample.ts");
+		expect(toolResultText(result)).toContain("sample.ts");
 		expect(details?.scopePath).toBe(".");
 	});
 
 	it("ast_edit rewrites within cwd when path is slash", async () => {
 		const queue = new ToolChoiceQueue();
 		const tools = await createTools(
-			createTestSession(tempDir, {
+			makeToolSessionAt(tempDir, {
 				getToolChoiceQueue: () => queue,
 				buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
 				steer: () => {},
@@ -157,7 +140,7 @@ describe("tool path root alias", () => {
 		});
 		const details = preview.details as { scopePath?: string; totalReplacements?: number } | undefined;
 
-		expect(getText(preview)).toContain("sample.ts");
+		expect(toolResultText(preview)).toContain("sample.ts");
 		expect(details?.scopePath).toBe(".");
 		expect(details?.totalReplacements).toBe(1);
 

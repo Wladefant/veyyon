@@ -235,10 +235,12 @@ describe("a launched process that ends reports its exit", () => {
 		const stopped = await tool.execute("call-2", { op: "stop", name: "service", timeout: 5 });
 		expect(textOf(stopped)).toContain("Stopped service");
 
-		// The watch is gone the moment the stop is requested, and staying quiet is
-		// the claim: give the delivery loop room to prove it has nothing to send.
+		// The watch is gone the moment the stop is requested, and staying quiet is the claim. Every
+		// job settling and every queued delivery draining is the point where a watch that heard the
+		// exit would have reported it, so the silence is read there rather than after a guessed wait.
 		expect(manager.getRunningJobs()).toHaveLength(0);
-		expect(await until(() => delivered.length > 0, 2_000)).toBeFalse();
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 5_000 })).toBeTrue();
 		expect(delivered).toEqual([]);
 	}, 30_000);
 

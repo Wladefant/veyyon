@@ -44,10 +44,9 @@ export class McpSmitheryCommands {
 		private readonly addServer: (name: string, config: MCPServerConfig) => Promise<void>,
 	) {}
 
-	/** `/mcp smithery-search <keyword>`: search the registry, pick a result, and add it. */
-	async search(text: string): Promise<void> {
-		const match = text.match(/^\/mcp\s+smithery-search\b\s*(.*)$/i);
-		const parsed = parseMcpSearchArgs(match?.[1]?.trim() ?? "", "terminal");
+	/** `/mcp smithery-search <keyword>`: search the registry, pick a result, and add it. `args` follows the verb. */
+	async search(args: string): Promise<void> {
+		const parsed = parseMcpSearchArgs(args, "terminal");
 		if (parsed.error) {
 			this.ctx.showError(parsed.error);
 			return;

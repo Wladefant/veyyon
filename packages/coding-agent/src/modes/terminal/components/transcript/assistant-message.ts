@@ -1,4 +1,3 @@
-import type { ImageContent } from "@veyyon/model";
 import {
 	type Component,
 	Container,
@@ -14,6 +13,7 @@ import {
 } from "@veyyon/tui";
 import { formatCount, formatNumber } from "@veyyon/utils";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import type { ImageContent } from "@veyyon/wire";
 import type { AssistantErrorPresentation, AssistantMessageView, AssistantSegment } from "@veyyon/wire/presentation";
 import chalk from "chalk";
 import type { AssistantThinkingRenderer } from "../../../../extensibility/extensions/types";

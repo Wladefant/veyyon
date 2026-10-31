@@ -15,6 +15,11 @@
 ### Fixed
 
 - Included generated assistant images in the wire content contract.
+### Added
+
+- `@veyyon/wire/relay-client` exports `RelayClient`, the collab relay client (send ordering, send backpressure, reconnect, fatal close codes) that the CLI host, the CLI guest and the browser guest bind with their own frame types, backoff schedule and log sink.
+
+## [1.5.6] - 2026-10-13
 
 ### Changed
 

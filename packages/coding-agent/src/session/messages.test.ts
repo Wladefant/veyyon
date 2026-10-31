@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	type CustomMessage,
 	convertToLlm,
@@ -23,15 +24,6 @@ function customMessage(customType: string, attribution: "agent" | "user"): Custo
 	};
 }
 
-const interruptedUsage: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function abortedAssistant(content: AssistantMessage["content"]): AssistantMessage {
 	return {
 		role: "assistant",
@@ -39,7 +31,7 @@ function abortedAssistant(content: AssistantMessage["content"]): AssistantMessag
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: interruptedUsage,
+		usage: emptyUsage(),
 		stopReason: "aborted",
 		timestamp: 1,
 	};

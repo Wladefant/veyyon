@@ -13,6 +13,7 @@
  * than restated.
  */
 import { describe, expect, it } from "bun:test";
+import { KernelExecutionCancelledError } from "@veyyon/coding-agent/eval/executor-base";
 import { executePythonWithKernel } from "@veyyon/coding-agent/eval/py/executor";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 import { resolveOutputSinkHeadBytes } from "@veyyon/coding-agent/tools/core/output-meta";
@@ -132,6 +133,38 @@ describe("executePythonWithKernel timeout annotation", () => {
 		const result = await executePythonWithKernel(kernel, "print('done')", { timeoutMs: 5_000 });
 
 		expect(result.output).toBe("done\n");
+	});
+});
+
+describe("executePythonWithKernel when the kernel throws a cancellation", () => {
+	/** A kernel that gives up by throwing, rather than returning a cancelled result, still
+	 *  produces a cancelled cell that keeps the output streamed before the throw and says
+	 *  the budget ran out. Otherwise a timed-out cell reads as a cell that printed and stopped. */
+	it("keeps the streamed output and names the budget when the cancellation was a timeout", async () => {
+		const kernel = new FakeKernel(OK, options => {
+			options?.onChunk?.("partial\n");
+			throw new KernelExecutionCancelledError(true);
+		});
+
+		const result = await executePythonWithKernel(kernel, "sleep(10)", { timeoutMs: 5_000 });
+
+		expect(result.cancelled).toBe(true);
+		expect(result.exitCode).toBeUndefined();
+		expect(result.output).toContain("partial");
+		expect(result.output).toContain("Command timed out after 5 seconds");
+	});
+
+	/** The counterweight: a cancellation that was not a timeout carries no timeout sentence. */
+	it("adds no timeout sentence when the cancellation was not a timeout", async () => {
+		const kernel = new FakeKernel(OK, options => {
+			options?.onChunk?.("partial\n");
+			throw new KernelExecutionCancelledError(false);
+		});
+
+		const result = await executePythonWithKernel(kernel, "sleep(10)", { timeoutMs: 5_000 });
+
+		expect(result.cancelled).toBe(true);
+		expect(result.output).toBe("partial\n");
 	});
 });
 

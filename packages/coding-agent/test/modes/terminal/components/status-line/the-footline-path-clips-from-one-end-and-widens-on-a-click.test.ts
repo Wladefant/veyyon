@@ -85,10 +85,11 @@ import {
 	fitLocation,
 	MIN_LOCATION_PART,
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { stripAnsi } from "@veyyon/utils";
 import { MOTION, MotionClock } from "@veyyon/utils/motion";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../../../../helpers/require-theme";
 import { makeStatusLineProducer } from "../../../../helpers/status-line-session";
 import { useTrackedTempDirs } from "../../../../helpers/tracked-temp-dir";
 
@@ -164,8 +165,7 @@ function renderedIds(bounds: readonly QuietSegmentBounds[]): Set<string> {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 
 	wideCwd = path.join(makeTempDir(), "platform-services", "ingest-pipeline", "normalizer");

@@ -19,13 +19,14 @@
  * numbers copied out of a layout that will move.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { sgrPress } from "../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const WIDTH = 120;
 
 let geometry: StubbedStdoutGeometry;
@@ -56,11 +57,6 @@ function registerSub(id: string, type: string): void {
 	});
 }
 
-/** An SGR left button press at a 0-based screen cell (the reports are 1-based). */
-function leftClick(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
 /** An SGR wheel report: button 64 is wheel-up, 65 is wheel-down. */
 function wheel(direction: "up" | "down", row = 10, col = 20): string {
 	return `\x1b[<${direction === "up" ? 64 : 65};${col + 1};${row + 1}M`;
@@ -68,7 +64,7 @@ function wheel(direction: "up" | "down", row = 10, col = 20): string {
 
 /** The 0-based screen row of the rendered line containing `needle`. */
 function rowOf(dashboard: AgentDashboard, needle: string): number {
-	const index = dashboard.render(WIDTH).findIndex(line => line.replace(ANSI_PATTERN, "").includes(needle));
+	const index = dashboard.render(WIDTH).findIndex(line => stripVTControlCharacters(line).includes(needle));
 	if (index < 0) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return index;
 }
@@ -77,7 +73,7 @@ function rowOf(dashboard: AgentDashboard, needle: string): number {
 function colOf(dashboard: AgentDashboard, needle: string): number {
 	const line = dashboard
 		.render(WIDTH)
-		.map(raw => raw.replace(ANSI_PATTERN, ""))
+		.map(raw => stripVTControlCharacters(raw))
 		.find(text => text.includes(needle));
 	if (!line) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return line.indexOf(needle);
@@ -98,7 +94,7 @@ describe("Clicking a roster row", () => {
 			},
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "scout"), 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "scout"), 20));
 		await focused.promise;
 
 		expect(opened).toEqual(["1-Sub"]);
@@ -111,11 +107,11 @@ describe("Clicking a roster row", () => {
 		registerSub("1-Sub", "scout");
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "scout"), 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "scout"), 20));
 
 		const cursorRow = dashboard
 			.render(WIDTH)
-			.map(line => line.replace(ANSI_PATTERN, ""))
+			.map(line => stripVTControlCharacters(line))
 			.find(line => line.includes(theme.nav.cursor));
 		expect(cursorRow).toContain("scout");
 		dashboard.dispose();
@@ -134,7 +130,7 @@ describe("Clicking a roster row", () => {
 			focusAgent: async id => void opened.push(id),
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "reviewer") + 5, 20));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "reviewer") + 5, 20));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -149,7 +145,7 @@ describe("Clicking a roster row", () => {
 			focusAgent: async id => void opened.push(id),
 		});
 
-		dashboard.handleInput(leftClick(rowOf(dashboard, "Agent Dashboard"), 30));
+		dashboard.handleInput(sgrPress(rowOf(dashboard, "Agent Dashboard"), 30));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -166,7 +162,7 @@ describe("Clicking a roster row", () => {
 		const rosterRow = rowOf(dashboard, "reviewer");
 
 		dashboard.handleInput("\x1b[C"); // right arrow: Live -> Comms
-		dashboard.handleInput(leftClick(rosterRow, 20));
+		dashboard.handleInput(sgrPress(rosterRow, 20));
 
 		expect(opened).toEqual([]);
 		dashboard.dispose();
@@ -180,9 +176,9 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, colOf(dashboard, "Comms (0)")));
+		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Comms (0)")));
 
-		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("No agent traffic yet.");
+		expect(stripVTControlCharacters(dashboard.render(WIDTH).join("\n"))).toContain("No agent traffic yet.");
 		dashboard.dispose();
 	});
 
@@ -192,9 +188,9 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, colOf(dashboard, "Live (1)")));
+		dashboard.handleInput(sgrPress(stripRow, colOf(dashboard, "Live (1)")));
 
-		const shown = dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "");
+		const shown = stripVTControlCharacters(dashboard.render(WIDTH).join("\n"));
 		expect(shown).toContain("reviewer");
 		expect(shown).not.toContain("No agent traffic yet.");
 		dashboard.dispose();
@@ -206,9 +202,9 @@ describe("Clicking a view tab", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 		const stripRow = rowOf(dashboard, "Live (1)");
 
-		dashboard.handleInput(leftClick(stripRow, WIDTH - 12));
+		dashboard.handleInput(sgrPress(stripRow, WIDTH - 12));
 
-		expect(dashboard.render(WIDTH).join("\n").replace(ANSI_PATTERN, "")).toContain("reviewer");
+		expect(stripVTControlCharacters(dashboard.render(WIDTH).join("\n"))).toContain("reviewer");
 		dashboard.dispose();
 	});
 });
@@ -224,7 +220,7 @@ describe("Chrome clicks still belong to the shell", () => {
 		};
 		dashboard.render(WIDTH);
 
-		dashboard.handleInput(leftClick(0, 0));
+		dashboard.handleInput(sgrPress(0, 0));
 
 		expect(closed).toBe(1);
 		dashboard.dispose();
@@ -246,7 +242,7 @@ describe("The scroll wheel", () => {
 		const cursorRow = () =>
 			dashboard
 				.render(WIDTH)
-				.map(line => line.replace(ANSI_PATTERN, ""))
+				.map(line => stripVTControlCharacters(line))
 				.find(line => line.includes(theme.nav.cursor));
 
 		dashboard.handleInput(wheel("down"));

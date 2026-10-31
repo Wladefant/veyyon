@@ -19,7 +19,7 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { getConfigRootDir, logger } from "@veyyon/utils";
+import { getConfigRootDir, logger, toError } from "@veyyon/utils";
 import { SNAPSHOT_PROGRESS_TIMEOUT_MS, TRANSCRIPT_TIMEOUT_MS, WELCOME_TIMEOUT_MS } from "@veyyon/wire";
 import type {
 	AgentTranscriptRemote,
@@ -307,7 +307,7 @@ export class CollabGuestLink {
 				.catch(err => {
 					logger.warn("collab guest frame apply failed", { type: frame.t, error: String(err) });
 					if (!joined && (frame.t === "welcome" || frame.t === "snapshot-chunk")) {
-						firstWelcome.reject(err instanceof Error ? err : new Error(String(err)));
+						firstWelcome.reject(toError(err));
 					}
 				});
 		};

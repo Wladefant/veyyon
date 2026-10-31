@@ -1,9 +1,10 @@
-import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
+import { type HistoryEntry, type HistoryStorage, historyQueryTokens } from "@veyyon/kernel/session/history-storage";
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { collapseWhitespace, NON_ALNUM_RUN_RE } from "@veyyon/utils";
+import { collapseWhitespace } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
+import { clamp } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -16,10 +17,11 @@ import {
 	matchesSelectPageUp,
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	CARD_BODY_COL_INSET,
 	type ModalShellGeometry,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
@@ -29,14 +31,6 @@ import { centeredWindow, hoverBandAt, renderScrollableList, selectionBand } from
 
 /** Visible result rows; also the jump distance for PageUp/PageDown. */
 const MAX_VISIBLE = 10;
-
-/** Split a query the same way `HistoryStorage` tokenizes it, so highlights align with matches. */
-function queryTokens(query: string): string[] {
-	return query
-		.toLowerCase()
-		.split(NON_ALNUM_RUN_RE)
-		.filter(tok => tok.length > 0);
-}
 
 /** Wrap every case-insensitive occurrence of any token in `text` with the accent color. */
 function highlightTokens(text: string, tokens: string[]): string {
@@ -105,6 +99,16 @@ class HistoryResultsList implements Component {
 		this.#selectedIndex = selectedIndex;
 	}
 
+	/** Rows the list fills on a card with room: every result up to {@link MAX_VISIBLE}, or the one empty-state row. */
+	preferredRows(): number {
+		return clamp(this.#results.length, 1, MAX_VISIBLE);
+	}
+
+	/** Show at most `rows` results, so a card shorter than the list shows the rows around the cursor. */
+	setRowBudget(rows: number): void {
+		this.#maxVisible = clamp(Math.floor(rows), 1, MAX_VISIBLE);
+	}
+
 	/** Resolve a rendered line (0-based within this list) to a result index. */
 	hitTest(line: number): number | undefined {
 		return this.#hitRows[line];
@@ -112,9 +116,7 @@ class HistoryResultsList implements Component {
 
 	/** Highlight the row under the pointer (null clears). Returns true on change. */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hover.key === index) return false;
-		this.#hover.set(index);
-		return true;
+		return this.#hover.set(index);
 	}
 
 	/**
@@ -366,30 +368,29 @@ export class HistorySearchComponent implements Component {
 			? this.#historyStorage.search(query, this.#resultLimit)
 			: this.#historyStorage.getRecent(this.#resultLimit);
 		this.#selectedIndex = 0;
-		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? queryTokens(query) : []);
+		this.#resultsList.setResults(this.#results, this.#selectedIndex, query ? historyQueryTokens(query) : []);
 	}
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const searchLine = this.#searchInput.render(dims.contentWidth)[0] ?? "";
-		const body = [...this.#resultsList.render(dims.contentWidth)];
-
-		const shell = renderModalShell({
-			title: "Search History",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body,
-			searchLine,
+		// A short card sheds its padding before the list shows fewer results.
+		const chrome = planModalChrome(dims, {
 			shortcuts: SELECT_LIST_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			searchLine,
+			minBodyRows: this.#resultsList.preferredRows(),
+		});
+		this.#resultsList.setRowBudget(chrome.maxBodyRows);
+		const shell = renderModalShell(chrome, {
+			title: "Search History",
+			body: this.#resultsList.render(dims.contentWidth),
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

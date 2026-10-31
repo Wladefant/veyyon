@@ -24,6 +24,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool, OPEN_SNAPSHOT_MAX_CHARS } from "@veyyon/coding-agent/tools/web/browser";
 import { browserToolView } from "@veyyon/coding-agent/tools/web/browser/view";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 const SMALL = `<!doctype html><title>Sign in</title><h1>Sign in to continue</h1>
@@ -38,10 +39,6 @@ let server: http.Server;
 let base = "";
 let tool: BrowserTool;
 const TAB = `snapshot-${process.pid}`;
-
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
 
 beforeAll(async () => {
 	server = http.createServer((request, response) => {
@@ -73,7 +70,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an open that loads a page", () => {
 	it("carries a small page's snapshot, whose refs the next run acts on without reading the page again", async () => {
 		const args = { action: "open" as const, name: TAB, url: `${base}/small` };
 		const result = await tool.execute("open", args);
-		const opened = text(result);
+		const opened = toolResultText(result);
 		const page = opened.slice(opened.indexOf("Page:\n") + "Page:\n".length);
 		expect(opened).toContain("Page:\n");
 		expect(page.length).toBeLessThanOrEqual(OPEN_SNAPSHOT_MAX_CHARS);
@@ -91,17 +88,17 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an open that loads a page", () => {
 			name: TAB,
 			code: `await tab.fill("aria-ref=${ref}", "sam"); return await tab.evaluate(() => document.getElementById("user").value);`,
 		});
-		expect(text(filled)).toBe("sam");
+		expect(toolResultText(filled)).toBe("sam");
 	}, 60_000);
 
 	it("states a large page's size instead of sending it, and a tab reused without a url carries nothing", async () => {
-		const opened = text(await tool.execute("open", { action: "open", name: TAB, url: `${base}/large` }));
+		const opened = toolResultText(await tool.execute("open", { action: "open", name: TAB, url: `${base}/large` }));
 		const size = Number(opened.match(/Page snapshot not sent: (\d+) chars\./)?.[1]);
 		expect(size).toBeGreaterThan(OPEN_SNAPSHOT_MAX_CHARS);
 		expect(opened).toContain("Read what you need with tab.observe() or tab.ariaSnapshot(selector).");
 		expect(opened).not.toContain("Entry 1 ");
 
-		const reused = text(await tool.execute("open", { action: "open", name: TAB }));
+		const reused = toolResultText(await tool.execute("open", { action: "open", name: TAB }));
 		expect(reused).toContain(`Reused tab "${TAB}"`);
 		expect(reused).not.toContain("Page");
 	}, 60_000);

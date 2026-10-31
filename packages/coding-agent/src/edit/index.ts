@@ -69,6 +69,7 @@ type EditParams = ReplaceParams | ReplaceBatchParams | PatchParams | HashlinePar
 type EditModeDefinition = {
 	description: (session: ToolSession) => string;
 	parameters: TInput;
+	wireParameters: Record<string, unknown>;
 	examples?: readonly ToolExample[];
 	execute: (
 		tool: EditTool,
@@ -575,6 +576,10 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 		return this.#getModeDefinition().parameters;
 	}
 
+	get wireParameters(): Record<string, unknown> {
+		return this.#getModeDefinition().wireParameters;
+	}
+
 	get examples(): readonly ToolExample[] | undefined {
 		return this.#getModeDefinition().examples;
 	}
@@ -650,6 +655,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				get parameters() {
 					return patchEditSchema.value;
 				},
+				get wireParameters(): Record<string, unknown> {
+					return patchEditSchema.wire;
+				},
 				examples: [
 					{
 						caption: "Create",
@@ -716,6 +724,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				get parameters() {
 					return applyPatchSchema.value;
 				},
+				get wireParameters(): Record<string, unknown> {
+					return applyPatchSchema.wire;
+				},
 				examples: [
 					{
 						caption: "Apply a combined patch file",
@@ -758,6 +769,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				get parameters() {
 					return hashlineEditParamsSchema.value;
 				},
+				get wireParameters(): Record<string, unknown> {
+					return hashlineEditParamsSchema.wire;
+				},
 				execute: (
 					tool: EditTool,
 					params: EditParams,
@@ -780,6 +794,9 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				description: () => prompt.render(toolsPrompts["tools/replace"].text),
 				get parameters() {
 					return replaceEditSchema.value;
+				},
+				get wireParameters(): Record<string, unknown> {
+					return replaceEditSchema.wire;
 				},
 				execute: (
 					tool: EditTool,

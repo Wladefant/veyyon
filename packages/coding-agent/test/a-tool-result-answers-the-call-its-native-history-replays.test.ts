@@ -21,21 +21,10 @@ import { buildTransformedCodexRequestBody } from "@veyyon/ai/providers/openai-co
 import { buildParams } from "@veyyon/ai/providers/openai-responses";
 import type { Api, AssistantMessage, Message, Model, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ProviderContextCanonicalizer } from "@veyyon/coding-agent/session/provider-context-canonicalizer";
 
 const ROOTS = ["/repo"];
-
-function usage() {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function canonicalizer(): ProviderContextCanonicalizer {
 	let counter = 0;
@@ -58,7 +47,7 @@ function nativeTurn(model: Model<Api>, calls: Array<{ callId: string; itemId: st
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1_000,
 		providerPayload: {

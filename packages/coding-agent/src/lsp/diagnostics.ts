@@ -3,20 +3,35 @@
  * dropping a TypeScript server's orphan-project noise, and formatting the result.
  */
 
+import { errorMessage } from "@veyyon/utils";
 import { formatPathRelativeToCwd } from "../tools/core/path-utils";
-import { throwIfAborted } from "../tools/core/tool-errors";
-import { getOrCreateClient, waitForProjectLoaded } from "./client";
+import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
+import {
+	getOrCreateClient,
+	LspResponseError,
+	onDiagnosticsPublish,
+	onProgress,
+	sendNotification,
+	sendRequest,
+	waitForProjectLoaded,
+} from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { isProjectAwareLspServer } from "./servers";
 import type { Diagnostic, LspClient, PublishedDiagnostics, ServerConfig } from "./types";
-import { fileToUri, formatDiagnostic, formatDiagnosticsSummary, sortDiagnostics } from "./utils";
+import { fileToUri, formatDiagnostic, formatDiagnosticsSummary, uniqueSortedDiagnostics } from "./utils";
 
 const DIAGNOSTIC_MESSAGE_LIMIT = 50;
 export const SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS = 3000;
 export const BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS = 400;
-const DIAGNOSTICS_POLL_MS = 100;
+/** Delay before re-sending a pull the server cancelled or saw outdated. */
+const PULL_RETRY_DELAY_MS = 100;
 const DIAGNOSTICS_SETTLE_MS = 250;
+/**
+ * JSON-RPC error codes a server answers `textDocument/diagnostic` with when the pull should be sent again:
+ * ServerCancelled (-32802) and ContentModified (-32801).
+ */
+const RETRIGGER_PULL_ERROR_CODES: ReadonlySet<number> = new Set([-32802, -32801]);
 
 export function limitDiagnosticMessages(messages: string[]): string[] {
 	if (messages.length <= DIAGNOSTIC_MESSAGE_LIMIT) {
@@ -60,6 +75,61 @@ function filterOrphanProjectDiagnostics(
 	return diagnostics.filter(diagnostic => !isTypeScriptProjectDiagnostic(serverName, diagnostic));
 }
 
+/** The answer to `textDocument/diagnostic`; `unchanged` only answers a pull that sent a `previousResultId`. */
+interface DocumentDiagnosticReport {
+	kind: "full" | "unchanged";
+	items?: Diagnostic[];
+}
+
+/**
+ * Resolves at `deadline` (epoch ms), when `wake` settles, or when `signal` aborts, whichever is first, and
+ * leaves no timer or abort listener behind. Never rejects: the caller re-checks its state and the signal.
+ */
+async function sleepUntil(deadline: number, signal: AbortSignal | undefined, wake?: Promise<void>): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+	const onAbort = () => resolve();
+	signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		await (wake ? Promise.race([promise, wake]) : promise);
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
+/**
+ * Pulls the diagnostics of one open document (`textDocument/diagnostic`, LSP 3.17). The server answers
+ * after every change sent before the request, so the result needs no settle window. A server that only
+ * pulls (tsgo) never publishes, and waiting for a publish from it lasted the whole timeout and reported no
+ * diagnostics. Resolves undefined when no full report arrives before `deadline`; never rejects.
+ */
+async function pullDocumentDiagnostics(
+	client: LspClient,
+	uri: string,
+	deadline: number,
+	signal: AbortSignal | undefined,
+): Promise<Diagnostic[] | undefined> {
+	while (Date.now() < deadline) {
+		try {
+			const report = (await sendRequest(
+				client,
+				"textDocument/diagnostic",
+				{ textDocument: { uri } },
+				signal,
+				Math.max(1, deadline - Date.now()),
+			)) as DocumentDiagnosticReport | null;
+			return report?.kind === "full" && Array.isArray(report.items) ? report.items : undefined;
+		} catch (error) {
+			if (signal?.aborted || !(error instanceof LspResponseError) || !RETRIGGER_PULL_ERROR_CODES.has(error.code)) {
+				return undefined;
+			}
+		}
+		await sleepUntil(Date.now() + PULL_RETRY_DELAY_MS, signal);
+	}
+	return undefined;
+}
+
 interface WaitForDiagnosticsOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
@@ -85,31 +155,122 @@ export async function waitForDiagnostics(
 	const start = Date.now();
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
-	while (Date.now() - start < timeoutMs) {
-		throwIfAborted(signal);
-		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
-		const published = client.diagnostics.get(uri);
-		if (published && versionOk) {
-			// Server honored our exact document version → authoritative, accept now.
-			if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
-				return published.diagnostics;
+	// A server that offers pulls answers with every change applied, so the first full report is accepted
+	// as soon as it lands; a version-matched publish that lands first is accepted the same way. Every
+	// state the loop reads changes on a publish or a finished pull, and the settle window and the budget
+	// end at known times, so each pass sleeps until exactly one of those happens.
+	let wake = Promise.withResolvers<void>();
+	const stopListening = onDiagnosticsPublish(client, () => wake.resolve());
+	const pull: { items?: Diagnostic[] } = {};
+	if (client.serverCapabilities?.diagnosticProvider) {
+		void pullDocumentDiagnostics(client, uri, start + timeoutMs, signal).then(items => {
+			pull.items = items;
+			wake.resolve();
+		});
+	}
+	try {
+		for (;;) {
+			throwIfAborted(signal);
+			if (pull.items) {
+				client.diagnostics.set(uri, { diagnostics: pull.items, version: expectedDocumentVersion ?? null });
+				return pull.items;
 			}
-			// Unversioned/mismatched publish: wait for the stream to go quiet so an
-			// in-flight publish for the pre-edit content is superseded by the fresh one.
-			if (published !== settledRef) {
-				settledRef = published;
-				settledAt = Date.now();
-			} else if (Date.now() - settledAt >= settleMs) {
-				return published.diagnostics;
+			const now = Date.now();
+			if (now - start >= timeoutMs) break;
+			let wakeAt = start + timeoutMs;
+			const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
+			const published = client.diagnostics.get(uri);
+			if (published && versionOk) {
+				// Server honored our exact document version → authoritative, accept now.
+				if (expectedDocumentVersion !== undefined && published.version === expectedDocumentVersion) {
+					return published.diagnostics;
+				}
+				// Unversioned/mismatched publish: wait for the stream to go quiet so an
+				// in-flight publish for the pre-edit content is superseded by the fresh one.
+				if (published !== settledRef) {
+					settledRef = published;
+					settledAt = now;
+				} else if (now - settledAt >= settleMs) {
+					return published.diagnostics;
+				}
+				wakeAt = Math.min(wakeAt, settledAt + settleMs);
 			}
+			await sleepUntil(wakeAt, signal, wake.promise);
+			wake = Promise.withResolvers<void>();
 		}
-		await Bun.sleep(DIAGNOSTICS_POLL_MS);
+	} finally {
+		stopListening();
 	}
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 	if (!versionOk) {
 		return [];
 	}
 	return client.diagnostics.get(uri)?.diagnostics ?? [];
+}
+
+/** The work-done progress tokens rust-analyzer reports a compiler check under: `rust-analyzer/flycheck/<n>`. */
+const FLYCHECK_PROGRESS_PREFIX = "rust-analyzer/flycheck/";
+
+/**
+ * How long a check requested with `rust-analyzer/runFlycheck` has to begin before it is taken as not
+ * started. rust-analyzer begins one about 70ms after the request; a workspace with no check never does.
+ */
+const FLYCHECK_START_GRACE_MS = 1_000;
+
+/** How the compiler check {@link runFlycheck} requested ended. */
+export type FlycheckOutcome =
+	| { readonly status: "finished" }
+	| { readonly status: "not-started" }
+	| { readonly status: "unfinished"; readonly title: string };
+
+/**
+ * Runs the server's compiler check (`rust-analyzer/runFlycheck`, rust-analyzer's `cargo check`) for the
+ * package of `uri`, or for every workspace when `uri` is undefined, and waits until the check ends or
+ * `deadline` (epoch ms) passes. Throws on abort.
+ *
+ * rust-analyzer ends a check's progress while handling the check's results and publishes what it found
+ * after them, so a `finished` check's publish can trail its end. A request answered after the end is
+ * answered after that publish, so the check's diagnostics are recorded when this resolves `finished`.
+ */
+export async function runFlycheck(
+	client: LspClient,
+	uri: string | undefined,
+	deadline: number,
+	signal?: AbortSignal,
+): Promise<FlycheckOutcome> {
+	const running = new Map<string | number, string>();
+	let began = false;
+	let ended = false;
+	const wake = { began: Promise.withResolvers<void>(), ended: Promise.withResolvers<void>() };
+	const stopListening = onProgress(client, (token, progress) => {
+		if (typeof token !== "string" || !token.startsWith(FLYCHECK_PROGRESS_PREFIX)) return;
+		if (progress.kind === "begin") {
+			began = true;
+			running.set(token, progress.title ?? "cargo check");
+			wake.began.resolve();
+		} else if (progress.kind === "end" && running.delete(token) && running.size === 0) {
+			ended = true;
+			wake.ended.resolve();
+		}
+	});
+	try {
+		const textDocument = uri === undefined ? null : { uri };
+		await sendNotification(client, "rust-analyzer/runFlycheck", { textDocument }, signal);
+		await sleepUntil(Math.min(Date.now() + FLYCHECK_START_GRACE_MS, deadline), signal, wake.began.promise);
+		throwIfAborted(signal);
+		if (!began) return { status: "not-started" };
+		await sleepUntil(deadline, signal, wake.ended.promise);
+		throwIfAborted(signal);
+		if (!ended) return { status: "unfinished", title: running.values().next().value ?? "cargo check" };
+		const left = deadline - Date.now();
+		if (left > 0) {
+			await sendRequest(client, "rust-analyzer/analyzerStatus", {}, signal, left).catch(() => undefined);
+			throwIfAborted(signal);
+		}
+		return { status: "finished" };
+	} finally {
+		stopListening();
+	}
 }
 
 /** Result from getDiagnosticsForFile */
@@ -233,7 +394,10 @@ export async function getDiagnosticsForFile(
 		}),
 	);
 
-	for (const result of results) {
+	// A server that failed is named with its error, so a file no checker could read is not reported clean.
+	const failures: string[] = [];
+	for (let i = 0; i < results.length; i++) {
+		const result = results[i]!;
 		if (result.status === "fulfilled") {
 			serverNames.push(result.value.serverName);
 			allDiagnostics.push(
@@ -244,34 +408,30 @@ export async function getDiagnosticsForFile(
 					result.value.diagnostics,
 				),
 			);
+		} else if (!signal?.aborted && !(result.reason instanceof ToolAbortError)) {
+			failures.push(`${servers[i]![0]} did not check the file: ${errorMessage(result.reason)}`);
 		}
 	}
 
-	if (serverNames.length === 0) {
+	if (serverNames.length === 0 && failures.length === 0) {
 		return undefined;
 	}
 
 	if (allDiagnostics.length === 0) {
 		return {
-			server: serverNames.join(", "),
-			messages: [],
-			summary: "OK",
+			server: serverNames.length > 0 ? serverNames.join(", ") : undefined,
+			messages: failures,
+			summary:
+				failures.length === 0
+					? "OK"
+					: serverNames.length === 0
+						? "not checked"
+						: `no issues from ${serverNames.join(", ")}`,
 			errored: false,
 		};
 	}
 
-	// Deduplicate diagnostics by range + message (different servers might report similar issues)
-	const seen = new Set<string>();
-	const uniqueDiagnostics: Diagnostic[] = [];
-	for (const d of allDiagnostics) {
-		const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
-		if (!seen.has(key)) {
-			seen.add(key);
-			uniqueDiagnostics.push(d);
-		}
-	}
-
-	sortDiagnostics(uniqueDiagnostics);
+	const uniqueDiagnostics = uniqueSortedDiagnostics(allDiagnostics);
 	const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
 	const limited = limitDiagnosticMessages(formatted);
 	const summary = formatDiagnosticsSummary(uniqueDiagnostics);
@@ -279,7 +439,7 @@ export async function getDiagnosticsForFile(
 
 	return {
 		server: serverNames.join(", "),
-		messages: limited,
+		messages: limited.concat(failures),
 		summary,
 		errored: hasErrors,
 	};

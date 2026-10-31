@@ -6,6 +6,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -106,10 +107,6 @@ function fiveTasks(): TaskParams {
 	} as TaskParams;
 }
 
-function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content.find(part => part.type === "text")?.text ?? "";
-}
-
 /**
  * Run five serial spawns where two finish, the third is cancelled MID-FLIGHT, and
  * the remaining two never start.
@@ -160,7 +157,7 @@ describe("a fan-out cancelled part way through", () => {
 
 		// Two finished, one was interrupted while running, two never started. All
 		// three of those are cancellations and none of them is a failure.
-		expect(firstText(result)).toContain("2 of 5 agents completed, 3 cancelled.");
+		expect(firstToolResultText(result)).toContain("2 of 5 agents completed, 3 cancelled.");
 	});
 
 	/**
@@ -171,7 +168,7 @@ describe("a fan-out cancelled part way through", () => {
 	 */
 	it("still returns the output of the agents that finished", async () => {
 		const { result } = await runCancelledMidFlight();
-		const text = firstText(result);
+		const text = firstToolResultText(result);
 
 		expect(text).toContain("One finished.");
 		expect(text).toContain("Two finished.");
@@ -185,7 +182,7 @@ describe("a fan-out cancelled part way through", () => {
 	/** The ones that never ran are named, so it is clear which work is outstanding. */
 	it("names the spawns that never started", async () => {
 		const { result } = await runCancelledMidFlight();
-		const text = firstText(result);
+		const text = firstToolResultText(result);
 
 		expect(text).toContain("Task Four: cancelled before start.");
 		expect(text).toContain("Task Five: cancelled before start.");
@@ -226,7 +223,7 @@ describe("a fan-out that genuinely failed", () => {
 		} as TaskParams);
 
 		expect(result.isError).toBe(true);
-		expect(firstText(result)).toContain("1 of 2 agents completed, 1 failed.");
+		expect(firstToolResultText(result)).toContain("1 of 2 agents completed, 1 failed.");
 	});
 
 	/**
@@ -247,7 +244,7 @@ describe("a fan-out that genuinely failed", () => {
 		} as TaskParams);
 
 		expect(result.isError).toBeFalsy();
-		expect(firstText(result)).not.toContain("agents completed");
-		expect(firstText(result)).toContain("One finished.");
+		expect(firstToolResultText(result)).not.toContain("agents completed");
+		expect(firstToolResultText(result)).toContain("One finished.");
 	});
 });

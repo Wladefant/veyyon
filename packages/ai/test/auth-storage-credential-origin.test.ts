@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { removeWithRetries } from "../../utils/src/temp";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 // Clear every env var the providers under test alias, so ambient shell / ~/.env
 // state can't leak an env origin into precedence assertions.

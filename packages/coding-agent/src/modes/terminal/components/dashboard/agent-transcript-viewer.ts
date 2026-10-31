@@ -35,7 +35,7 @@ import { getEditorTheme, theme } from "../../../../theme/theme";
 import { replaceTabs, shortenPath, truncateToWidth } from "../../../../tools/core/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../../session-observer-registry";
 import { matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import { type ModalShellGeometry, type ModalShortcut, planModalChrome, renderModalShell } from "../chrome/modal-shell";
 import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
 import { routeModalChrome } from "../selectors/select-list-mouse-routing";
@@ -46,6 +46,8 @@ import { type AgentDisplayState, agentDisplayState, agentStatusWord } from "./ag
 // viewer's chrome rows pad to the same rail so title, body, editor, and
 // footer share one gutter.
 const RAIL_PAD = " ".repeat(COMPOSER_INSET_COLS);
+/** Transcript rows the viewer asks the card for on a short terminal; it sheds its padding before it shows fewer. */
+const MIN_VIEWPORT_ROWS = 3;
 
 /** Result of one host-backed transcript read. */
 export interface AgentTranscriptRemoteRead {
@@ -604,8 +606,7 @@ export class AgentTranscriptViewer implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
 			return new Array(termHeight).fill(" ".repeat(width));
@@ -636,16 +637,17 @@ export class AgentTranscriptViewer implements Component {
 
 		// One owner for "how many rows do I get": the shell truncates a body that
 		// runs long, so the scroll viewport is sized from the same plan the card
-		// paints with, minus the rows this body spends on its own chrome.
-		const plan = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
-			shortcuts,
-			tipCandidates: statsLine ? [statsLine] : undefined,
-		});
+		// paints with, minus the rows this body spends on its own chrome. A short
+		// card sheds its padding for three viewport rows, then shrinks the viewport
+		// rather than push the notice and the editor off its bottom.
 		const bodyChrome = headerLines.length + 1 + editorLines.length + (noticeLine ? 1 : 0);
-		const viewportHeight = Math.max(3, plan.maxBodyRows - bodyChrome);
+		const plan = planModalChrome(dims, {
+			shortcuts,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates: statsLine ? [statsLine] : undefined,
+			minBodyRows: bodyChrome + MIN_VIEWPORT_ROWS,
+		});
+		const viewportHeight = Math.max(1, plan.maxBodyRows - bodyChrome);
 
 		const contentLines = this.#builder.isEmpty
 			? [`${RAIL_PAD}${theme.fg("dim", this.#placeholder(Math.max(10, contentWidth - 1)))}`]
@@ -661,16 +663,10 @@ export class AgentTranscriptViewer implements Component {
 		if (noticeLine) body.push(noticeLine);
 		for (const editorLine of editorLines) body.push(`${RAIL_PAD}${editorLine}`);
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(plan, {
 			title: `Transcript ${theme.sep.dot} ${this.deps.agentId}`,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body,
 			preferredBodyRows: plan.maxBodyRows,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			tipCandidates: statsLine ? [statsLine] : undefined,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

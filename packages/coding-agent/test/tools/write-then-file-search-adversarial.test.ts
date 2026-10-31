@@ -7,14 +7,8 @@ import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("write→search(files) chain adversarial", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -57,7 +51,7 @@ describe("write→search(files) chain adversarial", () => {
 		const write = new WriteTool(s);
 		await write.execute("w1", { path: path.join(tmpDir, "src", "a.ts"), content: "a\n" });
 		await write.execute("w2", { path: path.join(tmpDir, "src", "b.ts"), content: "b\n" });
-		const text = textOf(await new SearchTool(s).execute("g", { type: "files", input: "src/**/*.ts" }));
+		const text = toolResultText(await new SearchTool(s).execute("g", { type: "files", input: "src/**/*.ts" }));
 		expect(text).toContain("a.ts");
 		expect(text).toContain("b.ts");
 	});

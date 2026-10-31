@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import {
 	collectEntriesForBranchSummary,
 	type GenerateBranchSummaryOptions,
@@ -7,8 +8,11 @@ import {
 	type ReadonlySessionManager,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /** In-memory ReadonlySessionManager: getBranch walks parentId to the root and
  *  returns the path root-first, mirroring the real manager's contract. */
@@ -54,15 +58,6 @@ const MODEL: Model = buildModel({
 	maxTokens: 32_768,
 });
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 describe("branch summarization", () => {
 	test("includes informative tool results and drops useless ones", async () => {
 		const entries: SessionEntry[] = [
@@ -84,7 +79,7 @@ describe("branch summarization", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock-model",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 1,
 				},
@@ -114,7 +109,7 @@ describe("branch summarization", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock-model",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 3,
 				},
@@ -154,7 +149,7 @@ describe("branch summarization", () => {
 				api: "mock",
 				provider: "mock",
 				model: "mock-model",
-				usage: ZERO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 5,
 			};
@@ -193,7 +188,7 @@ describe("branch summarization", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock-model",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 1,
 				},
@@ -238,7 +233,7 @@ describe("branch summarization", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock-model",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 0,
 				},
@@ -411,7 +406,7 @@ describe("prepareBranchEntries entry conversion", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock-model",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: 0,
 				},
@@ -467,7 +462,7 @@ describe("generateBranchSummary early returns", () => {
 			api: "mock",
 			provider: "mock",
 			model: "mock-model",
-			usage: ZERO_USAGE,
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 			...fields,

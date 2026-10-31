@@ -3,6 +3,7 @@ import { streamPiNative } from "@veyyon/ai/providers/pi-native-client";
 import { streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function sseBytes(events: AssistantMessageEvent[]): Uint8Array {
 	const encoder = new TextEncoder();
@@ -85,14 +86,7 @@ function baseAssistant(overrides: Partial<AssistantMessage> = {}): AssistantMess
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 		...overrides,
@@ -342,14 +336,7 @@ describe("streamPiNative event flow", () => {
 	it("pushes parsed events verbatim and resolves `.result()` on terminal `done`", async () => {
 		const final = baseAssistant({
 			content: [{ type: "text", text: "hi" }],
-			usage: {
-				input: 4,
-				output: 2,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 6,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 4, output: 2, totalTokens: 6 },
 		});
 		const partial = baseAssistant({ content: [{ type: "text", text: "hi" }] });
 		const events: AssistantMessageEvent[] = [

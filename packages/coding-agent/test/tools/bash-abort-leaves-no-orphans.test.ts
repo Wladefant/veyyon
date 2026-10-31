@@ -128,6 +128,42 @@ function bashTool(): BashTool {
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * How long a killed descendant may take to disappear. The native abort gives the run up to 2 s to
+ * unwind before aborting its task (`natives/shell/src/shell.rs`), so a kill can land that late.
+ */
+const REAP_WITHIN_MS = 5_000;
+
+/**
+ * How long a descendant that must survive is watched. It covers the same 2 s unwind, so a kill that
+ * wrongly reached the process would have landed inside it.
+ */
+const SURVIVAL_WINDOW_MS = 2_500;
+
+/** How long a descendant has to record its pid after the run starts. */
+const PID_WITHIN_MS = 10_000;
+
+/**
+ * Per-case timeout, above the pid wait plus the reap bound, so a descendant that is never reaped
+ * fails on the assertion that names it rather than on the runner's 5 s default.
+ */
+const CASE_TIMEOUT_MS = PID_WITHIN_MS + REAP_WITHIN_MS + 5_000;
+
+/** Poll `check` every 25 ms; resolves true as soon as it holds, or false once `withinMs` passes. */
+async function holdsWithin(check: () => boolean | Promise<boolean>, withinMs: number): Promise<boolean> {
+	const deadline = Date.now() + withinMs;
+	for (;;) {
+		if (await check()) return true;
+		if (Date.now() >= deadline) return false;
+		await sleep(25);
+	}
+}
+
+/** Whether `pid` is gone within the reap bound. */
+function reaped(pid: number): Promise<boolean> {
+	return holdsWithin(() => !isAlive(pid), REAP_WITHIN_MS);
+}
+
+/**
  * Start `command`, wait for the descendant to record its pid, then end the run
  * either by aborting or by letting the timeout fire.
  *
@@ -148,15 +184,13 @@ async function runAndEnd(
 		how === "abort" ? controller.signal : undefined,
 	);
 
-	// Long enough for the descendant to spawn and write its pid, comfortably
-	// inside the 2 second timeout used by the timeout case.
-	await sleep(1_500);
+	// The descendant writes its pid as its first act; the timeout case's 2 second deadline bounds how
+	// long that can take before the run ends without one.
 	let pid = 0;
-	try {
-		pid = Number.parseInt((await fs.readFile(pidFile, "utf8")).trim(), 10);
-	} catch {
-		// Left as 0; the caller asserts it was found.
-	}
+	await holdsWithin(async () => {
+		pid = Number.parseInt((await fs.readFile(pidFile, "utf8").catch(() => "")).trim(), 10) || 0;
+		return pid > 0;
+	}, PID_WITHIN_MS);
 	if (pid) startedPids.push(pid);
 	const aliveBefore = pid > 0 && isAlive(pid);
 
@@ -166,8 +200,6 @@ async function runAndEnd(
 	} catch {
 		// Cancellation and timeout both throw; the process state is the subject.
 	}
-	// Reaping is asynchronous, so allow it to land before observing.
-	await sleep(2_500);
 	return { pid, aliveBefore };
 }
 
@@ -184,13 +216,21 @@ describe("aborting a command reaps its descendants", () => {
 	 * process failed to start at all would satisfy "not alive afterwards" and the
 	 * test would pass while proving nothing.
 	 */
-	it("kills a grandchild that would otherwise outlive the abort", async () => {
-		const { pid, aliveBefore } = await runAndEnd("one-level", f => `sh -c 'echo $$ > ${f}; exec sleep 120'`, "abort");
+	it(
+		"kills a grandchild that would otherwise outlive the abort",
+		async () => {
+			const { pid, aliveBefore } = await runAndEnd(
+				"one-level",
+				f => `sh -c 'echo $$ > ${f}; exec sleep 120'`,
+				"abort",
+			);
 
-		expect(pid).toBeGreaterThan(0);
-		expect(aliveBefore).toBe(true);
-		expect(isAlive(pid)).toBe(false);
-	});
+			expect(pid).toBeGreaterThan(0);
+			expect(aliveBefore).toBe(true);
+			expect(await reaped(pid)).toBe(true);
+		},
+		CASE_TIMEOUT_MS,
+	);
 
 	/**
 	 * Two levels deep, because a kill that walks only one generation would pass
@@ -198,17 +238,21 @@ describe("aborting a command reaps its descendants", () => {
 	 * the norm rather than the exception: a package script starts a runner, which
 	 * starts a compiler, which starts workers.
 	 */
-	it("kills a descendant two levels down", async () => {
-		const { pid, aliveBefore } = await runAndEnd(
-			"two-level",
-			f => `sh -c 'sh -c "echo \\$\\$ > ${f}; exec sleep 120"'`,
-			"abort",
-		);
+	it(
+		"kills a descendant two levels down",
+		async () => {
+			const { pid, aliveBefore } = await runAndEnd(
+				"two-level",
+				f => `sh -c 'sh -c "echo \\$\\$ > ${f}; exec sleep 120"'`,
+				"abort",
+			);
 
-		expect(pid).toBeGreaterThan(0);
-		expect(aliveBefore).toBe(true);
-		expect(isAlive(pid)).toBe(false);
-	});
+			expect(pid).toBeGreaterThan(0);
+			expect(aliveBefore).toBe(true);
+			expect(await reaped(pid)).toBe(true);
+		},
+		CASE_TIMEOUT_MS,
+	);
 
 	/** The caller-facing half: the tool must report the cancellation rather than
 	 * returning a quiet empty success, or the model reads a killed command as one
@@ -229,13 +273,21 @@ describe("a timeout reaps descendants the same way an abort does", () => {
 	 * fires unattended. If only the abort path reaped, every hung command in a long
 	 * session would leave its tree behind, and nobody would be watching.
 	 */
-	it("kills a grandchild when the command times out", async () => {
-		const { pid, aliveBefore } = await runAndEnd("timeout", f => `sh -c 'echo $$ > ${f}; exec sleep 120'`, "timeout");
+	it(
+		"kills a grandchild when the command times out",
+		async () => {
+			const { pid, aliveBefore } = await runAndEnd(
+				"timeout",
+				f => `sh -c 'echo $$ > ${f}; exec sleep 120'`,
+				"timeout",
+			);
 
-		expect(pid).toBeGreaterThan(0);
-		expect(aliveBefore).toBe(true);
-		expect(isAlive(pid)).toBe(false);
-	});
+			expect(pid).toBeGreaterThan(0);
+			expect(aliveBefore).toBe(true);
+			expect(await reaped(pid)).toBe(true);
+		},
+		CASE_TIMEOUT_MS,
+	);
 });
 
 describe("the boundary: a process that leaves the group deliberately", () => {
@@ -257,17 +309,23 @@ describe("the boundary: a process that leaves the group deliberately", () => {
 	 * this test fails and the failure is the prompt to document the stronger
 	 * guarantee. The survivor is killed in `afterEach` like every other pid here.
 	 */
-	it("does not reach a setsid-detached process, which is what setsid means", async () => {
-		const { pid, aliveBefore } = await runAndEnd(
-			"setsid",
-			f => `setsid sh -c 'echo $$ > ${f}; exec sleep 120' < /dev/null`,
-			"abort",
-		);
+	it(
+		"does not reach a setsid-detached process, which is what setsid means",
+		async () => {
+			const { pid, aliveBefore } = await runAndEnd(
+				"setsid",
+				f => `setsid sh -c 'echo $$ > ${f}; exec sleep 120' < /dev/null`,
+				"abort",
+			);
 
-		expect(pid).toBeGreaterThan(0);
-		expect(aliveBefore).toBe(true);
-		expect(isAlive(pid)).toBe(true);
-	});
+			expect(pid).toBeGreaterThan(0);
+			expect(aliveBefore).toBe(true);
+			// Reaping is asynchronous, so the process is watched for as long as a kill could take to land.
+			await sleep(SURVIVAL_WINDOW_MS);
+			expect(isAlive(pid)).toBe(true);
+		},
+		CASE_TIMEOUT_MS,
+	);
 });
 
 describe("session disposal evicts and aborts owned bash sessions", () => {

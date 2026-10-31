@@ -22,8 +22,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, ToolCall } from "@veyyon/ai";
+import type { AgentContext, AgentEvent, AgentLoopConfig, StreamFn } from "@veyyon/agent-core/types";
+import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import {
 	clearStreamingPartialJson,
@@ -31,28 +31,9 @@ import {
 	setStreamingPartialJson,
 } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { createUserMessage } from "./helpers";
-
-/** Deterministic 32-bit generator, so a failing interleaving reproduces from its seed. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
-
-const NO_USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import { emptyUsage } from "@veyyon/catalog/models";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
+import { createUserMessage, identityConverter } from "./helpers";
 
 interface PlannedCall {
 	id: string;
@@ -95,10 +76,6 @@ interface Outcome {
 	finalBlockIds: string[];
 	/** Calls whose `toolcall_end` the loop read and reported before the abort. */
 	readCloses: Set<string>;
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 function planCalls(random: () => number, prefix: string): PlannedCall[] {
@@ -174,7 +151,7 @@ async function runScenario(scenario: Scenario): Promise<Outcome> {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -304,7 +281,7 @@ function emptyPartial(): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude",
-		usage: NO_USAGE,
+		usage: emptyUsage(),
 		stopReason: "aborted",
 		timestamp: Date.now(),
 	};

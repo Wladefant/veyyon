@@ -54,12 +54,6 @@ const CONTEXT: Context = {
 	tools: TOOLS,
 };
 
-function aborted(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 describe("issue #2558 — GitHub Copilot Anthropic transport rejects eager_input_streaming", () => {
 	const model: Model<"anthropic-messages"> = buildModel(COPILOT_MODEL_SPEC);
 
@@ -72,7 +66,7 @@ describe("issue #2558 — GitHub Copilot Anthropic transport rejects eager_input
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		streamAnthropic(model, CONTEXT, {
 			apiKey: COPILOT_BEARER,
-			signal: aborted(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => resolve(payload),
 		});
 		const payload = (await promise) as { tools?: Array<Record<string, unknown>> };

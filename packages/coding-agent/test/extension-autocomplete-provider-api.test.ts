@@ -24,7 +24,6 @@ import { Effort } from "@veyyon/catalog/effort";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
 import type { AutocompleteProvider } from "@veyyon/utils/autocomplete";
-import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { loadExtensions } from "../src/extensibility/extensions/loader";
@@ -32,18 +31,7 @@ import { ExtensionRunner } from "../src/extensibility/extensions/runner";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { initTheme } from "../src/theme/theme";
-
-function makeTool(name: string): AgentTool {
-	return {
-		name,
-		label: name,
-		description: `Fake ${name}`,
-		parameters: type({}),
-		async execute() {
-			return { content: [{ type: "text" as const, text: "ok" }] };
-		},
-	};
-}
+import { createOkTool } from "./helpers/ok-tool";
 
 /**
  * Wrap `current` the way a well-behaved pi extension does: contribute items for
@@ -95,7 +83,7 @@ describe("extension autocomplete provider API (#4919)", () => {
 		const resolved = registry.find("anthropic", "claude-sonnet-4-5");
 		if (!resolved) throw new Error("Expected anthropic model claude-sonnet-4-5 to exist");
 		model = resolved;
-		tools = [makeTool("read")];
+		tools = [createOkTool("read")];
 	});
 
 	beforeEach(() => {

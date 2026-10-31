@@ -10,6 +10,7 @@
 
 import { isAbortError } from "@veyyon/utils/abortable";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { toError } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { promptApiKey } from "../api-key-login";
@@ -137,7 +138,7 @@ async function validateXiaomiApiKey(
 			if (isAbortError(e) && signal?.aborted) {
 				throw e;
 			}
-			lastError = e instanceof Error ? e : new Error(String(e));
+			lastError = toError(e);
 		} finally {
 			attemptTimeout.cancel();
 		}

@@ -2,8 +2,8 @@
  * Forwards session events to the extension runner as the extension event each one maps to, and
  * counts the turns of the current run for the `turn_start` / `turn_end` hooks.
  *
- * This is a session collaborator. It holds the turn index and the tail of the queue that keeps
- * streamed `message_update` events in order, and never touches the session.
+ * This is a session collaborator, held by `SessionEvents`. It holds the turn index and the tail of
+ * the queue that keeps streamed `message_update` events in order, and never touches the session.
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type {

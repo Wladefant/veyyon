@@ -87,10 +87,10 @@ interface RunOptions {
 	/** Drive the parent's own settings instead of the agent fork, for the differential. */
 	asMainSession?: boolean;
 	/**
-	 * Drop the approval surface entirely, reproducing what a spawned agent has TODAY:
-	 * `task/executor.ts` calls `extensionRunner.initialize(actions, runtime)` with no
-	 * fourth `uiContext` argument, so the child's runner keeps `noOpUIContext` and
-	 * `hasUI()` is false. This is the condition that makes the request unanswerable.
+	 * Drop the approval surface entirely, reproducing a spawned agent whose root has no
+	 * UI: `resolveRootUIContext` in `task/executor.ts` returns undefined for an ACP or
+	 * `-p` root, so the child's runner keeps `noOpUIContext` and `hasUI()` is false.
+	 * This is the condition that makes the request unanswerable.
 	 */
 	withoutApprovalSurface?: boolean;
 }

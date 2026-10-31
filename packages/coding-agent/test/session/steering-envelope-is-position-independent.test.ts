@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { ImageContent, TextContent, UserMessage } from "@veyyon/ai";
 import { wrapSteeringForModel } from "@veyyon/coding-agent/session/steering-envelope";
+import { assistantMsg } from "../helpers/session-messages";
 
 /**
  * Contracts: a steering message's wire bytes are a pure function of the message, not of its position.
@@ -28,10 +29,6 @@ import { wrapSteeringForModel } from "@veyyon/coding-agent/session/steering-enve
 
 function userMessage(content: string, steering?: true): UserMessage {
 	return steering ? ({ role: "user", content, steering } as UserMessage) : ({ role: "user", content } as UserMessage);
-}
-
-function assistantMessage(text: string): AgentMessage {
-	return { role: "assistant", content: [{ type: "text", text }] } as unknown as AgentMessage;
 }
 
 function contentOf(message: AgentMessage | undefined): string {
@@ -67,7 +64,7 @@ describe("wrapSteeringForModel", () => {
 		const buried = wrapSteeringForModel([
 			userMessage("first"),
 			userMessage("interject", true),
-			assistantMessage("ok"),
+			assistantMsg("ok"),
 			userMessage("next turn"),
 		]);
 
@@ -76,11 +73,7 @@ describe("wrapSteeringForModel", () => {
 
 	/** Every steering message in an array is wrapped, not just one of them. */
 	it("wraps every steering message in the array", () => {
-		const wrapped = wrapSteeringForModel([
-			userMessage("one", true),
-			assistantMessage("ok"),
-			userMessage("two", true),
-		]);
+		const wrapped = wrapSteeringForModel([userMessage("one", true), assistantMsg("ok"), userMessage("two", true)]);
 
 		expect(contentOf(wrapped[0])).toContain("one");
 		expect(contentOf(wrapped[0])).not.toBe("one");
@@ -113,7 +106,7 @@ describe("wrapSteeringForModel", () => {
 	 * allocate a new array and new objects for every message on every turn of every session.
 	 */
 	it("returns the same array and the same objects when nothing is steering", () => {
-		const messages: AgentMessage[] = [userMessage("plain"), assistantMessage("reply")];
+		const messages: AgentMessage[] = [userMessage("plain"), assistantMsg("reply")];
 
 		const wrapped = wrapSteeringForModel(messages);
 

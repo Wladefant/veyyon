@@ -39,7 +39,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@veyyon/agent-core";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { LoadedCustomCommand } from "@veyyon/coding-agent/extensibility/custom-commands";
@@ -50,6 +49,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /** One captured `logger.warn` call. */
 interface WarnEntry {
@@ -234,8 +234,7 @@ describe("headless command-context abort is detached, not floated", () => {
 	 * precisely why the promise underneath it needs a handler.
 	 */
 	async function runAbortCommand(behaviour: () => Promise<void>): Promise<void> {
-		const model = getBundledModel("openai", "gpt-4o-mini");
-		if (!model) throw new Error("expected bundled gpt-4o-mini");
+		const model = requireBundledModel("openai", "gpt-4o-mini");
 		// The custom-command path never reads the registry, and a real one needs
 		// auth storage on disk.
 		const modelRegistry = {} as ModelRegistry;

@@ -3000,6 +3000,27 @@ mod tests {
 			}
 		}
 
+		/// A `)` that closes nothing is refused by every engine rather than
+		/// paired with the `(?:…)` the engines wrap a pattern in, where `)(`
+		/// compiled as `(?:)()` and printed every line. `-F` is the way to
+		/// search for the text, and still finds it.
+		#[test]
+		fn a_stray_closing_parenthesis_is_refused_by_every_engine() {
+			let haystack = "()\n)(\nnone\n";
+			for engine in ["default", "pcre2", "auto"] {
+				let (code, stdout, stderr) = run_rg(&[&format!("--engine={engine}"), ")("], haystack);
+
+				assert_eq!(code, 2, "{engine}: {stdout:?}");
+				assert_eq!(stdout, "", "{engine}: nothing was searched");
+				assert!(stderr.starts_with("rg: "), "{engine}: {stderr:?}");
+
+				let (code, stdout, stderr) =
+					run_rg(&[&format!("--engine={engine}"), "-F", ")("], haystack);
+
+				assert_eq!((code, stdout.as_str()), (0, ")(\n"), "{engine} -F: {stderr}");
+			}
+		}
+
 		/// `--pcre2` is the short way to say `--engine=pcre2`, so it reports the
 		/// same single error, and it is NOT auto: a pattern PCRE2 refuses is an
 		/// error even when the default engine would have taken it.

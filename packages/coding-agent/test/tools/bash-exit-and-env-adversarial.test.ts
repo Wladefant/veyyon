@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -45,13 +46,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool exit and env adversarial", () => {
 	let tmpDir: string;
 
@@ -70,7 +64,7 @@ describe("BashTool exit and env adversarial", () => {
 		if (typeof details?.exitCode === "number") {
 			expect(details.exitCode).toBe(0);
 		}
-		expect(textOf(result).toLowerCase().includes("exit 1")).toBe(false);
+		expect(toolResultText(result, "").toLowerCase().includes("exit 1")).toBe(false);
 	});
 
 	it("pipeline stdout is the final command output", async () => {
@@ -79,8 +73,8 @@ describe("BashTool exit and env adversarial", () => {
 			command: "printf 'one\\ntwo\\nthree\\n' | tail -n 1",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("three");
-		expect(textOf(result).includes("one")).toBe(false);
+		expect(toolResultText(result, "")).toContain("three");
+		expect(toolResultText(result, "").includes("one")).toBe(false);
 	});
 
 	it("env var set via export is visible to the next command", async () => {
@@ -91,7 +85,7 @@ describe("BashTool exit and env adversarial", () => {
 			command: "export VEY_TEST_VAR=hello-env; printf '%s\\n' \"$VEY_TEST_VAR\"",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("hello-env");
+		expect(toolResultText(result, "")).toContain("hello-env");
 	});
 
 	it("&& short-circuit skips the second command on failure", async () => {
@@ -110,7 +104,7 @@ describe("BashTool exit and env adversarial", () => {
 			command: "false || printf 'fallback\\n'",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("fallback");
+		expect(toolResultText(result, "")).toContain("fallback");
 	});
 
 	it("writes and reads a file in the same command chain", async () => {
@@ -119,7 +113,7 @@ describe("BashTool exit and env adversarial", () => {
 			command: "printf 'chain\\n' > chain.txt && cat chain.txt",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("chain");
+		expect(toolResultText(result, "")).toContain("chain");
 		expect(await Bun.file(path.join(tmpDir, "chain.txt")).text()).toBe("chain\n");
 	});
 
@@ -127,7 +121,7 @@ describe("BashTool exit and env adversarial", () => {
 		const tool = new BashTool(bashSession(tmpDir) as never);
 		const result = await tool.execute("pwd", { command: "pwd", timeout: 15 });
 		// Resolve both sides (macOS /var vs /private/var).
-		const out = textOf(result).trim();
+		const out = toolResultText(result, "").trim();
 		const realTmp = await fs.realpath(tmpDir);
 		const realOut = out ? await fs.realpath(out).catch(() => out) : out;
 		expect(realOut === realTmp || out.includes(path.basename(tmpDir))).toBe(true);

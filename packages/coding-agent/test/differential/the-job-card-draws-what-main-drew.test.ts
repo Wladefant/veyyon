@@ -16,9 +16,8 @@
  *  - The header row is cut without an ellipsis, because the host composed it to fit, where main cut
  *    every row of the card alike.
  *  - A cut row closes its colour after the ellipsis, where main cut with a hard reset before it.
- *  - The fallback card's second row carries the mark alone, where main drew the whole card as one
- *    multi-line `Text` and that component re-emits the SGR carry of the row above at the start of the
- *    next one, so the row opened with two empty colour runs.
+ *  - The fallback card's second row sits under the block indent, where main drew the whole card as one
+ *    multi-line `Text` and left the row in column zero.
  *
  * WHAT THIS SUITE DOES NOT CATCH. It never calls `execute()`, so nothing here proves which jobs the
  * manager holds, what a poll waited for or what a cancel ended: `test/tools/job-waiting-poll.test.ts`
@@ -379,24 +378,20 @@ describe("job tool differential", () => {
 	});
 
 	/**
-	 * EXCEPTION CELL. The fallback card's second row carries the mark alone. Main drew the card as one
-	 * multi-line `Text`, and that component re-emits the SGR carry of the row above at the start of the
-	 * next row, so main's row opened with the header's two colours as empty runs.
+	 * EXCEPTION CELL. The fallback card's second row sits under the block indent. Main drew the card as one
+	 * multi-line `Text` and left the row in column zero.
 	 */
-	it("draws the fallback card without the carry main's multi-line Text re-emitted", () => {
+	it("indents the fallback card's second row where main left it in column zero", () => {
 		const value: JobViewResult = { content: [{ type: "text", text: "No jobs to process" }], details: { jobs: [] } };
-		// A colour opened and closed with nothing drawn between: the shape a re-emitted carry takes.
-		const emptyRuns = /^(?:\x1b\[[0-9;]+m\x1b\[39m)+/;
+		// A colour opened and closed with nothing drawn between, the shape a replayed SGR carry once took.
+		const emptyRun = /\x1b\[[0-9;]+m\x1b\[39m/;
 		for (const args of [{ list: true }, { poll: ["job_1"] }, undefined]) {
 			for (const width of WIDTHS) {
 				const view = viewResult(value, args, false, 1, width);
 				const oracle = oracleResult(value, args, false, 1, width);
 				expect(view[0]).toBe(oracle[0]);
-				const carry = emptyRuns.exec(oracle[1] ?? "")?.[0] ?? "";
-				// The header carried two colours, so the carry is two empty runs.
-				expect(carry.split("\x1b[39m").length - 1).toBe(2);
-				expect(emptyRuns.test(view[1] ?? "")).toBe(false);
-				expect(view[1]).toBe(`${" ".repeat(BLOCK_INDENT)}${oracle[1]?.slice(carry.length)}`);
+				expect(emptyRun.test(oracle[1] ?? "")).toBe(false);
+				expect(view[1]).toBe(`${" ".repeat(BLOCK_INDENT)}${oracle[1]}`);
 			}
 		}
 	});

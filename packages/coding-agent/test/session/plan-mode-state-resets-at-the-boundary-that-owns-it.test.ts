@@ -20,11 +20,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockHandler, type MockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls/local-protocol";
@@ -34,7 +34,8 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
+import { createOkTool } from "../helpers/ok-tool";
 
 const RETITLED_PLAN = "local://auth-plan.md";
 
@@ -47,18 +48,6 @@ const REMINDER_LINE = (() => {
 	if (!line) throw new Error("plan-mode reminder template has no literal line");
 	return line;
 })();
-
-function fakeTool(name: string): AgentTool {
-	return {
-		name,
-		label: name,
-		description: `Fake ${name}`,
-		parameters: type({}),
-		async execute() {
-			return { content: [{ type: "text" as const, text: "ok" }] };
-		},
-	};
-}
 
 function messageText(message: AgentMessage): string {
 	if (!("content" in message)) return "";
@@ -108,9 +97,8 @@ describe("plan mode state across its boundaries", () => {
 	});
 
 	function start(responses: MockHandler[]): { session: AgentSession; mock: MockModel; store: SessionManager } {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic model");
-		const tools = [fakeTool("ask"), fakeTool("resolve"), fakeTool("read")];
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const tools = [createOkTool("ask"), createOkTool("resolve"), createOkTool("read")];
 		const mock = createMockModel({ responses });
 		let created: AgentSession | undefined;
 		const agent = new Agent({
@@ -157,14 +145,7 @@ describe("plan mode state across its boundaries", () => {
 				provider: model.provider,
 				model: model.id,
 				stopReason: "toolUse",
-				usage: {
-					input: 16,
-					output: 8,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 24,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 				timestamp: Date.now(),
 			});
 			const result: ToolResultMessage = {

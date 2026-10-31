@@ -9,7 +9,7 @@ import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import { Settings } from "../../config/settings";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { styleTerminalRow } from "../../modes/terminal/draw/terminal-row";
-import { OutputSink, type OutputSummary } from "../../session/streaming-output";
+import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary } from "../../session/streaming-output";
 import type { Theme } from "../../theme/theme";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import {

@@ -6,7 +6,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
@@ -16,6 +15,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
@@ -134,8 +134,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	 * `resolveAgentModel` is the one owner of that decision.
 	 */
 	it("resolves an explicit effort suffix on the agent model over the agent-definition default", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = Settings.isolated();
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -161,8 +160,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	 * `resolveAgentThinkingLevel`) stands.
 	 */
 	it("falls back to the agent-definition thinking level without an explicit suffix", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = Settings.isolated();
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
@@ -190,8 +188,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	 * the dedicated parent-effort channel can preserve the session override.
 	 */
 	it("passes the parent configured effort through when agent effort inherits", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const spy = vi.spyOn(sdkModule, "createAgentSession");
 		const parentSelector = `${model.provider}/${model.id}`;
 
@@ -221,8 +218,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	 * or in the child badge.
 	 */
 	it("preserves explicit auto instead of replacing it with the parent effort", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const spy = vi
 			.spyOn(sdkModule, "createAgentSession")
 			.mockResolvedValue(createSessionResult(yieldEmittingSession()));
@@ -255,8 +251,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	 * in the caller, not a model selection.
 	 */
 	it("ignores the agent definition's own model when the caller passed no resolved pattern", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = Settings.isolated();
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));

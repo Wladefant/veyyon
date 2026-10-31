@@ -19,6 +19,7 @@
  * layout and let styling leak past the frame.
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SetupScene, SetupWizardContext } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";
 import { SetupWizardComponent } from "@veyyon/coding-agent/modes/terminal/setup-wizard/wizard-overlay";
@@ -32,7 +33,7 @@ beforeAll(async () => {
 
 /** ANSI-aware visible width: strip SGRs, count code points. */
 function visibleLength(line: string): number {
-	return [...line.replace(/\x1b\[[0-9;]*m/g, "")].length;
+	return [...stripVTControlCharacters(line)].length;
 }
 
 /** Basic and bright background selectors, plus `49` (reset to default background). */

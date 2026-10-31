@@ -49,7 +49,7 @@ export type LoginCredential = "api-key" | "oauth";
  * Heavy OAuth flow modules MUST be reached through dynamic-import thunks in
  * `login`/`refreshToken` so they stay out of the eager startup graph.
  */
-export type ProviderDefinition = ProviderDefinitionFields & ProviderLoginWiring;
+export type ProviderDefinition = ProviderDefinitionFields & ProviderLoginWiring & ProviderAlternateLoginWiring;
 
 interface ProviderDefinitionFields {
 	readonly id: string;
@@ -63,8 +63,6 @@ interface ProviderDefinitionFields {
 	/** `signal` aborts the token request; a refresher passes it to that request's `fetch`. */
 	readonly refreshToken?: (credentials: OAuthCredentials, signal?: AbortSignal) => Promise<OAuthCredentials>;
 	readonly getApiKey?: (credentials: OAuthCredentials) => string;
-	/** Store OAuth credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). */
-	readonly storeCredentialsAs?: string;
 	// --- coding-agent login UX ---
 	/** Auth-broker local callback-server port. Presence ⇒ entry in `CALLBACK_PORTS`. */
 	readonly callbackPort?: number;
@@ -79,3 +77,18 @@ type ProviderLoginWiring =
 			readonly credential: LoginCredential;
 	  }
 	| { readonly login?: undefined; readonly credential?: undefined };
+
+/**
+ * A row that files its credential under another provider is a second way into that provider, and
+ * states the mechanism it differs by. The provider's card lists it as `+ add with <loginMethod>`
+ * under the provider's own login, so the label reads beside the provider's name rather than
+ * repeating it.
+ */
+type ProviderAlternateLoginWiring =
+	| {
+			/** Store credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). */
+			readonly storeCredentialsAs: string;
+			/** The mechanism, without the provider's name: "API key", "device code". */
+			readonly loginMethod: string;
+	  }
+	| { readonly storeCredentialsAs?: undefined; readonly loginMethod?: undefined };

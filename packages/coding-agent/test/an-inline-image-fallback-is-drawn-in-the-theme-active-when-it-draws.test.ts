@@ -9,17 +9,12 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { TOOL_OUTPUT_IMAGE_THEME } from "@veyyon/coding-agent/theme/image-theme";
-import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { requireTheme } from "./helpers/require-theme";
 
-async function loadTheme(name: string): Promise<Theme> {
-	const theme = await getThemeByName(name);
-	if (theme === undefined) throw new Error(`theme ${name} is not bundled`);
-	return theme;
-}
-
-const dark = await loadTheme("dark");
-const light = await loadTheme("light");
+const dark = await requireTheme("dark");
+const light = await requireTheme("light");
 let policyBefore: AnsiPolicy;
 
 beforeAll(() => {

@@ -17,6 +17,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 const MIN_REPEATED_CHARS = 180;
 const MAX_UNIT = 200;
@@ -48,17 +49,6 @@ function exhaustiveScan(text: string): string | null {
 	return null;
 }
 
-function random(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
-
 /** Text with no periodic run of its own: every char is drawn independently from a wide alphabet. */
 function noise(next: () => number, chars: number): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:-_/";
@@ -80,7 +70,7 @@ function unitOf(next: () => number, len: number, alphabet: string): string {
 
 describe("the completed-text scanner reports what an exhaustive scan reports", () => {
 	test("for every unit length, a run on each side of the floors at every alignment", () => {
-		const next = random(7);
+		const next = mulberry32(7);
 		const mismatches: string[] = [];
 		const missed: number[] = [];
 		for (let len = 2; len <= MAX_UNIT; len++) {
@@ -105,7 +95,7 @@ describe("the completed-text scanner reports what an exhaustive scan reports", (
 	});
 
 	test("random texts with several runs, drifted units, token continuations and whitespace", () => {
-		const next = random(11);
+		const next = mulberry32(11);
 		const mismatches: string[] = [];
 		let reported = 0;
 		for (let round = 0; round < 1500; round++) {

@@ -13,10 +13,24 @@ import { urlHyperlinkAlways } from "../modes/terminal/draw/hyperlink";
 import type { InteractiveModeContext } from "../modes/terminal/types";
 import { extractLastCodeBlock, extractLastCommand } from "../modes/terminal/utils/copy-targets";
 import { theme } from "../theme/theme-binding";
+import { normalizePathLikeInput } from "../tools/core/path-utils";
 import { copyToClipboard } from "../utils/clipboard";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
+
+/** Words that ask `/export` for the clipboard, which is `/dump`'s job; as a path each would become the file name. */
+const EXPORT_CLIPBOARD_ALIASES: ReadonlySet<string> = new Set(["--copy", "clipboard", "copy"]);
+
+/**
+ * `/export`'s output path, read the way `/move` and `/cwd` read theirs: trimmed, outer double quotes
+ * stripped, and spaces kept, so `/export "my exports/s.html"` names one file on every surface.
+ */
+export function parseExportTarget(args: string): { outputPath: string | undefined } | { error: string } {
+	const target = normalizePathLikeInput(args);
+	if (EXPORT_CLIPBOARD_ALIASES.has(target)) return { error: "Use /dump to copy the session to clipboard." };
+	return { outputPath: target || undefined };
+}
 
 /** Scheme-less display form of a browser deep link: accent + underline, OSC-8 linked to the full URL. */
 export function collabWebLinkClickable(webLink: string): string {
@@ -64,16 +78,10 @@ export function showCollabLink(
 export const SHARE_HANDLERS = {
 	export: {
 		handle: async (command, runtime) => {
-			const arg = command.args.trim();
-			// Match the interactive `/export` behavior: clipboard aliases are not a
-			// valid export target. Without this, the literal value (`copy`,
-			// `--copy`, `clipboard`) is passed to `exportToHtml` and becomes the
-			// output filename.
-			if (arg === "--copy" || arg === "clipboard" || arg === "copy") {
-				return usage("Use /dump to copy the session to clipboard.", runtime);
-			}
+			const target = parseExportTarget(command.args);
+			if ("error" in target) return usage(target.error, runtime);
 			try {
-				const filePath = await runtime.session.exportToHtml(arg || undefined);
+				const filePath = await runtime.session.exportToHtml(target.outputPath);
 				await runtime.output(`Session exported to: ${filePath}`);
 				return commandConsumed();
 			} catch (err) {
@@ -81,7 +89,9 @@ export const SHARE_HANDLERS = {
 			}
 		},
 		handleTui: async (command, runtime) => {
-			await runtime.ctx.handleExportCommand(command.text);
+			const target = parseExportTarget(command.args);
+			if ("error" in target) runtime.ctx.showWarning(target.error);
+			else await runtime.ctx.handleExportCommand(target.outputPath);
 			runtime.ctx.editor.setText("");
 		},
 	},

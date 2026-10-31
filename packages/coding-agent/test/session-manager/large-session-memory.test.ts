@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { listSessions } from "@veyyon/kernel/session/session-listing";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { MemorySessionStorage } from "@veyyon/kernel/session/session-storage";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 class CountingMemorySessionStorage extends MemorySessionStorage {
 	writeTextSyncCalls = 0;
@@ -18,22 +19,14 @@ class CountingMemorySessionStorage extends MemorySessionStorage {
 }
 
 function makeAssistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	return {
 		role: "assistant" as const,
 		content: [{ type: "text" as const, text }],
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop" as const,
 		timestamp: 2,
 	};

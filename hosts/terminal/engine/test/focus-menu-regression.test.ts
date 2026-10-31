@@ -50,25 +50,25 @@ describe("focus-changing menu teardown", () => {
 
 		try {
 			tui.start();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			frame.working = true;
 			tui.requestRender();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			frame.menuOpen = true;
 			tui.setFocus(menu);
 			tui.requestRender();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			frame.working = false;
 			tui.requestRender();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			frame.menuOpen = false;
 			tui.setFocus(editor);
 			tui.requestRender();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			// The menu rows were committed to history while the menu was tall;
 			// closing it resyncs the commit index at the divergence (stale menu

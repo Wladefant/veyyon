@@ -40,11 +40,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test"
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type AgentTool, DEFAULT_TOOL_RESULT_MAX_BYTES } from "@veyyon/agent-core";
-import type { Message, ToolResultMessage } from "@veyyon/ai";
+import { Agent, type AgentTool, DEFAULT_TOOL_RESULT_MAX_BYTES } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -52,47 +50,9 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
-
-/** Scripted plain-text assistant turn that ends the loop. */
-function stopReply(text: string): MockResponse {
-	return {
-		content: [{ type: "text", text }],
-		stopReason: "stop",
-	};
-}
-
-/** Find the persisted tool result for one call id in the live transcript. */
-function findToolResult(messages: AgentMessage[], callId: string): ToolResultMessage | undefined {
-	for (const message of messages) {
-		if (message.role === "toolResult" && message.toolCallId === callId) return message;
-	}
-	return undefined;
-}
-
-/** Join the text blocks of a tool result for assertion. */
-function toolResultText(message: ToolResultMessage): string {
-	const parts: string[] = [];
-	for (const block of message.content) {
-		if (block.type === "text") parts.push(block.text);
-	}
-	return parts.join("\n");
-}
-
-/**
- * The tool result text the NEXT model call was built from. Matched by tool
- * name, not call id: the wire canonicalizer rewrites provider-facing ids.
- */
-function nextRequestToolResultText(messages: Message[], toolName: string): string | undefined {
-	for (const message of messages) {
-		if (message.role !== "toolResult" || message.toolName !== toolName) continue;
-		const parts: string[] = [];
-		for (const block of message.content) {
-			if (typeof block === "object" && block !== null && block.type === "text") parts.push(block.text);
-		}
-		return parts.join("\n");
-	}
-	return undefined;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
+import { findToolResult, nextRequestToolResultText, stopReply } from "./helpers/mock-turns";
+import { toolResultText } from "./helpers/tool-result-text";
 
 /** Marker string the cap writes where bytes were removed, e.g. `[…681kB elided…]`. */
 const ELISION_PATTERN = /\[…(\d+)B elided…\]/;
@@ -115,8 +75,7 @@ describe("an oversized tool result is capped before it is persisted or sent", ()
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected claude-sonnet-4-5 to be bundled");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		const settings = Settings.isolated({

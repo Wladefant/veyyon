@@ -23,6 +23,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, AssistantMessageEvent } from "@veyyon/ai";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { encodeResponse } from "../src/providers/openai-responses-server-output";
 import { encodeStream } from "../src/providers/openai-responses-server-stream";
 import { encodeTextSignatureV1 } from "../src/providers/openai-shared";
@@ -149,14 +150,7 @@ function finalMessage(variants: Variant[]): AssistantMessage {
 		provider: "openai",
 		model: "gpt-5",
 		content: variants.map((variant, index) => variant.block(`t${index}`)),
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp: 1_700_000_000_000,
 	};

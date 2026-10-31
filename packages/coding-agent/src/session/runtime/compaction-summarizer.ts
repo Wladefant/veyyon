@@ -25,13 +25,16 @@ import {
 import { modelServesPrefixCacheHits } from "@veyyon/agent-core/compaction/cache-aligned-context";
 import type { CodexCompactionContext, Message, Model, ProviderSessionState, ServiceTier } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { calculateRetryBackoffDelayMs, resolveRetryPolicy } from "@veyyon/kernel/session/retry-policy";
 import { readColdMessage } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
-import { errorMessage, exponentialBackoffDelay, extractRetryHint, logger, TimeSlice } from "@veyyon/utils";
+import { errorMessage, extractRetryHint, logger, TimeSlice } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
+import { formatModelString } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner } from "../../extensibility/extensions";
-import { compactionModelCandidates, configuredCompactionEfforts, modelKey } from "../agent-session-model-targets";
+import { compactionModelCandidates, configuredCompactionEfforts } from "../agent-session-model-targets";
+import { parkUsageLimitedCredential } from "./provider-usage";
 import type { SessionSecrets } from "./session-secrets";
 
 /** What {@link CompactionSummarizer} reads from the session's public surface. */
@@ -93,7 +96,7 @@ export type CompactionHookPreparation =
  * matcher still sees it, and the original is kept as `cause`.
  */
 function compactionCandidateError(candidate: Model, error: unknown): Error {
-	return new Error(`${modelKey(candidate)}: ${errorMessage(error)}`, { cause: error });
+	return new Error(`${formatModelString(candidate)}: ${errorMessage(error)}`, { cause: error });
 }
 
 /**
@@ -230,7 +233,7 @@ export class CompactionSummarizer {
 		signal?: AbortSignal,
 	): Promise<Pick<SummaryOptions, "sessionSystemPrompt" | "sessionMessages" | "tools"> | undefined> {
 		const sessionModel = this.#session.model;
-		if (!sessionModel || modelKey(sessionModel) !== modelKey(candidate)) return undefined;
+		if (!sessionModel || formatModelString(sessionModel) !== formatModelString(candidate)) return undefined;
 		if (!modelServesPrefixCacheHits(candidate)) return undefined;
 		const llmMessages = await this.#session.convertMessagesToLlm(this.#session.agent.state.messages.slice(), signal);
 		const context = await this.#session.agent.buildSideRequestContext(llmMessages);
@@ -246,7 +249,7 @@ export class CompactionSummarizer {
 			);
 		}
 		return new Error(
-			`Compaction requires usable credentials for ${currentModel.provider}/${currentModel.id}. ` +
+			`Compaction requires usable credentials for ${formatModelString(currentModel)}. ` +
 				`Configure ${currentModel.provider} credentials or set \`compaction.model\` to an authenticated model.`,
 		);
 	}
@@ -260,7 +263,7 @@ export class CompactionSummarizer {
 	#recordSummaryStaging(candidate: Model, result: CompactionResult): void {
 		this.#stagedSummaryCheckpoints.clear();
 		if (result.summaryStages === undefined) return;
-		const key = modelKey(candidate);
+		const key = formatModelString(candidate);
 		if (result.summaryStages > 1) this.#stagedSummaryModels.add(key);
 		else this.#stagedSummaryModels.delete(key);
 	}
@@ -277,9 +280,9 @@ export class CompactionSummarizer {
 	 */
 	#announceCompactionFallback(candidates: Model[], used: Model, skipReasons: Map<string, string>): void {
 		const first = candidates[0];
-		if (!first || modelKey(first) === modelKey(used)) return;
-		const reason = skipReasons.get(modelKey(first)) ?? "it could not run the summary";
-		const message = `Compacted with ${used.provider}/${used.id}. ${first.provider}/${first.id} was skipped: ${reason}.`;
+		if (!first || formatModelString(first) === formatModelString(used)) return;
+		const reason = skipReasons.get(formatModelString(first)) ?? "it could not run the summary";
+		const message = `Compacted with ${formatModelString(used)}. ${formatModelString(first)} was skipped: ${reason}.`;
 		if (this.#announcedCompactionFallbacks.has(message)) return;
 		this.#announcedCompactionFallbacks.add(message);
 		this.#session.emitNotice("warning", message, "compaction");
@@ -322,7 +325,7 @@ export class CompactionSummarizer {
 		// error on the compaction that sees it and as a resolved-nothing on
 		// every compaction after, and the two used to be keyed by their own
 		// wording, so the operator was told the route was gone twice.
-		const routeAbsentKey = `no-compaction-route:${model.provider}/${model.id}`;
+		const routeAbsentKey = `no-compaction-route:${formatModelString(model)}`;
 		if (!resolveServerCompactionTransport(model)) {
 			// A model that never supported this is inert and stays quiet. One
 			// whose route answered 404 is a downgrade away from what the operator
@@ -332,11 +335,11 @@ export class CompactionSummarizer {
 			if (serverCompactionRouteAbsent(model) && !this.#announcedServerCompactionFailures.has(routeAbsentKey)) {
 				this.#announcedServerCompactionFailures.add(routeAbsentKey);
 				logger.warn("Server-side compaction unavailable, falling back to local compaction", {
-					reason: `${model.provider}/${model.id} has no compaction route (404)`,
+					reason: `${formatModelString(model)} has no compaction route (404)`,
 				});
 				this.#session.emitNotice(
 					"warning",
-					`Server-side compaction unavailable (${model.provider}/${model.id} has no compaction route (404)); compacting locally for the rest of this session.`,
+					`Server-side compaction unavailable (${formatModelString(model)} has no compaction route (404)); compacting locally for the rest of this session.`,
 					"compaction",
 				);
 			}
@@ -346,7 +349,7 @@ export class CompactionSummarizer {
 		if (!apiKey) {
 			// The loader announced a remote pass from the sync half of this gate;
 			// a missing credential must not downgrade to a local pass silently.
-			const message = `no API key for ${model.provider}/${model.id}`;
+			const message = `no API key for ${formatModelString(model)}`;
 			logger.warn("Server-side compaction unavailable, falling back to local compaction", { reason: message });
 			if (!this.#announcedServerCompactionFailures.has(message)) {
 				this.#announcedServerCompactionFailures.add(message);
@@ -384,7 +387,7 @@ export class CompactionSummarizer {
 			const message = errorMessage(error);
 			logger.warn("Server-side compaction failed, falling back to local compaction", {
 				error: message,
-				model: `${model.provider}/${model.id}`,
+				model: formatModelString(model),
 			});
 			if (!this.#announcedServerCompactionFailures.has(message)) {
 				this.#announcedServerCompactionFailures.add(message);
@@ -443,11 +446,11 @@ export class CompactionSummarizer {
 			if (candidateWindow > 0 && summarizePayloadTokens > candidateWindow) {
 				skippedForWindow++;
 				skipReasons.set(
-					modelKey(candidate),
+					formatModelString(candidate),
 					`its context window holds ${candidateWindow} tokens and the summary needed ${summarizePayloadTokens}`,
 				);
 				logger.warn("compaction candidate skipped: summarization payload exceeds its context window", {
-					candidate: `${candidate.provider}/${candidate.id}`,
+					candidate: formatModelString(candidate),
 					candidateWindow,
 					summarizePayloadTokens,
 				});
@@ -455,7 +458,7 @@ export class CompactionSummarizer {
 			}
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
 			if (!apiKey) {
-				skipReasons.set(modelKey(candidate), "it is not authenticated");
+				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
 			}
 
@@ -476,7 +479,8 @@ export class CompactionSummarizer {
 						// Clamped per-model inside compact() via resolveCompactionEffort
 						// so unsupported-effort models (xai-oauth/grok-4.20-0309-reasoning) do not trip
 						// requireSupportedEffort.
-						thinkingLevel: configuredEffortByModel.get(modelKey(candidate)) ?? this.#session.thinkingLevel,
+						thinkingLevel:
+							configuredEffortByModel.get(formatModelString(candidate)) ?? this.#session.thinkingLevel,
 						tools: cachePrefix?.tools ?? this.#session.agent.state.tools,
 						sessionId: this.#session.sessionId,
 						// Providers route on `promptCacheKey ?? sessionId`, and the live
@@ -502,7 +506,7 @@ export class CompactionSummarizer {
 						// the tier the operator selected for this candidate's family,
 						// that request is billed and paced on a tier they never chose.
 						serviceTier: this.#host.effectiveServiceTier(candidate),
-						summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+						summaryStaging: this.#stagedSummaryModels.has(formatModelString(candidate)) ? "staged" : undefined,
 						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					},
 				);
@@ -513,7 +517,7 @@ export class CompactionSummarizer {
 				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
-				skipReasons.set(modelKey(candidate), "its credentials were rejected");
+				skipReasons.set(formatModelString(candidate), "its credentials were rejected");
 			}
 		}
 
@@ -628,7 +632,7 @@ export class CompactionSummarizer {
 			const candidate = candidates[candidateIndex];
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
 			if (!apiKey) {
-				skipReasons.set(modelKey(candidate), "it is not authenticated");
+				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
 			}
 			const cachePrefix = await this.#cacheAlignedCompactionPrefix(candidate, signal);
@@ -644,7 +648,7 @@ export class CompactionSummarizer {
 				// otherwise honor the user's /model thinking selection.
 				// The most-fired compaction site. Clamped per-model
 				// inside compact() via resolveCompactionEffort.
-				thinkingLevel: configuredEffortByModel.get(modelKey(candidate)) ?? this.#session.thinkingLevel,
+				thinkingLevel: configuredEffortByModel.get(formatModelString(candidate)) ?? this.#session.thinkingLevel,
 				sessionSystemPrompt: cachePrefix?.sessionSystemPrompt,
 				sessionMessages: cachePrefix?.sessionMessages,
 				tools: cachePrefix?.tools ?? this.#session.agent.state.tools,
@@ -657,7 +661,7 @@ export class CompactionSummarizer {
 				codexCompaction,
 				completeImpl: this.#session.sideComplete,
 				serviceTier: this.#host.effectiveServiceTier(candidate),
-				summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+				summaryStaging: this.#stagedSummaryModels.has(formatModelString(candidate)) ? "staged" : undefined,
 				stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 			};
 			const candidateWindow =
@@ -672,19 +676,19 @@ export class CompactionSummarizer {
 			);
 			if (candidateWindow > 0 && summarizePayloadTokens > candidateWindow) {
 				logger.warn("compaction candidate skipped: summarization payload exceeds its context window", {
-					candidate: `${candidate.provider}/${candidate.id}`,
+					candidate: formatModelString(candidate),
 					candidateWindow,
 					summarizePayloadTokens,
 				});
 				skipReasons.set(
-					modelKey(candidate),
+					formatModelString(candidate),
 					`its context window holds ${candidateWindow} tokens and the summary needed ${summarizePayloadTokens}`,
 				);
 				// Keep a real reason for the failure when every candidate is
 				// skipped this way. A provider error from a later candidate
 				// still overwrites it.
 				lastError ??= new Error(
-					`Compaction failed: ${candidate.provider}/${candidate.id} holds ${candidateWindow} tokens and the summary needed ${summarizePayloadTokens}.`,
+					`Compaction failed: ${formatModelString(candidate)} holds ${candidateWindow} tokens and the summary needed ${summarizePayloadTokens}.`,
 				);
 				// What the rescue has to free for ANY candidate to summarize at
 				// all. The smallest gap across skipped candidates is the widest
@@ -709,7 +713,7 @@ export class CompactionSummarizer {
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);
 				return attempt.result;
 			}
-			skipReasons.set(modelKey(candidate), attempt.skipReason);
+			skipReasons.set(formatModelString(candidate), attempt.skipReason);
 			lastError = attempt.error;
 		}
 
@@ -720,8 +724,10 @@ export class CompactionSummarizer {
 	}
 
 	/**
-	 * Run one compaction candidate, retrying a transient or rate-limited failure
-	 * with backoff.
+	 * Run one compaction candidate, retrying a transient or rate-limited failure under the retry
+	 * policy a turn on the candidate runs under: its `retry.perProvider` or built-in attempt count
+	 * and backoff, a spent allowance parked through {@link parkUsageLimitedCredential}, and no wait
+	 * past `retry.maxDelayMs`.
 	 *
 	 * A failure is returned rather than thrown so the caller moves on to the
 	 * next candidate; only an abort is thrown. A retry wait over 30s moves on
@@ -735,6 +741,15 @@ export class CompactionSummarizer {
 		hasMoreCandidates: boolean,
 	): Promise<{ result: CompactionResult } | { error: Error; skipReason: string }> {
 		const retrySettings = this.#session.settings.getGroup("retry");
+		const policy = resolveRetryPolicy(
+			{
+				maxRetries: retrySettings.maxRetries,
+				baseDelayMs: retrySettings.baseDelayMs,
+				maxDelayMs: retrySettings.maxDelayMs,
+			},
+			this.#session.settings.get("retry.perProvider"),
+			candidate,
+		);
 		const maxAcceptableDelayMs = 30_000;
 		let attempt = 0;
 		while (true) {
@@ -757,7 +772,10 @@ export class CompactionSummarizer {
 				const message = errorMessage(error);
 				const skipReason = `it failed: ${message}`;
 				const id = AIError.classify(error, candidate.api);
-				if (AIError.is(id, AIError.Flag.AuthFailed)) {
+				const usageLimited = AIError.is(id, AIError.Flag.UsageLimit);
+				// A 403 that states a spent balance carries both flags; the credential is valid and the
+				// allowance is not, so it is settled as a usage limit, the way a turn settles it.
+				if (AIError.is(id, AIError.Flag.AuthFailed) && !usageLimited) {
 					return { error: this.#buildCompactionAuthError(), skipReason };
 				}
 				if (AIError.is(id, AIError.Flag.Timeout)) {
@@ -767,7 +785,7 @@ export class CompactionSummarizer {
 							: "Auto-compaction summarization timed out, not retrying same model",
 						{
 							error: message,
-							model: `${candidate.provider}/${candidate.id}`,
+							model: formatModelString(candidate),
 						},
 					);
 					return { error: compactionCandidateError(candidate, error), skipReason };
@@ -776,39 +794,59 @@ export class CompactionSummarizer {
 				const retryAfterMs = extractRetryHint(undefined, message);
 				const shouldRetry =
 					retrySettings.enabled &&
-					attempt < retrySettings.maxRetries &&
-					(retryAfterMs !== undefined ||
-						AIError.is(id, AIError.Flag.Transient) ||
-						AIError.is(id, AIError.Flag.UsageLimit));
+					attempt < policy.maxRetries &&
+					(retryAfterMs !== undefined || usageLimited || AIError.is(id, AIError.Flag.Transient));
 				if (!shouldRetry) {
 					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
-				// Bounded by `retry.maxRetries`; the schedule is uncapped so a configured base keeps its full ladder.
-				const baseDelayMs = exponentialBackoffDelay(attempt, {
-					baseMs: retrySettings.baseDelayMs,
-					maxMs: Number.POSITIVE_INFINITY,
-					jitter: 0,
-				});
-				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
+				const modelNotInPlan = AIError.is(id, AIError.Flag.ModelNotInPlan);
+				const park = usageLimited
+					? await parkUsageLimitedCredential(
+							this.#session.modelRegistry.authStorage,
+							candidate,
+							this.#session.sessionId,
+							{ errorMessage: message, retryAfterMs, modelNotInPlan },
+						)
+					: undefined;
+				// No account serves the model on its plan, and no wait changes that.
+				if (modelNotInPlan && !park?.switched) {
+					return { error: compactionCandidateError(candidate, error), skipReason };
+				}
+
+				attempt++;
+				const providerWaitMs = park ? park.waitMs : retryAfterMs;
+				const delayMs = park?.switched
+					? 0
+					: Math.max(calculateRetryBackoffDelayMs(policy.baseDelayMs, attempt), providerWaitMs ?? 0);
 				if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
 					logger.warn("Auto-compaction retry delay too long, trying next model", {
 						delayMs,
 						retryAfterMs,
 						error: message,
-						model: `${candidate.provider}/${candidate.id}`,
+						model: formatModelString(candidate),
+					});
+					return { error: compactionCandidateError(candidate, error), skipReason };
+				}
+				// The fail-fast cap a turn honors: a summary does not hold the session through a wait
+				// the provider stated past `retry.maxDelayMs`.
+				if (policy.maxDelayMs > 0 && delayMs > policy.maxDelayMs) {
+					logger.warn("Auto-compaction retry wait exceeds retry.maxDelayMs, not retrying", {
+						delayMs,
+						maxDelayMs: policy.maxDelayMs,
+						error: message,
+						model: formatModelString(candidate),
 					});
 					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
-				attempt++;
 				logger.warn("Auto-compaction failed, retrying", {
 					attempt,
-					maxRetries: retrySettings.maxRetries,
+					maxRetries: policy.maxRetries,
 					delayMs,
 					retryAfterMs,
 					error: message,
-					model: `${candidate.provider}/${candidate.id}`,
+					model: formatModelString(candidate),
 				});
 				await scheduler.wait(delayMs, { signal });
 			}

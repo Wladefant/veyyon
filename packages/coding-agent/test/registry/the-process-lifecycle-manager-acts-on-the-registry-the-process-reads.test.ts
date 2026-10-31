@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 function recordingSession(disposed: string[], id: string): AgentSession {
 	return {
@@ -23,10 +24,6 @@ function recordingSession(disposed: string[], id: string): AgentSession {
 		sessionManager: { flush: async () => {} },
 		dispose: async () => void disposed.push(id),
 	} as unknown as AgentSession;
-}
-
-async function settle(): Promise<void> {
-	for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
 afterEach(() => {
@@ -70,7 +67,7 @@ describe("the process lifecycle manager after the process registry is replaced",
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.global();
 		vi.advanceTimersByTime(40);
-		await settle();
+		await drainMicrotasks(5);
 
 		expect(disposed).toEqual([]);
 	});

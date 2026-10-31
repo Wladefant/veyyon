@@ -533,7 +533,7 @@ export class AgentRegistry {
 	 * Only the agent named here moves. Its former children keep the old scope on
 	 * purpose: they belong to the conversation that just ended, and the caller
 	 * that re-roots a session is expected to release them (see
-	 * `AgentSession.#rescopeAgentRegistry`). Anything that survives the release —
+	 * `ConversationRelease` in `session/runtime/conversation-release.ts`). Anything that survives the release —
 	 * a ref another owner is holding — is then correctly invisible to the new
 	 * conversation rather than silently inherited by it.
 	 */

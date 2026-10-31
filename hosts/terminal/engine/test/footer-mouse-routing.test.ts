@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { Component } from "@veyyon/tui";
 import { TUI } from "@veyyon/tui/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
+import { sgrPress } from "./helpers/sgr-mouse";
 import { VirtualTerminal } from "./virtual-terminal";
 
 /** A fixed-height block of transcript filler. */
@@ -43,11 +44,6 @@ class PlainFooter implements Component {
 	}
 }
 
-/** SGR left-button press at 0-based (row, col). */
-function leftClickAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
 const ROWS = 10;
 const COLS = 40;
 
@@ -61,7 +57,7 @@ async function mountFooterTui(footerChildren: Component[]): Promise<{ tui: TUI; 
 	tui.setPinnedFooterChildCount(footerChildren.length);
 	tui.setScrollIsolation(true);
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 	return { tui, term };
 }
 
@@ -79,10 +75,10 @@ describe("pinned-footer mouse routing", () => {
 
 		// Footer is the last 2 frame rows, pinned to the last 2 screen rows.
 		// Clicking the SECOND footer row must arrive as line 1 of the child.
-		term.sendInput(leftClickAt(ROWS - 1, 7));
+		term.sendInput(sgrPress(ROWS - 1, 7));
 		expect(footer.calls).toEqual([{ line: 1, col: 7, leftClick: true }]);
 
-		term.sendInput(leftClickAt(ROWS - 2, 3));
+		term.sendInput(sgrPress(ROWS - 2, 3));
 		expect(footer.calls[1]).toEqual({ line: 0, col: 3, leftClick: true });
 	});
 
@@ -95,10 +91,10 @@ describe("pinned-footer mouse routing", () => {
 		// Footer rows (bottom-up): footer-b, footer-a, plain-footer. A click on
 		// the plain child routes nowhere and must not throw; a click on the
 		// routable child's first row arrives as line 0.
-		term.sendInput(leftClickAt(ROWS - 3, 0));
+		term.sendInput(sgrPress(ROWS - 3, 0));
 		expect(routable.calls).toEqual([]);
 
-		term.sendInput(leftClickAt(ROWS - 2, 12));
+		term.sendInput(sgrPress(ROWS - 2, 12));
 		expect(routable.calls).toEqual([{ line: 0, col: 12, leftClick: true }]);
 	});
 
@@ -107,8 +103,8 @@ describe("pinned-footer mouse routing", () => {
 		const { tui, term } = await mountFooterTui([footer]);
 		stop = () => tui.stop();
 
-		term.sendInput(leftClickAt(0, 0));
-		term.sendInput(leftClickAt(ROWS - 3, 5));
+		term.sendInput(sgrPress(0, 0));
+		term.sendInput(sgrPress(ROWS - 3, 5));
 		expect(footer.calls).toEqual([]);
 	});
 });

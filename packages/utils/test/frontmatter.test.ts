@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { parseFrontmatter } from "@veyyon/utils";
+import { FrontmatterError, parseFrontmatter } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
 
 describe("parseFrontmatter", () => {
@@ -173,5 +173,19 @@ describe("parseFrontmatter error level handling", () => {
 		expect(() => parseFrontmatter("---\ninvalid: [unclosed\n---\nb", { level: "fatal", source: "x.md" })).toThrow(
 			/x\.md/,
 		);
+	});
+
+	it("prints the message, the source and the YAML error's stack from a fatal FrontmatterError", () => {
+		vi.spyOn(logger, "warn").mockImplementation(() => {});
+		let thrown: unknown;
+		try {
+			parseFrontmatter("---\ninvalid: [unclosed\n---\nb", { level: "fatal", source: "x.md" });
+		} catch (err) {
+			thrown = err;
+		}
+		if (!(thrown instanceof FrontmatterError) || !(thrown.cause instanceof Error)) {
+			throw new Error("expected a FrontmatterError caused by the YAML error");
+		}
+		expect(thrown.toString()).toBe(`${thrown.message}\n\nSource: "x.md"\n\nStack:\n${thrown.cause.stack}`);
 	});
 });

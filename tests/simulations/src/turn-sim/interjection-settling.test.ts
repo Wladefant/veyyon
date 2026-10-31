@@ -24,6 +24,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { mulberry32 } from "../../../../packages/utils/test/helpers/mulberry32";
 import {
 	bulkProse,
 	createSimulation,
@@ -40,18 +41,6 @@ afterEach(async () => {
 	await sim?.dispose();
 	sim = undefined;
 });
-
-/** mulberry32: tiny seeded RNG so storm scenarios are replayable. */
-function seededRandom(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /**
  * Wait until the session is idle AND every queued steer/follow-up has been
@@ -629,7 +618,7 @@ describe("cancel and interjection storms", () => {
 		// Esc-cancel, then release the stream and prompt the next round. The
 		// seed is fixed and named in every failure so the sequence replays.
 		const seed = 0xc0ffee;
-		const random = seededRandom(seed);
+		const random = mulberry32(seed);
 		let roundGate = Promise.withResolvers<void>();
 		sim = await createSimulation({
 			settings: { "retry.enabled": false },
@@ -666,7 +655,7 @@ describe("cancel and interjection storms", () => {
 		// by event-stream count, never by round, or a follow-up turn wedges on
 		// a gate nobody releases. Every round must end idle, queue empty.
 		const seed = 0x5eed;
-		const random = seededRandom(seed);
+		const random = mulberry32(seed);
 		let toolGate = Promise.withResolvers<void>();
 		sim = await createSimulation({
 			settings: { "retry.enabled": false },

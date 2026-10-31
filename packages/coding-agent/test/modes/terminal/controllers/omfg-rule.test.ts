@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import {
 	type ParsedGeneratedRule,
@@ -10,14 +11,7 @@ import {
 	validateParsedRuleAgainstAssistantHistory,
 } from "@veyyon/coding-agent/modes/terminal/controllers/omfg-rule";
 
-const usage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = emptyUsage();
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {

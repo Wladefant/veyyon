@@ -36,15 +36,31 @@ function stringBytesNow(): number {
  * alive in the window, and moved a delta bounded by a 3.6 MB body by more than that body both ways.
  */
 export async function liveStringBytes(): Promise<number> {
+	return leastReading("liveStringBytes", 0, Number.NEGATIVE_INFINITY);
+}
+
+/**
+ * String bytes live now less `before`, a {@link liveStringBytes} reading, sampled only until the
+ * growth falls below `limit`. A caller that compares the growth against `limit` reaches the same
+ * verdict as from the least of every sample, since any sample below `limit` puts the least below it;
+ * a growth at or above `limit` is the least of all `SAMPLES`, as {@link liveStringBytes} reads it.
+ * A growth below `limit` is the first sample below it, not the least.
+ */
+export async function liveStringBytesGrownSince(before: number, limit: number): Promise<number> {
+	return leastReading("liveStringBytesGrownSince", before, limit);
+}
+
+/** The least of up to `SAMPLES` readings less `offset`, taken until one falls below `limit`. */
+async function leastReading(caller: string, offset: number, limit: number): Promise<number> {
 	if (TEST_FILE.test(Bun.main)) {
 		throw new Error(
-			`liveStringBytes reads the whole heap of ${Bun.main}, a test runner process; measure in a fixture script the test runs in a fresh process`,
+			`${caller} reads the whole heap of ${Bun.main}, a test runner process; measure in a fixture script the test runs in a fresh process`,
 		);
 	}
 	let least = Number.POSITIVE_INFINITY;
-	for (let sample = 0; sample < SAMPLES; sample++) {
+	for (let sample = 0; sample < SAMPLES && least >= limit; sample++) {
 		await setImmediate();
-		least = Math.min(least, stringBytesNow());
+		least = Math.min(least, stringBytesNow() - offset);
 	}
 	return least;
 }

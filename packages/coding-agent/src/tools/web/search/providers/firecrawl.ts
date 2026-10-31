@@ -4,7 +4,7 @@
  * Calls Firecrawl's search API and maps web results into the unified
  * SearchResponse shape used by the web search tool.
  */
-import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { normalizeFirecrawlSearchUrl } from "@veyyon/web/firecrawl";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
@@ -39,15 +39,6 @@ interface FirecrawlSearchResponse {
 	data?: {
 		web?: FirecrawlWebResult[] | null;
 	} | null;
-}
-
-/** Resolve Firecrawl API key through the shared auth storage pipeline. */
-export function findApiKey(
-	authStorage: AuthStorage,
-	sessionId?: string,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
-	return authStorage.getApiKey("firecrawl", sessionId, { signal });
 }
 
 export function buildRequestBody(params: FirecrawlSearchParams): Record<string, unknown> {

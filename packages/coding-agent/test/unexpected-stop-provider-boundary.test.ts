@@ -1,18 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { classifyUnexpectedStop } from "@veyyon/coding-agent/session/unexpected-stop-classifier";
 import { tinyTitleClient } from "@veyyon/coding-agent/tiny/title-client";
 import { logger } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const SECRET = "UNEXPECTED_STOP_SECRET_42d9";
 
 function onlineModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected bundled classifier model");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function settingsFor(backend: string, model = onlineModel()) {

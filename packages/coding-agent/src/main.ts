@@ -38,6 +38,8 @@ import {
 	postmortem,
 	setInteractiveHost,
 	setProjectDir,
+	stripAnsi,
+	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
@@ -46,6 +48,7 @@ import {
 	type Mode,
 	namesSessionFile,
 	normalizeContinueSessionArgs,
+	parseArgs,
 	reportUnrecognizedFlags,
 } from "./cli/args";
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE } from "./cli/exit-codes";
@@ -72,7 +75,7 @@ import {
 	type ScopedModel,
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
-import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
+import { getDefault, type SettingPath, Settings, settings, unparseableSettingsNotice } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import { reset as resetCapabilities } from "./discovery/capability";
 import {
@@ -451,7 +454,7 @@ export async function submitInteractiveInput(
 			await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
 			// Synthetic continue shortcuts are hidden developer prompts. The streaming
-			// queue (#queueUserMessage) only carries user-attributed messages, so we do
+			// queue (QueuedMessages.queueUser) only carries user-attributed messages, so we do
 			// NOT pass streamingBehavior here: queueing would silently demote the
 			// developer directive to a visible user message. A synthetic submit while
 			// streaming keeps its prior behavior (rejected as busy) rather than changing
@@ -525,7 +528,19 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);
 		}
-		applyExtensionFlags(nextSession.extensionRunner, args.rawArgs);
+		// A flag neither the launch parser nor this session's extensions recognize is a typo, refused the
+		// way a launch refuses it once its extensions load. It is checked here because extension flags are
+		// registered per session, for that session's directory; the client reads the reason as the
+		// `session/new` error, where a server that kept running on the typo would show nothing.
+		const flags = applyExtensionFlags(nextSession.extensionRunner, args.rawArgs) ?? parseArgs(args.rawArgs);
+		if (flags.unrecognizedFlags.length > 0) {
+			let report = "";
+			reportUnrecognizedFlags(flags, text => {
+				report += text;
+			});
+			await nextSession.dispose().catch(error => logger.warn("Failed to dispose ACP session", { error }));
+			throw new Error(stripAnsi(report).trim());
+		}
 		return nextSession;
 	};
 }
@@ -1417,6 +1432,7 @@ interface RunRootCommandDependencies {
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	selectSession?: typeof selectSession;
 	runAcpMode?: RunAcpMode;
+	runRpcMode?: RunRpcMode;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
 	/**
@@ -1980,17 +1996,24 @@ async function buildLaunchSessionOptions(
 	return sessionOptions;
 }
 
+/**
+ * Build a session. With `refreshModels` (the default) background model discovery starts once the
+ * session exists: ACP and RPC clients list models before their first prompt, and a session a host
+ * creates later serves the same host. The terminal starts discovery after its first frame and a
+ * print run after its first response starts streaming (`refreshModelsOnFirstResponse`), so neither
+ * delays its first request.
+ */
 type LaunchSessionCreator = (
 	options: CreateAgentSessionOptions,
-	deferModelRefresh?: boolean,
+	refreshModels?: boolean,
 ) => Promise<CreateAgentSessionResult>;
 
 function launchSessionCreator(launch: RootLaunch): LaunchSessionCreator {
 	const createAgentSessionImpl = launch.deps.createAgentSession ?? createAgentSession;
 	const { modelRegistry } = launch;
-	return async (options, deferModelRefresh = false) => {
+	return async (options, refreshModels = true) => {
 		const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
-		if (!deferModelRefresh) {
+		if (refreshModels) {
 			await yieldToEventLoop();
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
@@ -2201,32 +2224,36 @@ function nextSessionFactory(
 
 /**
  * Queue the model fallback warning and any model-registry error for the TUI.
- * A non-interactive run with no model cannot proceed, so it prints the setup
- * instructions and exits.
+ * A non-interactive run with no model cannot proceed, so it prints the same
+ * notices and the setup instructions, and exits.
+ *
+ * A fallback message the registry error caused already includes that error, so
+ * the error is stated once, as part of it, and at error severity.
  */
 function reportModelAvailability(launch: RootLaunch, created: CreateAgentSessionResult): void {
 	const { modelFallbackMessage } = created;
+	const registryError = launch.modelRegistry.getError()?.message;
+	const fallbackStatesRegistryError =
+		registryError !== undefined && modelFallbackMessage?.includes(registryError) === true;
+	const notices: InteractiveModeNotify[] = [];
 	if (modelFallbackMessage) {
-		launch.notifs.push({ kind: "warn", message: modelFallbackMessage });
+		notices.push({ kind: fallbackStatesRegistryError ? "error" : "warn", message: modelFallbackMessage });
 	}
-
-	const modelRegistryError = launch.modelRegistry.getError();
-	if (modelRegistryError) {
-		launch.notifs.push({ kind: "error", message: modelRegistryError.message });
+	if (registryError !== undefined && !fallbackStatesRegistryError) {
+		notices.push({ kind: "error", message: registryError });
 	}
+	launch.notifs.push(...notices);
 
 	if (launch.isInteractive || created.session.model) return;
-	if (modelRegistryError) {
-		process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
+	for (const notice of notices) process.stderr.write(`${chalk.red(notice.message)}\n\n`);
+	if (!modelFallbackMessage) process.stderr.write(`${chalk.red("No models available.")}\n\n`);
+	// The registry error ends with the fix for the file it names; key advice and an
+	// offer to create that file would point away from it.
+	if (registryError === undefined) {
+		process.stderr.write(`${chalk.yellow("Set an API key environment variable:")}\n`);
+		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
+		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 	}
-	if (modelFallbackMessage) {
-		process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-	} else {
-		process.stderr.write(`${chalk.red("No models available.")}\n`);
-	}
-	process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
-	process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-	process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 	process.exit(EXIT_FAILURE);
 }
 
@@ -2239,9 +2266,9 @@ interface StartedLaunch {
 	readonly createNextSession: NextSessionFactory;
 }
 
-async function runRpcLaunch(mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
+async function runRpcLaunch(launch: RootLaunch, mode: "rpc" | "rpc-ui", started: StartedLaunch): Promise<void> {
 	// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
-	const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
+	const runRpcMode = launch.deps.runRpcMode ?? (await import("./modes/rpc/rpc-mode")).runRpcMode;
 	stopStartupWatchdog();
 	const { created } = started;
 	await runRpcMode(created, {
@@ -2286,10 +2313,25 @@ async function runInteractiveLaunch(launch: RootLaunch, started: StartedLaunch):
 	await runInteractiveMode(launch, started, versionCheckPromise);
 }
 
+/**
+ * Start model discovery once the run's first response starts streaming. A print run resolves its
+ * model at startup, so discovery is not needed for the first request and would only delay it.
+ * Started while the provider generates, it still refreshes the catalog for what a longer run
+ * resolves later: an agent's model, a role model, the compaction model.
+ */
+function refreshModelsOnFirstResponse(session: AgentSession): void {
+	const unsubscribe = session.subscribe(event => {
+		if (event.type !== "message_start" || event.message.role !== "assistant") return;
+		unsubscribe();
+		session.modelRegistry.refreshInBackground();
+	});
+}
+
 async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Promise<void> {
 	stopStartupWatchdog();
 	const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 	const { session } = started.created;
+	refreshModelsOnFirstResponse(session);
 	await runPrintMode(session, {
 		mode,
 		messages: started.initialArgs.messages,
@@ -2300,7 +2342,6 @@ async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Pr
 			session,
 			sessionManager: session.sessionManager,
 			settings: session.settings,
-			cwd: session.sessionManager.getCwd(),
 			// A single-shot process has no client-side command palette or
 			// long-lived plugin registry to refresh after a command.
 			refreshCommands: () => {},
@@ -2332,13 +2373,26 @@ async function runSessionLaunch(
 	// the TUI delivers them once it is up (see the `setSink` call in `runInteractiveMode`). Every other mode
 	// keeps the default, which writes to stderr as they arrive.
 	const operatorNotices = launch.isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
+	// The TUI states settings files that did not parse once its screen exists (`runInteractiveMode`).
+	// Every other mode states them here, before a session that runs on defaults for them.
+	if (!launch.isInteractive && launch.settings.quarantinedFiles.length > 0) {
+		operatorNotices.error("settings", unparseableSettingsNotice(launch.settings.quarantinedFiles));
+	}
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
-	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
+	// RPC refreshes the model catalog once its session exists. The terminal refreshes after its first
+	// frame and a print run after its first response starts streaming.
+	const isRpc = mode === "rpc" || mode === "rpc-ui";
+	const created = await createSession({ ...sessionOptions, ...shared }, isRpc);
 	const { session } = created;
 	// Publish the in-process native capability before interactive commands can
 	// activate an external adapter. This starts no poller or socket; an
 	// authorized extension can bind actor/chat credentials to this session.
 	installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
+	// The TUI states a hand-edited setting that reads as another value above its first prompt
+	// (`InteractiveMode.init`). Every other mode states it here, before the run uses that value.
+	if (!launch.isInteractive) {
+		for (const warning of session.configWarnings) operatorNotices.warn("settings", warning);
+	}
 	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		launch.authStorage.setRuntimeApiKey(session.model.provider, launch.parsedArgs.apiKey);
@@ -2353,8 +2407,8 @@ async function runSessionLaunch(
 	reportModelAvailability(launch, created);
 
 	const started: StartedLaunch = { created, eventBus, initialArgs, prompt, createNextSession };
-	if (mode === "rpc" || mode === "rpc-ui") {
-		await runRpcLaunch(mode, started);
+	if (isRpc) {
+		await runRpcLaunch(launch, mode, started);
 	} else if (launch.isInteractive) {
 		await runInteractiveLaunch(launch, started);
 	} else {

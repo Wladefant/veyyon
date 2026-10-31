@@ -3,12 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
 
 // WHY THIS SUITE EXISTS (BACKLOG DOG-4)
@@ -23,13 +22,6 @@ import { makeToolSession } from "./helpers/tool-session";
 // tool workflows. This suite locks BOTH contracts against real byte output so the
 // expansion (and raw's exactness) cannot silently drift: the read.md doc now
 // promises this behavior, and these tests prove the runtime matches the doc.
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
 
 function createSession(cwd: string): ToolSession {
 	const settings = Settings.isolated();
@@ -77,7 +69,7 @@ describe("read tool range context expansion", () => {
 
 	it("pads a range constrained only at the end (`:1-5`) with 3 trailing context lines and no leading", async () => {
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-1-5", { path: `${filePath}:1-5` }));
+		const text = toolResultText(await tool.execute("call-1-5", { path: `${filePath}:1-5` }));
 
 		// 5 requested (1-5) + 3 trailing context = lines 1..8; line 9 must NOT appear.
 		expect(renderedLineNumbers(text)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -88,7 +80,7 @@ describe("read tool range context expansion", () => {
 
 	it("pads a range constrained on both sides (`:5-8`) with 1 leading and 3 trailing context lines", async () => {
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-5-8", { path: `${filePath}:5-8` }));
+		const text = toolResultText(await tool.execute("call-5-8", { path: `${filePath}:5-8` }));
 
 		// 1 leading (line 4) + 4 requested (5-8) + 3 trailing (9-11) = lines 4..11.
 		expect(renderedLineNumbers(text)).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
@@ -98,7 +90,7 @@ describe("read tool range context expansion", () => {
 
 	it("returns EXACTLY the requested range with `:raw`: no context padding, no line prefixes", async () => {
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-raw-1-5", { path: `${filePath}:raw:1-5` }));
+		const text = toolResultText(await tool.execute("call-raw-1-5", { path: `${filePath}:raw:1-5` }));
 
 		// Raw is verbatim: precisely lines 1-5, no added context, no `N:` prefixes.
 		expect(renderedLineNumbers(text)).toEqual([]);

@@ -165,6 +165,18 @@ const DOMAIN_DECISIONS: Record<string, DomainSpec> = {
 		},
 		vetoesRetry: true,
 	},
+	unreachable: {
+		buildFixture: () =>
+			Object.assign(new TypeError("ECONNREFUSED: Unable to connect. Is the computer able to access the url?"), {
+				code: "ECONNREFUSED",
+			}),
+		expectedFlags: Flag.PeerUnreachable | Flag.Transient,
+		expectedRecovery: {
+			transport: { action: "surface" },
+			credential: { action: "surface" },
+			turn: { action: "retry" },
+		},
+	},
 	transport: {
 		buildFixture: () => new Error("503 Service Unavailable"),
 		expectedFlags: Flag.Transient,

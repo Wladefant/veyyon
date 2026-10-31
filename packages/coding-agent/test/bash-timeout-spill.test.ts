@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
@@ -175,7 +176,9 @@ describe("BashTool timeout/cancel output spill (TW-7)", () => {
 	it("keeps the completed oversized path bounded with a recoverable artifact", async () => {
 		const artifactDir = makeBashCompleteSpillDir();
 		const { session, idToPath } = makeArtifactSession(artifactDir);
-		const tool = new BashTool(session);
+		// Wrapped as the session registers it: a completed result names its artifact in the
+		// truncation notice the wrapper appends, not in the tool's own text.
+		const tool = wrapToolWithMetaNotice(new BashTool(session));
 
 		const command = `printf '${HEAD_SENTINEL}\\n'; yes PADPADPADPADPADPAD | head -c 65536; printf '\\n${TAIL_SENTINEL}\\n'`;
 		const result = await tool.execute("call-complete", { command, timeout: 30 });

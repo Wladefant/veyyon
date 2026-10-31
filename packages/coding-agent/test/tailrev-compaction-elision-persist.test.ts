@@ -29,24 +29,23 @@ import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import { estimateTokens } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model, ToolResultMessage, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { completedStream } from "./helpers/mock-turns";
 
 const HUGE = "x".repeat(40_000);
 
 const usage = (input: number, output: number): Usage => ({
+	...emptyUsage(),
 	input,
 	output,
-	cacheRead: 0,
-	cacheWrite: 0,
 	totalTokens: input + output,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
 
 function assistantMessage(model: Model, text: string): AssistantMessage {
@@ -60,14 +59,6 @@ function assistantMessage(model: Model, text: string): AssistantMessage {
 		usage: usage(100, 50),
 		timestamp: Date.now(),
 	};
-}
-
-function completedStream(message: AssistantMessage): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
-	queueMicrotask(() => {
-		stream.push({ type: "done", reason: "stop", message });
-	});
-	return stream;
 }
 
 /** The tool-result message on the branch whose text is an elision marker, if any. */
@@ -97,8 +88,7 @@ describe("a successful compaction persists a pointered, correctly estimated elis
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		// Six small turns to summarize away, then a final turn whose one tool

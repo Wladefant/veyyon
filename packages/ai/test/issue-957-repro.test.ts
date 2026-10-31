@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as kimiOauth from "@veyyon/ai/registry/oauth/kimi";
+import * as kimiHeaders from "@veyyon/ai/utils/kimi-headers";
 import { removeWithRetries } from "../../utils/src/temp";
 
 afterEach(() => {
@@ -29,7 +30,7 @@ describe("issue #957 - Kimi OAuth refresh", () => {
 		// schedule the refresh before the real server cutoff.
 		const issuedAt = 1_700_000_000_000;
 		vi.spyOn(Date, "now").mockReturnValue(issuedAt);
-		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(kimiHeadersStub);
+		vi.spyOn(kimiHeaders, "getKimiCommonHeaders").mockReturnValue(kimiHeadersStub);
 		vi.spyOn(globalThis, "fetch").mockImplementation(
 			Object.assign(
 				async (_input: string | URL | Request, init?: RequestInit) => {
@@ -62,7 +63,7 @@ describe("issue #957 - Kimi OAuth refresh", () => {
 		// `kimi-code` provider when getApiKey() is called.
 		const issuedAt = 1_700_000_000_000;
 		vi.spyOn(Date, "now").mockReturnValue(issuedAt + 54 * 60 * 1000);
-		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(kimiHeadersStub);
+		vi.spyOn(kimiHeaders, "getKimiCommonHeaders").mockReturnValue(kimiHeadersStub);
 
 		let refreshCalls = 0;
 		vi.spyOn(globalThis, "fetch").mockImplementation(

@@ -6,6 +6,7 @@ import {
 	RECOVERY_SESSION_CHAIN_WARNING,
 	Recovery,
 } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery adversarial contracts: refuse corruption windows, accept safe
@@ -15,18 +16,14 @@ import {
 
 const PATH = "src/recovery-target.ts";
 
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
-
 describe("Recovery adversarial corpus", () => {
 	it("returns null for an unknown file hash tag", () => {
 		const store = new InMemorySnapshotStore();
-		store.record(PATH, text(["a", "b", "c"]));
+		store.record(PATH, linesText(["a", "b", "c"]));
 		const { edits } = parsePatch("SWAP 1.=1:\n|A");
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
-			currentText: text(["a", "b", "c"]),
+			currentText: linesText(["a", "b", "c"]),
 			fileHash: "dead",
 			edits,
 		});
@@ -35,8 +32,8 @@ describe("Recovery adversarial corpus", () => {
 
 	it("refuses when anchor line content diverged since the snapshot", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["L1", "L2", "L3", "L4", "L5"]);
-		const v1 = text(["L1", "L2", "L3", "L4", "L5-CHANGED"]);
+		const v0 = linesText(["L1", "L2", "L3", "L4", "L5"]);
+		const v1 = linesText(["L1", "L2", "L3", "L4", "L5-CHANGED"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const { edits } = parsePatch("SWAP 5.=5:\n|L5-MODEL");
@@ -51,8 +48,8 @@ describe("Recovery adversarial corpus", () => {
 
 	it("replays when anchors are unchanged and preserves later in-session edits", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["L1", "L2", "L3", "L4", "L5"]);
-		const v1 = text(["L1", "L2", "L3", "L4", "L5-CHANGED"]);
+		const v0 = linesText(["L1", "L2", "L3", "L4", "L5"]);
+		const v1 = linesText(["L1", "L2", "L3", "L4", "L5-CHANGED"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const { edits } = parsePatch("SWAP 2.=2:\n|L2-MODEL");
@@ -70,7 +67,7 @@ describe("Recovery adversarial corpus", () => {
 
 	it("returns null when current text is empty but snapshot is not (hostile empty disk)", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["only", "lines"]);
+		const v0 = linesText(["only", "lines"]);
 		const h0 = store.record(PATH, v0);
 		const { edits } = parsePatch("SWAP 1.=1:\n|X");
 		const recovered = new Recovery(store).tryRecover({
@@ -88,17 +85,17 @@ describe("Recovery adversarial corpus", () => {
 	});
 
 	it("computeFileHash is stable for identical content and differs on edit", () => {
-		const a = text(["same", "body"]);
-		const b = text(["same", "body"]);
-		const c = text(["same", "BODY"]);
+		const a = linesText(["same", "body"]);
+		const b = linesText(["same", "body"]);
+		const c = linesText(["same", "BODY"]);
 		expect(computeFileHash(a)).toBe(computeFileHash(b));
 		expect(computeFileHash(a)).not.toBe(computeFileHash(c));
 	});
 
 	it("multi-anchor delete refuses when one of the deleted lines already changed", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D"]);
-		const v1 = text(["A", "B-CHANGED", "C", "D"]);
+		const v0 = linesText(["A", "B", "C", "D"]);
+		const v1 = linesText(["A", "B-CHANGED", "C", "D"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const { edits } = parsePatch("DEL 2.=3");
@@ -114,8 +111,8 @@ describe("Recovery adversarial corpus", () => {
 
 	it("replays SWAP on an untouched first line when a later line drifted", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["KEEP", "MID", "TAIL"]);
-		const v1 = text(["KEEP", "MID", "TAIL-DRIFT"]);
+		const v0 = linesText(["KEEP", "MID", "TAIL"]);
+		const v1 = linesText(["KEEP", "MID", "TAIL-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const { edits } = parsePatch("SWAP 1.=1:\n|KEEP-EDITED");
@@ -135,7 +132,7 @@ describe("Recovery adversarial corpus", () => {
 		const { edits } = parsePatch("SWAP 1.=1:\n|X");
 		const recovered = new Recovery(store).tryRecover({
 			path: "never-seen.ts",
-			currentText: text(["x"]),
+			currentText: linesText(["x"]),
 			fileHash: "abcd",
 			edits,
 		});
@@ -151,7 +148,7 @@ describe("Recovery adversarial corpus", () => {
 
 	it("recovery with empty edits list returns null or no-op text equal to current", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["a"]);
+		const v0 = linesText(["a"]);
 		const h0 = store.record(PATH, v0);
 		const recovered = new Recovery(store).tryRecover({
 			path: PATH,
@@ -168,8 +165,8 @@ describe("Recovery adversarial corpus", () => {
 
 	it("DEL of an unchanged range can recover when later lines drifted", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D", "E"]);
-		const v1 = text(["A", "B", "C", "D", "E-DRIFT"]);
+		const v0 = linesText(["A", "B", "C", "D", "E"]);
+		const v1 = linesText(["A", "B", "C", "D", "E-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const { edits } = parsePatch("DEL 2.=2");

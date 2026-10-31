@@ -17,31 +17,22 @@ import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/c
 import { getSettingDef } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 function frameText(comp: SettingsSelectorComponent): string {
-	return comp.render(120).map(strip).join("\n");
+	return comp.render(120).map(stripVTControlCharacters).join("\n");
 }
 
 beforeAll(async () => {
 	await initTheme();
 });
 
-let geometryStub: { restore(): void } | undefined;
+let geometryStub: StubbedStdoutGeometry | undefined;
 
 beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40, set: () => {} });
-	geometryStub = {
-		restore() {
-			if (rowsDesc) Object.defineProperty(process.stdout, "rows", rowsDesc);
-		},
-	};
+	geometryStub = stubStdoutGeometry({ rows: 40 });
 });
 
 afterEach(() => {

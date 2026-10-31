@@ -1,9 +1,11 @@
 /**
  * Shared MCP command argument grammar.
  *
- * Consolidates argument parsing for /mcp add, /mcp smithery-search, and /mcp remove
- * across the terminal controller and CLI/ACP handlers while preserving surface-specific
- * policies (such as trailing scope words in search).
+ * The one reader of /mcp add, /mcp smithery-search and /mcp remove arguments, for the
+ * terminal controller and the CLI/ACP handlers, so a line is accepted, refused and
+ * explained the same on every surface. The one surface-specific rule is the terminal's
+ * refusal of a trailing scope word in a search, because only the terminal adds the
+ * server a search finds.
  */
 import type { MCPServerConfig } from "../../mcp/types";
 import { parseCommandArgs } from "../../utils/command-args";
@@ -75,7 +77,8 @@ export interface MCPAddParsed {
 	error?: string;
 }
 
-export type McpArgumentSurface = "terminal" | "cli";
+/** Which surface reads a search: the terminal adds the server picked from the results, the CLI/ACP lists them. */
+export type McpSearchSurface = "terminal" | "cli";
 
 export interface ParsedMcpSearchArgs {
 	keyword: string;
@@ -87,12 +90,6 @@ export interface ParsedMcpSearchArgs {
 export interface ParsedMcpRemoveArgs {
 	name?: string;
 	error?: string;
-}
-
-function isRemovedMcpWord(token: string, options: Record<string, string>, surface: McpArgumentSurface): boolean {
-	return surface === "terminal"
-		? token === "project" || token === "user"
-		: Object.hasOwn(options, token.toLowerCase());
 }
 
 /**
@@ -150,7 +147,7 @@ export function validateParsedMcpAddArgs(parsed: ParsedMcpAddArgs): ParsedMcpAdd
  * to redirect the write, and a scope word that is quietly dropped stores the
  * server in a config the operator did not name.
  */
-export function parseMcpAddArgs(rest: string, surface: McpArgumentSurface = "cli"): ParsedMcpAddArgs {
+export function parseMcpAddArgs(rest: string): ParsedMcpAddArgs {
 	const tokens = parseCommandArgs(rest);
 	const parsed: ParsedMcpAddArgs = { transport: "http" };
 	if (tokens.length === 0) return parsed;
@@ -180,7 +177,7 @@ export function parseMcpAddArgs(rest: string, surface: McpArgumentSurface = "cli
 			else parsed.authToken = value;
 			word = token;
 			index += 2;
-		} else if (isRemovedMcpWord(token, MCP_ADD_REMOVED_OPTIONS, surface)) {
+		} else if (Object.hasOwn(MCP_ADD_REMOVED_OPTIONS, token.toLowerCase())) {
 			return { ...parsed, error: removedOptionMessage(token, MCP_ADD_REMOVED_OPTIONS, MCP_ADD_USAGE) };
 		} else if (token === "http" || token === "sse") {
 			parsed.transport = token;
@@ -201,7 +198,7 @@ export function parseMcpAddArgs(rest: string, surface: McpArgumentSurface = "cli
  * supporting interactive wizard fallback when neither url nor run is supplied.
  */
 export function parseMcpAddCommand(rest: string): MCPAddParsed {
-	const raw = parseMcpAddArgs(rest, "terminal");
+	const raw = parseMcpAddArgs(rest);
 	if (raw.error) return { error: raw.error };
 	if (raw.name === undefined) return {};
 
@@ -237,12 +234,12 @@ export function parseMcpAddCommand(rest: string): MCPAddParsed {
  * The options cannot be confused with each other: `semantic` is one literal word
  * and the limit is the only integer the command reads.
  *
- * In terminal mode, trailing scope words
- * (`project`, `user`) are refused with a removed-option message.
- * In CLI / ACP mode, trailing scope words
- * are treated as search keywords.
+ * In the terminal, picking a result adds the server, so a trailing word that used to
+ * choose where it was written (`scope`, `project`, `user`) is refused with the
+ * removed-option message rather than searched for. The CLI/ACP search only lists
+ * results, so there every plain word is a search keyword.
  */
-export function parseMcpSearchArgs(rest: string, surface: McpArgumentSurface = "cli"): ParsedMcpSearchArgs {
+export function parseMcpSearchArgs(rest: string, surface: McpSearchSurface = "cli"): ParsedMcpSearchArgs {
 	const tokens = parseCommandArgs(rest);
 	const base: ParsedMcpSearchArgs = { keyword: "", limit: 20, semantic: false };
 	if (tokens.length === 0) return { ...base, error: `Keyword required.\n${MCP_SEARCH_USAGE}` };
@@ -258,7 +255,7 @@ export function parseMcpSearchArgs(rest: string, surface: McpArgumentSurface = "
 	let end = tokens.length;
 	while (end > 1) {
 		const token = tokens[end - 1]!;
-		if (surface === "terminal" && isRemovedMcpWord(token, MCP_SEARCH_REMOVED_OPTIONS, surface)) {
+		if (surface === "terminal" && MCP_SEARCH_REMOVED_OPTIONS[token.toLowerCase()] === MCP_SCOPE_REMOVED_REPLACEMENT) {
 			return { ...base, error: removedOptionMessage(token, MCP_SEARCH_REMOVED_OPTIONS, MCP_SEARCH_USAGE) };
 		}
 		let word: string;
@@ -294,7 +291,7 @@ export function parseMcpSearchArgs(rest: string, surface: McpArgumentSurface = "
  * rather than dropped, and a word the grammar used to read as an option gets the
  * sentence naming what replaced it.
  */
-export function parseMcpRemoveArgs(rest: string, surface: McpArgumentSurface = "cli"): ParsedMcpRemoveArgs {
+export function parseMcpRemoveArgs(rest: string): ParsedMcpRemoveArgs {
 	const tokens = parseCommandArgs(rest);
 	if (tokens.length === 0) return {};
 	const name = tokens[0]!;
@@ -303,7 +300,7 @@ export function parseMcpRemoveArgs(rest: string, surface: McpArgumentSurface = "
 	}
 	const extra = tokens[1];
 	if (extra !== undefined) {
-		if (extra.startsWith("-") || isRemovedMcpWord(extra, MCP_REMOVE_REMOVED_OPTIONS, surface)) {
+		if (extra.startsWith("-") || Object.hasOwn(MCP_REMOVE_REMOVED_OPTIONS, extra.toLowerCase())) {
 			return { error: removedOptionMessage(extra, MCP_REMOVE_REMOVED_OPTIONS, MCP_REMOVE_USAGE) };
 		}
 		return { error: `Unknown argument: ${extra}\n${MCP_REMOVE_USAGE}` };

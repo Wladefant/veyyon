@@ -12,6 +12,7 @@ import { type Component, Container, Editor, Spacer, TUI } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { settleFrames } from "../../../../hosts/terminal/engine/test/helpers/settle-frames";
+import { sgrPress, sgrRelease } from "../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { VirtualTerminal } from "../../../../hosts/terminal/engine/test/virtual-terminal";
 import {
 	CardPadRow,
@@ -95,16 +96,6 @@ export interface RunnerResult {
 	transcript: TranscriptMock;
 	advance: () => Promise<void>;
 	cleanUp: () => void;
-}
-
-/** SGR left-click press report at 0-based (row, col) */
-function pressAt(row: number, col = 0): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
-/** SGR left-click release report at 0-based (row, col) */
-function releaseAt(row: number, col = 0): string {
-	return `\x1b[<0;${col + 1};${row + 1}m`;
 }
 
 /**
@@ -303,8 +294,8 @@ export async function runComposerOracleScenario(options: RunnerOptions): Promise
 		capabilityLine.calls = [];
 		shortcuts.calls = [];
 
-		term.sendInput(pressAt(r, 5));
-		term.sendInput(releaseAt(r, 5));
+		term.sendInput(sgrPress(r, 5));
+		term.sendInput(sgrRelease(r, 5));
 
 		let routedTo: string | null = null;
 		let localLine: number | null = null;

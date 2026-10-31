@@ -11,8 +11,8 @@
 
 import { clampLow } from "@veyyon/utils/math";
 import type { AgentSnapshot, HostFrame, SessionState, WireFrame, WireSessionEntry } from "@veyyon/wire";
+import { COLLAB_PROTO, formatCollabLink, generateRoomId, packEnvelope, unpackEnvelope } from "@veyyon/wire";
 import { generateRoomKey, importRoomKey, open, seal } from "../src/lib/codec";
-import { COLLAB_PROTO, formatCollabLink, generateRoomId, packEnvelope, unpackEnvelope } from "../src/lib/link";
 import {
 	agentTranscriptJsonl,
 	fixtureAgents,
@@ -72,7 +72,7 @@ let replayTimer: Timer | null = null;
 let tick = 0;
 let shuttingDown = false;
 
-// ── sealed transport (order-preserving, mirrors relay-client) ────────────────
+// ── sealed transport (order-preserving, like @veyyon/wire/relay-client) ────────
 
 const ws = new WebSocket(`${relay.url}/r/${roomId}?role=host`);
 ws.binaryType = "arraybuffer";

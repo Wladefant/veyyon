@@ -10,7 +10,8 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import type { BlockId, TranscriptBlock } from "@veyyon/wire/presentation";
 import { formatRetrySummary, type RetryLineInput, type RetryTrace, retryReason } from "../modes/retry-display";
 import { buildToolExecutionBlock } from "./tool-execution";
-import { blockIdFor, defaultToolText, toTranscriptBlock, toTranscriptBlocks } from "./transcript-builder";
+import { serializeToolInput } from "./tool-input";
+import { blockIdFor, toTranscriptBlock, toTranscriptBlocks } from "./transcript-builder";
 
 export interface SessionProjectionEngineOptions {
 	readonly renderToolText?: (value: unknown) => string;
@@ -222,7 +223,7 @@ export class SessionProjectionEngine {
 			fallbackMessages?: readonly AgentMessage[];
 		},
 	): TranscriptBlock {
-		const renderToolText = options?.renderToolText ?? this.#options.renderToolText ?? defaultToolText;
+		const renderToolText = options?.renderToolText ?? this.#options.renderToolText ?? serializeToolInput;
 		const retryAttempt = options?.retryAttempt ?? this.#options.retryAttempt ?? 0;
 		const index = this.#activeMessageIndices.get(message.role) ?? this.indexOf(message);
 		this.#indices.set(message, index);

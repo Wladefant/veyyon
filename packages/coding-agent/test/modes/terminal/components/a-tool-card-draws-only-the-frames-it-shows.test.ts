@@ -36,6 +36,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
@@ -178,14 +179,7 @@ function writeArgs(marker: string): { path: string; content: string } {
  * last source it drew, and a text another case already drew would never reach the highlighter.
  */
 function settledWriteTurn(marker: string): SessionMessageEntry[] {
-	const usage = {
-		input: 10,
-		output: 2,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 12,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 10, output: 2, totalTokens: 12 };
 	return [
 		entry({ role: "user", content: "write the plan", timestamp: 1 }),
 		entry({

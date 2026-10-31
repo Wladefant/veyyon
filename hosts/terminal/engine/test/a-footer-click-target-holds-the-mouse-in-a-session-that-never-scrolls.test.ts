@@ -26,6 +26,7 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
+import { sgrPress } from "./helpers/sgr-mouse";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -149,11 +150,6 @@ async function rig(
 	return { term, tui, scheduler, body, stop: () => tui.stop() };
 }
 
-/** SGR left-button press at 0-based screen (row, col). */
-function leftClickAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
 describe("a footer click target holds the mouse in a session that never scrolls", () => {
 	it("grabs button reporting for a declared target with nothing scrolled off", async () => {
 		const bar = new ChipBar();
@@ -178,7 +174,7 @@ describe("a footer click target holds the mouse in a session that never scrolls"
 			// Footer is the last two frame rows: chip bar then composer. With body
 			// providing 2 transcript rows, the chip row is screen row 2, and the
 			// click must arrive as line 0 of the bar.
-			term.sendInput(leftClickAt(2, 4));
+			term.sendInput(sgrPress(2, 4));
 			expect(bar.clicks).toEqual([{ line: 0, col: 4 }]);
 		} finally {
 			stop();
@@ -226,7 +222,7 @@ describe("a footer click target holds the mouse in a session that never scrolls"
 			expect(after).toContain(TRACKING_OFF);
 			expect(after).not.toContain(TRACKING_BUTTONS_ON);
 			// And the grab really is gone: a click on the row is not routed.
-			term.sendInput(leftClickAt(2, 4));
+			term.sendInput(sgrPress(2, 4));
 			expect(bar.clicks).toEqual([]);
 		} finally {
 			stop();

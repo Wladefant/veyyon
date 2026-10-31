@@ -3,6 +3,7 @@ import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Model, ModelSpec, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * Regression: some Anthropic-routed models reject "assistant prefill" requests
@@ -35,14 +36,7 @@ describe("Anthropic assistant-prefill fallback", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -59,14 +53,7 @@ describe("Anthropic assistant-prefill fallback", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -100,14 +87,7 @@ describe("Anthropic assistant-prefill fallback", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: model.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				},
@@ -149,14 +129,7 @@ it("preserves redacted thinking blocks in assistant replay payloads", () => {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
@@ -199,14 +172,7 @@ it("preserves latest Anthropic thinking blocks even when model id changes", () =
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-6-20251201",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
@@ -249,14 +215,7 @@ it("preserves a completed thinking signature on an aborted turn interrupted duri
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "aborted",
 		timestamp: Date.now(),
 	};

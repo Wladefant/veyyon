@@ -39,8 +39,8 @@ import {
 	restoreDirOverrides,
 	setAgentDir,
 	setProfile,
-	writeGlobalDefaultProfile,
 } from "@veyyon/utils/dirs";
+import { writeGlobalDefaultProfile } from "@veyyon/utils/global-config-write";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
 
 /** Whatever the file found, put back, whichever way a test left it. */

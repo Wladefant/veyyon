@@ -126,7 +126,9 @@ describe("profile lifecycle CLI", () => {
 		await createProfile("src", "blank");
 		await Bun.write(path.join(getProfileRootDir("src"), "agent", "config.yml"), "profile: [unclosed\n");
 
-		await expect(createProfile("work", "src")).rejects.toThrow("not valid YAML");
+		await expect(createProfile("work", "src")).rejects.toThrow(
+			"is not valid YAML: Flow sequence in block collection must be sufficiently indented and end with a ] at line 2, column 1",
+		);
 
 		expect(profileExists("work")).toBe(false);
 		const profilesDir = path.join(configRoot, "profiles");

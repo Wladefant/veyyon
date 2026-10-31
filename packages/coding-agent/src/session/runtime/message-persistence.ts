@@ -14,19 +14,15 @@
  *   mutation (rewind, branch switch, new session) rebuilds it, without a call site having to
  *   remember to.
  * - **The write** ({@link persistIfMissing}) strips telemetry the instrumentation level does not
- *   allow, drops classifier refusals and empty error turns, stamps the assistant's context
- *   snapshot, and appends only when the branch does not already hold the same message.
+ *   allow, drops classifier refusals and empty error turns along with the never-ran placeholder
+ *   results the loop paired with a refusal's calls, stamps the assistant's context snapshot, and
+ *   appends only when the branch does not already hold the same message.
  */
 import type { AgentMessage, AgentTurnEndContext } from "@veyyon/agent-core";
 import { calculatePromptTokens } from "@veyyon/agent-core/compaction";
-import type {
-	AssistantMessage,
-	ImageContent,
-	Message,
-	MessageAttribution,
-	TextContent,
-	VideoContent,
-} from "@veyyon/ai";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
+import { toolResultNeverRan } from "@veyyon/agent-core/tool-result-never-ran";
+import type { AssistantMessage, ImageContent, Message, MessageAttribution, TextContent, VideoContent } from "@veyyon/ai";
 import {
 	assistantTurnMetricsForPersistence,
 	assistantTurnRequestForPersistence,
@@ -43,7 +39,6 @@ import type { BashExecutionMessage, PythonExecutionMessage } from "../../tools/s
 import { isSameAssistantMessage } from "../agent-session-message-shapes";
 import type { MessageEndPersistenceSlot, PendingContextSnapshot } from "../agent-session-types";
 import { buildContextSnapshot, estimateContextSnapshotAttribution } from "../context-usage";
-import { isClassifierRefusal } from "../failed-turn";
 import {
 	type CustomMessage,
 	type FileMentionMessage,
@@ -209,6 +204,12 @@ export class MessagePersistence {
 	#tail: Promise<void> = Promise.resolve();
 	readonly #pending = new Map<string, Promise<void>>();
 	#index: BranchTimestamps | undefined;
+	/**
+	 * Call ids of classifier-refused turns that were not written. The loop still answers each of
+	 * those calls with a never-ran placeholder result; written alone, a placeholder is a result
+	 * with no call, and a resume folds its refusal text back into the model's context.
+	 */
+	readonly #refusedCallIds = new Set<string>();
 
 	constructor(host: MessagePersistenceHost) {
 		this.#host = host;
@@ -347,7 +348,8 @@ export class MessagePersistence {
 	/**
 	 * Append {@link message} unless the branch already holds it. Only user, developer, assistant,
 	 * tool result and file mention messages persist here. A rewind tool result whose rewind already
-	 * rewrote the branch is not appended.
+	 * rewrote the branch is not appended, and neither is a never-ran placeholder answering a call of
+	 * a classifier refusal that was not appended: the live context drops both with the turn.
 	 */
 	persistIfMissing(message: AgentMessage): void {
 		if (
@@ -383,15 +385,20 @@ export class MessagePersistence {
 		if (this.alreadyPersisted(persistenceMessage)) return;
 		if (message.role === "assistant") {
 			const assistantMessage = persistenceMessage as AssistantMessage;
-			if (isClassifierRefusal(assistantMessage)) return;
+			if (isProviderRefusalMessage(assistantMessage)) {
+				for (const block of assistantMessage.content) {
+					if (block.type === "toolCall") this.#refusedCallIds.add(block.id);
+				}
+				return;
+			}
 			if (isEmptyErrorTurn(assistantMessage)) return;
 			this.#stampContextSnapshot(assistantMessage);
 		}
-		const skipPersistedRewindResult =
+		const skipResult =
 			message.role === "toolResult" &&
-			message.toolName === TOOL.rewind &&
-			this.#host.consumeRewoundResult(message.toolCallId);
-		if (!skipPersistedRewindResult) {
+			((message.toolName === TOOL.rewind && this.#host.consumeRewoundResult(message.toolCallId)) ||
+				(this.#refusedCallIds.has(message.toolCallId) && toolResultNeverRan(message.details)));
+		if (!skipResult) {
 			this.append(persistenceMessage);
 		}
 	}

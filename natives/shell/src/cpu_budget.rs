@@ -208,9 +208,10 @@ impl BudgetGroup {
 		}
 	}
 
-	/// The degraded-mode lever: lower the scheduling priority of every member.
-	/// Meaningful only where no quota exists; `level` 0 restores. Quota
-	/// backends ignore it because the quota is already the lever.
+	/// The degraded-mode lever: set the scheduling priority of every member to
+	/// `level`, an absolute nice value. Meaningful only where no quota exists;
+	/// the watcher restores [`SPAWN_NICE`]. Quota backends ignore it because
+	/// the quota is already the lever.
 	#[cfg_attr(
 		not(unix),
 		expect(
@@ -271,6 +272,70 @@ pub fn unregister_budget_group(name: &str) {
 pub fn adopt_into_budget(name: &str, pid: i32) {
 	if let Some(group) = budget_group(name) {
 		group.adopt(pid);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Spawn priority: what every spawned child starts at
+// ---------------------------------------------------------------------------
+
+/// Nice level every external child a run spawns starts at, budget or not.
+///
+/// Agent work then yields the CPU to the desktop, the terminal and the host
+/// whenever they contend, and loses nothing on an idle machine. Same value as
+/// `SPAWN_NICE` in `packages/coding-agent/src/session/cpu-limit.ts`, which
+/// applies it to the spawns the TypeScript side makes.
+pub const SPAWN_NICE: i32 = 10;
+
+/// Start `pid` at [`SPAWN_NICE`].
+///
+/// Descendants inherit the level, so the direct child is the only process
+/// that needs it. A host already at or below that priority leaves the child
+/// at the level it inherited. Best-effort: an exited child or a refused
+/// change leaves the spawn as is.
+#[cfg(unix)]
+pub fn lower_spawn_priority(pid: i32) {
+	// SAFETY: getpriority on the calling thread only reads. Its -1 is both an
+	// error and a real level; either reading is below SPAWN_NICE, so both lead
+	// to the same call.
+	let own = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+	if own >= SPAWN_NICE {
+		return;
+	}
+	// SAFETY: setpriority with PRIO_PROCESS targets exactly the pid given; a
+	// dead pid fails with ESRCH and changes nothing.
+	unsafe {
+		libc::setpriority(libc::PRIO_PROCESS, pid as u32, SPAWN_NICE);
+	}
+}
+
+/// Start `pid` at `BELOW_NORMAL_PRIORITY_CLASS`, the class for [`SPAWN_NICE`].
+///
+/// Children of a below-normal process inherit the class.
+#[cfg(windows)]
+pub fn lower_spawn_priority(pid: i32) {
+	use windows_sys::Win32::{
+		Foundation::CloseHandle,
+		System::Threading::{
+			BELOW_NORMAL_PRIORITY_CLASS, GetCurrentProcess, GetPriorityClass, IDLE_PRIORITY_CLASS,
+			OpenProcess, PROCESS_SET_INFORMATION, SetPriorityClass,
+		},
+	};
+	// SAFETY: GetCurrentProcess returns a pseudo-handle that needs no close.
+	let own = unsafe { GetPriorityClass(GetCurrentProcess()) };
+	if own == BELOW_NORMAL_PRIORITY_CLASS || own == IDLE_PRIORITY_CLASS {
+		return;
+	}
+	// SAFETY: OpenProcess either returns a handle this scope owns and closes,
+	// or null for an already-exited child.
+	let process = unsafe { OpenProcess(PROCESS_SET_INFORMATION, 0, pid as u32) };
+	if process.is_null() {
+		return;
+	}
+	// SAFETY: `process` is a live handle owned by this scope.
+	unsafe {
+		SetPriorityClass(process, BELOW_NORMAL_PRIORITY_CLASS);
+		CloseHandle(process);
 	}
 }
 

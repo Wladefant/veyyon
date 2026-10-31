@@ -6,7 +6,7 @@ import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/compone
 import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { getProjectDir, removeSyncWithRetries, setProjectDir } from "@veyyon/utils";
-import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 
 const originalProjectDir = getProjectDir();
 beforeAll(async () => {
@@ -26,10 +26,7 @@ function expectIconMarker(content: string, expected: string, absent: string): vo
 }
 
 function createPathContext(): SegmentContext {
-	return {
-		facts: NO_SESSION_FACTS,
-		width: 120,
-		compactThinkingLevel: false,
+	return segmentContext({
 		options: {
 			path: {
 				abbreviate: false,
@@ -37,43 +34,7 @@ function createPathContext(): SegmentContext {
 				stripWorkPrefix: true,
 			},
 		},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
-		activeMs: 0,
-		activeRepo: null,
-		worktree: null,
-		git: {
-			branch: null,
-			status: null,
-			pr: null,
-		},
-		account: null,
-		usage: null,
-	};
+	});
 }
 
 afterEach(() => {

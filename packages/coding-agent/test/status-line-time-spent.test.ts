@@ -18,8 +18,8 @@ import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/st
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
-import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
 import { StatusPresentationProducer } from "../src/presentation/status-producer";
+import { segmentContext } from "./helpers/segment-context";
 import { statusLineSessionParts } from "./helpers/status-line-session";
 
 beforeAll(async () => {
@@ -37,45 +37,8 @@ afterEach(() => {
 });
 
 function createCtx(activeMs: number): SegmentContext {
-	return {
-		// The segment under test reads no session fact.
-		facts: NO_SESSION_FACTS,
-		width: 120,
-		compactThinkingLevel: false,
-		options: {},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
-		activeMs,
-		activeRepo: null,
-		worktree: null,
-		git: { branch: null, status: null, pr: null },
-		account: null,
-		usage: null,
-	};
+	// The segment under test reads no session fact.
+	return segmentContext({ activeMs });
 }
 
 function makeSession(overrides: { isStreaming?: boolean; sessionFile?: string | undefined } = {}): AgentSession {

@@ -23,12 +23,12 @@
  * out painted in the selection colour.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { selectionBand } from "@veyyon/coding-agent/modes/terminal/components/selectors/selector-helpers";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, ScrollView, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const BG_OPEN = /\x1b\[(?:4[0-7]|10[0-7]|48;(?:2;\d+;\d+;\d+|5;\d+))m/;
 const BG_CLOSE = "\x1b[49m";
 
@@ -44,11 +44,6 @@ afterEach(() => {
 	setAnsiPolicy(policy);
 });
 
-/** The row with every escape removed, which is what the eye sees as cells. */
-function cells(line: string): string {
-	return line.replace(ANSI_PATTERN, "");
-}
-
 describe("selectionBand", () => {
 	/**
 	 * The whole rule in one assertion. A row a third the width of the pane is
@@ -57,7 +52,7 @@ describe("selectionBand", () => {
 	test("pads a short row out to the full width before tinting", () => {
 		const band = selectionBand("  short", 40);
 
-		expect(cells(band)).toBe(`  short${" ".repeat(33)}`);
+		expect(stripVTControlCharacters(band)).toBe(`  short${" ".repeat(33)}`);
 		expect(visibleWidth(band)).toBe(40);
 	});
 
@@ -89,7 +84,7 @@ describe("selectionBand", () => {
 	test("cuts without an ellipsis, since the row already shows it truncated", () => {
 		const band = selectionBand(`  ${"x".repeat(80)}`, 30);
 
-		expect(cells(band)).toBe(`  ${"x".repeat(28)}`);
+		expect(stripVTControlCharacters(band)).toBe(`  ${"x".repeat(28)}`);
 	});
 
 	/** A row already exactly the width is neither padded nor cut. */
@@ -97,7 +92,7 @@ describe("selectionBand", () => {
 		const exact = "x".repeat(20);
 		const band = selectionBand(exact, 20);
 
-		expect(cells(band)).toBe(exact);
+		expect(stripVTControlCharacters(band)).toBe(exact);
 	});
 
 	/** Inner styling survives: the band is a background, not a repaint. */
@@ -106,12 +101,12 @@ describe("selectionBand", () => {
 		const band = selectionBand(styled, 20);
 
 		expect(band).toContain("\x1b[38;2;1;2;3m");
-		expect(cells(band)).toBe(`coloured${" ".repeat(12)}`);
+		expect(stripVTControlCharacters(band)).toBe(`coloured${" ".repeat(12)}`);
 	});
 
 	/** A zero width cannot produce a band with cells in it. */
 	test("produces no cells at a width of zero", () => {
-		expect(cells(selectionBand("  anything", 0))).toBe("");
+		expect(stripVTControlCharacters(selectionBand("  anything", 0))).toBe("");
 	});
 });
 
@@ -138,8 +133,8 @@ describe("A band inside a ScrollView", () => {
 		// The bar is the last cell of the row and the fill has already closed.
 		const closeAt = banded.indexOf(BG_CLOSE);
 		expect(closeAt).toBeGreaterThan(-1);
-		expect(cells(banded.slice(closeAt))).not.toContain("selected");
-		expect(visibleWidth(cells(banded.slice(closeAt)))).toBe(2);
+		expect(stripVTControlCharacters(banded.slice(closeAt))).not.toContain("selected");
+		expect(visibleWidth(stripVTControlCharacters(banded.slice(closeAt)))).toBe(2);
 		expect(visibleWidth(banded)).toBe(width);
 	});
 

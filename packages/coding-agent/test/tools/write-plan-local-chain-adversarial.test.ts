@@ -7,18 +7,12 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * Plan-mode local:// write then read chain: sandbox is writable, tree is not.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("plan-mode local:// write→read chain", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -98,7 +92,8 @@ describe("plan-mode local:// write→read chain", () => {
 			if (hit) found = await Bun.file(hit).text();
 		}
 		expect(
-			found === body || textOf(await read.execute("r1", { path: "local://my-plan.md" })).includes("step one"),
+			found === body ||
+				toolResultText(await read.execute("r1", { path: "local://my-plan.md" })).includes("step one"),
 		).toBe(true);
 	});
 

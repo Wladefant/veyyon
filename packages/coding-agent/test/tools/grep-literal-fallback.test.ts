@@ -4,26 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 // A pattern that neither the Rust regex engine nor PCRE2 will compile, so native
 // text search demotes it to a literal search. The tool must say so loudly rather than
@@ -46,7 +30,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 	});
 
 	it("surfaces a loud notice when an uncompilable pattern is demoted to a literal search", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -55,7 +39,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 			input: "foo[bar",
 			path: ".",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		// Recall is preserved: the literal text is still found.
 		expect(text).toContain("foo[bar");
@@ -65,7 +49,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 	});
 
 	it("adds no notice for a pattern that compiles as a regex", async () => {
-		const tools = await createTools(createTestSession(tempDir));
+		const tools = await createTools(makeToolSessionAt(tempDir));
 		const tool = tools.find(entry => entry.name === "search");
 		if (!tool) throw new Error("Missing search tool");
 
@@ -76,7 +60,7 @@ describe("search text literal-fallback notice (Law 10)", () => {
 			input: "foo.bar",
 			path: ".",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("foo[bar");
 		expect(text).not.toMatch(/did not compile as a regex/i);

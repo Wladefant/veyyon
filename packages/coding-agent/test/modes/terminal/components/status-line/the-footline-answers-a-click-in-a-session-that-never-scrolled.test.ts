@@ -26,6 +26,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { QuietZoneLine } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
 import type { Component } from "@veyyon/tui";
 import { TUI } from "@veyyon/tui/tui";
+import { sgrPress } from "../../../../../../../hosts/terminal/engine/test/helpers/sgr-mouse";
 import { VirtualTerminal } from "../../../../../../../hosts/terminal/engine/test/virtual-terminal";
 
 const COLS = 120;
@@ -37,11 +38,6 @@ class ShortTranscript implements Component {
 	render(): string[] {
 		return ["one line of history"];
 	}
-}
-
-/** SGR left-button press at 0-based (row, col), the bytes a terminal sends. */
-function leftPressAt(row: number, col: number): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
 }
 
 async function mount(isolation: boolean): Promise<{
@@ -61,7 +57,7 @@ async function mount(isolation: boolean): Promise<{
 	tui.setPinnedFooterChildCount(1);
 	tui.setScrollIsolation(isolation);
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 
 	// The pinned footer is the last frame row (row 1), rendered directly below the
 	// short transcript.
@@ -79,8 +75,8 @@ describe("the footline answers a click in a session that never scrolled", () => 
 		const { tui, term, clicks, footerRow } = await mount(true);
 		stop = () => tui.stop();
 
-		term.sendInput(leftPressAt(footerRow, INDENT + 9));
-		await term.waitForRender();
+		term.sendInput(sgrPress(footerRow, INDENT + 9));
+		await term.waitForRender(tui);
 
 		// The column the handler receives is line-local: `quietSegmentAt` is indexed from
 		// the first character the provider rendered, not from the terminal's left edge.
@@ -95,8 +91,8 @@ describe("the footline answers a click in a session that never scrolled", () => 
 		const { tui, term, clicks, footerRow } = await mount(false);
 		stop = () => tui.stop();
 
-		term.sendInput(leftPressAt(footerRow, INDENT + 9));
-		await term.waitForRender();
+		term.sendInput(sgrPress(footerRow, INDENT + 9));
+		await term.waitForRender(tui);
 
 		expect(clicks).toEqual([]);
 	});

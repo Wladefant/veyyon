@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { performance } from "node:perf_hooks";
 import { StallSampler } from "@veyyon/utils/stall-sampler";
+import { holdTheLoopForMs } from "./helpers/hold-the-loop";
 
 /**
  * WHY THIS SUITE EXISTS. Until a profile stops, JavaScriptCore keeps every function its samples
@@ -36,13 +37,6 @@ afterEach(async () => {
 	// The profiler is process-global; stop every sampler's profile before the next case starts its own.
 	for (const sampler of samplers.splice(0)) await sampler.borrow();
 });
-
-function holdTheLoopForMs(ms: number): number {
-	const until = performance.now() + ms;
-	let x = 0;
-	while (performance.now() < until) x += Math.sqrt(x + 1);
-	return x;
-}
 
 /**
  * Runs a closure over a fresh object long enough for the busy interval to sample it about twenty

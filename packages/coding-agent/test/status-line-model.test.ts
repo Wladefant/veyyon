@@ -4,54 +4,20 @@ import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/compone
 import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 
 beforeAll(async () => {
 	await initTheme();
 });
 
 function createModelContext(advisorActive: boolean): SegmentContext {
-	return {
+	return segmentContext({
 		facts: {
 			...NO_SESSION_FACTS,
 			model: { id: "test-model", name: "Test Model", supportsThinking: false },
 			advisorActive,
 		},
-		width: 120,
-		compactThinkingLevel: false,
-		options: {},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
-		activeMs: 0,
-		activeRepo: null,
-		worktree: null,
-		git: { branch: null, status: null, pr: null },
-		account: null,
-		usage: null,
-	};
+	});
 }
 
 describe("status line model segment advisor badge", () => {

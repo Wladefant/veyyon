@@ -24,7 +24,7 @@ import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readSseJson } from "@veyyon/utils/stream";
-import { asRecord, errorMessage } from "@veyyon/utils/type-guards";
+import { asRecord, errorMessage, toError } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import packageJson from "../../package.json" with { type: "json" };
 import {
@@ -1427,6 +1427,7 @@ function createCodexRequestContext(
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
+
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {

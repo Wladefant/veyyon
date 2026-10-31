@@ -68,13 +68,16 @@ import { hoverBandAt, selectionBand } from "@veyyon/coding-agent/modes/terminal/
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
 import { TreeSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/tree-selector";
 import { UserMessageSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/user-message-selector";
-import { getThemeByName, initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon/tui";
 import { motionClock } from "@veyyon/utils/motion";
+import { bandRgb, hexRgb, rgbDistance } from "../../../helpers/band-colors";
 import { useHandTickedMotion } from "../../../helpers/hand-ticked-motion";
+import { requireTheme } from "../../../helpers/require-theme";
+import { motionAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -94,31 +97,6 @@ let originalTheme: typeof theme | undefined;
  * driven through its public `tick` rather than by waiting.
  */
 const { advance, settle } = useHandTickedMotion();
-
-/** `48;2;r;g;b` from a rendered row, or null when the row paints no truecolor background. */
-function bandRgb(row: string): [number, number, number] | null {
-	const match = /\x1b\[[0-9;]*?48;2;(\d+);(\d+);(\d+)/.exec(row);
-	if (match === null) return null;
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function hexRgb(hex: string): [number, number, number] {
-	return [
-		Number.parseInt(hex.slice(1, 3), 16),
-		Number.parseInt(hex.slice(3, 5), 16),
-		Number.parseInt(hex.slice(5, 7), 16),
-	];
-}
-
-/** How far one colour is from another, summed over the channels. */
-function distance(a: [number, number, number], b: [number, number, number]): number {
-	return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-}
-
-/** SGR motion report (button 32+3=35) at a 1-based screen row, mid-card column. */
-function motionAt(row1: number, col1 = 40): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
 
 /** The panes share only this much surface, and it is all the cases below touch. */
 interface Pane {
@@ -422,8 +400,7 @@ beforeEach(async () => {
 	// 256-colour branch instead, which is how a band test stays green while the band is broken.
 	originalColorterm = Bun.env.COLORTERM;
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") throw new Error(`titanium built as ${loaded.getColorMode()}`);
 	setThemeInstance(loaded);
 	policy = getAnsiPolicy();
@@ -487,8 +464,10 @@ describe("a pointer band fades on a hand-painted list", () => {
 				expect(full, "the switched band paints a truecolor background").not.toBeNull();
 				const ground = hexRgb(modalRevealGround());
 				// Mid-fade is neither endpoint: a colour mixed out of the ground the card sits on.
-				expect(distance(midway as [number, number, number], full as [number, number, number])).toBeGreaterThan(0);
-				expect(distance(midway as [number, number, number], ground)).toBeGreaterThan(0);
+				expect(rgbDistance(midway as [number, number, number], full as [number, number, number])).toBeGreaterThan(
+					0,
+				);
+				expect(rgbDistance(midway as [number, number, number], ground)).toBeGreaterThan(0);
 				pane.dispose();
 			});
 
@@ -509,8 +488,12 @@ describe("a pointer band fades on a hand-painted list", () => {
 				expect(incoming, "the row the pointer arrived at bands").not.toBeNull();
 				const full = bandRgb(switchedBandRow(paneCase, paneCase.second));
 				// Both are mid-travel: one on its way out, one on its way in, on the same frame.
-				expect(distance(outgoing as [number, number, number], full as [number, number, number])).toBeGreaterThan(0);
-				expect(distance(incoming as [number, number, number], full as [number, number, number])).toBeGreaterThan(0);
+				expect(rgbDistance(outgoing as [number, number, number], full as [number, number, number])).toBeGreaterThan(
+					0,
+				);
+				expect(rgbDistance(incoming as [number, number, number], full as [number, number, number])).toBeGreaterThan(
+					0,
+				);
 
 				settle();
 				expect(rowText(pane, leaving)).toBe(bareLeaving);

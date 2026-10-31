@@ -1,11 +1,3 @@
-import { describe, expect, it } from "bun:test";
-import { agentLoop } from "@veyyon/agent-core";
-import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
-import { createMockModel } from "@veyyon/ai/providers/mock";
-import { type } from "arktype";
-import { createUserMessage } from "./helpers";
-
 /**
  * What the model is told when the operator cancels the run while a tool is running.
  *
@@ -25,9 +17,12 @@ import { createUserMessage } from "./helpers";
  * These assert the exact result text, because the text IS the contract: it is the whole of
  * what the next turn gets to reason from.
  */
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
+import { describe, expect, it } from "bun:test";
+import { agentLoop } from "@veyyon/agent-core";
+import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
+import { createMockModel } from "@veyyon/ai/providers/mock";
+import { type } from "arktype";
+import { createUserMessage, identityConverter } from "./helpers";
 
 /**
  * Run one tool call and cancel the run from inside the tool, either before or after the

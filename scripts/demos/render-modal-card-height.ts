@@ -16,8 +16,12 @@
  *
  *     bun scripts/demos/render-modal-card-height.ts --variant before|after [--theme titanium] [--width 100]
  */
-import { MODAL_SIZING_MEDIUM } from "../../packages/coding-agent/src/modes/terminal/components/chrome/modal-geometry";
 import {
+	layoutModalCard,
+	MODAL_SIZING_MEDIUM,
+} from "../../packages/coding-agent/src/modes/terminal/components/chrome/modal-geometry";
+import {
+	planModalChrome,
 	renderModalShell,
 	SELECT_LIST_SHORTCUTS,
 } from "../../packages/coding-agent/src/modes/terminal/components/chrome/modal-shell";
@@ -34,16 +38,13 @@ const ROWS = [
 	"1.3.0    14 May 2026",
 ];
 
-await renderDemo(
-	({ width, flag }) =>
-		renderModalShell({
-			title: "Version · takes effect on restart",
-			sizing: MODAL_SIZING_MEDIUM,
-			areaWidth: width,
-			areaHeight: 34,
-			body: ROWS,
-			preferredBodyRows: flag("variant", "after") === "before" ? undefined : ROWS.length,
-			shortcuts: SELECT_LIST_SHORTCUTS,
-			showClose: true,
-		}).lines,
-);
+await renderDemo(({ width, flag }) => {
+	const card = layoutModalCard(width, 34, MODAL_SIZING_MEDIUM);
+	if (!card) throw new Error(`no card fits a ${width}-column terminal`);
+	return renderModalShell(planModalChrome(card, { shortcuts: SELECT_LIST_SHORTCUTS }), {
+		title: "Version · takes effect on restart",
+		body: ROWS,
+		preferredBodyRows: flag("variant", "after") === "before" ? undefined : ROWS.length,
+		showClose: true,
+	}).lines;
+});

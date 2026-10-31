@@ -18,7 +18,7 @@
  * member from inheriting whatever the fallback happens to be.
  *
  * WHAT IT DOES NOT CATCH. It asserts the level of one log line, not whether the line is written
- * at all on a path that never reaches `#recordSessionExit` (a `process.exit` that outruns the
+ * at all on a path that never reaches the exit record (a `process.exit` that outruns the
  * postmortem list, an OOM kill, SIGKILL). Nothing in-process can record those.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -26,7 +26,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -34,20 +34,12 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SESSION_EXIT_CUSTOM_TYPE, type SessionExitLogLevel } from "@veyyon/kernel/session/exit-diagnostics";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, postmortem, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const EXIT_MESSAGE = "Session exit recorded";
 
 /** Every level the record can be written at, so a run can prove which one fired and which did not. */
 const LEVELS: readonly SessionExitLogLevel[] = ["debug", "warn", "error"];
-
-const emptyUsage = () => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
 
 /** An assistant turn that finished. Something must be in the transcript or no record is written at all. */
 const settledAssistant = (): AssistantMessage => ({
@@ -139,8 +131,7 @@ describe("the severity of a recorded session exit", () => {
 		transcript: Transcript,
 	): Promise<ExitObservation> => {
 		const modelRegistry = await registry();
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const dir = TempDir.createSync("@pi-exit-severity-session-");
 		tempDirs.push(dir);
 		const sessionManager = SessionManager.inMemory(dir.path());

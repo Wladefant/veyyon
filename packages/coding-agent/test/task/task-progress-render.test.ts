@@ -11,7 +11,8 @@ import type { RetryRecoveryMode } from "@veyyon/coding-agent/modes/retry-display
 import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { taskToolView } from "@veyyon/coding-agent/task/task-view";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../helpers/require-theme";
 import { useFullColor } from "../helpers/theme-assertions";
 
 /** The card the terminal draws from the task tool's view, which is what the product renders. */
@@ -86,8 +87,7 @@ describe("task progress rendering", () => {
 		resetSettingsForTest();
 	});
 	it("renders running task rows static with the agent dot", async () => {
-		const theme = (await getThemeByName("dark"))!;
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({ id: "CountPackages", description: "List workspace packages" });
 
@@ -118,7 +118,7 @@ describe("task progress rendering", () => {
 	// preview — it stays on live progress rows and on finished result rows, and
 	// the generic `deep` worker stays bare.
 	it("keeps the agent type badge on progress and result rows", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const badge = `${theme.format.bracketLeft}sonic${theme.format.bracketRight}`;
 
@@ -171,7 +171,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("shows the spawn count without a joined agent-type list in the header", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
 			results: [],
@@ -196,7 +196,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("keeps the agent dot when shimmer is disabled", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const settings = Settings.instance;
 		const readSetting: Settings["get"] = settings.get.bind(settings);
 		vi.spyOn(settings, "get").mockImplementation(<P extends SettingPath>(path: P): SettingValue<P> => {
@@ -222,7 +222,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("renders pending task rows with the agent dot, not the pending glyph", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
 			id: "BestGpt",
@@ -252,7 +252,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("settles completed rows to the foreground color with the same dot", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
 			id: "DonePkg",
@@ -283,7 +283,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("shows the dispatch glyph in the header while agents run, not a spinner", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const header = findRow(
 			taskToolRenderer.renderResult(
@@ -301,7 +301,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("renders the task brief markdown inside the result frame", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({ id: "BestGpt", status: "pending", description: "Combine winners" });
@@ -325,7 +325,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("pins unfinished tasks below finished ones, finished sorted by runtime asc", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
@@ -354,7 +354,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("orders finalized results by runtime asc, matching the live view", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
@@ -379,7 +379,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("folds collapsed progress lists to the live edge with a status summary", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
 			results: [],
@@ -426,7 +426,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("keeps problem rows visible when the collapsed result list folds", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
 			results: [
@@ -468,7 +468,7 @@ describe("task progress rendering", () => {
 	// resolved-model badge now defaults on, so a launched agent's model id
 	// shows in its status line without any opt-in.
 	it("shows the resolved model badge on a running agent by default", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
 			id: "ModelShown",
@@ -495,7 +495,7 @@ describe("task progress rendering", () => {
 
 	it("hides the resolved model badge when the setting is turned off", async () => {
 		settings.set("agent.showResolvedModelBadge", false);
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
 			id: "ModelHidden",
@@ -528,7 +528,7 @@ describe("task result detail-less state", () => {
 	});
 
 	it("renders a validation failure with the error glyph, not a success bullet", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		// The task-brief section renders markdown, which reads the active theme.
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
@@ -552,7 +552,7 @@ describe("task result detail-less state", () => {
 	});
 
 	it("renders a detail-less success with the accent bullet, not an error glyph", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
 		const component = taskToolRenderer.renderResult({ content: [{ type: "text", text: "done" }] }, options, theme, {
@@ -602,7 +602,7 @@ describe("a recovery that gives up names the recovery", () => {
 	});
 
 	const failedRow = async (retryFailure: AgentProgress["retryFailure"]): Promise<string> => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		const progress = runningProgress({
 			id: "GaveUp",
 			status: "failed",
@@ -658,7 +658,7 @@ describe("a recovery that gives up names the recovery", () => {
 	// The badge and the detail row beneath it must agree; the detail row is the
 	// one that was already right, so it is the one the badge is measured against.
 	it("agrees with the detail row about which recovery gave up", async () => {
-		const theme = (await getThemeByName("dark"))!;
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 		const progress = runningProgress({
 			id: "Disagree",

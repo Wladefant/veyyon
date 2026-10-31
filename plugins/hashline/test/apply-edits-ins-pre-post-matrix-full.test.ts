@@ -1,15 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { applyEdits, parsePatch } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Full INS.PRE / INS.POST matrix on a 6-line file.
  */
 
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
-
-const SRC = text(["1", "2", "3", "4", "5", "6"]);
+const SRC = linesText(["1", "2", "3", "4", "5", "6"]);
 
 function apply(diff: string): string {
 	return applyEdits(SRC, parsePatch(diff).edits).text;

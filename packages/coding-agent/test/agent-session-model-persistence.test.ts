@@ -4,7 +4,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -15,6 +15,7 @@ import { getRestorableSessionModels } from "@veyyon/kernel/session/session-conte
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("AgentSession model persistence", () => {
 	let tempDir: TempDir;
@@ -52,8 +53,7 @@ describe("AgentSession model persistence", () => {
 	});
 
 	function getAnthropicModelOrThrow(id: string): Model<Api> {
-		const model = getBundledModel("anthropic", id);
-		if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
+		const model = requireBundledModel("anthropic", id);
 		return model;
 	}
 
@@ -249,6 +249,30 @@ describe("AgentSession model persistence", () => {
 		expect(created.settings.get("defaultModel")).toBe(defaultRoleValue);
 	});
 
+	it("cycles backward from the first available model onto the last, and forward from there onto the first", async () => {
+		let available: Model<Api>[] = [];
+		const created = await createSession({
+			selectInitialModel: availableModels => {
+				available = availableModels;
+				if (availableModels.length <= 2 || !availableModels[0]) {
+					throw new Error("Expected at least three available models");
+				}
+				return availableModels[0];
+			},
+		});
+		const first = available[0];
+		const last = available[available.length - 1];
+		if (!first || !last) throw new Error("Expected the available models to have two ends");
+
+		const backward = await created.session.cycleModel("backward");
+		const forward = await created.session.cycleModel("forward");
+
+		expect([backward?.model, forward?.model].map(model => model && modelValue(model))).toEqual([
+			modelValue(last),
+			modelValue(first),
+		]);
+	});
+
 	it("restores the last active role model when switching sessions", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
@@ -398,14 +422,7 @@ describe("AgentSession model persistence", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};

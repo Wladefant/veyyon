@@ -9,11 +9,12 @@
  * to the historical ``` rendering that other consumers and tests pin.
  */
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Markdown, type MarkdownTheme } from "@veyyon/tui";
 import { defaultMarkdownTheme } from "./test-themes";
 
 function plain(lines: readonly string[]): string[] {
-	return lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+	return lines.map(line => stripVTControlCharacters(line).trimEnd());
 }
 
 const SOURCE = "```ts\nconst x = 1;\n```";

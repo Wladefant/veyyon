@@ -42,6 +42,7 @@ veyyon trust --list    # show candidates without deciding
 veyyon trust --deny    # refuse, and remember the refusal
 veyyon trust --forget  # drop the decision
 veyyon trust path/to/skill/SKILL.md   # decide one named skill
+veyyon trust a.ts b.ts  # decide the named files
 ```
 
 Inside a session, bare `/trust` lists the project files and reports their decisions. `/trust approve`,

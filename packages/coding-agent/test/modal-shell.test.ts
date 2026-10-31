@@ -2,9 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import {
 	computeModalDims,
+	layoutModalCard,
 	MODAL_SIZING_LARGE,
 	MODAL_SIZING_MEDIUM,
 	MODAL_SIZING_SETTINGS,
+	type ModalSizing,
 	sizingForArea,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
 import * as modalShell from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
@@ -12,12 +14,11 @@ import {
 	fitTipLine,
 	hitTestModalChrome,
 	type ModalShortcut,
-	minModalChromeRows,
-	renderModalShell,
 	renderModalShortcuts,
 	SETTINGS_BROWSE_SHORTCUTS,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { paintCard } from "./helpers/modal-card";
 
 await initTheme(false, "unicode", false, "titanium", "light");
 
@@ -55,7 +56,7 @@ describe("ModalShell", () => {
 	});
 
 	it("paints title, search, tip, and centered shortcut chips", () => {
-		const { lines, geometry } = renderModalShell({
+		const { lines, geometry } = paintCard({
 			title: "Settings",
 			sizing: MODAL_SIZING_SETTINGS,
 			areaWidth: 100,
@@ -66,7 +67,6 @@ describe("ModalShell", () => {
 			shortcuts: SETTINGS_BROWSE_SHORTCUTS,
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
 		const plain = lines.map(l => stripVTControlCharacters(l)).join("\n");
 		expect(plain).toContain("Settings");
 		expect(plain).toContain("[x]");
@@ -76,7 +76,7 @@ describe("ModalShell", () => {
 		expect(plain).toContain("enter change");
 		// Floating: empty pad rows around the card.
 		expect(lines[0]?.trim()).toBe("");
-		expect(geometry!.bodyRowStart).toBeGreaterThan(0);
+		expect(geometry.bodyRowStart).toBeGreaterThan(0);
 	});
 
 	it("wraps footer chips and fits tip candidates", () => {
@@ -169,7 +169,7 @@ describe("ModalShell", () => {
 		// A search + tip overlay whose chrome alone (search 2 + tip 2 + footer 4 +
 		// borders 2) exceeds the modal height must shed the tip/pad, not shear off
 		// the bottom border (regression: card.slice cut the last rows).
-		const { lines, geometry } = renderModalShell({
+		const { lines } = paintCard({
 			title: "Model Hub",
 			sizing: MODAL_SIZING_LARGE,
 			areaWidth: 80,
@@ -184,7 +184,6 @@ describe("ModalShell", () => {
 			],
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
 		const painted = lines.filter(l => stripVTControlCharacters(l).trim().length > 0);
 		const bottom = stripVTControlCharacters(painted[painted.length - 1] ?? "");
 		// Bottom border row must be the sharp bottom-left/right corners, intact.
@@ -198,7 +197,7 @@ describe("ModalShell", () => {
 	});
 
 	it("exposes clickable close and shortcut hit rects", () => {
-		const { geometry } = renderModalShell({
+		const { geometry } = paintCard({
 			title: "Settings",
 			sizing: MODAL_SIZING_SETTINGS,
 			areaWidth: 100,
@@ -207,10 +206,9 @@ describe("ModalShell", () => {
 			shortcuts: SETTINGS_BROWSE_SHORTCUTS,
 			showClose: true,
 		});
-		expect(geometry).not.toBeNull();
-		expect(geometry!.closeColStart).toBeGreaterThan(0);
-		expect(geometry!.shortcutHits.some(h => h.id === "close")).toBe(true);
-		const close = hitTestModalChrome(geometry, geometry!.titleRow, geometry!.closeColStart + 1, {
+		expect(geometry.closeColStart).toBeGreaterThan(0);
+		expect(geometry.shortcutHits.some(h => h.id === "close")).toBe(true);
+		const close = hitTestModalChrome(geometry, geometry.titleRow, geometry.closeColStart + 1, {
 			leftClick: true,
 		});
 		expect(close).toEqual({ kind: "close" });
@@ -220,90 +218,61 @@ describe("ModalShell", () => {
 });
 
 /**
- * The chrome floor a caller can size a layout against.
+ * The rows a card spends outside its body.
  *
- * `ask-dialog.ts` needs the body budget BEFORE rendering, to decide between a
- * side-by-side preview and a stacked list, and it used to restate the shell's
- * arithmetic as `3 + footerLines + vPad` with a comment admitting it mirrored an
- * internal calculation. A restated formula silently stops matching the moment the
- * shell grows or drops a row, and the symptom would be a layout decision made
- * against a budget the renderer does not honour: a preview column chosen for a
- * card that cannot hold it. So the terms live in the shell, and these tests tie
- * the exported number to what the renderer actually reserves rather than to a
- * second copy of the same sum.
+ * `ask-dialog.ts`, `plan-review-overlay.ts` and `model-hub.ts` each restated the shell's arithmetic
+ * as `3 + footerLines + vPad` to size a body before rendering, which charged `vPad` once where the
+ * card charges it twice. A restated formula silently stops matching the moment the shell grows or
+ * drops a row, and the symptom is a body sized against a budget the renderer does not honour. The
+ * plan states the cost, and these tests tie it to what the renderer reserves, term by term.
  */
-describe("minModalChromeRows", () => {
-	/** The floor, per sizing, named term by term. A change to `vPad` or
-	 *  `footerLines` must move it; a change to the borders must move it too.
-	 *
-	 *  `vPad` is charged TWICE, once above the body and once below it. It used to
-	 *  be charged only above, which nothing showed while every card was full
-	 *  height and padded out with filler rows; once a card hugs its content the
-	 *  last row rests directly on the footer divider, so the pad is now symmetric
-	 *  and the budget a caller sizes a layout against has to say so. */
+describe("a card's chrome rows", () => {
+	const ESC = [{ label: "esc close" }];
+	const SIZINGS = [MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM, MODAL_SIZING_SETTINGS];
+
+	/** `nonBody` of the plan for a 120x40 card of `sizing`. */
+	function chromeRowsOf(sizing: ModalSizing, chrome: modalShell.ModalChromeInput): number {
+		const card = layoutModalCard(120, 40, sizing);
+		if (!card) throw new Error("no card on a 120x40 area");
+		return modalShell.planModalChrome(card, chrome).nonBody;
+	}
+
+	/** Named term by term. `vPad` is charged TWICE, once above the body and once below it: a card
+	 *  that hugs its content otherwise rests its last row on the footer divider. */
 	it.each([
 		[MODAL_SIZING_LARGE, 9],
 		[MODAL_SIZING_MEDIUM, 7],
 		[MODAL_SIZING_SETTINGS, 7],
 	])("counts top border, both vPad bands, divider, footer band, and bottom border", (sizing, expected) => {
-		expect(minModalChromeRows(sizing)).toBe(expected);
-		expect(minModalChromeRows(sizing)).toBe(3 + 2 * sizing.vPad + sizing.footerLines);
+		expect(chromeRowsOf(sizing, { shortcuts: ESC })).toBe(expected);
+		expect(chromeRowsOf(sizing, { shortcuts: ESC })).toBe(3 + 2 * sizing.vPad + sizing.footerLines);
 	});
 
-	/** THE drift lock. With nothing droppable in play (no search line, no tip, and
-	 *  shortcut chips that fit inside `footerLines` on one row), the rows the
-	 *  renderer spends outside the body must equal the floor exactly. If the shell
-	 *  gains or loses a border, divider, or pad row, this fails and the caller's
-	 *  budget is corrected with it. Measured from the rendered card, not recomputed. */
+	/** THE drift lock, measured from the rendered card: with nothing droppable in play the renderer
+	 *  spends exactly that sum outside the body, and the frame fills the area it was handed. */
 	it("equals the rows the renderer actually spends outside the body", () => {
-		for (const sizing of [MODAL_SIZING_LARGE, MODAL_SIZING_MEDIUM, MODAL_SIZING_SETTINGS]) {
-			const body = Array.from({ length: 40 }, (_, i) => `  row ${i}`);
+		for (const sizing of SIZINGS) {
 			const areaHeight = 40;
-			const { lines, geometry } = renderModalShell({
+			const { lines, geometry } = paintCard({
 				title: "Card",
 				sizing,
 				areaWidth: 120,
 				areaHeight,
-				body,
-				shortcuts: [{ label: "esc close" }],
+				body: Array.from({ length: 40 }, (_, i) => `  row ${i}`),
+				shortcuts: ESC,
 			});
-			expect(geometry).not.toBeNull();
 
-			expect(geometry!.modalHeight - geometry!.bodyRowCount).toBe(minModalChromeRows(sizing));
-			// The geometry is only trustworthy if it describes the frame that was
-			// actually produced. The render must fill the area it was handed exactly,
-			// and the card it reports must fit inside that area: a chrome row spent
-			// past the edge would still satisfy the arithmetic above while clipping.
+			expect(geometry.modalHeight - geometry.bodyRowCount).toBe(3 + 2 * sizing.vPad + sizing.footerLines);
 			expect(lines.length).toBe(areaHeight);
-			expect(geometry!.modalHeight).toBeLessThanOrEqual(areaHeight);
+			expect(geometry.modalHeight).toBeLessThanOrEqual(areaHeight);
 		}
 	});
 
-	/** The floor is a floor: a search line adds two rows, so a caller using it as
-	 *  an exact budget would be wrong in the direction that overfills the card.
-	 *  Stated as a test so the docstring's claim is checked, not just asserted. */
-	it("is a minimum, and a search line costs more than it", () => {
-		const withoutSearch = renderModalShell({
-			title: "Card",
-			sizing: MODAL_SIZING_LARGE,
-			areaWidth: 120,
-			areaHeight: 40,
-			body: Array.from({ length: 40 }, (_, i) => `  row ${i}`),
-			shortcuts: [{ label: "esc close" }],
-		});
-		const withSearch = renderModalShell({
-			title: "Card",
-			sizing: MODAL_SIZING_LARGE,
-			areaWidth: 120,
-			areaHeight: 40,
-			body: Array.from({ length: 40 }, (_, i) => `  row ${i}`),
-			searchLine: " / find",
-			shortcuts: [{ label: "esc close" }],
-		});
-
-		expect(withoutSearch.geometry!.bodyRowCount - withSearch.geometry!.bodyRowCount).toBe(2);
-		expect(withSearch.geometry!.modalHeight - withSearch.geometry!.bodyRowCount).toBe(
-			minModalChromeRows(MODAL_SIZING_LARGE) + 2,
-		);
+	it("charges a search line two more rows", () => {
+		for (const sizing of SIZINGS) {
+			expect(chromeRowsOf(sizing, { shortcuts: ESC, searchLine: " / find" })).toBe(
+				chromeRowsOf(sizing, { shortcuts: ESC }) + 2,
+			);
+		}
 	});
 });

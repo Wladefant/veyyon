@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * WHY: Claude Fable 5.1 binds every thinking block's signature to the exact
@@ -56,14 +57,7 @@ function assistant(content: AssistantMessage["content"], timestamp: number, mode
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp,
 	};

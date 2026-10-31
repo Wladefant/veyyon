@@ -3,8 +3,12 @@ use std::{borrow::Cow, io};
 use grep_matcher::Matcher;
 use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use regex_syntax::ast::ErrorKind as AstErrorKind;
 
-use crate::{CompiledMatcher, escape_literal_pattern, pcre_matcher_defaults};
+use crate::{
+	CompiledMatcher, escape_literal_pattern, pcre_matcher_defaults, pcre_standalone_error,
+	rust_standalone_error,
+};
 
 /// The rule that fences the default engine's error off from PCRE2's, 79 tildes
 /// wide, which is the width ripgrep 15.1.0 writes.
@@ -66,10 +70,11 @@ impl Default for MatcherSpec {
 
 impl MatcherSpec {
 	/// Build a `grep_regex::RegexMatcher` with these flags.
-	pub fn build_rust_matcher(
-		&self,
-		patterns: &[String],
-	) -> Result<RegexMatcher, grep_regex::Error> {
+	///
+	/// Each pattern is parsed as written first, unless it is a fixed string:
+	/// the builder wraps it in `(?:…)`, where a `)` that closes no group of
+	/// its own pairs with the wrapper and `)(` compiles as `(?:)()`.
+	pub fn build_rust_matcher(&self, patterns: &[String]) -> Result<RegexMatcher, String> {
 		let Self {
 			case_insensitive,
 			case_smart,
@@ -82,6 +87,13 @@ impl MatcherSpec {
 			multi_line,
 			line_terminator,
 		} = *self;
+		if !fixed_strings
+			&& let Some(error) = patterns
+				.iter()
+				.find_map(|pattern| rust_standalone_error(pattern))
+		{
+			return Err(error.to_string());
+		}
 		let mut builder = RegexMatcherBuilder::new();
 		builder
 			.case_insensitive(case_insensitive)
@@ -96,10 +108,13 @@ impl MatcherSpec {
 		if let Some(terminator) = line_terminator {
 			builder.line_terminator(Some(terminator));
 		}
-		builder.build_many(patterns)
+		builder
+			.build_many(patterns)
+			.map_err(|error| error.to_string())
 	}
 
-	/// Build a `grep_pcre2::RegexMatcher` with these flags.
+	/// Build a `grep_pcre2::RegexMatcher` with these flags, checking each
+	/// pattern as written first for the same reason as the Rust engine.
 	pub fn build_pcre_matcher(&self, patterns: &[String]) -> Result<PcreMatcher, String> {
 		let Self {
 			case_insensitive,
@@ -113,6 +128,13 @@ impl MatcherSpec {
 			multi_line,
 			line_terminator: _,
 		} = *self;
+		if !fixed_strings
+			&& let Some(error) = patterns
+				.iter()
+				.find_map(|pattern| pcre_standalone_error(pattern, unicode))
+		{
+			return Err(error.to_string());
+		}
 		let mut builder = PcreMatcherBuilder::new();
 		builder
 			.caseless(case_insensitive)
@@ -140,17 +162,14 @@ impl MatcherSpec {
 		engine: RegexEngine,
 	) -> Result<CompiledMatcher, String> {
 		match engine {
-			RegexEngine::Default => self
-				.build_rust_matcher(patterns)
-				.map(CompiledMatcher::Rust)
-				.map_err(|error| error.to_string()),
+			RegexEngine::Default => self.build_rust_matcher(patterns).map(CompiledMatcher::Rust),
 			RegexEngine::Pcre2 => self.build_pcre_matcher(patterns).map(CompiledMatcher::Pcre),
 			RegexEngine::Auto => match self.build_rust_matcher(patterns) {
 				Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
 				Err(rust) => self
 					.build_pcre_matcher(patterns)
 					.map(CompiledMatcher::Pcre)
-					.map_err(|pcre| both_engines_refused(&rust.to_string(), &pcre)),
+					.map_err(|pcre| both_engines_refused(&rust, &pcre)),
 			},
 		}
 	}
@@ -271,48 +290,64 @@ pub fn sanitize_braces(pattern: &str) -> Cow<'_, str> {
 	}
 }
 
-/// Escape unescaped parentheses after a group-syntax regex error.
+/// Escape the parentheses that cannot pair, after a group-syntax regex error.
+///
+/// A `(` with no later `)` and a `)` with no earlier open `(` are escaped. A
+/// balanced pair stays a group, so `(get|set)Value(` keeps its alternation and
+/// matches `getValue(` rather than the text `(get` or `set)Value(`. Escaped
+/// parentheses and parentheses inside a character class are literal already
+/// and are left as written.
 #[must_use]
-pub fn escape_unescaped_parentheses(pattern: &str) -> Cow<'_, str> {
+pub fn escape_unbalanced_parentheses(pattern: &str) -> Cow<'_, str> {
+	// Byte scan: every byte compared below is ASCII, and the bytes of a
+	// multi-byte character are all >= 0x80, so none of them is mistaken for one
+	// and every recorded offset is a character boundary.
 	let bytes = pattern.as_bytes();
-	if !bytes.contains(&b'(') && !bytes.contains(&b')') {
+	let mut open = Vec::new();
+	let mut stray = Vec::new();
+	let mut class_depth = 0usize;
+	let mut i = 0;
+	while i < bytes.len() {
+		match bytes[i] {
+			b'\\' => {
+				i += 2;
+				continue;
+			},
+			b'[' => {
+				class_depth += 1;
+				i += 1;
+				// A `]` first in a class, after an optional `^`, is a member.
+				if bytes.get(i) == Some(&b'^') {
+					i += 1;
+				}
+				if bytes.get(i) == Some(&b']') {
+					i += 1;
+				}
+				continue;
+			},
+			b']' if class_depth > 0 => class_depth -= 1,
+			b'(' if class_depth == 0 => open.push(i),
+			// The guard pops the `(` this `)` closes; with none open, it is stray.
+			b')' if class_depth == 0 && open.pop().is_none() => stray.push(i),
+			_ => {},
+		}
+		i += 1;
+	}
+	stray.extend(open);
+	if stray.is_empty() {
 		return Cow::Borrowed(pattern);
 	}
+	stray.sort_unstable();
 
-	let mut result = String::with_capacity(pattern.len() + 4);
-	let mut modified = false;
-	let mut i = 0;
-
-	while i < bytes.len() {
-		if bytes[i] == b'\\' && i + 1 < bytes.len() {
-			result.push('\\');
-			i += 1;
-			let ch = pattern[i..]
-				.chars()
-				.next()
-				.expect("non-empty slice has a char");
-			result.push(ch);
-			i += ch.len_utf8();
-			continue;
-		}
-
-		let ch = pattern[i..]
-			.chars()
-			.next()
-			.expect("non-empty slice has a char");
-		if matches!(ch, '(' | ')') {
-			result.push('\\');
-			modified = true;
-		}
-		result.push(ch);
-		i += ch.len_utf8();
+	let mut result = String::with_capacity(pattern.len() + stray.len());
+	let mut copied = 0;
+	for at in stray {
+		result.push_str(&pattern[copied..at]);
+		result.push('\\');
+		copied = at;
 	}
-
-	if modified {
-		Cow::Owned(result)
-	} else {
-		Cow::Borrowed(pattern)
-	}
+	result.push_str(&pattern[copied..]);
+	Cow::Owned(result)
 }
 
 /// Compile a single pattern with automatic sanitization, fallback to PCRE2,
@@ -326,7 +361,16 @@ pub fn compile_with_demotion(
 	ignore_case: bool,
 	multiline: bool,
 ) -> Result<(CompiledMatcher, Option<String>), String> {
-	let build_rust = |pat: &str| {
+	// Each engine is asked about the pattern as written before it builds it,
+	// since both builders wrap it in `(?:…)` and would otherwise pair a stray
+	// `)` with that wrapper. The Rust error records whether the fault is an
+	// unpaired group, which is the one fault the retry below repairs.
+	let build_rust = |pat: &str| -> Result<RegexMatcher, (String, bool)> {
+		if let Some(err) = rust_standalone_error(pat) {
+			let group_fault =
+				matches!(err.kind(), AstErrorKind::GroupUnclosed | AstErrorKind::GroupUnopened);
+			return Err((err.to_string(), group_fault));
+		}
 		let build = |line_terminated| {
 			let mut builder = RegexMatcherBuilder::new();
 			builder.case_insensitive(ignore_case).multi_line(multiline);
@@ -338,34 +382,36 @@ pub fn compile_with_demotion(
 		if !multiline && let Ok(matcher) = build(true) {
 			return Ok(matcher);
 		}
-		build(false)
+		build(false).map_err(|err| (err.to_string(), false))
 	};
 
-	let build_pcre = |pat: &str| {
+	let build_pcre = |pat: &str| -> Option<PcreMatcher> {
+		if pcre_standalone_error(pat, true).is_some() {
+			return None;
+		}
 		let mut builder = PcreMatcherBuilder::new();
 		builder.caseless(ignore_case).multi_line(multiline);
 		pcre_matcher_defaults(&mut builder);
-		builder.build(pat)
+		builder.build(pat).ok()
 	};
 
 	let sanitized = sanitize_braces(pattern);
-	let err = match build_rust(sanitized.as_ref()) {
+	let (message, group_fault) = match build_rust(sanitized.as_ref()) {
 		Ok(matcher) => return Ok((CompiledMatcher::Rust(matcher), None)),
 		Err(err) => err,
 	};
 
-	if let Ok(matcher) = build_pcre(sanitized.as_ref()) {
+	if let Some(matcher) = build_pcre(sanitized.as_ref()) {
 		return Ok((CompiledMatcher::Pcre(matcher), None));
 	}
 
-	let message = err.to_string();
-	if message.contains("unclosed group") || message.contains("unopened group") {
-		let escaped = escape_unescaped_parentheses(sanitized.as_ref());
+	if group_fault {
+		let escaped = escape_unbalanced_parentheses(sanitized.as_ref());
 		if escaped.as_ref() != sanitized.as_ref() {
 			if let Ok(matcher) = build_rust(escaped.as_ref()) {
 				return Ok((CompiledMatcher::Rust(matcher), None));
 			}
-			if let Ok(matcher) = build_pcre(escaped.as_ref()) {
+			if let Some(matcher) = build_pcre(escaped.as_ref()) {
 				return Ok((CompiledMatcher::Pcre(matcher), None));
 			}
 		}

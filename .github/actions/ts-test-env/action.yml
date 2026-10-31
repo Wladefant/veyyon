@@ -51,14 +51,6 @@ runs:
            run-id: ${{ steps.source.outputs.artifact-run-id }}
            github-token: ${{ inputs.github-token }}
 
-      - name: Build the test sandbox image
-        # Every `bun test` in this repo refuses to run unless it can PROVE the
-        # operator's home is unreachable, so CI has to establish the same boundary
-        # a workstation does or the contract holds on one machine only. On a
-        # GitHub runner that is the container rung, and this builds the guest
-        # userland it runs. There is no /dev/kvm here, so the script builds the
-        # userland only and says so; the microVM rung reports itself unavailable
-        # instead of being silently swapped for something weaker.
+      - name: Provide the test sandbox image
         if: ${{ inputs.sandbox == 'true' }}
-        shell: bash
-        run: bash scripts/test-sandbox/run.sh --build
+        uses: ./.github/actions/test-sandbox-image

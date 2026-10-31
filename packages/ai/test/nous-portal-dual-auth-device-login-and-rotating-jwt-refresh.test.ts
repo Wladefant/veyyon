@@ -24,6 +24,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as AIError from "@veyyon/ai/error";
@@ -184,8 +185,8 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 	describe("Pathway 2: Nous Research OAuth device-code flow & JWT exchange", () => {
 		it("drives full state transitions: device-code -> pending -> slow_down -> complete", async () => {
 			const sleepTimes: number[] = [];
-			vi.spyOn(Bun, "sleep").mockImplementation(async (ms: number | Date) => {
-				sleepTimes.push(typeof ms === "number" ? ms : ms.getTime() - Date.now());
+			vi.spyOn(scheduler, "wait").mockImplementation(async (ms: number) => {
+				sleepTimes.push(ms);
 			});
 
 			const nowSeconds = Math.floor(Date.now() / 1000);
@@ -447,7 +448,7 @@ describe("Nous Research dual authentication and rotating JWT refresh lifecycle",
 
 	describe("Bounds, Loop Termination, and Deduplication", () => {
 		it("terminates polling when the device code expires after bounded attempts", async () => {
-			vi.spyOn(Bun, "sleep").mockImplementation(async () => {});
+			vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 
 			let attempts = 0;
 			const { fetch } = createFetchStub(req => {

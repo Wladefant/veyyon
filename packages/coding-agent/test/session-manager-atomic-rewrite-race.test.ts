@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	MemorySessionStorage,
@@ -7,6 +7,8 @@ import {
 	type WriteTextAtomicOptions,
 } from "@veyyon/kernel/session/session-storage";
 import type { SessionTitleUpdate } from "@veyyon/kernel/session/session-title-slot";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 interface DetachableWriter extends SessionStorageWriter {
 	detach(): void;
@@ -147,8 +149,7 @@ describe("SessionManager atomic rewrite race", () => {
 	it("keeps post-compaction appends on the current JSONL path", async () => {
 		const storage = new DetachingRewriteStorage();
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		sessionManager.appendMessage({
 			role: "assistant",
@@ -156,14 +157,7 @@ describe("SessionManager atomic rewrite race", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -205,14 +199,7 @@ describe("SessionManager atomic rewrite race", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -264,8 +251,7 @@ describe("SessionManager atomic rewrite race", () => {
 	it("flushSync during an in-flight atomic rewrite durably publishes the exit record", async () => {
 		const storage = new DetachingRewriteStorage();
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		sessionManager.appendMessage({
 			role: "assistant",
@@ -273,14 +259,7 @@ describe("SessionManager atomic rewrite race", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -329,8 +308,7 @@ describe("SessionManager atomic rewrite fence spans writer.close()", () => {
 	it("blocks a fresh writer from opening while an in-flight rewrite awaits writer.close()", async () => {
 		const storage = new CloseGatedRewriteStorage();
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// Seed an assistant message so the session materializes on disk without
 		// opening a persistent writer (cold-path #rewriteSynchronously).
@@ -340,14 +318,7 @@ describe("SessionManager atomic rewrite fence spans writer.close()", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -413,8 +384,7 @@ describe("SessionManager title-change fallback fenced-append durability", () => 
 	it("loops on the dirty flag so fenced appends during the fallback rewrite persist", async () => {
 		const storage = new TitleFallbackPausingStorage();
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// Materialize the session on disk with a title slot present so a later
 		// setSessionName takes the append-then-updateSessionTitle try branch
@@ -425,14 +395,7 @@ describe("SessionManager title-change fallback fenced-append durability", () => 
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -476,8 +439,7 @@ describe("SessionManager fence relaxes when flushSync supersedes the atomic rewr
 	it("routes post-flushSync appends onto the hot path so they land on disk before close()", async () => {
 		const storage = new DetachingRewriteStorage();
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// Materialize a session on disk so subsequent rewrites are meaningful.
 		sessionManager.appendMessage({
@@ -486,14 +448,7 @@ describe("SessionManager fence relaxes when flushSync supersedes the atomic rewr
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -625,8 +580,7 @@ describe("SessionManager fence handoff across superseded rewrites", () => {
 		const storage = new SequencedRewriteStorage();
 		storage.pauseCount = 2;
 		const sessionManager = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		sessionManager.appendMessage({
 			role: "assistant",
@@ -634,14 +588,7 @@ describe("SessionManager fence handoff across superseded rewrites", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});
@@ -672,7 +619,7 @@ describe("SessionManager fence handoff across superseded rewrites", () => {
 		// epoch bookkeeping so subsequent appends took the hot path and were
 		// then detached by the newer publish.
 		storage.pauses[0].allow.resolve();
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await drainMicrotasks(20);
 
 		// Sync append during the newer rewrite: MUST still be fenced.
 		sessionManager.appendCustomEntry("during_newer", { data: "X2" });

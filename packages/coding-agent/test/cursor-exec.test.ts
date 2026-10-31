@@ -6,7 +6,6 @@ import { create } from "@bufbuild/protobuf";
 import type { AgentEvent, AnyAgentTool } from "@veyyon/agent-core";
 import { prepareToolCall } from "@veyyon/agent-core/tool-call-preparation";
 import { GrepArgsSchema, ReadArgsSchema, ShellArgsSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { CursorExecHandlers } from "@veyyon/coding-agent/cursor";
 import {
 	createBridgeEditTool,
@@ -19,17 +18,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
-
-function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-		...overrides,
-	};
-}
+import { makeToolSessionAt } from "./helpers/tool-session";
 
 function textMatchCount(details: unknown): number | undefined {
 	if (!isRecord(details) || details.type !== "text" || !isRecord(details.result)) return undefined;
@@ -44,7 +33,7 @@ describe("CursorExecHandlers.grep bridge", () => {
 	beforeEach(async () => {
 		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-exec-test-"));
 		await Bun.write(path.join(cwd, "sample.txt"), "Hello World\nhello world\n");
-		searchTool = new SearchTool(createTestSession(cwd));
+		searchTool = new SearchTool(makeToolSessionAt(cwd));
 		handlers = new CursorExecHandlers({
 			cwd,
 			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
@@ -280,5 +269,50 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		expect(result.isError).toBe(true);
 		expect(await Bun.file(target).text()).toBe("alpha\nbeta\n");
+describe("the shell stream bridge streams every text block of a result", () => {
+	const multiBlockTool: AnyAgentTool = {
+		name: "bash",
+		label: "bash",
+		description: "streams output split across several content blocks",
+		parameters: type({}),
+		execute: async (_id, _params, _signal, onUpdate) => {
+			onUpdate?.({
+				content: [
+					{ type: "text", text: "one " },
+					{ type: "image", data: "AAAA", mimeType: "image/png" },
+					{ type: "text", text: "two" },
+				],
+				details: {},
+			});
+			return {
+				content: [
+					{ type: "text", text: "one " },
+					{ type: "text", text: "two" },
+					{ type: "text", text: " three" },
+				],
+				details: {},
+			};
+		},
+	};
+
+	it("concatenates the text blocks of each update and of the final result, dropping images", async () => {
+		const events: AgentEvent[] = [];
+		const stdout: string[] = [];
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			prepareToolCall: (tool, toolCall) => prepareToolCall(tool, toolCall, {}),
+			tools: new Map([["bash", multiBlockTool]]),
+			emitEvent: event => events.push(event),
+		});
+
+		await handlers.shellStream(create(ShellArgsSchema, { toolCallId: "call-multi", command: "ignored" }), {
+			onStdout: data => stdout.push(data),
+			onStderr: () => {},
+		});
+		expect(stdout).toEqual(["one two", " three"]);
+		const update = events.find(event => event.type === "tool_execution_update");
+		expect(update?.type === "tool_execution_update" && update.partialResult.content).toEqual([
+			{ type: "text", text: "one two" },
+		]);
 	});
 });

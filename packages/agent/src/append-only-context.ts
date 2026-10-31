@@ -27,7 +27,10 @@ import type { AgentContext } from "./types";
 export interface StablePrefixSnapshot {
 	systemPrompt: string[];
 	tools: Tool[];
-	fingerprint: string;
+	/** {@link prefixIdentity} of `systemPrompt` and `tools`, which {@link StablePrefix.fingerprint} hashes. */
+	identity: object;
+	/** Hashed from `identity` on the first read: no request reads it, so a build does not pay the hash. */
+	fingerprint: string | undefined;
 }
 
 /** Options threaded through `build()` so the snapshot reflects loop-time settings. */
@@ -54,7 +57,10 @@ export class StablePrefix {
 	#version = 0;
 
 	get fingerprint(): string {
-		return this.#snapshot?.fingerprint ?? "<unbuilt>";
+		const snapshot = this.#snapshot;
+		if (!snapshot) return "<unbuilt>";
+		snapshot.fingerprint ??= computeFingerprint(snapshot.identity);
+		return snapshot.fingerprint;
 	}
 	get version(): number {
 		return this.#version;
@@ -71,15 +77,12 @@ export class StablePrefix {
 		const tools =
 			normalizeTools(context.tools, options.intentTracing, options.exampleDialect, options.pruneToolDescriptions) ??
 			[];
-		const identity = prefixIdentity(context.systemPrompt, tools, options);
+		const systemPrompt = context.systemPrompt.slice();
+		const identity = prefixIdentity(systemPrompt, tools, options);
 		if (this.#snapshot && matchesSnapshot(identity, this.#identity)) {
 			return false;
 		}
-		this.#snapshot = {
-			systemPrompt: context.systemPrompt.slice(),
-			tools,
-			fingerprint: computeFingerprint(identity),
-		};
+		this.#snapshot = { systemPrompt, tools, identity, fingerprint: undefined };
 		this.#identity = snapshotJson(identity);
 		this.#version++;
 		return true;

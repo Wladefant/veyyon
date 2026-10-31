@@ -198,6 +198,14 @@ describe("Model and effort slash commands and controllers", () => {
 			expect(rec.editorText).toEqual([""]);
 		});
 
+		it("TUI: /model <query> opens the model selector searching for the query", () => {
+			const rec = makeTui();
+			const cmd: ParsedSlashCommand = { name: "model", args: "gpt-6  ", text: "/model gpt-6  " };
+			modelCmd.handleTui!(cmd, rec.runtime);
+			expect(rec.modelSelectorOpened).toEqual([{ query: "gpt-6" }]);
+			expect(rec.editorText).toEqual([""]);
+		});
+
 		it("TUI: /switch opens the model selector in temporary-only mode", () => {
 			const rec = makeTui();
 			const cmd: ParsedSlashCommand = { name: "switch", args: "", text: "/switch" };

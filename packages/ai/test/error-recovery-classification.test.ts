@@ -50,6 +50,9 @@ const RETRY_DECISION: Record<string, boolean> = {
 	// The call was never well-formed enough to run, so there is no tool effect
 	// to duplicate and re-sampling is the repair.
 	MalformedFunctionCall: true,
+	// A dial nobody answered. The turn redials it on its visible countdown; the provider transport
+	// stands down (asserted in the unreachable-endpoint suite), so it is not retried twice.
+	PeerUnreachable: true,
 	// A code whose meaning is that a replay reproduces it. It rides BESIDE Transient rather than
 	// clearing it — the wording still describes the failure — so the veto has to be the decision.
 	TransportRefused: false,
@@ -129,6 +132,7 @@ const FRAME_BAIT_TEXT: Record<keyof typeof AIError.Flag, string> = {
 	Class: "class marker",
 	Transient: "503 service unavailable: overloaded_error",
 	TransportRefused: "NGHTTP2_CANCEL: stream cancelled by peer",
+	PeerUnreachable: "connect ECONNREFUSED 127.0.0.1:11434",
 	ThinkingLoop: "model repeated the same thinking block",
 	StaleResponsesItem: "Item with id 'rs_abc' not found. previous_response expired",
 	ProviderFinishError: "Provider finish_reason: error",
@@ -339,6 +343,7 @@ describe("a stack trace is not evidence about the failure", () => {
 			"EmptyResponse",
 			"MalformedFunctionCall",
 			"ModelNotInPlan",
+			"PeerUnreachable",
 			"ProviderFinishError",
 			"Timeout",
 			"ToolChoiceRejected",

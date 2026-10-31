@@ -4,7 +4,8 @@
  * Both the streamable-HTTP and the SSE transport answer server-to-client
  * requests (sampling, elicitation) by POSTing a JSON-RPC response back. Both
  * swallowed a failed POST, one of them under the comment "best-effort response
- * delivery".
+ * delivery", and both discarded the status of a POST the server answered with
+ * an error.
  *
  * It is not best-effort from the server's side. The server asked a question, we
  * did the work to answer it, and then dropped the answer. The server waits on a
@@ -12,13 +13,17 @@
  * nothing anywhere connecting the hang to the send that failed (Law 10). Two
  * transports had the identical swallow, so the report has one owner and cannot
  * drift into describing the same failure two ways.
+ *
+ * WHAT THIS DOES NOT CATCH. A send that throws without the server answering at
+ * all (a reset connection) is reported through the same catch as a refused one,
+ * but no case here resets a connection.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { HttpTransport } from "@veyyon/coding-agent/mcp/transports/http";
 import { reportUndeliveredServerResponse } from "@veyyon/coding-agent/mcp/transports/server-response-delivery";
+import { LegacySseTransport } from "@veyyon/coding-agent/mcp/transports/sse";
+import type { JsonRpcMessage } from "@veyyon/coding-agent/mcp/types";
 import { logger } from "@veyyon/utils";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 
 describe("reportUndeliveredServerResponse", () => {
 	let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
@@ -118,56 +123,134 @@ describe("reportUndeliveredServerResponse", () => {
 });
 
 /**
- * The owner being correct is not enough: both call sites have to use it.
+ * The owner being correct is not enough: both transports have to reach it.
  *
- * The original defect was two bare catches, and nothing about a well-tested
- * reporter stops one of them being reintroduced. These read the transport
- * sources, because the defect is a source pattern and no runtime observation
- * can see a `catch` that does nothing.
+ * Each transport is driven against a local server that asks the client a
+ * question and then answers the client's reply with a chosen status. A reply
+ * the server refused is reported once, naming the server and the id it is
+ * waiting on; a reply the server accepted is not reported.
  */
-describe("both transports route a failed server-response POST through the owner", () => {
-	const TRANSPORTS = [
-		{ name: "http", path: path.resolve(import.meta.dir, "../../src/mcp/transports/http.ts") },
-		{ name: "sse", path: path.resolve(import.meta.dir, "../../src/mcp/transports/sse.ts") },
-	];
+describe("both transports report an answer the server did not accept", () => {
+	const QUESTION_ID = "server-question-1";
+	const QUESTION = { jsonrpc: "2.0", id: QUESTION_ID, method: "ping" };
+	const REPORT_DEADLINE_MS = 2_000;
+	const encoder = new TextEncoder();
 
-	for (const transport of TRANSPORTS) {
-		it(`${transport.name} calls reportUndeliveredServerResponse`, () => {
-			const source = fs.readFileSync(transport.path, "utf8");
+	let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
+	let server: Bun.Server<undefined> | undefined;
+	let closeTransport: (() => Promise<void>) | undefined;
 
-			expect(source).toContain("reportUndeliveredServerResponse({");
-			expect(moduleSpecifiersIn(source)).toContain("./server-response-delivery");
+	beforeEach(() => {
+		warnings = [];
+		vi.spyOn(logger, "warn").mockImplementation((message: string, fields?: Record<string, unknown>) => {
+			warnings.push({ message, fields: fields ?? {} });
 		});
+	});
 
-		it(`${transport.name} does not reintroduce its own copy of the report`, () => {
-			// A second `logger.warn` with this text would mean the two transports had
-			// drifted apart again, which is the state the owner exists to end.
-			const source = fs.readFileSync(transport.path, "utf8");
+	afterEach(async () => {
+		await closeTransport?.();
+		closeTransport = undefined;
+		server?.stop(true);
+		server = undefined;
+		vi.restoreAllMocks();
+	});
 
-			expect(source).not.toContain("the server is still waiting for it");
-		});
-
-		it(`${transport.name} has no bare catch left in its server-response path`, () => {
-			// The exact shape of the original defect: `} catch {` with a comment or
-			// nothing, discarding the send failure.
-			const source = fs.readFileSync(transport.path, "utf8");
-			const inSendServerResponse = source.slice(
-				source.indexOf("async #sendServerResponse"),
-				source.indexOf("async #sendServerResponse") + 3_000,
-			);
-
-			expect(inSendServerResponse).not.toContain("} catch {");
-			expect(inSendServerResponse).not.toContain("Best-effort response delivery");
-		});
+	interface Asked {
+		/** The server's URL, as the transport was configured with it. */
+		url: string;
+		/** Resolves with the reply the client posted to the question. */
+		reply: Promise<JsonRpcMessage>;
 	}
 
-	it("reads real transport sources, so a passing scan means something", () => {
-		// Anti-vacuity. A moved or renamed file would otherwise make every scan
-		// above pass against an empty string.
-		for (const transport of TRANSPORTS) {
-			const source = fs.readFileSync(transport.path, "utf8");
-			expect(source.length).toBeGreaterThan(5_000);
-			expect(source).toContain("async #sendServerResponse");
+	/** Streamable HTTP: the question rides on the response to a notification the client sends. */
+	async function askOverStreamableHttp(answerStatus: number): Promise<Asked> {
+		const reply = Promise.withResolvers<JsonRpcMessage>();
+		server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const body = (await req.json()) as JsonRpcMessage;
+				if ("method" in body && !("id" in body)) {
+					return new Response(`data: ${JSON.stringify(QUESTION)}\n\n`, {
+						headers: { "Content-Type": "text/event-stream" },
+					});
+				}
+				reply.resolve(body);
+				return new Response("answer refused", { status: answerStatus });
+			},
+		});
+		const url = `http://127.0.0.1:${server.port}/mcp`;
+		const transport = new HttpTransport({ type: "http", url, timeout: REPORT_DEADLINE_MS });
+		transport.onRequest = async () => ({});
+		closeTransport = () => transport.close();
+		await transport.connect();
+		await transport.notify("notifications/initialized");
+		return { url, reply: reply.promise };
+	}
+
+	/** Legacy HTTP+SSE: the question arrives on the event stream, right after the endpoint event. */
+	async function askOverLegacySse(answerStatus: number): Promise<Asked> {
+		const reply = Promise.withResolvers<JsonRpcMessage>();
+		server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				if (req.method === "GET") {
+					const stream = new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(encoder.encode("event: endpoint\ndata: /mcp/messages\n\n"));
+							controller.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(QUESTION)}\n\n`));
+						},
+					});
+					return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+				}
+				reply.resolve((await req.json()) as JsonRpcMessage);
+				return new Response("answer refused", { status: answerStatus });
+			},
+		});
+		const url = `http://127.0.0.1:${server.port}/mcp/sse`;
+		const transport = new LegacySseTransport({ type: "sse", url, timeout: REPORT_DEADLINE_MS });
+		transport.onRequest = async () => ({});
+		closeTransport = () => transport.close();
+		await transport.connect();
+		return { url, reply: reply.promise };
+	}
+
+	/** Every transport that answers server requests over HTTP. A new one belongs here. */
+	const TRANSPORTS = [
+		{ name: "streamable HTTP", ask: askOverStreamableHttp },
+		{ name: "legacy HTTP+SSE", ask: askOverLegacySse },
+	];
+
+	/** Wait for the report, bounded so a missing one fails rather than hangs. */
+	async function reportsWithin(deadlineMs: number): Promise<void> {
+		const deadline = Date.now() + deadlineMs;
+		while (warnings.length === 0 && Date.now() < deadline) await Bun.sleep(5);
+	}
+
+	for (const transport of TRANSPORTS) {
+		for (const status of [400, 401, 500]) {
+			it(`${transport.name} reports a reply the server answered with HTTP ${status}`, async () => {
+				const asked = await transport.ask(status);
+				const reply = await asked.reply;
+				expect(reply).toMatchObject({ jsonrpc: "2.0", id: QUESTION_ID });
+
+				await reportsWithin(REPORT_DEADLINE_MS);
+
+				expect(warnings).toHaveLength(1);
+				expect(warnings[0]?.message).toBe(
+					"Could not deliver a response to an MCP server request; the server is still waiting for it",
+				);
+				expect(warnings[0]?.fields).toMatchObject({ server: asked.url, requestId: QUESTION_ID });
+				expect(String(warnings[0]?.fields.error)).toContain(`HTTP ${status}: answer refused`);
+			});
 		}
-	});
+
+		it(`${transport.name} reports nothing for a reply the server accepted`, async () => {
+			const asked = await transport.ask(202);
+			await asked.reply;
+
+			await reportsWithin(200);
+
+			expect(warnings).toEqual([]);
+		});
+	}
 });

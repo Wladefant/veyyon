@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { formatHashlineHeader } from "@veyyon/hashline";
 import { type AstReplaceChange, type AstReplaceFileChange, astEdit } from "@veyyon/natives";
 import { $envpos, lazy, prompt, truncate, untilAborted } from "@veyyon/utils";
@@ -35,7 +36,7 @@ const astEditOpSchema = lazy(() =>
 	}),
 );
 
-const astEditSchema = lazy(() =>
+const astEditSchema = toolSchema("ast_edit", () =>
 	type({
 		ops: astEditOpSchema.value.array().atLeastLength(1).describe("rewrite ops"),
 		paths: type("string")
@@ -216,6 +217,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema.value, AstEdi
 	readonly description: string;
 	get parameters(): typeof astEditSchema.value {
 		return astEditSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return astEditSchema.wire;
 	}
 	readonly strict = true;
 

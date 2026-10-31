@@ -8,12 +8,15 @@
  *  - a hook that succeeds shows its status or panel, one that throws shows an error naming the action, and an empty
  *    result or a backend without the hook shows a warning naming the backend;
  *  - clearing memory refreshes the system prompt only after the clear succeeded;
- *  - no action, or an action in any letter case, is read the same as its lowercase form; anything else prints usage.
+ *  - no action, or an action in any letter case or after a `:` separator, is read the same as its lowercase form;
+ *    anything else prints usage. Entering at the terminal's slash dispatcher reaches the same hook: the controller
+ *    receives the parsed arguments, never the raw text, so `/memory:stats` is not read as the action `:stats`.
  *
  * The usage line is read from the controller at run time, so an action added to it without a recorded outcome here
  * fails `every action the usage line lists has a recorded outcome`.
  *
- * Gap: what each backend stores, clears or reports is owned by the backend suites; the hooks are stubbed here.
+ * Gap: what each backend stores, clears or reports is owned by the backend suites; the hooks are stubbed here. A
+ * bare `/memory` in the terminal opens the subcommand picker before the controller runs; the dispatcher suites own it.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
@@ -23,6 +26,9 @@ import {
 	CommandController,
 	type CommandControllerContext,
 } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
+import { parseSlashCommand } from "@veyyon/coding-agent/slash-commands/helpers/parse";
 import type { Component } from "@veyyon/tui";
 import { useTruecolorTheme } from "../../../helpers/theme-assertions";
 
@@ -42,7 +48,15 @@ interface MemoryRun {
 	session: object;
 }
 
-async function runMemory(command: string, backend: "mnemopi" | "local" = "mnemopi"): Promise<MemoryRun> {
+/**
+ * Runs `command` against a real `CommandController`. `through: "dispatcher"` enters at the terminal's slash
+ * dispatcher instead, so the arguments the controller receives are the ones the dispatcher parsed.
+ */
+async function runMemory(
+	command: string,
+	backend: "mnemopi" | "local" = "mnemopi",
+	through: "controller" | "dispatcher" = "controller",
+): Promise<MemoryRun> {
 	const run: MemoryRun = { statuses: [], warnings: [], errors: [], panels: [], refreshed: [], session: {} };
 	const session = {
 		refreshBaseSystemPrompt: async (reason: string) => {
@@ -51,7 +65,7 @@ async function runMemory(command: string, backend: "mnemopi" | "local" = "mnemop
 		getHindsightSessionState: () => undefined,
 	};
 	run.session = session;
-	const ctx = {
+	const base = {
 		settings: {
 			getAgentDir: () => AGENT_DIR,
 			get: (key: string) => (key === "memory.backend" ? backend : undefined),
@@ -64,8 +78,19 @@ async function runMemory(command: string, backend: "mnemopi" | "local" = "mnemop
 		showStatus: (message: string) => run.statuses.push(message),
 		showWarning: (message: string) => run.warnings.push(message),
 		showError: (message: string) => run.errors.push(message),
-	} as unknown as CommandControllerContext;
-	await new CommandController(ctx).handleMemoryCommand(command);
+	};
+	const controller = new CommandController(base as unknown as CommandControllerContext);
+	if (through === "dispatcher") {
+		const ctx = {
+			...base,
+			editor: { setText: () => {}, addToHistory: () => {} },
+			handleMemoryCommand: (args: string) => controller.handleMemoryCommand(args),
+		} as unknown as InteractiveModeContext;
+		expect(await executeBuiltinSlashCommand(command, { ctx })).toBe(true);
+		return run;
+	}
+	// The controller receives what the dispatcher parsed after the command name, never the raw text.
+	await controller.handleMemoryCommand(parseSlashCommand(command)?.args ?? "");
 	return run;
 }
 
@@ -260,11 +285,20 @@ describe("a memory action is read the same however it is written", () => {
 
 	it("an action in any letter case runs its lowercase form", async () => {
 		const performed = fakeBackend();
-		for (const command of ["/memory ENQUEUE", "/memory Rebuild", "/memory   enqueue  extra"]) {
+		for (const command of ["/memory ENQUEUE", "/memory Rebuild", "/memory   enqueue  extra", "/memory:enqueue"]) {
 			const run = await runMemory(command);
 			expect(run.statuses).toEqual(["Memory consolidation enqueued."]);
 		}
-		expect(performed.map(({ hook }) => hook)).toEqual(["enqueue", "enqueue", "enqueue"]);
+		expect(performed.map(({ hook }) => hook)).toEqual(["enqueue", "enqueue", "enqueue", "enqueue"]);
+	});
+
+	it("the terminal dispatcher hands every spelling of an action to the same hook", async () => {
+		const performed = fakeBackend({ stats: "## Bank\n\nstats body" });
+		for (const command of ["/memory stats", "/memory:stats", "/memory   STATS"]) {
+			const run = await runMemory(command, "mnemopi", "dispatcher");
+			expect(shown(run)).toEqual({ statuses: [], warnings: [], errors: [], panels: 1 });
+		}
+		expect(performed.map(({ hook }) => hook)).toEqual(["stats", "stats", "stats"]);
 	});
 
 	it("every action the usage line lists has a recorded outcome", async () => {

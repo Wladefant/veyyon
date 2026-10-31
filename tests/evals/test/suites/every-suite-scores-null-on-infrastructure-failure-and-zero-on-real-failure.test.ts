@@ -24,14 +24,8 @@ import * as path from "node:path";
 import type { TrialArtifacts, TrialCell } from "../../engine/contracts";
 import { KIT_FILES } from "../../engine/kit/suite";
 import { suites } from "../../engine/members/loaded";
-import { internalScratchDir } from "../../engine/package-paths";
 import { LOCAL_TRIAL_FILES } from "../../engine/run/layout";
-
-function createScratchDir(prefix: string): string {
-	const base = internalScratchDir();
-	fs.mkdirSync(base, { recursive: true });
-	return fs.mkdtempSync(path.join(base, prefix));
-}
+import { createScratchDir } from "../scratch-dir";
 
 interface SuiteScoreDriver {
 	createInfrastructureFailureArtifacts(scratchDir: string): Promise<{ cell: TrialCell; artifacts: TrialArtifacts }>;

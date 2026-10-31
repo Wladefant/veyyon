@@ -22,7 +22,7 @@ import { normalizeToLF } from "./normalize";
  */
 export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
-interface FileSnapshotStoreOwner {
+export interface FileSnapshotStoreOwner {
 	fileSnapshotStore?: InMemorySnapshotStore;
 }
 

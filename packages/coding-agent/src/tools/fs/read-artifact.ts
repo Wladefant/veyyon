@@ -20,8 +20,10 @@ import { readLocalFileMultiRange } from "./read-local-file";
 import type { ReadContext, ReadToolDetails } from "./read-types";
 import {
 	computeRangeWindow,
+	contextHidRequestedLine,
 	formatContextPaddingNotice,
 	formatOutOfBoundsMessage,
+	type RangeWindow,
 	streamLinesFromFile,
 } from "./read-window";
 
@@ -101,17 +103,23 @@ export async function readArtifactFile(
 	}
 
 	const { offset, limit } = selToOffsetLimit(parsedSel);
-	const { requestedStart, startLine, startLineDisplay, maxLinesToCollect, selectedLineLimit, maxBytesForRead } =
-		computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session);
-	const streamResult = await streamLinesFromFile(
-		artifact.path,
-		startLine,
-		maxLinesToCollect,
-		maxBytesForRead,
-		selectedLineLimit,
-		signal,
-		artifact.size > SNAPSHOT_MAX_BYTES,
-	);
+	const streamWindow = (window: RangeWindow) =>
+		streamLinesFromFile(
+			artifact.path,
+			window.startLine,
+			window.maxLinesToCollect,
+			window.maxBytesForRead,
+			window.selectedLineLimit,
+			signal,
+			artifact.size > SNAPSHOT_MAX_BYTES,
+		);
+	let window = computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session);
+	let streamResult = await streamWindow(window);
+	if (contextHidRequestedLine(window, streamResult.lines.length, streamResult.stoppedByByteLimit)) {
+		window = computeRangeWindow(offset, limit, rawSelector, ctx.defaultLimit, ctx.session, false);
+		streamResult = await streamWindow(window);
+	}
+	const { requestedStart, startLine, startLineDisplay, maxBytesForRead } = window;
 	const {
 		lines: collectedLines,
 		totalFileLines,
@@ -171,6 +179,7 @@ export async function readArtifactFile(
 				startLine: startLineDisplay,
 				totalFileLines: reachedEof ? totalFileLines : undefined,
 				totalLinesUnknown: !reachedEof,
+				maxBytes: maxBytesForRead,
 			},
 		};
 	} else {
@@ -183,6 +192,7 @@ export async function readArtifactFile(
 					startLine: startLineDisplay,
 					totalFileLines: reachedEof ? totalFileLines : undefined,
 					totalLinesUnknown: !reachedEof,
+					maxBytes: maxBytesForRead,
 				},
 			};
 		} else if (startLine + collectedLines.length < totalFileLines || !reachedEof) {

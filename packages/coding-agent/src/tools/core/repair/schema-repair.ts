@@ -10,12 +10,15 @@
  *      their own fields ({@link splitLeakedParameters}).
  *   3. Alias/typo key repair — rename an unrecognized key to the one declared
  *      schema property it unambiguously matches ({@link planAliasKeyRepairs}).
- *   4. Strict unknown-key rejection — refuse leftover unrecognized keys when
+ *   4. Tool-specific repair — the tool's entry in
+ *      {@link TOOL_ARGUMENT_REPAIRS}, when it has one and the call carries the
+ *      mistake it repairs.
+ *   5. Strict unknown-key rejection — refuse leftover unrecognized keys when
  *      the tool's own schema authoring literally declares
  *      `additionalProperties: false` ({@link detectStrictUnknownKeyRepair}).
  *      Gated to raw-JSON/TypeBox-authored tools only — see the note on
  *      `schemaAuthoredAsPlainJsonSchema` in {@link repairToolCallArguments}.
- *   5. Ambiguity guard — refuse when a missing required string could be
+ *   6. Ambiguity guard — refuse when a missing required string could be
  *      filled from more than one plausible donor field
  *      ({@link detectAmbiguousRequiredStringRepair}).
  *
@@ -27,9 +30,8 @@ import { errorMessage } from "@veyyon/utils";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { INTENT_FIELD } from "@veyyon/wire";
-
-/** Hard cap on raw JSON bytes accepted for repair attempts. */
-export const MAX_REPAIR_INPUT_BYTES = 1_048_576;
+import { MAX_REPAIR_INPUT_BYTES } from "./limits";
+import { TOOL_ARGUMENT_REPAIRS } from "./tool-repairs";
 
 export type ToolCallRepairStatus = "clean" | "repaired" | "unrepairable";
 
@@ -480,6 +482,13 @@ export function repairToolCallArguments(tool: Tool, toolCall: ToolCall): ToolCal
 			.map(([from, to]) => `${from} -> ${to}`)
 			.join(", ");
 		hints = hints.concat([`Renamed alias/typo field name(s) to the declared schema name: ${renameSummary}.`]);
+	}
+
+	const toolRepair = TOOL_ARGUMENT_REPAIRS.get(tool.name)?.repair(workingArgs);
+	if (toolRepair) {
+		workingArgs = toolRepair.arguments;
+		repaired = true;
+		hints = hints.concat(toolRepair.hints);
 	}
 
 	const strictUnknownKey = schemaAuthoredAsPlainJsonSchema

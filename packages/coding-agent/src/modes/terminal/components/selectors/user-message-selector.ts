@@ -1,16 +1,17 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
+import { clamp, wrapIndex } from "@veyyon/utils/math";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -29,6 +30,15 @@ const USER_MESSAGE_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "esc close", clickable: true, id: "close" },
 ];
 
+/** Messages a card with room for them shows. */
+const MAX_VISIBLE_MESSAGES = 10;
+
+/** Rows one message takes: its text, its position in the history, and a blank. */
+const ROWS_PER_MESSAGE = 3;
+
+/** Rows above the list: the hint line and a blank. */
+const HINT_ROWS = 2;
+
 /**
  * Custom user message list component with selection
  */
@@ -38,7 +48,9 @@ class UserMessageList implements Component {
 	#selectedIndex: number = 0;
 	onSelect?: (entryId: string) => void;
 	onCancel?: () => void;
-	#maxVisible: number = 10; // Max messages visible
+	#maxVisible = MAX_VISIBLE_MESSAGES;
+	/** Rows the card gives this list; unbounded until the card sets it. */
+	#rowBudget = Number.POSITIVE_INFINITY;
 	/** Pointer-highlighted message (never the selected one; selection owns its rows). */
 	#hover = new HoverController<number>();
 	#hitRows: (number | undefined)[] = [];
@@ -55,7 +67,20 @@ class UserMessageList implements Component {
 	}
 
 	#isSearchEnabled(): boolean {
-		return this.messages.length > this.#maxVisible;
+		return this.messages.length > MAX_VISIBLE_MESSAGES;
+	}
+
+	/**
+	 * Show only the messages that fit in `rows` rows, the search row included.
+	 *
+	 * A message is three rows (text, position, blank), so a ten-message window is 31 rows with its
+	 * search row, and a card shorter than that dropped the messages past its bottom border. The
+	 * blank after the last message is spacing, so a window that fits only without it drops it.
+	 */
+	setRowBudget(rows: number): void {
+		this.#rowBudget = rows;
+		const searchRows = this.#shouldRenderSearchStatus() ? 1 : 0;
+		this.#maxVisible = clamp(Math.floor((rows - searchRows + 1) / ROWS_PER_MESSAGE), 1, MAX_VISIBLE_MESSAGES);
 	}
 
 	#shouldRenderSearchStatus(): boolean {
@@ -88,9 +113,7 @@ class UserMessageList implements Component {
 	 * suppressing it there left a row nothing could point at.
 	 */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hover.key === index) return false;
-		this.#hover.set(index);
-		return true;
+		return this.#hover.set(index);
 	}
 
 	/**
@@ -110,15 +133,7 @@ class UserMessageList implements Component {
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
 	handleWheel(delta: -1 | 1): void {
 		if (this.#filteredMessages.length === 0) return;
-		const total = this.#filteredMessages.length;
-		this.#selectedIndex =
-			delta < 0
-				? this.#selectedIndex === 0
-					? total - 1
-					: this.#selectedIndex - 1
-				: this.#selectedIndex === total - 1
-					? 0
-					: this.#selectedIndex + 1;
+		this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, this.#filteredMessages.length);
 	}
 
 	/** Select the message under the pointer and confirm it, like Enter. */
@@ -186,23 +201,24 @@ class UserMessageList implements Component {
 			messageLines.push(""); // Blank line between messages
 		}
 
+		const searchRows = this.#shouldRenderSearchStatus() ? 1 : 0;
+		if (messageLines.length + searchRows > this.#rowBudget && messageLines.at(-1) === "") messageLines.pop();
+
 		if (total === 0) {
 			lines.push(theme.fg("muted", "  No matching messages"));
 		} else {
-			const visibleCount = endIndex - startIndex;
-			const linesPerItem = visibleCount > 0 ? messageLines.length / visibleCount : 1;
 			const sv = new ScrollView(messageLines, {
 				height: messageLines.length,
 				scrollbar: "auto",
-				totalRows: Math.round(total * linesPerItem),
+				totalRows: total * ROWS_PER_MESSAGE,
 				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 			});
-			sv.setScrollOffset(Math.round(startIndex * linesPerItem));
+			sv.setScrollOffset(startIndex * ROWS_PER_MESSAGE);
 			lines.push(...sv.render(width));
 		}
 
 		// Add search indicator if needed
-		if (this.#shouldRenderSearchStatus()) {
+		if (searchRows > 0) {
 			lines.push(this.#renderStatusLine(total));
 		}
 
@@ -319,32 +335,33 @@ export class UserMessageSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
+		// A short card sheds its padding to keep one whole message under the hint, and the list
+		// shows only the messages the rest of the body holds.
+		const chrome = planModalChrome(dims, {
+			shortcuts: USER_MESSAGE_SHORTCUTS,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			minBodyRows: HINT_ROWS + ROWS_PER_MESSAGE,
+		});
+		this.#messageList.setRowBudget(chrome.maxBodyRows - HINT_ROWS);
 		const body = [
 			theme.fg("muted", "Select a message to create a new branch from that point"),
 			"",
 			...this.#messageList.render(dims.contentWidth),
 		];
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Branch from Message",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts: USER_MESSAGE_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;
-		// The body leads with a hint line and a blank before the list's own rows.
-		this.#listRowStart = (shell.geometry?.bodyRowStart ?? 0) + 2;
+		this.#listRowStart = (shell.geometry?.bodyRowStart ?? 0) + HINT_ROWS;
 		return shell.lines;
 	}
 }
