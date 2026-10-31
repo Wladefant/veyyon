@@ -110,6 +110,60 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote!.snapshot.credentials[0].id).not.toBe(bId);
 	});
 
+	for (const pathKind of ["direct", "wait"] as const) {
+		test(`does not resurrect a revoked broker row from a delayed ${pathKind} snapshot GET`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const before = structuredClone(initial.snapshot);
+			const id = before.credentials[0]!.id;
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before, streamSnapshots: false });
+
+			const actualFetch = client.fetchSnapshot.bind(client);
+			const delayed = Promise.withResolvers<void>();
+			let intercepted = false;
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				const isSelectedGet = pathKind === "direct" ? opts?.waitMs === undefined : opts?.waitMs === 250;
+				if (isSelectedGet && !intercepted) {
+					intercepted = true;
+					await delayed.promise;
+					return { status: 200 as const, snapshot: before, generation: before.generation };
+				}
+				return actualFetch(opts);
+			});
+
+			const pending = pathKind === "direct" ? remote.refreshSnapshot() : remote.waitForFreshSnapshot(250);
+			expect(intercepted).toBe(true);
+			expect(storage!.disableCredentialById(id, "synthetic revocation between GET responses")).toBe(true);
+			await remote.refreshSnapshot();
+			const acceptedGeneration = remote.snapshot.generation;
+			expect(acceptedGeneration).toBeGreaterThan(before.generation);
+			expect(remote.snapshot.credentials).toHaveLength(0);
+
+			// The first GET was already formed but could only deliver its old bytes
+			// after the later response had removed this credential.
+			delayed.resolve();
+			const outcome = await pending;
+			if (pathKind === "wait") expect(outcome).toBe(true);
+			expect(remote.snapshot.generation).toBe(acceptedGeneration);
+			expect(remote.snapshot.credentials).toHaveLength(0);
+		});
+	}
+
+	test("accepts a lower broker generation after restart without an intervening local update", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		expect(initial.snapshot.generation).toBeGreaterThan(0);
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+
+		const restarted = { ...initial.snapshot, generation: 0, credentials: [] };
+		spyOn(client, "fetchSnapshot").mockResolvedValueOnce({ status: 200, snapshot: restarted, generation: 0 });
+		await remote.refreshSnapshot();
+		expect(remote.snapshot.generation).toBe(0);
+		expect(remote.snapshot.credentials).toHaveLength(0);
+	});
+
 	test("calls onSnapshot for broker snapshots but not the constructor snapshot", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await client.fetchSnapshot();
