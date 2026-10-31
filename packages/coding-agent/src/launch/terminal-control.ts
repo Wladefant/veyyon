@@ -12,6 +12,7 @@ import {
 	parseTelegramTrace,
 	postmortem,
 	type TelegramDeliveryTraceData,
+} from "@veyyon/utils";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
@@ -23,6 +24,12 @@ export interface TerminalOwner {
 	sessionId: string;
 	pid: number;
 	cwd: string;
+	sessionFile: string;
+	endpoint: string;
+	token: string;
+	loadedVersion: string;
+	loadedBuildSha: string | null;
+	capabilities: readonly string[];
 }
 
 export interface TerminalDeliveryOptions {

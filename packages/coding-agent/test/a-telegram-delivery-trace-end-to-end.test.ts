@@ -204,14 +204,19 @@ describe("telegram delivery tracing end-to-end", () => {
 			outcome: "started",
 		});
 
-		// Verify logged stages
+		// Verify logged stages and exact order
 		const stages = loggedTraces.map(t => t.context.stage);
-		expect(stages).toContain("session_acceptance");
-		expect(stages).toContain("terminal_delivery_start");
-		expect(stages).toContain("turn_consumption");
-		expect(stages).toContain("provider_call_start");
-		expect(stages).toContain("delivery_outcome");
+		const acceptanceIdx = stages.indexOf("session_acceptance");
+		const deliveryStartIdx = stages.indexOf("terminal_delivery_start");
+		const consumptionIdx = stages.indexOf("turn_consumption");
+		const providerStartIdx = stages.indexOf("provider_call_start");
+		const deliveryOutcomeIdx = stages.indexOf("delivery_outcome");
 
+		expect(acceptanceIdx).toBeGreaterThanOrEqual(0);
+		expect(deliveryStartIdx).toBeGreaterThan(acceptanceIdx);
+		expect(consumptionIdx).toBeGreaterThan(deliveryStartIdx);
+		expect(providerStartIdx).toBeGreaterThan(consumptionIdx);
+		expect(deliveryOutcomeIdx).toBeGreaterThan(deliveryStartIdx);
 		const expectedTraceId = "-1001999888:9001:42";
 		for (const record of loggedTraces) {
 			expect(record.context.traceId).toBe(expectedTraceId);
@@ -257,8 +262,8 @@ describe("telegram delivery tracing end-to-end", () => {
 		expect(loggedTraces.length).toBe(countBefore);
 	});
 
-	it("traces prompt options through session into agent turn and provider stream", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-prompt-root-"));
+	it("traces streaming steer and followUp with exact-turn attribution and strict order", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-streaming-root-"));
 		cleanup.push(async () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		});
@@ -271,15 +276,47 @@ describe("telegram delivery tracing end-to-end", () => {
 			}
 		});
 
+		const { promise: toolRunning, resolve: signalToolRunning } = Promise.withResolvers<void>();
+		const { promise: canFinishTool, resolve: signalFinishTool } = Promise.withResolvers<void>();
+
+		const probeTool = {
+			name: "probe",
+			description: "test probe tool",
+			parameters: { type: "object" as const, properties: {} },
+			execute: async () => {
+				signalToolRunning();
+				await canFinishTool;
+				return { content: [{ type: "text" as const, text: "probe complete" }] };
+			},
+		};
+
 		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		auth.setRuntimeApiKey("mock", "test-key");
 		const registry = new ModelRegistry(auth, path.join(tempDir, "models.yml"));
 		const store = SessionManager.create(tempDir, tempDir);
 		const mock = createMockModel({
-			responses: [{ content: ["Prompt response"], stopReason: "stop" }],
+			responses: [
+				// Turn 1 step 1: call probe tool
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "call-1",
+							name: "probe",
+							arguments: {},
+						},
+					],
+					stopReason: "toolUse",
+				},
+				// Turn 1 step 2 (after tool + steer): reply to steer
+				{ content: ["Steered step reply"], stopReason: "stop" },
+				// Turn 2: reply to followUp
+				{ content: ["FollowUp turn reply"], stopReason: "stop" },
+			],
 		});
+
 		const agent = new Agent({
-			initialState: { model: mock.model, systemPrompt: ["Test prompt"], tools: [], messages: [] },
+			initialState: { model: mock.model, systemPrompt: ["Test prompt"], tools: [probeTool], messages: [] },
 			streamFn: mock.stream,
 		});
 		const session = new AgentSession({
@@ -287,22 +324,143 @@ describe("telegram delivery tracing end-to-end", () => {
 			sessionManager: store,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false }),
 			modelRegistry: registry,
+			toolRegistry: new Map([["probe", probeTool as never]]),
 		});
 
-		const promptTrace: utils.TelegramDeliveryTraceData = {
-			updateId: 7777,
-			messageId: 88,
+		const mockMode = {
+			sessionManager: store,
+			session,
+			isShuttingDown: false,
+			isInitialized: true,
+			startPendingSubmission(input: {
+				text: string;
+				streamingBehavior?: "steer" | "followUp";
+				telegramTrace?: utils.TelegramDeliveryTraceData;
+			}): SubmittedUserInput {
+				return {
+					text: input.text,
+					streamingBehavior: input.streamingBehavior,
+					telegramTrace: input.telegramTrace,
+					cancelled: false,
+					started: false,
+				};
+			},
+		};
+
+		const serverClose = await startTerminalControl(mockMode as never);
+		cleanup.push(serverClose);
+
+		const owner = await readOwner(tempDir);
+		const client = connect(owner);
+
+		// Start initial prompt
+		const promptPromise = session.prompt("Initial task");
+
+		// Wait until probe tool is actively executing (streaming is guaranteed true)
+		await toolRunning;
+		expect(session.isStreaming).toBe(true);
+
+		const steerTrace: utils.TelegramDeliveryTraceData = {
+			updateId: 7001,
+			messageId: 101,
+			chatId: "-100222333",
+		};
+		const followUpTrace: utils.TelegramDeliveryTraceData = {
+			updateId: 7002,
+			messageId: 102,
 			chatId: "-100222333",
 		};
 
-		await session.prompt("Direct prompt", { telegramTrace: promptTrace });
+		// 1. Deliver steer via socket while streaming
+		client.send({
+			id: "req-steer",
+			op: "deliver",
+			text: "Steer now",
+			mode: "steer",
+			ack: true,
+			messageId: "msg-steer-1",
+			telegramTrace: steerTrace,
+		});
+
+		const steerAck = await client.next(f => f.id === "req-steer");
+		expect(steerAck).toMatchObject({
+			ok: true,
+			result: { accepted: true, messageId: "msg-steer-1" },
+		});
+
+		// 2. Deliver followUp via socket while streaming
+		client.send({
+			id: "req-followup",
+			op: "deliver",
+			text: "Follow up next",
+			mode: "followUp",
+			ack: true,
+			messageId: "msg-followup-1",
+			telegramTrace: followUpTrace,
+		});
+
+		const followUpAck = await client.next(f => f.id === "req-followup");
+		expect(followUpAck).toMatchObject({
+			ok: true,
+			result: { accepted: true, messageId: "msg-followup-1" },
+		});
+
+		// Release the tool execution now
+		signalFinishTool();
+
+		// Wait for initial prompt and follow-up continuation turn to settle
+		await promptPromise;
 		await session.waitForIdle();
 
-		const promptStages = loggedTraces
-			.filter(t => t.context.traceId === "-100222333:7777:88")
-			.map(t => t.context.stage);
+		// Verify delivery events on socket
+		const steerDeliveryEvent = await client.next(
+			f => f.event?.kind === "delivery" && f.event?.messageId === "msg-steer-1",
+		);
+		expect(steerDeliveryEvent.event).toMatchObject({
+			kind: "delivery",
+			messageId: "msg-steer-1",
+			state: "delivered",
+			outcome: "steered",
+		});
 
-		expect(promptStages).toContain("turn_consumption");
-		expect(promptStages).toContain("provider_call_start");
+		const followUpDeliveryEvent = await client.next(
+			f => f.event?.kind === "delivery" && f.event?.messageId === "msg-followup-1",
+		);
+		expect(followUpDeliveryEvent.event).toMatchObject({
+			kind: "delivery",
+			messageId: "msg-followup-1",
+			state: "delivered",
+			outcome: "queued",
+		});
+
+		// Exact lifecycle order checks
+		const steerRecords = loggedTraces.filter(t => t.context.traceId === "-100222333:7001:101");
+		const followUpRecords = loggedTraces.filter(t => t.context.traceId === "-100222333:7002:102");
+
+		const steerStages = steerRecords.map(t => t.context.stage);
+		const followUpStages = followUpRecords.map(t => t.context.stage);
+
+		// Core order: session_acceptance -> terminal_delivery_start -> turn_consumption -> provider_call_start
+		expect(steerStages.indexOf("session_acceptance")).toBeGreaterThanOrEqual(0);
+		expect(steerStages.indexOf("terminal_delivery_start")).toBeGreaterThan(steerStages.indexOf("session_acceptance"));
+		expect(steerStages.indexOf("turn_consumption")).toBeGreaterThan(steerStages.indexOf("terminal_delivery_start"));
+		expect(steerStages.indexOf("provider_call_start")).toBeGreaterThan(steerStages.indexOf("turn_consumption"));
+		expect(steerStages).toContain("delivery_outcome");
+
+		expect(followUpStages.indexOf("session_acceptance")).toBeGreaterThanOrEqual(0);
+		expect(followUpStages.indexOf("terminal_delivery_start")).toBeGreaterThan(followUpStages.indexOf("session_acceptance"));
+		expect(followUpStages.indexOf("turn_consumption")).toBeGreaterThan(followUpStages.indexOf("terminal_delivery_start"));
+		expect(followUpStages.indexOf("provider_call_start")).toBeGreaterThan(followUpStages.indexOf("turn_consumption"));
+		expect(followUpStages).toContain("delivery_outcome");
+
+		// Exact-turn attribution: steer was consumed during turn 1, followUp was consumed during turn 2
+		const steerConsumptionIdx = loggedTraces.findIndex(
+			t => t.context.traceId === "-100222333:7001:101" && t.context.stage === "turn_consumption",
+		);
+		const followUpConsumptionIdx = loggedTraces.findIndex(
+			t => t.context.traceId === "-100222333:7002:102" && t.context.stage === "turn_consumption",
+		);
+		expect(steerConsumptionIdx).toBeGreaterThanOrEqual(0);
+		expect(followUpConsumptionIdx).toBeGreaterThan(steerConsumptionIdx);
 	});
 });
