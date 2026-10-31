@@ -251,7 +251,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected broker snapshot");
 		const entry = initial.snapshot.credentials[0]!;
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
-		const refresh = spyOn(client, "refreshCredential").mockResolvedValue({ entry });
+		spyOn(client, "refreshCredential").mockResolvedValue({ entry });
 		const credential = await remote.refreshOAuthCredential(
 			"anthropic",
 			entry.id,
