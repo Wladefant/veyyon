@@ -345,23 +345,23 @@ describe("history exact record lookup", () => {
 				'{"type":"session"}',
 				'{}',
 			]) {
-					await fs.writeFile(file, prefix + invalid + "\n");
-					const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 });
-					expect(implicitRead.status).toBe("unavailable");
-					expect(implicitRead.fragment).toBeUndefined();
-					const implicitSearch = await searchStoredHistoryEntries(file, { query: "abandoned-only", limit: 5 });
-					expect(implicitSearch.status).toBe("unavailable");
-					expect(implicitSearch.matches).toEqual([]);
-					const archivedRead = await readStoredHistoryEntry(file, {
-						entryId: "b", leafId: "b", offset: 0, limit: 200,
-					});
-					expect(archivedRead.status).toBe("ok");
-					expect(archivedRead.fragment).toContain("abandoned-only");
-					const archivedSearch = await searchStoredHistoryEntries(file, {
-						query: "abandoned-only", leafId: "b", limit: 5,
-					});
-					expect(archivedSearch.status).toBe("partial");
-					expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["b"]);
+				await fs.writeFile(file, prefix + invalid + "\n");
+				const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 });
+				expect(implicitRead.status).toBe("unavailable");
+				expect(implicitRead.fragment).toBeUndefined();
+				const implicitSearch = await searchStoredHistoryEntries(file, { query: "abandoned-only", limit: 5 });
+				expect(implicitSearch.status).toBe("unavailable");
+				expect(implicitSearch.matches).toEqual([]);
+				const archivedRead = await readStoredHistoryEntry(file, {
+					entryId: "b", leafId: "b", offset: 0, limit: 200,
+				});
+				expect(archivedRead.status).toBe("ok");
+				expect(archivedRead.fragment).toContain("abandoned-only");
+				const archivedSearch = await searchStoredHistoryEntries(file, {
+					query: "abandoned-only", leafId: "b", limit: 5,
+				});
+				expect(archivedSearch.status).toBe("partial");
+				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["b"]);
 			}
 		} finally {
 			await dir.remove();
