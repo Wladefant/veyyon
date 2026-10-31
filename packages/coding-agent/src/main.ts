@@ -462,7 +462,11 @@ export async function submitInteractiveInput(
 				userInitiated: input.userInitiated,
 			});
 		} else {
-			await session.prompt(input.text, { images: input.images, streamingBehavior });
+			await session.prompt(input.text, {
+				images: input.images,
+				streamingBehavior,
+				telegramTrace: input.telegramTrace,
+			});
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";

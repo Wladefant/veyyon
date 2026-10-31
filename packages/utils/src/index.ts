@@ -71,6 +71,7 @@ export * from "./strings";
 export * from "./strip-ansi";
 export * from "./tab-spacing";
 export * from "./tab-width";
+export * from "./telegram-delivery-trace";
 export * from "./temp";
 export * from "./terminal-safe";
 export * from "./theme-store";

@@ -128,6 +128,8 @@ import {
 	prompt,
 	Snowflake,
 	withTimeout,
+	attachTelegramTrace,
+	type TelegramDeliveryTraceData,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
@@ -285,6 +287,7 @@ import {
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
+	type SteerOptions,
 	QUIESCENCE_RECHECK_MS,
 	type ScheduledAgentContinueOptions,
 	type SecretRuntimeLease,
@@ -5233,9 +5236,9 @@ export class AgentSession {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp", options);
 			} else {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer", options);
 			}
 			return true;
 		}
@@ -5259,6 +5262,9 @@ export class AgentSession {
 		const message = options?.synthetic
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
+		if (options?.telegramTrace) {
+			attachTelegramTrace(message, options.telegramTrace);
+		}
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -5622,16 +5628,47 @@ export class AgentSession {
 	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
-	async steer(text: string, images?: ImageContent[], videos?: VideoContent[]): Promise<void> {
+	async steer(
+		text: string,
+		imagesOrOptions?: ImageContent[] | SteerOptions,
+		videosOrOptions?: VideoContent[] | SteerOptions,
+		options?: SteerOptions,
+	): Promise<void> {
 		if (text.startsWith("/")) {
 			throwIfExtensionCommand(this.#config.extensionRunner, text);
 		}
+
+		let images: ImageContent[] | undefined;
+		let videos: VideoContent[] | undefined;
+		let opts: SteerOptions | undefined;
+
+		if (Array.isArray(imagesOrOptions)) {
+			images = imagesOrOptions;
+			if (Array.isArray(videosOrOptions)) {
+				videos = videosOrOptions;
+				opts = options;
+			} else if (videosOrOptions && typeof videosOrOptions === "object") {
+				opts = videosOrOptions;
+			} else {
+				opts = options;
+			}
+		} else if (imagesOrOptions && typeof imagesOrOptions === "object") {
+			opts = imagesOrOptions;
+		} else if (Array.isArray(videosOrOptions)) {
+			videos = videosOrOptions;
+			opts = options;
+		} else if (videosOrOptions && typeof videosOrOptions === "object") {
+			opts = videosOrOptions;
+		} else {
+			opts = options;
+		}
+
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, videos, "steer");
+		await this.#queueUserMessage(expandedText, images, videos, "steer", opts);
 	}
 
 	/**
@@ -5669,7 +5706,7 @@ export class AgentSession {
 		const expandedText =
 			opts?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
 		if (!opts?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, videos, "followUp");
+			await this.#queueUserMessage(expandedText, images, videos, "followUp", opts);
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
@@ -5695,6 +5732,7 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		videos: VideoContent[] | undefined,
 		mode: "steer" | "followUp",
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
 	): Promise<void> {
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
@@ -5709,21 +5747,29 @@ export class AgentSession {
 		}
 		if (mode === "followUp") {
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
+			const message: AgentMessage = {
 				role: "user",
 				content,
 				attribution: "user",
 				timestamp: Date.now(),
-			});
+			};
+			if (options?.telegramTrace) {
+				attachTelegramTrace(message, options.telegramTrace);
+			}
+			this.agent.followUp(message);
 		} else {
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
+			const message: AgentMessage = {
 				role: "user",
 				content,
 				steering: true,
 				attribution: "user",
 				timestamp: Date.now(),
-			});
+			};
+			if (options?.telegramTrace) {
+				attachTelegramTrace(message, options.telegramTrace);
+			}
+			this.agent.steer(message);
 		}
 		this.#scheduleIdleQueueDrain();
 	}

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@veyyon/agent-core";
+import type { TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
@@ -77,6 +78,7 @@ export type SubmittedUserInput = {
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
+	telegramTrace?: TelegramDeliveryTraceData;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -351,6 +353,7 @@ export interface InteractiveModeContext {
 		customType?: string;
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
+		telegramTrace?: TelegramDeliveryTraceData;
 	}): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;

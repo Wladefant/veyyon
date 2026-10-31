@@ -12,6 +12,7 @@ import type {
 import * as prompt from "@veyyon/utils/prompt";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentMessage } from "../types";
+import { transferTelegramTrace } from "@veyyon/utils";
 
 const COMPACTION_SUMMARY_TEMPLATE = AGENT_PROMPTS["compaction/compaction-summary-context"].text;
 const BRANCH_SUMMARY_TEMPLATE = AGENT_PROMPTS["compaction/branch-summary-context"].text;
@@ -290,6 +291,7 @@ function cachedAuthoredConversion(message: AuthoredMessage): Message | undefined
 
 /** Record `converted` as the conversion of `message`'s current role, attribution and content, and return it. */
 function cacheAuthoredConversion(message: AuthoredMessage, converted: Message): Message {
+	transferTelegramTrace(message, converted);
 	convertedMessageCache.set(message, {
 		role: message.role,
 		converted,

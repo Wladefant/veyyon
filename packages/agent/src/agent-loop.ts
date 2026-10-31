@@ -61,15 +61,19 @@ import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
 import {
+	consumeTelegramTrace,
 	errorMessage,
 	estimateTokensFromText,
 	formatCount,
 	isAbortError,
 	isRecord,
+	logTelegramDeliveryTrace,
 	LoopRace,
 	logger,
 	sanitizeText,
 	structuredCloneJSON,
+	type TelegramDeliveryTraceData,
+	transferTelegramTrace,
 } from "@veyyon/utils";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
@@ -662,7 +666,10 @@ export function normalizeMessagesForProvider(
 			return message;
 		}
 		const filtered = message.content.filter(block => block.type !== "thinking");
-		return filtered.length === message.content.length ? message : { ...message, content: filtered };
+		if (filtered.length === message.content.length) return message;
+		const next = { ...message, content: filtered };
+		transferTelegramTrace(message, next);
+		return next;
 	});
 }
 
@@ -780,7 +787,7 @@ interface LoopState {
 	hasMoreToolCalls: boolean;
 	/** Steering, asides and follow-ups injected before the next assistant response. */
 	pendingMessages: AgentMessage[];
-	harmonyRetryAttempt: number;
+	activeTelegramTraces: TelegramDeliveryTraceData[];
 	harmonyTruncateResumeCount: number;
 	pausedTurnContinuations: number;
 	/**
@@ -869,7 +876,7 @@ async function driveLoop(run: LoopRun): Promise<void> {
 		firstTurn: true,
 		hasMoreToolCalls: true,
 		pendingMessages: await initialSteeringMessages(run),
-		harmonyRetryAttempt: 0,
+		activeTelegramTraces: [],
 		harmonyTruncateResumeCount: 0,
 		pausedTurnContinuations: 0,
 		softRequirementId: undefined,
@@ -909,12 +916,25 @@ async function runTurn(run: LoopRun, state: LoopState): Promise<boolean> {
 	if (await parkWhilePaused(run)) return true;
 	if (!state.firstTurn) {
 		run.stream.push({ type: "turn_start" });
+	} else {
+		for (const prompt of run.newMessages) {
+			const trace = consumeTelegramTrace(prompt, run.config.sessionId);
+			if (trace) {
+				state.activeTelegramTraces.push(trace);
+			}
+		}
 	}
 	state.firstTurn = false;
 
 	// Process pending messages (inject before next assistant response)
 	if (state.pendingMessages.length > 0) {
-		for (const message of state.pendingMessages) injectMessage(run, message);
+		for (const message of state.pendingMessages) {
+			const trace = consumeTelegramTrace(message, run.config.sessionId);
+			if (trace) {
+				state.activeTelegramTraces.push(trace);
+			}
+			injectMessage(run, message);
+		}
 		state.pendingMessages = [];
 	}
 
@@ -1487,7 +1507,17 @@ async function openTurnResponse(
 	model: Model,
 	turn: ProviderTurn,
 	options: SimpleStreamOptions,
+	state?: LoopState,
 ): Promise<AssistantMessageEventStream> {
+	if (state?.activeTelegramTraces && state.activeTelegramTraces.length > 0) {
+		for (const trace of state.activeTelegramTraces) {
+			logTelegramDeliveryTrace(trace, {
+				stage: "provider_call_start",
+				sessionId: run.config.sessionId,
+			});
+		}
+		state.activeTelegramTraces = [];
+	}
 	const response = await (run.streamFn ?? streamSimple)(model, turn.llmContext, options);
 	const inband = turn.inband;
 	if (!inband) return response;
@@ -1554,7 +1584,7 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 	try {
 		return await runInActiveSpan(chatSpan, async () => {
 			const reader = new AssistantTurnStream(run, model, options, finishChat);
-			return reader.read(await openTurnResponse(run, model, turn, options));
+			return reader.read(await openTurnResponse(run, model, turn, options, state));
 		});
 	} catch (err) {
 		failChatSpan(telemetry, chatSpan, { errorObject: err, responseHeaders, baseUrl: model.baseUrl });

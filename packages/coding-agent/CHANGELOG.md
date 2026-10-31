@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.0] - 2026-10-31
 
 - The terminal launch status row now reads file-backed Git HEAD without eagerly loading Git subprocess and diff helpers; background status and PR queries still load the full Git implementation when needed ([#701](https://github.com/Wladefant/veyyon/issues/701)).
