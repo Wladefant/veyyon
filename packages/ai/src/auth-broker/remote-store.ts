@@ -276,6 +276,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#snapshot: SnapshotResponse = emptySnapshot();
 	#snapshotReceivedAt = Date.now();
 	#generation = 0;
+	/** Monotonic local application revision; broker generation can reset on restart. */
+	#appliedSnapshotRevision = 0;
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
@@ -320,6 +322,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
 		this.#snapshot = { ...snapshot, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = nowMs;
 		const onSnapshot = this.#onSnapshot;
 		if (!onSnapshot) return;
@@ -331,17 +334,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * A delayed GET may finish after an SSE frame or a newer GET has revoked the
-	 * selected row. Never let that old response roll the client snapshot back.
-	 * A broker restart can legitimately reset generation, so a lower generation
-	 * is still accepted when nothing changed locally while this GET was pending.
+	 * A broker restart may reset the numeric generation. Only the local applied-state
+	 * revision can prove whether an in-flight GET predates newer client state.
 	 */
-	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, generationAtRequest: number): void {
-		if (generationAtRequest !== this.#generation && generation < this.#generation) {
+	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, revisionAtRequest: number): void {
+		if (revisionAtRequest !== this.#appliedSnapshotRevision) {
 			logger.debug("auth-broker stale snapshot response ignored", {
-			currentGeneration: this.#generation,
-			responseGeneration: generation,
-			generationAtRequest,
+				currentGeneration: this.#generation,
+				responseGeneration: generation,
 			});
 			return;
 		}
@@ -389,12 +389,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	async #pollSnapshot(): Promise<void> {
 		const generationAtRequest = this.#generation;
+		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot({
 			ifGenerationGt: generationAtRequest,
 			waitMs: BACKGROUND_WAIT_MS,
 			signal: this.#backgroundAbort.signal,
 		});
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, generationAtRequest);
+		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 	}
 
 	/**
@@ -477,6 +478,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (blocksChanged) this.#protectNewSnapshotBlocks(this.#snapshot.credentials, credentials, Date.now());
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
 	}
 
@@ -486,14 +488,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.filter(entry => entry.id !== id);
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
 	}
 
 	/** Re-hydrate the in-memory snapshot from the broker. */
 	async refreshSnapshot(): Promise<SnapshotResponse> {
-		const generationAtRequest = this.#generation;
+		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot();
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, generationAtRequest);
+		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 		return this.#snapshot;
 	}
 
@@ -644,12 +647,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
 		const previousGeneration = this.#generation;
+		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot({
 			ifGenerationGt: previousGeneration,
 			waitMs: maxWaitMs,
 			signal: opts.signal,
 		});
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, previousGeneration);
+		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 		return this.#generation !== previousGeneration;
 	}
 
