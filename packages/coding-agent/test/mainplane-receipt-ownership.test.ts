@@ -36,7 +36,7 @@ async function withStubbedReceipt<T>(data: object, run: (calls: () => number) =>
 	const stub = spyOn(globalThis, "fetch").mockImplementation((async () => {
 		calls++;
 		return new Response(JSON.stringify(data));
-	}) as typeof fetch);
+	}) as unknown as typeof fetch);
 	const previousURL = process.env.MAINPLANE_BRIDGE_URL;
 	const previousKey = process.env.MAINPLANE_API_KEY;
 	process.env.MAINPLANE_BRIDGE_URL = "https://fleet.example/";
@@ -85,14 +85,14 @@ describe("Mainplane operation receipts are scoped to the active session", () => 
 	});
 	test("exported receipt reader refuses a foreign session even with valid digests", async () => {
 		const foreign = "/session/other.json"; const id = remoteRunId(foreign, "known-key");
-		const transport = (async () => new Response(JSON.stringify(nativeReceipt(foreign, id)))) as typeof fetch;
+		const transport = (async () => new Response(JSON.stringify(nativeReceipt(foreign, id)))) as unknown as typeof fetch;
 		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key", id,
 			"/session/current.json", undefined, transport)).rejects.toThrow("another Veyyon session");
 	});
 	test("exported receipt reader requires a session before contacting the bridge", async () => {
 		const file = "/session/other.json"; const id = remoteRunId(file, "known-key");
 		let calls = 0;
-		const transport = (async () => { calls++; return new Response(JSON.stringify(nativeReceipt(file, id))); }) as typeof fetch;
+		const transport = (async () => { calls++; return new Response(JSON.stringify(nativeReceipt(file, id))); }) as unknown as typeof fetch;
 		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key", id, "", undefined, transport)).rejects.toThrow("Persisted session");
 		expect(calls).toBe(0);
 	});
@@ -112,7 +112,7 @@ describe("Mainplane operation receipts are scoped to the active session", () => 
 		await withStubbedReceipt(nativeReceipt(file, id, "job", "accepted"), async () => {
 			const result = await inspect(id, file);
 			expect(result.isError).toBe(false);
-			expect(JSON.stringify(result)).toContain('"accepted"');
+			expect(JSON.parse(result.content[0]!.text).state).toBe("accepted");
 		});
 	});
 });
