@@ -65,6 +65,28 @@ else:
                 self.assertTrue(receipt.exists(), "owner never completed its eval")
                 pids = json.loads(receipt.read_text())
                 self.assertIsNotNone(pids[1], "runner did not report its descendant")
+                if shutdown == "force":
+                    # This real OS test waits for kernel handles, not a fake timer.
+                    # Kill only the runner reported by our still-live disposable owner.
+                    dll = ctypes.WinDLL("kernel32", use_last_error=True)
+                    dll.OpenProcess.restype = ctypes.c_void_p
+                    dll.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                    dll.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+                    dll.CloseHandle.argtypes = [ctypes.c_void_p]
+                    handle = dll.OpenProcess(0x100001, False, pids[0])
+                    self.assertTrue(handle, "owned runner handle unavailable")
+                    try:
+                        self.assertTrue(dll.TerminateProcess(handle, 1))
+                        self.assertEqual(dll.WaitForSingleObject(handle, 2000), 0)
+                    finally:
+                        dll.CloseHandle(handle)
+                    deadline = time.monotonic() + 8
+                    while alive(pids[1]) and time.monotonic() < deadline:
+                        time.sleep(.1)
+                    self.assertFalse(alive(pids[1]), "owned descendant survived the forced runner exit")
+                    self.assertIsNone(owner.poll(), "parent-death cleanup concealed the forced-runner result")
+                    print(f"owned mapping: owner={owner.pid} runner={pids[0]} descendant={pids[1]}", flush=True)
+                    owner.kill()
                 if shutdown == "cancel":
                     owner.kill()
                 owner.wait(timeout=12)
@@ -153,6 +175,10 @@ else:
 
     def test_cancelled_owner_releases_runner_and_descendants(self):
         self.run_scenario("cancel")
+
+    @unittest.skipUnless(os.name == "nt", "Windows runner ownership")
+    def test_forced_runner_exit_releases_descendants_while_owner_lives(self):
+        self.run_scenario("force")
 
 
 if __name__ == "__main__":
