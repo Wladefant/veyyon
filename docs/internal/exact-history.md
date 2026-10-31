@@ -29,7 +29,9 @@ history://Scout?entry=entry-id&leaf=leaf-id&revision=<returned-sha256>&offset=80
 
 A running agent's default leaf comes from its active session manager, including
 after navigating to an earlier branch. A parked session defaults to the last
-stored entry because no live branch selection exists. Supplying an explicit leaf
+stored entry only when every record needed for branch selection was readable.
+After a malformed or oversized record, an implicit branch read/search is unavailable;
+an explicit leaf is required to select archived evidence. Supplying an explicit leaf
 selects that branch in either case. Appending later records does not invalidate a
 page pinned to the earlier leaf; changing the selected record does.
 

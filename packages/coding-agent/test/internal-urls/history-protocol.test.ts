@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";

@@ -71,6 +71,41 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+
+	it("rejects continuation after a same-ID record rewrite", async () => {
+		const dir = TempDir.createSync("@veyyon-history-revision-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s1" });
+			const firstRecord = { type: "message", id: "same", parentId: null, message: "alpha".repeat(12) };
+			const rewritten = { ...firstRecord, message: "omega".repeat(12) };
+			await fs.writeFile(file, header + "\n" + JSON.stringify(firstRecord) + "\n");
+			const first = await readStoredHistoryEntry(file, { entryId: "same", offset: 0, limit: 24 });
+			expect(first.status).toBe("ok");
+			expect(first.revision).toMatch(/^[0-9a-f]{64}$/);
+			const same = await readStoredHistoryEntry(file, {
+				entryId: "same", leafId: first.leafId, offset: first.nextOffset!, limit: 24, revision: first.revision,
+			});
+			expect(same.status).toBe("ok");
+			expect(same.revision).toBe(first.revision);
+			await fs.writeFile(file, header + "\n" + JSON.stringify(rewritten) + "\n");
+			const stale = await readStoredHistoryEntry(file, {
+				entryId: "same", leafId: first.leafId, offset: first.nextOffset!, limit: 24, revision: first.revision,
+			});
+			expect(stale.status).toBe("stale");
+			expect(stale.fragment).toBeUndefined();
+			const fresh = await readStoredHistoryEntry(file, { entryId: "same", offset: 0, limit: 24 });
+			expect(fresh.revision).not.toBe(first.revision);
+			const offset = JSON.stringify(rewritten).indexOf("omega");
+			const page = await readStoredHistoryEntry(file, {
+				entryId: "same", leafId: fresh.leafId, offset, limit: 5, revision: fresh.revision,
+			});
+			expect(page.fragment).toBe("omega");
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("does not invent missing records or make them look like exact evidence", async () => {
 		const dir = TempDir.createSync("@veyyon-history-missing-");
 		try {
@@ -104,6 +139,8 @@ describe("history exact record lookup", () => {
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=../secret"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&limit=999999"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=-1"))).toThrow();
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10"))).toThrow(/rev/);
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&revision=short"))).toThrow(/SHA-256/);
 		expect(parseExactHistoryRequest(new URL("history://Scout"))).toBeUndefined();
 	});
 	it("finds stored evidence IDs on the selected branch and returns newest matches first", async () => {
@@ -125,6 +162,60 @@ describe("history exact record lookup", () => {
 			expect(result.matches[0]?.preview).toContain("later correction");
 			const sibling = await searchStoredHistoryEntries(file, { ...request, leafId: "b" });
 			expect(sibling.matches.map(match => match.entryId)).toEqual(["b", "a"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("does not infer an abandoned branch when a later oversized record was skipped", async () => {
+		const dir = TempDir.createSync("@veyyon-history-oversized-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "branchb-only abandoned sibling" },
+				{ type: "message", id: "c", parentId: "a", message: "x".repeat(8 * 1024 * 1024) },
+			];
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const defaultRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 });
+			expect(defaultRead.status).toBe("unavailable");
+			expect(defaultRead.fragment).toBeUndefined();
+			const defaultSearch = await searchStoredHistoryEntries(file, { query: "branchb-only", limit: 10 });
+			expect(defaultSearch.status).toBe("unavailable");
+			expect(defaultSearch.matches).toEqual([]);
+			// Deliberate archival selection stays available; the query remains partial
+			// because the large record itself could not be inspected.
+			const explicitRead = await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 100 });
+			expect(explicitRead.status).toBe("ok");
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "branchb-only", leafId: "b", limit: 10,
+			});
+			expect(explicitSearch.status).toBe("partial");
+			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("refuses implicit branch selection after an unreadable final JSONL record", async () => {
+		const dir = TempDir.createSync("@veyyon-history-broken-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const valid = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "old sibling" },
+			];
+			await fs.writeFile(file, valid.map(record => JSON.stringify(record)).join("\n") +
+				'\n{"type":"message","id":bad}\n');
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 })).status)
+				.toBe("unavailable");
+			const search = await searchStoredHistoryEntries(file, { query: "old sibling", limit: 10 });
+			expect(search.status).toBe("unavailable");
+			expect(search.matches).toEqual([]);
+			expect((await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 200 })).status)
+				.toBe("ok");
 		} finally {
 			await dir.remove();
 		}

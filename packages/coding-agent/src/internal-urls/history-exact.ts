@@ -246,6 +246,15 @@ export async function readStoredHistoryEntry(
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
+	// A skipped record may be the actual branch tip. Never infer the current
+	// branch from an earlier readable row without an explicitly selected leaf.
+	if (!request.leafId && incomplete) {
+		return {
+			status: "unavailable", entryId: request.entryId, sessionId,
+			source: "stored-jsonl",
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch reads",
+		};
+	}
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
@@ -391,6 +400,15 @@ export async function searchStoredHistoryEntries(
 		return {
 			status: "unavailable", query: request.query, source: "stored-jsonl", matches: [],
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
+		};
+	}
+	// The latest readable entry is not a safe default if a branch record
+	// may have been skipped. Explicit archived-branch selection remains valid.
+	if (!request.leafId && incomplete) {
+		return {
+			status: "unavailable", sessionId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch search",
 		};
 	}
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;

@@ -11,6 +11,7 @@
 - Exact history pages require a matching branch and record revision across continuations, honor the active branch, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Exact history pages require a matching branch and record revision across continuations, honor active and explicitly selected branches, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Live non-persistent history reads take precedence over stale artifact transcripts ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Added branch-scoped `history://` search and exact record paging with revision-pinned continuation that refuses stale pages ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.6.8] - 2026-10-30
 
