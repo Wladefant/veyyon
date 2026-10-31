@@ -220,7 +220,6 @@ test("a recovery that cannot inject leaves the answer pending for the sender's r
 	expect(injected).toEqual([envelope("q-1", "evt-1")]);
 });
 
-
 test("repeated recovery and reconnect never requeue a pending answer already held by the runtime", async () => {
 	const { manager, dir } = newSession();
 	const answer = envelope("q-reconnect", "evt-original");
