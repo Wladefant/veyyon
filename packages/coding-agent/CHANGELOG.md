@@ -27,6 +27,7 @@
 - Multiline registered secrets stay redacted or withheld across producer output chunks.
 - Ordinary agent reads block credential files named by the profile's configured metadata indexes.
 - Multiline registered secrets stay redacted or withheld across producer output chunks.
+- Reconnected operator-answer inboxes reject pending answer replays already waiting in the runtime queue ([Refs #705](https://github.com/Wladefant/veyyon/issues/705)).
 - Child prompts and IRC rosters distinguish delegation from exclusive write ownership ([Refs #738](https://github.com/Wladefant/veyyon/issues/738)).
 - The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).

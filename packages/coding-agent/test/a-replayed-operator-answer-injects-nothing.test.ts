@@ -219,3 +219,170 @@ test("a recovery that cannot inject leaves the answer pending for the sender's r
 	expect(await ready.accept(envelope("q-1", "evt-1"), "auto")).toBe("queued");
 	expect(injected).toEqual([envelope("q-1", "evt-1")]);
 });
+
+test("repeated recovery and reconnect never requeue a pending answer already held by the runtime", async () => {
+	const { manager, dir } = newSession();
+	const answer = envelope("q-reconnect", "evt-original");
+	const beforeCrash = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("crash before the queued user message was committed");
+		},
+		() => false,
+	);
+	await expect(beforeCrash.accept(answer, "followUp")).rejects.toThrow("crash before");
+	const file = manager.getSessionFile();
+	expect(file).toBeString();
+	const reopened = await SessionManager.open(file as string, dir.path());
+	const queue: string[] = [];
+	const first = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await first.recover();
+	expect(queue).toEqual([answer]);
+
+	// The pending journal has not yet been consumed. It is not permission to enqueue the same answer again.
+	await first.recover();
+	expect(queue).toEqual([answer]);
+	const reconnected = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await reconnected.recover();
+	expect(queue).toEqual([answer]);
+
+	// A deliberately cleared queue does not count as delivery; recover it again from the original journal.
+	queue.length = 0;
+	await reconnected.recover();
+	expect(queue).toEqual([answer]);
+	// Once the answer's own user entry is persisted, no later reconnect or sender replay may inject it.
+	reopened.appendMessage({ role: "user", content: answer, timestamp: Date.now() });
+	await reopened.flush();
+	queue.length = 0;
+	const consumed = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await consumed.recover();
+	expect(queue).toEqual([]);
+	expect(await consumed.accept(envelope("q-reconnect", "evt-replay"), "followUp")).toBe("duplicate");
+	expect(queue).toEqual([]);
+});
+
+
+test("an unavailable runtime queue during recovery does not block startup or consume the pending answer", async () => {
+	const { manager, dir } = newSession();
+	const answer = envelope("q-queue-unavailable", "evt-1");
+	const beforeCrash = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("crash before user-message persistence");
+		},
+		() => false,
+	);
+	await expect(beforeCrash.accept(answer, "auto")).rejects.toThrow("crash before");
+	const reopened = await SessionManager.open(manager.getSessionFile() as string, dir.path());
+	const queue: string[] = [];
+	const unavailable = new OperatorAnswerInbox(
+		() => reopened,
+		queueingInto(queue),
+		() => {
+			throw new Error("runtime queue not ready");
+		},
+	);
+	await expect(unavailable.recover()).resolves.toBeUndefined();
+	expect(queue).toEqual([]);
+	const ready = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await ready.recover();
+	expect(queue).toEqual([answer]);
+});
+
+test("a sender retry before replacement-inbox recovery does not duplicate a pending queued answer", async () => {
+	const { manager, dir } = newSession();
+	const queue: string[] = [];
+	const answer = envelope("q-accept-reconnect", "evt-original");
+	const original = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	expect(await original.accept(answer, "followUp")).toBe("queued");
+	await manager.flush();
+	const reopened = await SessionManager.open(manager.getSessionFile() as string, dir.path());
+	const replacement = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	const replay = envelope("q-accept-reconnect", "evt-retry");
+
+	// A fresh instance has no in-memory queue marker; the live queue is still authoritative.
+	expect(await replacement.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([answer]);
+	expect(await replacement.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([answer]);
+
+	// Clearing an unconsumed follow-up allows a subsequent retry using the journaled original.
+	queue.length = 0;
+	expect(await replacement.accept(replay, "followUp")).toBe("queued");
+	expect(queue).toEqual([answer]);
+	reopened.appendMessage({ role: "user", content: answer, timestamp: Date.now() });
+	await reopened.flush();
+	queue.length = 0;
+
+	const afterConsumption = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	expect(await afterConsumption.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([]);
+});
+
+test("a pending answer whose queue state is unknown stays retryable without a false ack", async () => {
+	const { manager } = newSession();
+	const answer = envelope("q-accept-unknown", "evt-original");
+	const notReady = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("dispatch not ready");
+		},
+		() => false,
+	);
+	await expect(notReady.accept(answer, "auto")).rejects.toThrow("dispatch not ready");
+
+	const queue: string[] = [];
+	const unavailable = new OperatorAnswerInbox(
+		() => manager,
+		queueingInto(queue),
+		() => {
+			throw new Error("runtime queue inspection unavailable");
+		},
+	);
+	await expect(unavailable.accept(envelope("q-accept-unknown", "evt-retry"), "auto")).rejects.toThrow(
+		"runtime queue inspection unavailable",
+	);
+	expect(queue).toEqual([]);
+
+	const ready = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	expect(await ready.accept(envelope("q-accept-unknown", "evt-retry"), "auto")).toBe("queued");
+	expect(queue).toEqual([answer]);
+});
+
+
+test("concurrent inbox instances serialize the same pending decision", async () => {
+	const { manager } = newSession();
+	const queue: string[] = [];
+	const original = envelope("q-concurrent", "evt-first");
+	const first = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	const second = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+
+	// These calls race from separate inbox objects and enter the journal on the same tick.
+	const results = await Promise.all([
+		first.accept(original, "followUp"),
+		second.accept(envelope("q-concurrent", "evt-retry"), "followUp"),
+	]);
+	expect(results.sort()).toEqual(["duplicate", "queued"]);
+	expect(queue).toEqual([original]);
+	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});
+
+test("a failed first concurrent injection permits exactly one later pending-answer retry", async () => {
+	const { manager } = newSession();
+	const queue: string[] = [];
+	const original = envelope("q-concurrent-retry", "evt-first");
+	const failing = new OperatorAnswerInbox(
+		() => manager,
+		async () => { throw new Error("first injection failed"); },
+		waiting(queue),
+	);
+	const succeeding = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	const [failure, retry] = await Promise.allSettled([
+		failing.accept(original, "followUp"),
+		succeeding.accept(envelope("q-concurrent-retry", "evt-retry"), "followUp"),
+	]);
+	expect(failure.status).toBe("rejected");
+	expect(retry).toEqual({ status: "fulfilled", value: "queued" });
+	expect(queue).toEqual([original]);
+	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+});

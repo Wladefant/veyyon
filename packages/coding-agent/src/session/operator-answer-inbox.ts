@@ -4,6 +4,8 @@ import { logger } from "@veyyon/utils";
 const ENTRY_TYPE = "terminal:operator-answer";
 const ANSWER_MARKER = /^\[operator-answer question=([^\s\]]{1,256}) event=[^\s\]]{1,256}\](?:\s|$)/;
 type DeliveryMode = "auto" | "steer" | "followUp";
+// In-process FIFO across inbox instances that reference the same session journal.
+const journalOperationChains = new WeakMap<SessionManager, Promise<void>>();
 interface PendingAnswer {
 	version: 1;
 	sessionId: string;
@@ -72,8 +74,16 @@ export class OperatorAnswerInbox {
 		return { pending, consumed };
 	}
 
-	#serialize<T>(operation: () => Promise<T>): Promise<T> {
-		const run = this.#chain.then(operation);
+	#serialize<T>(operation: (journal: SessionManager) => Promise<T>): Promise<T> {
+		const run = this.#chain.then(() => {
+			const journal = this.#journal();
+			// Reconnect can replace an inbox while the old instance is still accepting a sender retry.
+			// Serialize both instances against their shared durable journal, not only each inbox's chain.
+			const previous = journalOperationChains.get(journal) ?? Promise.resolve();
+			const queued = previous.then(() => operation(journal));
+			journalOperationChains.set(journal, queued.then(() => {}, () => {}));
+			return queued;
+		});
 		this.#chain = run.then(() => {}, () => {});
 		return run;
 	}
@@ -93,15 +103,20 @@ export class OperatorAnswerInbox {
 	accept(text: string, mode: DeliveryMode): Promise<string | undefined> {
 		const questionId = operatorAnswerQuestionId(text);
 		if (!questionId) return Promise.resolve(undefined);
-		return this.#serialize(async () => {
-			const journal = this.#journal();
+		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before acceptance");
 			const sessionId = journal.getSessionId();
 			const key = `${sessionId}:${questionId}`;
 			const { pending, consumed } = this.#scan(journal);
 			// An answer still waiting in the runtime queue is a replay. One the operator cleared from the queue is
 			// gone: no user message was written, so the retry delivers it again. A dequeue that lands between the
 			// runtime taking the message and journaling it is a window of milliseconds against a retry's seconds.
-			if (this.#queued.has(key) && !consumed.has(questionId) && !this.#isQueued(questionId)) this.#queued.delete(key);
+			// A replacement inbox may receive the sender's retry before recover() inspects a still-queued
+			// answer. The durable pending record, not only this instance's mark, requires checking the queue.
+			if (!consumed.has(questionId) && (pending.has(questionId) || this.#queued.has(key))) {
+				if (this.#isQueued(questionId)) this.#queued.add(key);
+				else this.#queued.delete(key);
+			}
 			if (consumed.has(questionId) || this.#queued.has(key)) {
 				logger.info(`DUPLICATE-ANSWER ${questionId}`);
 				return "duplicate";
@@ -123,13 +138,21 @@ export class OperatorAnswerInbox {
 	 * effort: an answer that cannot be injected now stays pending for the sender's retry and never blocks startup.
 	 */
 	recover(): Promise<void> {
-		return this.#serialize(async () => {
-			const journal = this.#journal();
+		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) return;
 			const { pending, consumed } = this.#scan(journal);
 			for (const answer of pending.values()) {
 				if (consumed.has(answer.questionId)) continue;
 				if (this.#journal() !== journal) return;
+				const key = `${answer.sessionId}:${answer.questionId}`;
 				try {
+					// Reconnect/repeated recovery can see an unconsumed entry whose answer is already queued.
+					// Only a user-message entry commits consumption; a cleared queue remains retryable.
+					if (this.#isQueued(answer.questionId)) {
+						this.#queued.add(key);
+						continue;
+					}
+					this.#queued.delete(key);
 					await this.#queue(answer);
 				} catch (error) {
 					logger.warn("Operator answer recovery could not inject a pending answer", {
