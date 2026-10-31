@@ -262,4 +262,42 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		await remote.markCredentialSuspect(entry.id);
 		expect(remote.snapshot.credentials[0]?.credential).toEqual(entry.credential);
 	});
+	for (const reconciledState of ["revoked", "rotated"] as const) {
+		test(`refuses a ${reconciledState} credential after the post-refresh snapshot read`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const entry = initial.snapshot.credentials[0]!;
+			if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+			// The broker refresh has replied; its follow-up GET observes a concurrent,
+			// authoritative disable or access rotation before the caller sees the result.
+			spyOn(client, "refreshCredential").mockResolvedValue({ entry });
+			const actualFetch = client.fetchSnapshot.bind(client);
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs === undefined) {
+					if (reconciledState === "revoked") {
+						expect(storage!.disableCredentialById(entry.id, "synthetic revocation during reconciliation")).toBe(true);
+					} else {
+						store!.updateAuthCredential(entry.id, mintOAuthCredential("new", Date.now() + 120_000));
+						await storage!.reload();
+					}
+				}
+				return actualFetch(opts);
+			});
+			await expect(
+					remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000)),
+				).rejects.toThrow(reconciledState === "revoked" ? /unknown or mismatched/i : /superseded/i);
+			if (reconciledState === "revoked") {
+				expect(remote.snapshot.credentials).toEqual([]);
+			} else {
+				expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+					type: "oauth",
+					access: "access-new",
+					refresh: REMOTE_REFRESH_SENTINEL,
+				});
+			}
+		});
+	}
+
 });
