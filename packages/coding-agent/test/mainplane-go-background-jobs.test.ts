@@ -33,6 +33,11 @@ describe("native background job tools", () => {
 		expect(done.completed).toBe(true); expect(done.process_succeeded).toBe(true);
 		await expect(inspectRemoteJob("https://fleet.example/", "fixture-key", { runId: id, sessionFile: "/foreign" }, undefined, transport)).rejects.toThrow("another");
 	});
+	test("status helper refuses a missing session before any bridge request", async () => {
+		const forbidden = (async () => { throw new Error("status must not reach bridge without a session"); }) as typeof fetch;
+		await expect(inspectRemoteJob("https://fleet.example/", "fixture-key",
+			{ runId: id, sessionFile: "" }, undefined, forbidden)).rejects.toThrow("Persisted session");
+	});
 	test("rejects wrong native job identity and incomplete start metadata", () => {
 		for (const change of [{ job: "wrong" }, { pid: 0 }, { log: undefined }, { owner_instance: "../bad" }]) {
 			expect(() => validateReceipt({ ...receipt(), ...change }, id, "job")).toThrow();
