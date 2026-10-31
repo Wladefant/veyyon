@@ -6,6 +6,7 @@ import { registerMainplaneWrite } from "./mainplane-bridge-write";
 import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
 import { registerMainplaneOutputRecovery } from "./mainplane-bridge-output";
 import { registerMainplaneJobs } from "./mainplane-bridge-jobs";
+import { registerMainplaneDiscovery } from "./mainplane-bridge-discovery";
 
 // Go JSON control escaping can expand the two retained 50 KiB outputs sixfold.
 const MAX_RUN_REPLY = 1024 * 1024;
@@ -91,4 +92,5 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	registerMainplaneCancellation(pi);
 	registerMainplaneOutputRecovery(pi);
 	registerMainplaneJobs(pi);
+	registerMainplaneDiscovery(pi);
 }
