@@ -19,8 +19,8 @@ match. Both file text and remote path must round-trip exactly through UTF-8;
 malformed lone-surrogate paths fail locally before any write, while valid Unicode
 paths (including supplementary characters) remain unchanged. It overwrites the
 specified path. Uncertain writes are never retried, and responses contain
-metadata only. This is not atomic compare-and-swap against
-concurrent external writers; success is readback at one instant.
+metadata only. This is not atomic compare-and-swap against concurrent external
+writers; success is readback at one instant.
 
 The transport helper is shared by the actual Run/Read/Write callers. No legacy
 aliases remain. Timeouts, byte ceilings, redirect refusal and sanitized errors

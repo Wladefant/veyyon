@@ -17,7 +17,8 @@ export async function recoverRemoteOutput(origin: string, token: string, input: 
 	const bytes = Buffer.from(data.data_base64, "base64");
 	if (bytes.toString("base64") !== data.data_base64 || bytes.length !== data.bytes || digest(bytes) !== receipt.output_sha256) throw new MainplaneError("Output artifact integrity mismatch");
 	let text: string;
-	try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new MainplaneError("Output is binary; use a binary-aware recovery tool"); }
+	try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+	catch { throw new MainplaneError("Output is binary; use a binary-aware recovery tool"); }
 	if (text.includes("\0")) throw new MainplaneError("Output contains binary NUL bytes; use a binary-aware recovery tool");
 	const characters = Array.from(text);
 	if (offset > characters.length) throw new MainplaneError("Output offset is past the end");

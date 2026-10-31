@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved a UTF-8 BOM in recovered output pages instead of dropping the leading marker ([Refs #797](https://github.com/Wladefant/veyyon/issues/797)).
+- Native Mainplane run receipts now allow Go JSON escaping within a 1 MiB response bound.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
