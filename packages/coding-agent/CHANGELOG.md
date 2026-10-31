@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- The terminal launch status row now reads file-backed Git HEAD without eagerly loading Git subprocess and diff helpers; background status and PR queries still load the full Git implementation when needed ([#701](https://github.com/Wladefant/veyyon/issues/701)).
 - Shell and Python/JS eval withhold bulk environment inventories before tool output persistence ([issue](https://github.com/Wladefant/veyyon/issues/682)).
 - Failed recovery-artifact saves leave the original live and persisted history unchanged ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 

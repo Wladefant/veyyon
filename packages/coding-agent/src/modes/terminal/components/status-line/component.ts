@@ -22,7 +22,15 @@ import { StatusPresentationProducer } from "../../../../presentation/status-prod
 import { withIcon } from "../../../../theme/icon-label";
 import { transitionsEnabled } from "../../../../theme/shimmer";
 import { theme } from "../../../../theme/theme-binding";
-import * as git from "../../../../utils/git";
+import type { GitStatusSummary } from "../../../../utils/git";
+import {
+	headBranchForLookup,
+	headLabel,
+	isReftableRepoSync,
+	resolveHeadStateFromFiles,
+	resolveInProgressOperation,
+	resolveRepositorySync,
+} from "../../../../utils/git-head";
 import { isTreeDirty } from "./branch";
 import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { type LocationContext, resolveLocationContext } from "./location-context";
@@ -109,7 +117,7 @@ export class StatusLineComponent implements Component {
 	#activeRepoCache: LocationContext | undefined;
 
 	// Git status caching: refreshed on request, otherwise once GIT_STATUS_MAX_AGE_MS old
-	#cachedGitStatus: git.GitStatusSummary | null = null;
+	#cachedGitStatus: GitStatusSummary | null = null;
 	#cachedGitStatusCwd: string | undefined = undefined;
 	#gitStatusLastFetch = 0;
 	#gitStatusInFlightCwd: string | undefined = undefined;
@@ -347,10 +355,10 @@ export class StatusLineComponent implements Component {
 		}
 
 		const { effectiveGitCwd } = this.#resolveActiveRepoCache();
-		const repository = git.repo.resolveSync(effectiveGitCwd);
+		const repository = resolveRepositorySync(effectiveGitCwd);
 		if (!repository) return;
 
-		const watchPath = git.repo.isReftableSync(repository)
+		const watchPath = isReftableRepoSync(repository)
 			? path.join(repository.gitDir, "reftable")
 			: repository.headPath;
 
@@ -431,7 +439,13 @@ export class StatusLineComponent implements Component {
 			return this.#cachedBranch;
 		}
 
-		const head = git.head.resolveSync(gitCwd);
+		const repository = resolveRepositorySync(gitCwd);
+		// File-backed HEAD stays on the first-frame leaf path; reftable still asks the Git subprocess layer.
+		const head = !repository
+			? null
+			: isReftableRepoSync(repository)
+				? (require("../../../../utils/git") as typeof import("../../../../utils/git")).head.resolveSync(gitCwd)
+				: resolveHeadStateFromFiles(repository);
 		const gitHeadPath = head?.headPath ?? null;
 		this.#cachedBranchCwd = gitCwd;
 		this.#cachedBranchRepoId = gitHeadPath;
@@ -441,9 +455,9 @@ export class StatusLineComponent implements Component {
 			return null;
 		}
 
-		const operation = git.head.operation(head);
-		this.#cachedBranch = git.head.label(head, operation);
-		this.#cachedPrBranch = git.head.branchForLookup(head, operation);
+		const operation = resolveInProgressOperation(head);
+		this.#cachedBranch = headLabel(head, operation);
+		this.#cachedPrBranch = headBranchForLookup(head, operation);
 
 		return this.#cachedBranch ?? null;
 	}
@@ -459,7 +473,7 @@ export class StatusLineComponent implements Component {
 			const lookupCwd = effectiveGitCwd;
 			(async () => {
 				try {
-					const resolved = await git.branch.default(lookupCwd);
+					const resolved = await (await import("../../../../utils/git")).branch.default(lookupCwd);
 					if (this.#disposed || this.#defaultBranchCwd !== lookupCwd) return;
 					if (resolved) {
 						this.#defaultBranch = resolved;
@@ -478,7 +492,7 @@ export class StatusLineComponent implements Component {
 	 * directory that lands is filed for the next launch's card when `recordsTree` is set, whichever
 	 * zones sit beside the git zone; a failed scan files nothing and keeps the last record.
 	 */
-	#getGitStatus(gitCwd: string, recordsTree: boolean): git.GitStatusSummary | null {
+	#getGitStatus(gitCwd: string, recordsTree: boolean): GitStatusSummary | null {
 		if (!gitEnabled()) return null;
 
 		if (this.#cachedGitStatusCwd === undefined && gitCwd === getProjectDir()) {
@@ -500,9 +514,9 @@ export class StatusLineComponent implements Component {
 		const requested = this.#gitStatusRequested;
 
 		(async () => {
-			let nextStatus: git.GitStatusSummary | null = null;
+			let nextStatus: GitStatusSummary | null = null;
 			try {
-				nextStatus = await git.status.summary(gitCwd);
+				nextStatus = await (await import("../../../../utils/git")).status.summary(gitCwd);
 			} catch {
 				nextStatus = null;
 			} finally {
@@ -564,8 +578,9 @@ export class StatusLineComponent implements Component {
 				}
 			};
 			try {
-				const result = await withScopedTimeoutSignal(git.GIT_COMMAND_TIMEOUT_MS, signal =>
-					git.github.run(lookupCwd, ["pr", "view", "--json", "number,url"], signal),
+				const processGit = await import("../../../../utils/git");
+				const result = await withScopedTimeoutSignal(processGit.GIT_COMMAND_TIMEOUT_MS, signal =>
+					processGit.github.run(lookupCwd, ["pr", "view", "--json", "number,url"], signal),
 				);
 				if (this.#disposed) return;
 				if (result.exitCode !== 0) {
