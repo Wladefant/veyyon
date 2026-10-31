@@ -55,10 +55,7 @@ class FakeTransport implements PublicFetchTransport {
 	readonly #dns: Readonly<Record<string, readonly string[]>>;
 	readonly #respond: (url: URL) => Response | Promise<Response>;
 
-	constructor(
-		dns: Readonly<Record<string, readonly string[]>>,
-		respond: (url: URL) => Response | Promise<Response>,
-	) {
+	constructor(dns: Readonly<Record<string, readonly string[]>>, respond: (url: URL) => Response | Promise<Response>) {
 		this.#dns = dns;
 		this.#respond = respond;
 	}
@@ -96,7 +93,10 @@ function harness(options: {
 	return { service, transport, admission };
 }
 
-function reply(body: BodyInit | null, init: { status?: number; headers?: Record<string, string> } = {}): Response {
+function reply(
+	body: ConstructorParameters<typeof Response>[0],
+	init: { status?: number; headers?: Record<string, string> } = {},
+): Response {
 	return new Response(body, { status: init.status ?? 200, headers: init.headers });
 }
 
@@ -225,7 +225,7 @@ describe("public fetch vets every DNS answer before choosing an address", () => 
 		"240.0.0.1",
 		"255.255.255.255",
 		"0.0.0.0",
-	])("refuses a name whose only answer is the non-global IPv4 %s", async (address) => {
+	])("refuses a name whose only answer is the non-global IPv4 %s", async address => {
 		const { service, transport } = harness({
 			dns: { "internal.example.com": [address] },
 			respond: () => plain("x"),
@@ -250,7 +250,7 @@ describe("public fetch vets every DNS answer before choosing an address", () => 
 		"2001:db8::1",
 		"2002:5db8:d822::1",
 		"3fff::1",
-	])("refuses a name whose only answer is the non-global IPv6 %s", async (address) => {
+	])("refuses a name whose only answer is the non-global IPv6 %s", async address => {
 		const { service, transport } = harness({
 			dns: { "v6.example.com": [address] },
 			respond: () => plain("x"),
@@ -304,19 +304,19 @@ describe("public fetch vets every DNS answer before choosing an address", () => 
 });
 
 describe("public fetch follows at most three redirects and vets each hop", () => {
-	it.each([301, 302, 303, 307, 308])("follows a %s redirect with a relative Location", async (status) => {
+	it.each([301, 302, 303, 307, 308])("follows a %s redirect with a relative Location", async status => {
 		const { service, transport } = harness({
-			respond: (url) => (url.pathname === "/" ? redirect(status, "/final") : plain("done")),
+			respond: url => (url.pathname === "/" ? redirect(status, "/final") : plain("done")),
 		});
 		const result = await service.fetchPublic("user-1", "https://example.com/");
 		expect(result.url).toBe("https://example.com/final");
 		expect(result.text).toBe("done");
-		expect(transport.dials.map((dial) => dial.url)).toEqual(["https://example.com/", "https://example.com/final"]);
+		expect(transport.dials.map(dial => dial.url)).toEqual(["https://example.com/", "https://example.com/final"]);
 	});
 
 	it("follows three redirects and returns the fourth hop", async () => {
 		const { service, transport } = harness({
-			respond: (url) => {
+			respond: url => {
 				if (url.pathname === "/1") return redirect(302, "https://example.com/2");
 				if (url.pathname === "/2") return redirect(302, "https://example.com/3");
 				if (url.pathname === "/3") return redirect(302, "https://example.com/final");
@@ -330,10 +330,10 @@ describe("public fetch follows at most three redirects and vets each hop", () =>
 
 	it("refuses a fourth redirect and sends no fifth request", async () => {
 		const { service, transport } = harness({
-			respond: (url) => redirect(302, `https://example.com/${Number(url.pathname.slice(1)) + 1}`),
+			respond: url => redirect(302, `https://example.com/${Number(url.pathname.slice(1)) + 1}`),
 		});
 		await expect(service.fetchPublic("user-1", "https://example.com/1")).rejects.toThrow(/after 3 redirects/);
-		expect(transport.dials.map((dial) => dial.url)).toEqual([
+		expect(transport.dials.map(dial => dial.url)).toEqual([
 			"https://example.com/1",
 			"https://example.com/2",
 			"https://example.com/3",
@@ -348,7 +348,7 @@ describe("public fetch follows at most three redirects and vets each hop", () =>
 		});
 		await expect(service.fetchPublic("user-1", "https://example.com/")).rejects.toThrow(/non-public address/);
 		expect(transport.resolved).toEqual(["example.com", "evil.example"]);
-		expect(transport.dials.map((dial) => dial.url)).toEqual(["https://example.com/"]);
+		expect(transport.dials.map(dial => dial.url)).toEqual(["https://example.com/"]);
 	});
 
 	it("refuses a redirect into a literal private address before any DNS query", async () => {
@@ -388,7 +388,7 @@ describe("public fetch follows at most three redirects and vets each hop", () =>
 			cancel: () => cancelled.resolve(),
 		});
 		const { service } = harness({
-			respond: (url) =>
+			respond: url =>
 				url.pathname === "/" ? reply(redirectBody, { status: 302, headers: { location: "/final" } }) : plain("ok"),
 		});
 		await service.fetchPublic("user-1", "https://example.com/");
@@ -434,7 +434,7 @@ describe("public fetch accepts only the allowed media types and charsets", () =>
 		expect(result.text).toBe('{"ok":true}');
 	});
 
-	it.each(["application/rss+xml", "application/atom+xml"])("accepts %s feeds as text", async (type) => {
+	it.each(["application/rss+xml", "application/atom+xml"])("accepts %s feeds as text", async type => {
 		const { service } = harness({
 			respond: () => reply("<feed></feed>", { headers: { "content-type": type } }),
 		});
@@ -443,7 +443,7 @@ describe("public fetch accepts only the allowed media types and charsets", () =>
 		expect(result.text).toBe("<feed></feed>");
 	});
 
-	it('accepts a quoted UTF-8 charset in any letter case', async () => {
+	it("accepts a quoted UTF-8 charset in any letter case", async () => {
 		const { service } = harness({
 			respond: () => reply("hi", { headers: { "content-type": 'text/plain; charset="UTF-8"' } }),
 		});
@@ -587,9 +587,13 @@ describe("public fetch settles within its deadline whatever its dependencies do"
 		await expect(service.fetchPublic("user-1", "https://example.com/")).rejects.toThrow(/deadline/);
 	});
 
-	it.each([0, -1, 15_001, Number.NaN])("refuses a configured timeout of %s at creation", (timeoutMs) => {
+	it.each([0, -1, 15_001, Number.NaN])("refuses a configured timeout of %s at creation", timeoutMs => {
 		expect(() =>
-			createPublicFetchService({ admission: grantedAdmission(), timeoutMs, transport: new FakeTransport({}, () => plain("x")) }),
+			createPublicFetchService({
+				admission: grantedAdmission(),
+				timeoutMs,
+				transport: new FakeTransport({}, () => plain("x")),
+			}),
 		).toThrow(/timeout must be above 0 and at most 15000/);
 	});
 });

@@ -1,5 +1,5 @@
 import * as dns from "node:dns/promises";
-import { connect as netConnect, isIP, type Socket as NetSocket } from "node:net";
+import { isIP, type Socket as NetSocket, connect as netConnect } from "node:net";
 import * as tls from "node:tls";
 
 /**
@@ -24,7 +24,8 @@ const LOW_WATER_BYTES = 64 * 1024;
 /** Longest chunk-size or trailer line accepted. */
 const MAX_LINE_BYTES = 1024;
 const HTTPS_PORT = 443;
-const REQUEST_ACCEPT = "text/html, application/xhtml+xml, text/plain;q=0.9, text/markdown;q=0.8, application/json;q=0.7";
+const REQUEST_ACCEPT =
+	"text/html, application/xhtml+xml, text/plain;q=0.9, text/markdown;q=0.8, application/json;q=0.7";
 
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const DIGITS = /^[0-9]+$/;
@@ -43,8 +44,15 @@ export interface PublicFetchTransport {
  * The part of a TLS socket the transport uses. The test seam implements exactly
  * this, so a fake socket needs no network.
  */
+export interface PinnedSocketEvents {
+	data: [chunk: Buffer];
+	end: [];
+	close: [hadError?: boolean];
+	error: [error: Error];
+}
+
 export interface PinnedTlsSocket {
-	on(event: "data" | "end" | "close" | "error", listener: (...args: never[]) => void): unknown;
+	on<E extends keyof PinnedSocketEvents>(event: E, listener: (...args: PinnedSocketEvents[E]) => void): unknown;
 	write(data: Uint8Array | string): unknown;
 	pause(): unknown;
 	resume(): unknown;
@@ -52,9 +60,19 @@ export interface PinnedTlsSocket {
 }
 
 /** The event surface the connect adapter waits on. `net.Socket` and `tls.TLSSocket` both satisfy it. */
+interface ConnectionEvents {
+	connect: [];
+	secureConnect: [];
+	error: [error: Error];
+	close: [hadError?: boolean];
+}
+
 export interface Emitter {
-	once(event: string, listener: (...args: never[]) => void): unknown;
-	removeListener(event: string, listener: (...args: never[]) => void): unknown;
+	once<E extends keyof ConnectionEvents>(event: E, listener: (...args: ConnectionEvents[E]) => void): unknown;
+	removeListener<E extends keyof ConnectionEvents>(
+		event: E,
+		listener: (...args: ConnectionEvents[E]) => void,
+	): unknown;
 }
 
 /** A TLS socket the adapter waits on before it hands the socket to the transport. */
@@ -97,11 +115,14 @@ export function createNodePublicFetchTransport(connect: PinnedTlsConnect = conne
  * the IP. Over a socket, `tls.connect({ socket, servername })` takes the STARTTLS
  * path, which passes `servername` as `expectedServerHostname`
  * (`internal_tls_wrap.ts`, `_start`). Node documents the `socket` option for this.
- * `rejectUnauthorized` stays `true`.
+ * This is not a proven Workers deployment path: workerd#6903 records the edge
+ * ignoring that hostname, and workerd can reject the option as unsupported.
+ * Do not replace the pinned dial with a second hostname lookup to hide that
+ * runtime limitation. `rejectUnauthorized` stays `true`.
  */
 const connectWithNodeTls: PinnedTlsConnect = pinnedTlsOver({
-	dial: (options) => netConnect(options),
-	wrap: (options) => tls.connect(options),
+	dial: options => netConnect(options),
+	wrap: options => tls.connect(options),
 });
 
 /**
@@ -109,7 +130,9 @@ const connectWithNodeTls: PinnedTlsConnect = pinnedTlsOver({
  * after the handshake, so no request byte leaves before the peer is verified.
  * An error, a close or an abort at any step destroys the raw and TLS sockets.
  */
-export function pinnedTlsOver(factories: NodeTlsFactories): PinnedTlsConnect {
+export function pinnedTlsOver(
+	factories: NodeTlsFactories,
+): (dial: PinnedDial, signal: AbortSignal) => Promise<PinnedTlsSocket> {
 	return async (dial, signal) => {
 		signal.throwIfAborted();
 		const attempt = new AbortController();
@@ -120,14 +143,22 @@ export function pinnedTlsOver(factories: NodeTlsFactories): PinnedTlsConnect {
 		let established = false;
 		// Attached synchronously after the dial, before any wait, and kept for the life of the raw
 		// socket. Node throws on an `error` with no listener, so no window may lack one.
-		raw.on("error", (error) => {
+		raw.on("error", error => {
 			if (established) secure?.destroy(error);
 			else attempt.abort(error);
 		});
 		try {
+			// Workers starts a raw read immediately after emitting `connect`, before this
+			// async continuation resumes. Pause now so the TLS wrap can take ownership
+			// without releasing a stream reader that still has an outstanding read.
+			raw.pause();
 			// The TCP connect comes first, so the TLS upgrade runs on an open socket.
 			await untilReady(raw, "connect", attempt.signal);
-			secure = factories.wrap({ socket: raw, servername: dial.servername, rejectUnauthorized: dial.rejectUnauthorized });
+			secure = factories.wrap({
+				socket: raw,
+				servername: dial.servername,
+				rejectUnauthorized: dial.rejectUnauthorized,
+			});
 			await untilReady(secure, "secureConnect", attempt.signal);
 			established = true;
 			return secure;
@@ -142,7 +173,7 @@ export function pinnedTlsOver(factories: NodeTlsFactories): PinnedTlsConnect {
 }
 
 /** Resolves on `ready`. Rejects with the `error`, on `close`, or with the abort reason, whichever comes first. */
-function untilReady(socket: Emitter, ready: string, signal: AbortSignal): Promise<void> {
+function untilReady(socket: Emitter, ready: "connect" | "secureConnect", signal: AbortSignal): Promise<void> {
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const settle = (): void => {
 		socket.removeListener(ready, onReady);
@@ -199,10 +230,18 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 	return Promise.race([work, aborted.promise]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
-async function fetchPinned(connect: PinnedTlsConnect, url: URL, address: string, signal: AbortSignal): Promise<Response> {
+async function fetchPinned(
+	connect: PinnedTlsConnect,
+	url: URL,
+	address: string,
+	signal: AbortSignal,
+): Promise<Response> {
 	signal.throwIfAborted();
 	requireDirectHttps(url);
-	const socket = await connect({ host: address, servername: url.hostname, port: HTTPS_PORT, rejectUnauthorized: true }, signal);
+	const socket = await connect(
+		{ host: address, servername: url.hostname, port: HTTPS_PORT, rejectUnauthorized: true },
+		signal,
+	);
 	const wire = new SocketReader(socket, signal);
 	try {
 		socket.write(
@@ -225,7 +264,7 @@ async function fetchPinned(connect: PinnedTlsConnect, url: URL, address: string,
 		const decoder = new BodyDecoder(wire, mode);
 		const body = new ReadableStream<Uint8Array>(
 			{
-				pull: async (controller) => {
+				pull: async controller => {
 					try {
 						const piece = await decoder.next();
 						if (piece === undefined) {
@@ -317,8 +356,8 @@ function bodyModeFor(head: ParsedHead): BodyMode | undefined {
 			throw new Error("compressed responses are refused; the request asks for identity encoding");
 		}
 	}
-	const transfer = head.fields.filter((field) => field.name === "transfer-encoding");
-	const length = head.fields.filter((field) => field.name === "content-length");
+	const transfer = head.fields.filter(field => field.name === "transfer-encoding");
+	const length = head.fields.filter(field => field.name === "content-length");
 	if (transfer.length > 0 && length.length > 0) {
 		throw new Error("response carries both Transfer-Encoding and Content-Length");
 	}

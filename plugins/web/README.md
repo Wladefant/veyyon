@@ -74,5 +74,5 @@ export default {
 
 - Issue #628 (durable budget and authentication), and sibling shared contracts #630, #631 and #632, are not implemented here.
 - No deployment, provisioning, Worker configuration, secret or database is included.
-- The runtime TLS proof for the pinned transport under Workers is not run.
-- The tests in `test/a-public-fetch-handler-admits-only-authorized-callers.test.ts` are authored but not run.
+- Workers deployment remains blocked: production-edge probes of IP-pinned TLS fail while hostname controls succeed, matching [workerd #6903](https://github.com/cloudflare/workerd/issues/6903). Pausing the raw socket before its TLS handoff fixes the pending-reader failure; it does not fix the edge's unsupported `expectedServerHostname` option. The service retains IP pinning and never retries through an unpinned hostname fetch.
+- The three deterministic public-fetch suites passed at `363075d757ef971184273ea6f74884d8595291a0` ([157 tests, 367 assertions](https://github.com/Wladefant/veyyon/actions/runs/40636353511)). That run skipped static checks and cannot prove the deployed Workers TLS behavior. The later raw-socket handoff change requires its own test run.

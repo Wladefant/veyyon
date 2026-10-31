@@ -5,10 +5,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { ConnectionOptions } from "node:tls";
 import {
 	createNodePublicFetchTransport,
-	pinnedTlsOver,
 	type PinnedDial,
+	type PinnedSocketEvents,
 	type PinnedTlsSocket,
 	type PublicFetchTransport,
+	pinnedTlsOver,
 	type TlsSocketLike,
 } from "@veyyon/web/public-fetch-transport";
 
@@ -43,7 +44,7 @@ class FakeTlsSocket implements PinnedTlsSocket {
 		this.#endAfterReply = endAfterReply;
 	}
 
-	on(event: "data" | "end" | "close" | "error", listener: (...args: never[]) => void): unknown {
+	on<E extends keyof PinnedSocketEvents>(event: E, listener: (...args: PinnedSocketEvents[E]) => void): unknown {
 		const listeners = this.#listeners.get(event) ?? [];
 		listeners.push(listener as (...args: unknown[]) => void);
 		this.#listeners.set(event, listeners);
@@ -94,9 +95,12 @@ interface Dial {
 	socket: FakeTlsSocket;
 }
 
-function harnessWith(reply: ReadonlyArray<string | Buffer>, endAfterReply = true): { transport: PublicFetchTransport; dials: Dial[] } {
+function harnessWith(
+	reply: ReadonlyArray<string | Buffer>,
+	endAfterReply = true,
+): { transport: PublicFetchTransport; dials: Dial[] } {
 	const dials: Dial[] = [];
-	const transport = createNodePublicFetchTransport((options) => {
+	const transport = createNodePublicFetchTransport(options => {
 		const socket = new FakeTlsSocket(reply, endAfterReply);
 		dials.push({ options, socket });
 		return socket;
@@ -125,7 +129,9 @@ describe("public fetch transport dials the vetted address", () => {
 
 	it("refuses an IP literal as the TLS name, because a certificate cannot be checked against it", async () => {
 		const { transport, dials } = harnessWith([]);
-		await expect(transport.get(new URL("https://203.0.113.9/"), VETTED_ADDRESS, new AbortController().signal)).rejects.toThrow();
+		await expect(
+			transport.get(new URL("https://203.0.113.9/"), VETTED_ADDRESS, new AbortController().signal),
+		).rejects.toThrow();
 		expect(dials).toHaveLength(0);
 	});
 });
@@ -172,7 +178,7 @@ describe("public fetch transport sends a bounded identity GET", () => {
 	});
 
 	it("returns no body for 304 Not Modified", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 304 Not Modified", "ETag: \"v1\""])]);
+		const { transport } = harnessWith([httpReply(["HTTP/1.1 304 Not Modified", 'ETag: "v1"'])]);
 		const response = await transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal);
 		expect(response.status).toBe(304);
 		expect(response.body).toBeNull();
@@ -181,12 +187,16 @@ describe("public fetch transport sends a bounded identity GET", () => {
 
 describe("public fetch transport fails closed on framing it cannot honour", () => {
 	it("refuses a compressed response", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Content-Encoding: gzip", "Content-Length: 0"])]);
+		const { transport } = harnessWith([
+			httpReply(["HTTP/1.1 200 OK", "Content-Encoding: gzip", "Content-Length: 0"]),
+		]);
 		await expect(transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal)).rejects.toThrow();
 	});
 
 	it("refuses a Transfer-Encoding that is not exactly chunked", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Transfer-Encoding: gzip, chunked"], "0\r\n\r\n")]);
+		const { transport } = harnessWith([
+			httpReply(["HTTP/1.1 200 OK", "Transfer-Encoding: gzip, chunked"], "0\r\n\r\n"),
+		]);
 		await expect(transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal)).rejects.toThrow();
 	});
 
@@ -198,7 +208,9 @@ describe("public fetch transport fails closed on framing it cannot honour", () =
 	});
 
 	it("refuses two Content-Length headers even when they agree", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Content-Length: 2", "Content-Length: 2"], "ok")]);
+		const { transport } = harnessWith([
+			httpReply(["HTTP/1.1 200 OK", "Content-Length: 2", "Content-Length: 2"], "ok"),
+		]);
 		await expect(transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal)).rejects.toThrow();
 	});
 
@@ -208,7 +220,9 @@ describe("public fetch transport fails closed on framing it cannot honour", () =
 	});
 
 	it("refuses an informational 1xx status line", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 100 Continue"], "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")]);
+		const { transport } = harnessWith([
+			httpReply(["HTTP/1.1 100 Continue"], "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+		]);
 		await expect(transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal)).rejects.toThrow();
 	});
 
@@ -235,7 +249,9 @@ describe("public fetch transport fails closed on framing it cannot honour", () =
 	});
 
 	it("fails the body on a chunk size that is not hexadecimal", async () => {
-		const { transport } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Transfer-Encoding: chunked"], "zz\r\nabc\r\n0\r\n\r\n")]);
+		const { transport } = harnessWith([
+			httpReply(["HTTP/1.1 200 OK", "Transfer-Encoding: chunked"], "zz\r\nabc\r\n0\r\n\r\n"),
+		]);
 		const response = await transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal);
 		await expect(response.text()).rejects.toThrow();
 	});
@@ -267,7 +283,10 @@ describe("public fetch transport honours cancellation", () => {
 	});
 
 	it("cancelling the body stream destroys the socket", async () => {
-		const { transport, dials } = harnessWith([httpReply(["HTTP/1.1 200 OK", "Content-Length: 10"], "0123456789")], false);
+		const { transport, dials } = harnessWith(
+			[httpReply(["HTTP/1.1 200 OK", "Content-Length: 10"], "0123456789")],
+			false,
+		);
 		const response = await transport.get(SOURCE, VETTED_ADDRESS, new AbortController().signal);
 		const reader = response.body?.getReader();
 		if (reader === undefined) throw new Error("expected a body stream");
@@ -315,20 +334,26 @@ function adapterWith(script: AdapterScript) {
 	const secure = new FakeWrappedTls();
 	const dials: Array<{ host: string; port: number }> = [];
 	const wraps: ConnectionOptions[] = [];
+	const rawReadsStarted: boolean[] = [];
 	const connect = pinnedTlsOver({
-		dial: (options) => {
+		dial: options => {
 			dials.push(options);
-			if (script.dial === "connect") queueMicrotask(() => raw.emit("connect"));
+			if (script.dial === "connect")
+				queueMicrotask(() => {
+					raw.emit("connect");
+					// workerd starts its read loop after the connect listeners return.
+					rawReadsStarted.push(!raw.isPaused());
+				});
 			return raw;
 		},
-		wrap: (options) => {
+		wrap: options => {
 			wraps.push(options);
 			if (script.tls === "secure") queueMicrotask(() => secure.emit("secureConnect"));
 			if (script.tls === "fail") queueMicrotask(() => secure.emit("error", new Error("certificate verify failed")));
 			return secure;
 		},
 	});
-	return { connect, raw, secure, dials, wraps };
+	return { connect, raw, secure, dials, wraps, rawReadsStarted };
 }
 
 const DIAL: PinnedDial = { host: VETTED_ADDRESS, servername: "example.com", port: 443, rejectUnauthorized: true };
@@ -342,12 +367,13 @@ describe("the production adapter dials the vetted address, then verifies the ori
 		expect(h.wraps).toHaveLength(1);
 		expect(h.wraps[0]).toMatchObject({ servername: "example.com", rejectUnauthorized: true });
 		expect(h.wraps[0]?.socket).toBe(h.raw);
+		expect(h.rawReadsStarted).toEqual([false]);
 	});
 
 	it("resolves only after the handshake, so no request byte precedes verification", async () => {
 		const h = adapterWith({ dial: "connect", tls: "hang" });
 		let resolved = false;
-		const pending = h.connect(DIAL, new AbortController().signal).then((socket) => {
+		const pending = h.connect(DIAL, new AbortController().signal).then(socket => {
 			resolved = true;
 			return socket;
 		});
