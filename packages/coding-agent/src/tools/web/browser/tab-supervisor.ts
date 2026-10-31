@@ -27,7 +27,6 @@ import {
 	releaseOrphanBrowsers,
 } from "./registry";
 import { applyStorageState, captureStorageState, type StorageState, type StorageStateLoaded } from "./storage-state";
-import { redactTabInventoryUrl } from "./extension-policy";
 import type {
 	BrowserRunError,
 	ReadyInfo,
@@ -187,48 +186,6 @@ export interface ReleaseTabOptions {
 	kill?: boolean;
 }
 
-export interface OwnerTabReleaseOptions extends ReleaseTabOptions {
-	/** Chrome tab IDs explicitly approved from this session's relay inventory. */
-	approvedTabIds?: readonly number[];
-}
-
-export interface ExtensionTabInventoryEntry {
-	name: string;
-	tabId: number;
-	windowId?: number;
-	url: string;
-	title: string;
-	ownership: "owned" | "attached";
-}
-
-/**
- * List live extension tabs in the relay registry this caller may see: its own as "owned", ownerless as
- * "attached". A tab another session owns is left out before its name, title or URL is read.
- */
-export function getExtensionTabInventory(ownerId?: string): ExtensionTabInventoryEntry[] {
-	const inventory: ExtensionTabInventoryEntry[] = [];
-	for (const tab of tabs.values()) {
-		if (tab.state !== "alive" || tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay)
-			continue;
-		if (tab.ownerSessionId !== undefined && tab.ownerSessionId !== ownerId) continue;
-		const tracked = tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId);
-		if (!tracked) continue;
-		inventory.push({
-			name: tab.name,
-			tabId: tracked.tabId,
-			windowId: tracked.windowId,
-			url: redactTabInventoryUrl(tracked.url),
-			title: tracked.title,
-			ownership: tab.ownerSessionId === undefined ? "attached" : "owned",
-		});
-	}
-	return inventory;
-}
-
-function approvedExtensionTabId(tab: TabSession): number | undefined {
-	if (tab.backend !== "worker" || tab.kindTag !== "extension" || !tab.browser.relay) return undefined;
-	return tab.browser.relay.getTrackedTabs().find(item => item.targetId === tab.targetId)?.tabId;
-}
 
 const tabs = new Map<string, TabSession>();
 // Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
@@ -529,8 +486,6 @@ async function openWorkerTab(
 	startedAt: number,
 ): Promise<AcquireTabResult> {
 	let heldContext = contextHeld;
-	let createdExtensionPage: Page | undefined;
-	let published = false;
 	try {
 		let initPayload: WorkerInitPayload;
 		let worker: WorkerHandle;
@@ -553,11 +508,7 @@ async function openWorkerTab(
 					opts.storageState,
 				);
 			}
-			initPayload = await buildInitPayload(browser, opts, context?.id, page => {
-				createdExtensionPage = page;
-				// Keep the connection alive until this owned page is published or removed.
-				holdBrowser(browser);
-			});
+			initPayload = await buildInitPayload(browser, opts, context?.id);
 			worker = await spawnTabWorker();
 		} catch (error) {
 			// Failing before the worker took its own hold must release the temporary one, or it stays held forever.
@@ -646,21 +597,11 @@ async function openWorkerTab(
 		};
 		worker.onMessage(msg => handleTabMessage(tab, msg));
 		tabs.set(name, tab);
-		published = true;
 		return { tab, created: true, ...(stateLoaded ? { stateLoaded } : {}) };
 	} catch (error) {
 		// The tab never opened, so its hold on the context goes; the context closes if nothing else is in it.
 		if (heldContext && contextName !== undefined) await releaseNamedContext(browser, contextName);
 		throw error;
-	} finally {
-		if (createdExtensionPage) {
-			if (!published)
-				await bestEffort(
-					createdExtensionPage.close(),
-					"remove only the extension page created by this failed open",
-				);
-			await releaseBrowser(browser, { kill: false });
-		}
 	}
 }
 
@@ -967,7 +908,7 @@ async function tearDownTab(name: string, tab: TabSession, opts: ReleaseTabOption
 		}
 	}
 	await terminateWorker(tab.worker, "release-tab");
-	if ((forced && tab.kindTag === "headless") || tab.kindTag === "extension") await closeOrphanTarget(tab);
+	if (forced && tab.kindTag === "headless") await closeOrphanTarget(tab);
 	// Before the browser hold goes: the last hold on a browser closes it, and the context with it.
 	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
@@ -988,38 +929,31 @@ export async function dropHeadlessTabs(): Promise<void> {
 	for (const name of names) await releaseTab(name);
 }
 
-/** Release a named tab only when this session owns it or approves its exact controlled Chrome tab ID. */
+/** Release a named tab only when this session owns it. */
 export async function releaseTabForOwner(
 	name: string,
 	ownerId: string | undefined,
-	opts: OwnerTabReleaseOptions = {},
+	opts: ReleaseTabOptions = {},
 ): Promise<boolean> {
 	const tab = tabs.get(name);
 	if (!tab) return false;
 	if (ownerId && tab.ownerSessionId === ownerId) return releaseTab(name, opts);
-	const tabId = approvedExtensionTabId(tab);
-	if (!tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId)) return releaseTab(name, opts);
 	throw new ToolError(
-		`Cannot close tab ${JSON.stringify(name)} because this session does not own it. Include its exact Chrome tab ID in approved_tab_ids only for an ownerless relay-controlled tab.`,
+		`Cannot close tab ${JSON.stringify(name)} because this session does not own it.`,
 	);
 }
 
 /**
  * Release tabs created by a session when `AgentSession.dispose()` runs. Ownership is stamped only
- * at creation and never changes on reuse. Explicit approved IDs can add only ownerless tabs in this relay's
- * controlled registry; another lane's tabs and unrelated browser tabs are never adopted.
+ * at creation and never changes on reuse. Another lane's tabs and unrelated browser tabs are never adopted.
  */
 export async function releaseTabsForOwner(
 	ownerId: string | undefined,
-	opts: OwnerTabReleaseOptions = {},
+	opts: ReleaseTabOptions = {},
 ): Promise<number> {
 	if (!ownerId) return 0;
 	const names = Array.from(tabs.values())
-		.filter(tab => {
-			if (ownerId !== undefined && tab.ownerSessionId === ownerId) return true;
-			const tabId = approvedExtensionTabId(tab);
-			return !tab.ownerSessionId && tabId !== undefined && opts.approvedTabIds?.includes(tabId) === true;
-		})
+		.filter(tab => tab.ownerSessionId === ownerId)
 		.map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
@@ -1051,7 +985,6 @@ async function buildInitPayload(
 	browser: PuppeteerBrowserHandle,
 	opts: AcquireTabOptions,
 	browserContextId: string | undefined,
-	onExtensionPageCreated: (page: Page) => void,
 ): Promise<WorkerInitPayload> {
 	const browserWSEndpoint = browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
@@ -1069,12 +1002,7 @@ async function buildInitPayload(
 			...(browser.kind.headless ? {} : { visible: true }),
 		};
 	}
-	// The extension backend adopts only tabs it creates itself, so open one now and hand its id to the worker.
-	const page =
-		browser.kind.kind === "extension"
-			? await browser.browser.newPage()
-			: await pickElectronTarget(browser.browser, opts.target);
-	if (browser.kind.kind === "extension") onExtensionPageCreated(page);
+	const page = await pickElectronTarget(browser.browser, opts.target);
 	const targetId = await targetIdForPage(page);
 	return {
 		mode: "attach",
@@ -1303,7 +1231,7 @@ async function killTab(name: string, tab: TabSession, reason: string): Promise<v
 		return;
 	}
 	await terminateWorker(tab.worker, "force-kill");
-	if (tab.kindTag === "headless" || tab.kindTag === "extension") await closeOrphanTarget(tab);
+	if (tab.kindTag === "headless") await closeOrphanTarget(tab);
 	if (tab.contextName !== undefined) await releaseNamedContext(tab.browser, tab.contextName);
 	await releaseBrowser(tab.browser, { kill: false });
 	tabs.delete(name);

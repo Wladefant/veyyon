@@ -48,7 +48,6 @@ import {
 	acquireTab,
 	captureTabState,
 	dropHeadlessTabs,
-	getExtensionTabInventory,
 	getTab,
 	isolatedContextName,
 	releaseTab,
@@ -94,24 +93,18 @@ const CMUX_REFUSAL =
 
 const appSchema = lazy(() =>
 	type({
+		"+": "reject",
 		"path?": type("string").describe("binary path to spawn"),
 		"cdp_url?": type("string").describe("existing cdp endpoint"),
 		"args?": type("string[]").describe("extra cli args"),
 		"target?": type("string").describe("substring to pick a window"),
-		"extension?": type("boolean").describe(
-			"drive the operator's own signed-in Chrome through the Playwright Extension (no remote-debugging port)",
-		),
-		"instance?": type("string").describe(
-			"with extension: which stored Chrome profile token to use (alias of instance_id)",
-		),
-		"instance_id?": type("string").describe("with extension: which stored Chrome profile token to use"),
-		"profile?": type("string").describe("with extension: Chrome --profile-directory name"),
-	}),
+	}).narrow((app, ctx) => Boolean(app.path || app.cdp_url) || ctx.mustBe("used with path or cdp_url")),
 );
 
 const browserSchema = lazy(() =>
 	type({
-		action: type("'open' | 'close' | 'inventory' | 'run' | 'save_state'").describe("operation"),
+		"+": "reject",
+		action: type("'open' | 'close' | 'run' | 'save_state'").describe("operation"),
 		"name?": type("string").describe("tab id (default 'main')"),
 		"url?": type("string").describe("url to open"),
 		"context?": type("string").describe("isolated context: tabs naming the same one share cookies and storage"),
@@ -135,9 +128,6 @@ const browserSchema = lazy(() =>
 		"code?": type("string").describe("js body to run in tab"),
 		"timeout?": type("number").describe(describeTimeoutParam("browser")),
 		"all?": type("boolean").describe("close every tab owned by this session"),
-		"approved_tab_ids?": type("number[]").describe(
-			"exact Chrome tab IDs from inventory that authorize closing only ownerless relay-controlled tabs",
-		),
 		"kill?": type("boolean").describe("also kill spawned-app browsers"),
 	}),
 );
@@ -177,19 +167,8 @@ function resolveBrowserKind(
 	current: BrowserKind | undefined,
 ): BrowserKind {
 	const app = params.app;
-	if (app?.extension) {
-		if (app.cdp_url || app.path) {
-			throw new ToolError("app.extension cannot be combined with app.cdp_url or app.path.");
-		}
-		const instanceId = app.instance ?? app.instance_id;
-		return {
-			kind: "extension",
-			...(instanceId ? { instanceId } : {}),
-			...(app.profile ? { profile: app.profile } : {}),
-		};
-	}
-	if (app?.instance || app?.instance_id || app?.profile) {
-		throw new ToolError("app.instance, app.instance_id, and app.profile require app.extension: true.");
+	if (app !== undefined && !app.path && !app.cdp_url) {
+		throw new ToolError("app requires path or cdp_url.");
 	}
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: trimTrailingSlashes(app.cdp_url) };
@@ -244,9 +223,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		if (typeof params.url === "string" && params.url.length > 0) {
 			lines.push(`URL: ${truncateForPrompt(params.url)}`);
 		}
-		if (Array.isArray(params.approved_tab_ids) && params.approved_tab_ids.length > 0) {
-			lines.push(`Approved Tab IDs: ${params.approved_tab_ids.join(", ")}`);
-		}
 		if (typeof params.code === "string" && params.code.length > 0) {
 			lines.push(`Code:\n${truncateForPrompt(params.code)}`);
 		}
@@ -271,10 +247,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 		{
 			caption: "Open a tab",
 			call: { action: "open", name: "docs", url: "https://example.com" },
-		},
-		{
-			caption: "List relay-controlled extension tabs and lane ownership",
-			call: { action: "inventory" },
 		},
 		{
 			caption: "Read structured page data in the opened tab",
@@ -360,17 +332,8 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 			const ownerId = this.session.getSessionId?.() ?? undefined;
 			const details: BrowserToolDetails = {
 				action: params.action,
-				name: params.action === "inventory" ? undefined : name,
+				name: name,
 			};
-			if (params.approved_tab_ids !== undefined) {
-				if (params.action !== "close") throw new ToolError("approved_tab_ids applies only to close.");
-				if (
-					params.approved_tab_ids.some(id => !Number.isSafeInteger(id) || id <= 0) ||
-					new Set(params.approved_tab_ids).size !== params.approved_tab_ids.length
-				) {
-					throw new ToolError("approved_tab_ids must contain unique positive Chrome tab IDs.");
-				}
-			}
 			// Ignored silently, either would read as done: a context on a run, or a state file on a close.
 			if (typeof params.context === "string" && params.action !== "open") {
 				throw new ToolError(`context applies to open, which puts a tab in it; ${params.action} takes none.`);
@@ -393,9 +356,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema.value, Browse
 					break;
 				case "close":
 					result = await close(name, params, details, ownerId, signal);
-					break;
-				case "inventory":
-					result = inventory(ownerId, details);
 					break;
 				case "run":
 					result = await this.#run(name, params, details, timeoutMs, signal);
@@ -875,7 +835,7 @@ async function close(
 	ownerId: string | undefined,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<BrowserToolDetails>> {
-	const options = { kill: !!params.kill, approvedTabIds: params.approved_tab_ids };
+	const options = { kill: !!params.kill };
 	if (params.all) {
 		const count = await untilAborted(signal, () => releaseTabsForOwner(ownerId, options));
 		details.result = `Closed ${count} tab(s)`;
@@ -886,26 +846,6 @@ async function close(
 	return toolResult(details).text(details.result).done();
 }
 
-function inventory(
-	ownerId: string | undefined,
-	details: BrowserToolDetails,
-): AgentToolResult<BrowserToolDetails> {
-	const tabs = getExtensionTabInventory(ownerId);
-	if (tabs.length === 0) {
-		details.result = "No relay-managed extension tabs are open.";
-		return toolResult(details).text(details.result).done();
-	}
-	const rows = tabs.map(tab => ({
-		tab_id: tab.tabId,
-		window_id: tab.windowId,
-		name: truncateForPrompt(tab.name),
-		url: truncateForPrompt(tab.url),
-		title: truncateForPrompt(tab.title),
-		ownership: tab.ownership,
-	}));
-	details.result = `Listed ${rows.length} relay-managed extension tab(s)`;
-	return toolResult(details).text(JSON.stringify(rows, null, 2)).done();
-}
 
 /** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */
 function saveBrowserOutputArtifact(session: ToolSession, fullText: string): Promise<string | undefined> {
@@ -937,8 +877,6 @@ function describeBrowser(handle: BrowserHandle): string {
 			return `spawned ${handle.kind.path} (pid ${handle.pid ?? "?"})`;
 		case "connected":
 			return `connected ${handle.cdpUrl ?? handle.kind.cdpUrl}`;
-		case "extension":
-			return `extension (operator's Chrome, ${handle.kind.instanceId ?? handle.kind.profile ?? "default profile"})`;
 	}
 }
 
@@ -950,8 +888,6 @@ function describeKind(kind: BrowserKind): string {
 			return `spawned:${kind.path}`;
 		case "connected":
 			return `connected:${kind.cdpUrl}`;
-		case "extension":
-			return `extension:${kind.instanceId ?? kind.profile ?? "default"}`;
 		case "cmux":
 			return `cmux:${kind.surface ?? "split"}`;
 	}
@@ -962,9 +898,6 @@ function sameBrowserKind(a: BrowserKind, b: BrowserKind): boolean {
 	if (a.kind === "headless" && b.kind === "headless") return a.headless === b.headless && a.profile === b.profile;
 	if (a.kind === "spawned" && b.kind === "spawned") return a.path === b.path;
 	if (a.kind === "connected" && b.kind === "connected") return a.cdpUrl === b.cdpUrl;
-	if (a.kind === "extension" && b.kind === "extension") {
-		return (a.instanceId ?? a.profile) === (b.instanceId ?? b.profile);
-	}
 	if (a.kind === "cmux" && b.kind === "cmux") return a.socketPath === b.socketPath;
 	return false;
 }
