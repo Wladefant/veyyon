@@ -145,6 +145,57 @@ describe("InProcessBackend — trial deadline and artifact paths", () => {
 		}
 	});
 
+
+	it("records a pre-aborted run as cancelled, not timed out", async () => {
+		const tempDir = await TempDir.create("@evals-test-pre-cancelled-trial-");
+		try {
+			const suite = createDeadlineProbeSuite(30);
+			const controller = new AbortController();
+			controller.abort();
+			const backend = new InProcessBackend({
+				clientFactory: () => ({
+					async start() {},
+					async prompt() {},
+					async getSessionStats() {
+						return { tokens: { input: 0, output: 0, total: 0 }, assistantMessages: 0, cost: 0 };
+					},
+					async getLastAssistantText() {
+						return null;
+					},
+					abort() {},
+					async dispose() {},
+				}),
+			});
+			const artifacts = await backend.runTrial(
+				{ suite: suite.id, variant: "default", task: "deadline-task", repeat: 0 },
+				{
+					runId: "pre-cancelled-run",
+					suite,
+					workDir: tempDir.absolute(),
+					runsDir: tempDir.join("runs"),
+					harnesses,
+					options: {
+						variants: [{
+							name: "default",
+							harness: "veyyon",
+							configPath: null,
+							promptVariantPath: null,
+							model: "anthropic/claude-sonnet-4-6",
+							attachments: [],
+						}],
+						trialTimeoutSec: 30,
+					},
+					signal: controller.signal,
+				},
+			);
+			expect(artifacts.extra?.cancelled).toBe(true);
+			expect(artifacts.extra?.timedOut).toBe(false);
+			expect(artifacts.extra?.error).toContain("Trial aborted by context signal");
+		} finally {
+			await tempDir.remove();
+		}
+	});
+
 	it("runs a trial under a tiny timeout multiplier instead of timing out at 0s", async () => {
 		const tempDir = await TempDir.create("@evals-test-timeout-floor-");
 		try {

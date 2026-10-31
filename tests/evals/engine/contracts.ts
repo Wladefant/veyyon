@@ -12,6 +12,7 @@
  */
 
 import type { ContainerProgramContext, StagedProgram } from "./harness/container-program";
+import type { FrozenSkillArm } from "./skills/arms";
 
 /**
  * Identifier for an execution backend (e.g. "pier", "harbor", "in-process").
@@ -434,6 +435,7 @@ export interface Variant {
 	readonly attachments: readonly string[];
 	/** The build the variant runs (`--build`), or absent for the harness's default build. */
 	readonly build?: string | null;
+	readonly skillArm?: FrozenSkillArm;
 }
 
 /**

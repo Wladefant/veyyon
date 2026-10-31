@@ -13,16 +13,23 @@
  * in, so every eval in the package is invoked the same way.
  */
 
+import * as skills from "./engine/skills/lifecycle";
+import type { SkillCandidateArtifact, FrozenSkillSelection, SkillScoreOutcome } from "./engine/skills/lifecycle";
+import type { FrozenSkillArm } from "./engine/skills/arms";
+import type { FinalSkillUseDeclaration } from "./engine/skills/final-use";
 import { spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { errorMessage, logger } from "@veyyon/utils";
-import type { EvalSuite, HarnessAdapter, SuiteContext } from "./engine/contracts";
+import type { EvalSuite, HarnessAdapter, SuiteContext, TaskDescriptor } from "./engine/contracts";
+import { splitTasks } from "./engine/task-splits";
 import { preflightHarnesses } from "./engine/harness/preflight";
 import { findMembers, MEMBER_KINDS } from "./engine/members/discovery";
 import { backends, harnesses, harnessFlags, suites } from "./engine/members/loaded";
 import { runsDir as defaultRunsDir, requirePathSegment } from "./engine/package-paths";
+import { bindSkillExperiment } from "./engine/skills/binding";
+import { assessSkillStaleness } from "./engine/skills/report";
 import { planIdentity } from "./engine/plan/plan-identity";
 import type { RunPlan } from "./engine/plan/run-plan";
 import { buildRunPlan, describeRunPlan } from "./engine/plan/run-plan";
@@ -63,6 +70,12 @@ export const VALUE_FLAGS: Record<string, true> = {
 	"--trial-timeout": true,
 	"--agent-timeout": true,
 	"--timeout-multiplier": true,
+	"--skill-experiment": true,
+	"--skill-candidate": true,
+	"--skill-phase": true,
+	"--skill-selection": true,
+	"--skill-score-run": true,
+	"--skill-split-seed": true,
 };
 
 export const BOOLEAN_FLAGS: Record<string, true> = {
@@ -83,6 +96,12 @@ export interface EvalsCliArgs {
 	readonly builds: readonly string[];
 	readonly models: readonly string[];
 	readonly tasks: readonly string[];
+	readonly skillPhase: "pilot" | "feedback" | "score" | "final" | null;
+	readonly skillSelection: string | null;
+	readonly skillScoreRun: string | null;
+	readonly skillExperiment: string | null;
+	readonly skillSplitSeed: string | null;
+	readonly skillCandidate: string | null;
 	/**
 	 * Cap on how many of the selected tasks run, applied after selection. A smoke run
 	 * takes the first few of whatever the suite discovers without a task-list file.
@@ -150,7 +169,13 @@ export function parseEvalsArgs(
 	const harnesses: string[] = [];
 	const configs: string[] = [];
 	const promptVariants: string[] = [];
+	let skillPhase: "pilot" | "feedback" | "score" | "final" | null = null;
+	let skillSelection: string | null = null;
+	let skillScoreRun: string | null = null;
+	let skillSplitSeed: string | null = null;
 	const builds: string[] = [];
+	let skillExperiment: string | null = null;
+	let skillCandidate: string | null = null;
 	const models: string[] = [];
 	const tasks: string[] = [];
 	const suites: string[] = [];
@@ -238,6 +263,27 @@ export function parseEvalsArgs(
 				break;
 			case "--build":
 				builds.push(...items);
+				break;
+			case "--skill-experiment":
+				skillExperiment = value;
+				break;
+			case "--skill-phase":
+				if (value !== "pilot" && value !== "feedback" && value !== "score" && value !== "final") {
+					throw new CliUsageError("--skill-phase must be pilot, feedback, score, or final.");
+				}
+				skillPhase = value;
+				break;
+			case "--skill-selection":
+				skillSelection = value;
+				break;
+			case "--skill-score-run":
+				skillScoreRun = value;
+				break;
+			case "--skill-split-seed":
+				skillSplitSeed = value;
+				break;
+			case "--skill-candidate":
+				skillCandidate = value;
 				break;
 			case "--model":
 				models.push(...items);
@@ -327,8 +373,12 @@ export function parseEvalsArgs(
 		harnesses,
 		configs,
 		promptVariants,
+		skillSplitSeed,
 		builds,
 		models,
+		skillPhase,
+		skillSelection,
+		skillScoreRun,
 		tasks,
 		limit,
 		repeats,
@@ -338,9 +388,11 @@ export function parseEvalsArgs(
 		workDir,
 		datasetDir,
 		runId,
+		skillCandidate,
 		trialTimeoutSec,
 		agentTimeoutSec,
 		timeoutMultiplier,
+		skillExperiment,
 		dryRun,
 		list,
 		resume,
@@ -370,10 +422,11 @@ Usage:
   evals --list                                    list suites, backends and harnesses
   evals --list --suite <id,id>                    list the tasks of each named suite
   evals --suite <id,id> --model <id>              run one or more suites
-  evals bench [<id> [args...]]                    list benches, or run one
-  evals measure [<id> [args...]]                  list measurements, or run one
-  evals tool [<id> [args...]]                     list tools, or run one
-  evals serve [--port 4700] [--host 0.0.0.0]       start the manager server
+  evals --suite <id> --model <id> --skill-experiment <manifest> --skill-phase pilot (--tasks <id>|--limit 1|2)
+  evals skill revise --manifest <path> --tasks <cohort-json> --run <feedback-run.json> --split-seed <seed> --model <id> --output <candidate.json>
+  evals skill select --manifest <path> --tasks <cohort-json> --run <score-run.json> --split-seed <seed> --candidate <candidate.json> --output <selection.json>
+  evals skill inspect --manifest <path> --run <run.json> [--candidate <candidate.json>]
+  evals --suite <id> --model <id> --skill-experiment <manifest> --skill-phase final --skill-split-seed <seed> --skill-candidate <candidate> --skill-selection <selection> --skill-score-run <score-run>
 Axes:
   --suite <name,name>       evaluation suites, one run record each (required to run)
   --harness <a,b>           harness axis (default: veyyon)
@@ -388,7 +441,14 @@ Selection and execution:
                             A value holding a path separator or a .txt/.jsonl/.list/.tasks
                             extension names a file and must exist. Prefix an entry with a
                             suite name (--tasks deep-swe=smoke.txt) to scope it; an
-                            unprefixed entry applies to every suite.
+  --skill-experiment <path> frozen manifest arms for in-process experiments
+  --skill-phase <phase>     pilot runs 1-2 real tasks (diagnostic only); feedback/score/final
+                            default to 100 verified tasks (20 feedback/20 score/60 final);
+                            an explicit cohortSize: 80 manifest uses 16 feedback/16 score/48 final
+  --skill-split-seed <seed> required for feedback, score, and final; absent for pilot
+  --skill-candidate <path>  immutable candidate artifact required for score and final
+  --skill-selection <path>  frozen score selection required for final use
+  --skill-score-run <path>  exact score-phase run whose hash is recorded in the selection
   --limit <n>               run only the first n selected tasks (integer >= 1)
   --repeats <n>             trials per cell (default 1)
   --attempts <n>            attempts per trial when one throws before it produces a result
@@ -676,6 +736,236 @@ async function runProgram(kind: "bench" | "measurement" | "tool", argv: readonly
  * Starts the evals manager server (REST + SSE API, dashboard, run launcher).
  * One entrypoint, one flag grammar: `evals serve [--port 4700] [--host 0.0.0.0]`.
  */
+const SKILL_COMMAND_FLAGS: Record<string, Record<string, true>> = {
+	revise: { "--manifest": true, "--tasks": true, "--run": true, "--split-seed": true, "--model": true, "--output": true },
+	select: {
+		"--manifest": true,
+		"--tasks": true,
+		"--run": true,
+		"--split-seed": true,
+		"--candidate": true,
+		"--output": true,
+	},
+	inspect: { "--manifest": true, "--run": true, "--candidate": true },
+};
+
+export function parseSkillCommandArgs(
+	operation: string,
+	argv: readonly string[],
+): ReadonlyMap<string, string> {
+	const allowed = SKILL_COMMAND_FLAGS[operation];
+	if (!allowed) throw new CliUsageError("Use `evals skill revise`, `evals skill select`, or `evals skill inspect`.");
+	const values = new Map<string, string>();
+	for (let index = 0; index < argv.length; index += 1) {
+		const key = argv[index];
+		const value = argv[index + 1];
+		if (!key?.startsWith("--") || !allowed[key] || !value || value.startsWith("--") || values.has(key)) {
+			throw new CliUsageError("Skill commands require unique supported --name value arguments.");
+		}
+		values.set(key, value);
+		index += 1;
+	}
+	return values;
+}
+
+async function runSkillCommand(argv: readonly string[]): Promise<number> {
+	const operation = argv[0];
+	let values: ReadonlyMap<string, string>;
+	try {
+		values = parseSkillCommandArgs(operation ?? "", argv.slice(1));
+	} catch (error) {
+		process.stderr.write(`${errorMessage(error)}\n`);
+		return 2;
+	}
+	const requireValue = (key: string): string => {
+		const value = values.get(key);
+		if (!value) throw new CliUsageError(`${key} is required.`);
+		return value;
+	};
+	try {
+		const manifestPath = requireValue("--manifest");
+		const readTasks = async (): Promise<TaskDescriptor[]> => {
+			const value: unknown = JSON.parse(await fs.readFile(path.resolve(requireValue("--tasks")), "utf8"));
+			if (!Array.isArray(value) || !value.every(task => isRecord(task) && typeof task.id === "string")) {
+				throw new CliUsageError("--tasks must be a JSON array of task descriptors with string ids.");
+			}
+			return value as TaskDescriptor[];
+		};
+		if (operation === "revise") {
+			const tasks = await readTasks();
+			const splitSeed = requireValue("--split-seed");
+			const run = await skills.readSkillPhaseRun({
+				runPath: requireValue("--run"),
+				phase: "feedback",
+				tasks,
+				splitSeed,
+				manifestPath,
+			});
+			const model = requireValue("--model");
+			if (!run.binding.requestedModels.includes(model)) {
+				throw new CliUsageError("--model must match the model in the verified feedback run.");
+			}
+			const candidate = await skills.reviseSkillCandidate({
+				manifestPath,
+				tasks,
+				splitSeed,
+				outcomes: run.feedbackOutcomes,
+				model,
+				binding: run.binding,
+				outputPath: requireValue("--output"),
+				cwd: process.cwd(),
+			});
+			process.stdout.write(`${JSON.stringify(candidate, null, 2)}\n`);
+			return 0;
+		}
+		if (operation === "select") {
+			const tasks = await readTasks();
+			const splitSeed = requireValue("--split-seed");
+			const candidatePath = requireValue("--candidate");
+			const candidate = await skills.readSkillCandidateArtifact(manifestPath, candidatePath, splitSeed);
+			const run = await skills.readSkillPhaseRun({
+				runPath: requireValue("--run"),
+				phase: "score",
+				tasks,
+				splitSeed,
+				manifestPath,
+				candidate,
+			});
+			const selection = await skills.createSkillSelection({
+				tasks,
+				splitSeed,
+				outcomes: run.scoreOutcomes,
+				candidate,
+				sourceHash: candidate.sourceHash,
+				binding: run.binding,
+				scoreRunHash: run.runHash,
+				outputPath: requireValue("--output"),
+			});
+			process.stdout.write(`${JSON.stringify(selection, null, 2)}\n`);
+			return 0;
+		}
+		if (operation === "inspect") {
+			return await inspectSkillRun({
+				runPath: requireValue("--run"),
+				manifestPath,
+				candidatePath: values.get("--candidate"),
+			});
+		}
+		throw new CliUsageError("Use `evals skill revise`, `evals skill select`, or `evals skill inspect`.");
+	} catch (error) {
+		process.stderr.write(`${errorMessage(error)}\n`);
+		return 2;
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSkillArmKind(value: unknown): value is FrozenSkillArm["kind"] {
+	return value === "baseline" || value === "full" || value === "ablation" || value === "candidate";
+}
+
+export async function inspectSkillRun(input: { readonly runPath: string; readonly manifestPath: string; readonly candidatePath?: string }): Promise<number> {
+	const parsed: unknown = JSON.parse(await fs.readFile(path.resolve(input.runPath), "utf8"));
+	if (!isRecord(parsed) || !isRecord(parsed.metadata) || !isRecord(parsed.metadata.skillBinding) || !isRecord(parsed.suite)) {
+		throw new CliUsageError("Run file is not a Veyyon skill experiment record.");
+	}
+	const recordBinding = parsed.metadata.skillBinding;
+	if (typeof parsed.suite.name !== "string" || !Array.isArray(parsed.variants) || parsed.variants.length === 0) {
+		throw new CliUsageError("Run file has no suite identity or variants.");
+	}
+	const runVariants = parsed.variants.map(value => {
+		if (!isRecord(value) || typeof value.name !== "string" || typeof value.model !== "string" || typeof value.harness !== "string") {
+			throw new CliUsageError("Run file has an invalid variant.");
+		}
+		if (!isRecord(value.skillArm) || typeof value.skillArm.kind !== "string") {
+			throw new CliUsageError("Run file has a variant without a frozen skill arm.");
+		}
+		const armValue = value.skillArm;
+		const kind = armValue.kind;
+		if (!isSkillArmKind(kind)) throw new CliUsageError("Run file has an unsupported skill arm kind.");
+		const omitted = armValue.omittedComponents;
+		if (!Array.isArray(omitted)) throw new CliUsageError("Run file has invalid omitted skill components.");
+		const omittedComponents = omitted.filter((component): component is string => typeof component === "string");
+		if (omittedComponents.length !== omitted.length) throw new CliUsageError("Run file has invalid omitted skill components.");
+		if (
+			typeof armValue.id !== "string" ||
+			typeof armValue.skillName !== "string" ||
+			typeof armValue.contentHash !== "string" ||
+			typeof armValue.sourceHash !== "string" ||
+			typeof armValue.recipeHash !== "string" ||
+			!(armValue.content === null || typeof armValue.content === "string")
+		) {
+			throw new CliUsageError("Run file has an invalid frozen skill arm.");
+		}
+		const arm = {
+			id: armValue.id,
+			kind,
+			skillName: armValue.skillName,
+			content: armValue.content,
+			contentHash: armValue.contentHash,
+			sourceHash: armValue.sourceHash,
+			recipeHash: armValue.recipeHash,
+			omittedComponents,
+		};
+		return {
+			name: value.name,
+			model: value.model,
+			harness: value.harness,
+			configPath: typeof value.configPath === "string" ? value.configPath : null,
+			promptVariantPath: typeof value.promptVariantPath === "string" ? value.promptVariantPath : null,
+			attachments: Array.isArray(value.attachments) && value.attachments.every(item => typeof item === "string") ? value.attachments : [],
+			...(typeof value.build === "string" || value.build === null ? { build: value.build } : {}),
+			skillArm: arm,
+		};
+	});
+	const manifestArms = await skills.loadSkillArms(input.manifestPath);
+	const full = manifestArms.find(arm => arm.kind === "full");
+	if (!full) throw new CliUsageError("Skill manifest has no full arm.");
+	const runCandidate = runVariants.find(variant => variant.skillArm.kind === "candidate");
+	const candidateArms = input.candidatePath
+		? await skills.loadSkillArms(input.manifestPath, input.candidatePath)
+		: [];
+	const currentCandidateArm = candidateArms.find(arm => arm.kind === "candidate");
+	if (runCandidate && input.candidatePath && !currentCandidateArm) {
+		throw new CliUsageError("The supplied candidate artifact does not contain a candidate arm.");
+	}
+	const candidateArtifactUnverified = runCandidate !== undefined && currentCandidateArm === undefined;
+	const currentVariants = runVariants.map(variant => {
+		const arm =
+			variant.skillArm.kind === "candidate"
+				? currentCandidateArm ?? { ...variant.skillArm, sourceHash: full.sourceHash }
+				: manifestArms.find(current => current.kind === variant.skillArm.kind && current.id === variant.skillArm.id);
+		if (!arm) throw new CliUsageError(`Current manifest has no ${variant.skillArm.kind} arm.`);
+		return { ...variant, skillArm: arm };
+	});
+	const suite = suites.require(parsed.suite.name);
+	const requestedModel = runVariants[0]?.model;
+	if (!requestedModel) throw new CliUsageError("Run file has no requested model.");
+	const args = parseEvalsArgs(["--suite", suite.id, "--model", requestedModel, "--dry-run"]);
+	const context = suiteContext(args, suite);
+	const provenance = await suite.provenance(context);
+	const manifest: unknown = JSON.parse(await fs.readFile(path.resolve(input.manifestPath), "utf8"));
+	const hasCriteria = isRecord(manifest) && isRecord(manifest.criteria);
+	const criteria = hasCriteria ? await skills.readSkillExperimentCriteria(input.manifestPath) : undefined;
+	const currentBinding = await bindSkillExperiment(
+		currentVariants,
+		provenance,
+		criteria ? { minimumImprovement: criteria.minimumImprovement } : undefined,
+		await skills.readSkillCohortSize(input.manifestPath),
+	);
+	const report = assessSkillStaleness(recordBinding, { ...currentBinding });
+	const status = candidateArtifactUnverified && report.status === "current" ? "unverified" : report.status;
+	const unknown = candidateArtifactUnverified ? [...report.unknown, "candidate artifact not supplied"] : report.unknown;
+	process.stdout.write(
+		`skill staleness: ${status}\n` +
+			`changed: ${report.changed.length === 0 ? "none" : report.changed.join(", ")}\n` +
+			`unknown: ${unknown.length === 0 ? "none" : unknown.join(", ")}\n`,
+	);
+	return status === "stale" ? 1 : status === "unverified" ? 2 : 0;
+}
+
 async function runServe(argv: readonly string[]): Promise<number> {
 	const { ManagerServer, parseServerArgs } = await import("./api/main");
 	let args: { port: number; host: string; jobsDir: string; token?: string };
@@ -703,6 +993,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 	if (argv[0] === "bench") return await runProgram("bench", argv.slice(1));
 	if (argv[0] === "measure") return await runProgram("measurement", argv.slice(1));
 	if (argv[0] === "tool") return await runProgram("tool", argv.slice(1));
+	if (argv[0] === "skill") return await runSkillCommand(argv.slice(1));
 	if (argv[0] === "serve") return await runServe(argv.slice(1));
 
 	// Rendered from the loaded roster, so the harness section states what this process
@@ -836,13 +1127,126 @@ async function runOneSuite(
 		args.configs.length > 0 ? args.configs.map(file => ({ path: file })) : undefined;
 	const promptVariants: readonly PromptVariantSpec[] | undefined =
 		args.promptVariants.length > 0 ? args.promptVariants.map(file => ({ path: file })) : undefined;
-	const builds: readonly string[] | undefined = args.builds.length > 0 ? args.builds : undefined;
+	const allSkillArms =
+		args.skillExperiment === null
+			? undefined
+			: await skills.loadSkillArms(
+					args.skillExperiment,
+					args.skillCandidate ?? undefined,
+					args.skillSplitSeed ?? undefined,
+				);
+	let skillArms = allSkillArms;
+	let selectedTaskIds: readonly string[] | undefined;
+	let skillCriteria: { readonly minimumImprovement: number; readonly hash: string } | undefined;
+	let finalSelection: FrozenSkillSelection | null = null;
+	let finalScoreRunHash: string | null = null;
+	let skillTaskDescriptors: readonly TaskDescriptor[] | undefined;
+	let fullSkillArm: FrozenSkillArm | undefined;
+	let finalCandidate: SkillCandidateArtifact | null = null;
+	let finalScoreOutcomes: readonly SkillScoreOutcome[] | null = null;
+	let skillCohortSize: 80 | 100 = 100;
+	if (args.skillPhase !== null && allSkillArms === undefined) {
+		throw new CliUsageError("--skill-phase requires --skill-experiment.");
+	}
+	if (
+		args.skillPhase !== null &&
+		(args.models.length !== 1 ||
+			(args.harnesses.length > 0 && (args.harnesses.length !== 1 || args.harnesses[0] !== "veyyon")) ||
+			args.configs.length > 0 ||
+			args.promptVariants.length > 0 ||
+			args.builds.length > 0)
+	) {
+		throw new CliUsageError("Skill phases require one model, the veyyon harness, and no build, config, or prompt axes.");
+	}
+	if (allSkillArms !== undefined) {
+		if (!args.skillPhase) throw new CliUsageError("--skill-experiment requires --skill-phase.");
+		fullSkillArm = allSkillArms.find(arm => arm.kind === "full");
+		if (!fullSkillArm) throw new CliUsageError("Skill manifest has no full arm.");
+		skillCohortSize = await skills.readSkillCohortSize(args.skillExperiment!);
+		const fullArm = fullSkillArm;
+		if (args.skillPhase === "pilot") {
+			if (args.skillSplitSeed || args.skillCandidate || args.skillSelection || args.skillScoreRun) {
+				throw new CliUsageError("Pilot phase does not use a split seed, candidate, or score-selection artifact.");
+			}
+			if (args.limit === null && args.tasks.length === 0) {
+				throw new CliUsageError("Pilot phase needs explicit --tasks or --limit 1|2.");
+			}
+			if (args.limit !== null && args.limit > 2) throw new CliUsageError("Pilot phase is limited to one or two real tasks.");
+			if (args.tasks.length > 0) {
+				selectedTaskIds = await resolveTasks(tasksForSuite(args.tasks, suite.id, running));
+				if (selectedTaskIds.length > 2) throw new CliUsageError("Pilot phase is limited to one or two real tasks.");
+			}
+			skillArms = allSkillArms.filter(arm => arm.kind !== "candidate");
+			process.stdout.write("Skill pilot: diagnostic only; results are ineligible for candidate selection or cutover.\n");
+		} else {
+			skillCriteria = await skills.readSkillExperimentCriteria(args.skillExperiment!);
+			if (!args.skillSplitSeed) throw new CliUsageError(`--skill-phase ${args.skillPhase} requires --skill-split-seed.`);
+			if (args.limit !== null || args.tasks.length > 0) throw new CliUsageError("Outcome phases use the exact seeded split; --limit and --tasks are not allowed.");
+			if (args.skillPhase !== "final" && args.skillScoreRun !== null) {
+				throw new CliUsageError("--skill-score-run is only valid with --skill-phase final.");
+			}
+			if (args.repeats !== 1) throw new CliUsageError("Feedback, score, and final skill phases require --repeats 1.");
+			const candidateArm = allSkillArms.find(arm => arm.kind === "candidate");
+			if (args.skillPhase === "feedback" && (args.skillCandidate !== null || args.skillSelection !== null)) {
+				throw new CliUsageError("Feedback phase cannot use candidate or score-selection artifacts.");
+			}
+			if (args.skillPhase === "score" && (!args.skillCandidate || args.skillSelection !== null)) {
+				throw new CliUsageError("Score phase requires --skill-candidate and cannot use --skill-selection.");
+			}
+			if (args.skillPhase === "final" && (!args.skillCandidate || !args.skillSelection || !args.skillScoreRun)) {
+				throw new CliUsageError("Final phase requires --skill-candidate, --skill-selection, and --skill-score-run.");
+			}
+			const ids = await suite.discoverTasks(context);
+			const descriptors = await Promise.all(ids.map(id => suite.describeTask(id, context)));
+			skillTaskDescriptors = descriptors;
+			const split = splitTasks(descriptors, args.skillSplitSeed, skillCohortSize);
+			selectedTaskIds = split[args.skillPhase].map(task => task.id);
+			if (args.skillPhase === "feedback") {
+				skillArms = [fullArm];
+			} else if (args.skillPhase === "score") {
+				if (!candidateArm) throw new CliUsageError("Score phase requires a frozen candidate arm.");
+				skillArms = [fullArm, candidateArm];
+			} else {
+				if (!candidateArm || !args.skillCandidate || !args.skillSelection) {
+					throw new CliUsageError("Final phase requires a frozen candidate arm and score selection.");
+				}
+				finalCandidate = await skills.readSkillCandidateArtifact(
+					args.skillExperiment!,
+					args.skillCandidate,
+					args.skillSplitSeed,
+				);
+				const scoreRun = await skills.readSkillPhaseRun({
+					runPath: args.skillScoreRun!,
+					phase: "score",
+					tasks: descriptors,
+					splitSeed: args.skillSplitSeed,
+					manifestPath: args.skillExperiment!,
+					candidate: finalCandidate,
+				});
+				finalScoreRunHash = scoreRun.runHash;
+				finalScoreOutcomes = scoreRun.scoreOutcomes;
+				finalSelection = await skills.readFrozenSkillSelection(
+					args.skillSelection,
+					finalCandidate,
+					fullArm.sourceHash,
+					args.skillSplitSeed,
+					descriptors,
+					scoreRun.scoreOutcomes,
+					split.score.map(task => task.id),
+					scoreRun.binding,
+					scoreRun.runHash,
+				);
+				skillArms = [finalSelection.winner === "candidate" ? candidateArm : fullArm];
+			}
+		}
+	}
 	const selection: VariantMatrixSelection = {
 		harnesses: args.harnesses.length > 0 ? args.harnesses : ["veyyon"],
 		configs,
 		promptVariants,
-		builds,
+		...(args.builds.length === 0 ? {} : { builds: args.builds }),
 		models: args.models,
+		...(skillArms === undefined ? {} : { skillArms }),
 	};
 	const runId = args.runId === null ? undefined : running.length > 1 ? `${args.runId}-${suite.id}` : args.runId;
 
@@ -850,11 +1254,14 @@ async function runOneSuite(
 	try {
 		plan = await buildRunPlan({
 			suite,
-			harnesses,
 			selection,
-			tasks: await resolveTasks(tasksForSuite(args.tasks, suite.id, running)),
+			harnesses,
+			tasks: selectedTaskIds ?? (await resolveTasks(tasksForSuite(args.tasks, suite.id, running))),
 			...(args.limit === null ? {} : { limit: args.limit }),
 			repeats: args.repeats,
+			...(args.skillPhase === null ? {} : { skillPhase: args.skillPhase }),
+			...(skillCriteria === undefined ? {} : { skillCriteria: { minimumImprovement: skillCriteria.minimumImprovement } }),
+			...(args.skillPhase === null ? {} : { skillCohortSize }),
 			context,
 			runId,
 		});
@@ -872,6 +1279,38 @@ async function runOneSuite(
 			return 1;
 		}
 		process.stderr.write(`${errorMessage(error)}\n`);
+		return 1;
+	}
+	if (args.skillPhase === "final") {
+		if (!fullSkillArm || !finalCandidate || !finalSelection || !finalScoreRunHash || !finalScoreOutcomes || !skillTaskDescriptors || !skillCriteria || !plan.skillBinding) {
+			throw new CliUsageError("Final skill phase has no complete current binding.");
+		}
+		const expectedBinding = skills.createCandidateSourceBinding(
+			plan.skillBinding,
+			skillTaskDescriptors,
+			fullSkillArm.sourceHash,
+			{
+				minimumImprovement: skillCriteria.minimumImprovement,
+				hash: skillCriteria.hash,
+			},
+			args.skillSplitSeed!,
+			finalCandidate.resolvedModel,
+			skillCohortSize,
+		);
+		finalSelection = await skills.readFrozenSkillSelection(
+			args.skillSelection!,
+			finalCandidate,
+			fullSkillArm.sourceHash,
+			args.skillSplitSeed!,
+			skillTaskDescriptors,
+			finalScoreOutcomes ?? [],
+			splitTasks(skillTaskDescriptors, args.skillSplitSeed!, skillCohortSize).score.map(task => task.id),
+			expectedBinding,
+			finalScoreRunHash ?? "",
+		);
+	}
+	if (args.skillExperiment !== null && suite.backend !== "in-process") {
+		process.stderr.write(`Skill experiments require the in-process backend; ${suite.backend} is unsupported.\n`);
 		return 1;
 	}
 
@@ -969,6 +1408,50 @@ async function runOneSuite(
 		`\nRun ${plan.runId} interrupted by ${signal} (${completed}/${total} trials completed).\n` +
 		`To resume this run:\n  evals ${resume}\n`;
 
+	const executionOptions = {
+		...context.options,
+		...(args.datasetDir === null ? {} : { datasetDir: args.datasetDir }),
+	};
+	let finalSkillUse: FinalSkillUseDeclaration | undefined;
+	if (args.skillPhase === "final") {
+		if (!finalCandidate || !finalSelection || !plan.skillBinding) {
+			throw new CliUsageError("Final skill phase has no frozen candidate selection.");
+		}
+		const variant = plan.variants[0];
+		if (!variant) throw new CliUsageError("Final skill phase has no candidate variant.");
+		const binding = finalCandidate.binding;
+		finalSkillUse = {
+			identity: {
+				sourceHash: finalCandidate.sourceHash,
+				datasetFingerprint: binding.datasetFingerprint,
+				splitFingerprint: binding.splitFingerprint,
+				model: `${finalCandidate.resolvedModel.provider}/${finalCandidate.resolvedModel.id}@${finalCandidate.resolvedModel.version ?? "unknown"}`,
+				harness: variant.harness,
+				grader: binding.graderHash,
+			},
+			candidate: {
+				candidateHash: finalCandidate.candidateHash,
+				sourceHash: finalCandidate.sourceHash,
+				resolvedModel: finalCandidate.resolvedModel,
+				binding: { ...binding },
+			},
+			selection: finalSelection,
+			executionFingerprint: skills.finalExecutionFingerprint({
+				planIdentity: planIdentity(plan),
+				runId: plan.runId,
+				runsDir,
+				tasks: plan.tasks.map(task => task.id),
+				repeats: plan.repeats,
+				cells: plan.cells,
+				options: executionOptions,
+				jobs: args.jobs,
+			}),
+			resume: args.resume,
+		};
+		if (finalSelection.score.reason === "unknown-model-revision") {
+			process.stderr.write("Final run uses the incumbent with an unknown model revision; this does not justify candidate cutover.\n");
+		}
+	}
 	let record: EvalRunRecord;
 	let interrupted: string | null;
 	try {
@@ -990,10 +1473,8 @@ async function runOneSuite(
 					// checkout's own build, `--trial-timeout`, `--agent-timeout`,
 					// `--timeout-multiplier` and `--attempts` changed nothing, and a run comparing two
 					// builds measured one build twice. Only the dry-run path above was correct.
-					options: {
-						...context.options,
-						...(args.datasetDir === null ? {} : { datasetDir: args.datasetDir }),
-					},
+					options: executionOptions,
+					...(finalSkillUse === undefined ? {} : { finalSkillUse }),
 					onSkip: (skipped, totalCount) => {
 						process.stdout.write(
 							`resumed run ${plan.runId}: skipping ${skipped} already-settled trial(s) out of ${totalCount}\n`,

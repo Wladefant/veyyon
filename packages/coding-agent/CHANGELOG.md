@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).
 - Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Task successors now reject changed agent behavior before claiming a checkpoint. Version 2 checkpoints replace version 1; older checkpoints cannot resume.
