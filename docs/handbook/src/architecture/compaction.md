@@ -605,8 +605,34 @@ These values are consumed at runtime by `AgentSession` and compaction/branch sum
 
 ### Stale-result recovery
 
-The per-turn stale-read and useless-result pass uses the same staged archive-before-commit path as threshold pruning. Its recovery envelope has operation `prune-stale`; each retained marker names the archive and original entry. A later read of a path does not make the earlier bytes disposable evidence. Archive or transcript failures keep the original result available, and reported savings include the recovery-reference cost.
+The per-turn stale-read and useless-result pass stages changes before saving originals, as threshold pruning does.
+Its `prune-stale` envelope retains each complete original entry.
+Each retained marker names its archive and entry, so a newer read does not discard the earlier bytes.
+Archive failure leaves live entries and the transcript unchanged.
+Persistence failure restores only records that still match this pass's published snapshot.
+The pass never overwrites concurrent edits while handling that failure.
+
+Useless-result pruning prices the complete replacement, including its actual recovery reference.
+It keeps a result when that replacement would save no tokens.
+It reports the number of entries actually changed and their net estimated savings, clamped at zero.
+The saved archive may also contain selected originals that remain unchanged after this cost check.
 
 ### Image recovery
 
-`dropImages` (including shake image mode) stages image removal from messages, tool-result details, file mentions and custom messages. It saves the exact original entries in a `drop-images` recovery envelope before publishing any removal. The retained text names the archive and entry; file mentions carry that reference in each affected file's text. Archive errors leave originals untouched. Failed transcript persistence restores both message and custom-message containers before returning the error. Repeating the pass after successful removal does not archive the placeholders again.
+`dropImages`, including shake image mode, stages supported message, tool-result detail, file-mention and custom-message images.
+It saves complete original entries in a `drop-images` recovery envelope before publishing removals.
+Retained text names the archive and entry.
+Each affected file mention carries its own reference.
+
+Archive failure leaves live entries and persisted bytes unchanged.
+Persistence failure restores unchanged records, but never overwrites concurrent edits.
+Repeating a successful pass does not archive placeholders again.
+The pass does not load cold assistant content.
+
+#### Provider-native image limitation
+
+The pass does not rewrite user or developer records with preserved native OpenAI Responses history.
+If a selected image record has this payload, the whole image pass fails before saving an archive or changing history.
+Canonical content, native payloads and persisted bytes remain unchanged.
+Provider serializers can replay native items instead of canonical content, so deleting only the canonical image is unsafe.
+This pass does not edit native images.
