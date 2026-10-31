@@ -219,3 +219,45 @@ test("a recovery that cannot inject leaves the answer pending for the sender's r
 	expect(await ready.accept(envelope("q-1", "evt-1"), "auto")).toBe("queued");
 	expect(injected).toEqual([envelope("q-1", "evt-1")]);
 });
+
+
+test("repeated recovery and reconnect never requeue a pending answer already held by the runtime", async () => {
+	const { manager, dir } = newSession();
+	const answer = envelope("q-reconnect", "evt-original");
+	const beforeCrash = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("crash before the queued user message was committed");
+		},
+		() => false,
+	);
+	await expect(beforeCrash.accept(answer, "followUp")).rejects.toThrow("crash before");
+	const file = manager.getSessionFile();
+	expect(file).toBeString();
+	const reopened = await SessionManager.open(file as string, dir.path());
+	const queue: string[] = [];
+	const first = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await first.recover();
+	expect(queue).toEqual([answer]);
+
+	// The pending journal has not yet been consumed. It is not permission to enqueue the same answer again.
+	await first.recover();
+	expect(queue).toEqual([answer]);
+	const reconnected = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await reconnected.recover();
+	expect(queue).toEqual([answer]);
+
+	// A deliberately cleared queue does not count as delivery; recover it again from the original journal.
+	queue.length = 0;
+	await reconnected.recover();
+	expect(queue).toEqual([answer]);
+	// Once the answer's own user entry is persisted, no later reconnect or sender replay may inject it.
+	reopened.appendMessage({ role: "user", content: answer, timestamp: Date.now() });
+	await reopened.flush();
+	queue.length = 0;
+	const consumed = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	await consumed.recover();
+	expect(queue).toEqual([]);
+	expect(await consumed.accept(envelope("q-reconnect", "evt-replay"), "followUp")).toBe("duplicate");
+	expect(queue).toEqual([]);
+});
