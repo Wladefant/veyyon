@@ -1326,6 +1326,69 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("keeps the full T3 text in one message when message_start arrives after its first delta", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		const firstMessage = makeAssistantMessage("T3_LEADING_CHAR_TRACE_OK");
+		const secondMessage = makeAssistantMessage("second answer");
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({
+					type: "message_update",
+					message: firstMessage,
+					assistantMessageEvent: { type: "text_delta", delta: "T" },
+				} as AgentSessionEvent);
+				listener({ type: "message_start", message: firstMessage } as AgentSessionEvent);
+				listener({
+					type: "message_update",
+					message: firstMessage,
+					assistantMessageEvent: { type: "text_delta", delta: "3_LEADING_CHAR_TRACE_OK" },
+				} as AgentSessionEvent);
+				listener({ type: "message_end", message: firstMessage } as AgentSessionEvent);
+				listener({
+					type: "message_update",
+					message: secondMessage,
+					assistantMessageEvent: { type: "text_delta", delta: "second answer" },
+				} as AgentSessionEvent);
+				listener({ type: "message_end", message: secondMessage } as AgentSessionEvent);
+			}
+			session.sessionManager.appendMessage(firstMessage);
+			session.sessionManager.appendMessage(secondMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [firstMessage, secondMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say T3" }],
+		});
+
+		const chunks = harness.updates.filter(
+			update => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		const firstId = getChunkMessageId(chunks[0]!);
+		expect(chunks.filter(chunk => getChunkMessageId(chunk) === firstId).map(chunk => chunk.update.content)).toEqual([
+			{ type: "text", text: "T" },
+			{ type: "text", text: "3_LEADING_CHAR_TRACE_OK" },
+		]);
+		expect(chunks.map(chunk => getChunkMessageId(chunk))).toHaveLength(3);
+		expect(chunks.map(chunk => getChunkMessageId(chunk))).toEqual([firstId, firstId, getChunkMessageId(chunks[2]!)]);
+		expect(new Set(chunks.map(chunk => getChunkMessageId(chunk))).size).toBe(2);
+		expect(getChunkMessageId(chunks[2]!)).not.toBe(firstId);
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("delivers the final visible answer when agent_end overtakes the assistant message_end (#4902)", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
