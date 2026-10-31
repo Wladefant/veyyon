@@ -422,6 +422,64 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses cyclic stored ancestry for implicit and explicit leaf selection", async () => {
+		const dir = TempDir.createSync("@veyyon-history-cyclic-parents-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = { type: "session", id: "s-cycle" };
+			const healthy = [
+				{ type: "message", id: "root", parentId: null, message: "needle stable ancestor" },
+				{ type: "message", id: "healthy", parentId: "root", message: "needle healthy branch" },
+			];
+			const write = async (tail: Array<{ type: string; id: string; parentId: string; message: string }>) => {
+				await fs.writeFile(file, [header, ...healthy, ...tail].map(record => JSON.stringify(record)).join("\n") + "\n");
+			};
+			await write([]);
+			expect((await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 })).status)
+				.toBe("ok");
+			expect((await searchStoredHistoryEntries(file, { query: "needle", limit: 5 })).matches
+				.map(match => match.entryId)).toEqual(["healthy", "root"]);
+
+			for (const cycle of [
+				[{ type: "message", id: "self", parentId: "self", message: "needle self-parent" }],
+				[
+					{ type: "message", id: "a", parentId: "b", message: "needle first" },
+					{ type: "message", id: "b", parentId: "a", message: "needle second" },
+				],
+				[
+					{ type: "message", id: "a", parentId: "c", message: "needle first" },
+					{ type: "message", id: "b", parentId: "a", message: "needle second" },
+					{ type: "message", id: "c", parentId: "b", message: "needle third" },
+				],
+			]) {
+				await write(cycle);
+				const corruptLeaf = cycle[cycle.length - 1]!.id;
+				for (const leafId of [undefined, corruptLeaf]) {
+					const read = await readStoredHistoryEntry(file, {
+						entryId: "root", leafId, offset: 0, limit: 256,
+					});
+					expect(read.status).toBe("unavailable");
+					expect(read.fragment).toBeUndefined();
+					const search = await searchStoredHistoryEntries(file, { query: "needle", leafId, limit: 5 });
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				}
+				// An unrelated, explicitly selected valid archived branch remains readable.
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "healthy", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				const healthySearch = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "healthy", limit: 5,
+				});
+				expect(healthySearch.status).toBe("ok");
+				expect(healthySearch.matches.map(match => match.entryId)).toEqual(["healthy", "root"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
