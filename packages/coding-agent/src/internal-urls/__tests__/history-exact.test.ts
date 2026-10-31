@@ -169,6 +169,33 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("returns bounded partial results for more than 500 readable matches without losing the current leaf", async () => {
+		const dir = TempDir.createSync("@veyyon-history-search-many-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records: Array<{ type: string; id: string; parentId?: string | null; message?: string }> = [
+				{ type: "session", id: "s-many" },
+			];
+			for (let i = 0; i < 502; i++) {
+				records.push({
+					type: "message", id: `e${i}`, parentId: i === 0 ? null : `e${i - 1}`,
+					message: `needle record ${i}`,
+				});
+			}
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const result = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(result.status).toBe("partial");
+			expect(result.leafId).toBe("e501");
+			expect(result.sessionId).toBe("s-many");
+			expect(result.matches.map(match => match.entryId))
+				.toEqual(["e501", "e500", "e499", "e498", "e497"]);
+			expect((await readStoredHistoryEntry(file, { entryId: "e501", offset: 0, limit: 100 })).status)
+				.toBe("ok");
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("does not infer an abandoned branch when a later oversized record was skipped", async () => {
 		const dir = TempDir.createSync("@veyyon-history-oversized-tail-");
 		try {
