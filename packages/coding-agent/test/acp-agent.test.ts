@@ -1311,6 +1311,13 @@ describe("ACP agent", () => {
 		expectAcpStructure(zLoadSessionResponse, loaded);
 		expect(harness.sessions.at(-1)?.sessionId).toBe(stored.sessionId);
 		expect(harness.sessions.at(-1)?.sessionManager.getCwd()).toBe(harness.cwdA);
+		await expect(
+			harness.agent.loadSession({
+				sessionId: stored.sessionId,
+				cwd: harness.cwdB,
+				mcpServers: [],
+			}),
+		).rejects.toThrow(`ACP session ${stored.sessionId} is already loaded for ${harness.cwdA}, not ${harness.cwdB}`);
 
 		harness.abortController.abort();
 	});
