@@ -5,6 +5,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
+      runner_label:
+        description: Runner label admitted for this dispatch (empty uses veyyon)
+        type: string
+        default: veyyon
       target_sha:
         description: Exact source commit to exercise (empty uses workflow commit)
         type: string
@@ -47,7 +51,7 @@ jobs:
        !github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        vars.OVH_CI_PR_ADMISSION == 'verified')
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
@@ -242,7 +246,7 @@ jobs:
        !github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        vars.OVH_CI_PR_ADMISSION == 'verified'))
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -425,7 +429,7 @@ jobs:
           retention-days: 7
   typecheck:
     if: github.event_name == 'workflow_dispatch' && inputs.typecheck
-    runs-on: [self-hosted, Linux, X64, veyyon]
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     env:
       NODE_OPTIONS: --max-old-space-size=4096
