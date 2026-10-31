@@ -215,6 +215,65 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+
+	// A successful local broker disable is a state change even before another
+	// snapshot or SSE event arrives. A pre-disable GET must not undo it.
+	for (const disableMode of ["confirmed", "fire-and-forget"] as const) {
+		test(`does not resurrect a locally ${disableMode} disabled credential from a delayed GET`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const before = structuredClone(initial.snapshot);
+			const id = before.credentials[0]!.id;
+			const staleStarted = Promise.withResolvers<void>();
+			const releaseStale = Promise.withResolvers<void>();
+			const releaseReconciliation = Promise.withResolvers<void>();
+			const actualFetch = client.fetchSnapshot.bind(client);
+			let oldReadCaptured = false;
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				// Keep the background long-poll from becoming an unintended
+				// authoritative second snapshot before the stale response is released.
+				if (opts?.waitMs === 30_000) {
+					await untilAborted(opts.signal);
+					throw new Error("background poll aborted");
+				}
+				if (opts?.waitMs === undefined && !oldReadCaptured) {
+					oldReadCaptured = true;
+					staleStarted.resolve();
+					await releaseStale.promise;
+					return { status: 200 as const, snapshot: before, generation: before.generation };
+				}
+				// The write-triggered reconciliation must not mask the missing
+				// local revision increment by finishing before the stale GET.
+				if (opts?.waitMs === undefined) await releaseReconciliation.promise;
+				return actualFetch(opts);
+			});
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before, streamSnapshots: false });
+			const pendingStale = remote.refreshSnapshot();
+			await staleStarted.promise;
+			try {
+				if (disableMode === "confirmed") {
+					expect(await remote.deleteAuthCredentialRemote(id, "synthetic broker disable")).toBe(true);
+				} else {
+					remote.deleteAuthCredential(id, "synthetic immediate disable");
+				}
+				expect(remote.snapshot.credentials).toEqual([]);
+				releaseStale.resolve();
+				await pendingStale;
+				expect(remote.snapshot.credentials).toEqual([]);
+			} finally {
+				releaseStale.resolve();
+				releaseReconciliation.resolve();
+			}
+			if (disableMode === "confirmed") {
+				await remote.refreshSnapshot();
+				// The real broker also confirms the deletion, independently of
+				// the client's in-flight stale GET ordering.
+				expect(remote.snapshot.credentials).toEqual([]);
+			}
+		});
+	}
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
