@@ -187,8 +187,9 @@ function page(
 function selectedBranchIds(parents: ReadonlyMap<string, string | undefined>, leafId: string): Set<string> | undefined {
 	const selected = new Set<string>();
 	let current: string | undefined = leafId;
-	while (current) {
-		if (selected.has(current)) return undefined;
+	while (current !== undefined) {
+		// A missing parent is not a root: it leaves branch ancestry unprovable.
+		if (selected.has(current) || !parents.has(current)) return undefined;
 		selected.add(current);
 		current = parents.get(current);
 	}

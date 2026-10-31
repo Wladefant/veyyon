@@ -480,6 +480,48 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses dangling stored parent links without hiding a healthy archived branch", async () => {
+		const dir = TempDir.createSync("@veyyon-history-dangling-ancestor-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const parentId of ["missing-ancestor", ""]) {
+				const records = [
+					{ type: "session", id: "s-dangling" },
+					{ type: "message", id: "root", parentId: null, message: "needle root" },
+					{ type: "message", id: "archived", parentId: "root", message: "needle archived" },
+					{ type: "message", id: "orphan", parentId, message: "needle ungrounded" },
+				];
+				await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+				for (const leafId of [undefined, "orphan"]) {
+					const exact = await readStoredHistoryEntry(file, {
+						entryId: "orphan", leafId, offset: 0, limit: 256,
+					});
+					expect(exact.status).toBe("unavailable");
+					expect(exact.fragment).toBeUndefined();
+					const ancestor = await readStoredHistoryEntry(file, {
+						entryId: "root", leafId, offset: 0, limit: 256,
+					});
+					expect(ancestor.status).toBe("unavailable");
+						expect(ancestor.fragment).toBeUndefined();
+					const search = await searchStoredHistoryEntries(file, { query: "needle", leafId, limit: 5 });
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				}
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "archived", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				const healthySearch = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "archived", limit: 5,
+				});
+				expect(healthySearch.status).toBe("ok");
+				expect(healthySearch.matches.map(match => match.entryId)).toEqual(["archived", "root"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
