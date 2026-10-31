@@ -4,9 +4,15 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { __internalsForTesting, acquireFileLock, tryWithFileLock, withFileLock, withFileLockSync } from "../src/file-lock";
-import * as sleepHelpers from "../src/sleep";
+import {
+	__internalsForTesting,
+	acquireFileLock,
+	tryWithFileLock,
+	withFileLock,
+	withFileLockSync,
+} from "../src/file-lock";
 import { getProcessStartIdentity } from "../src/process-liveness";
+import * as sleepHelpers from "../src/sleep";
 import { removeWithRetries } from "../src/temp";
 
 const {
@@ -579,7 +585,7 @@ describe("acquireFileLock lease handle (F5)", () => {
 describe("file-lock candidate publication errors", () => {
 	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
 		"retries public async acquisition after %s only when a competing owner exists",
-		async (code) => {
+		async code => {
 			const root = await mkRoot();
 			const target = path.join(root, `async-${code}.json`);
 			const lockPath = getLockPath(target);
@@ -594,14 +600,18 @@ describe("file-lock candidate publication errors", () => {
 				throw error;
 			});
 			const delays: number[] = [];
-			const sleep = spyOn(Bun, "sleep").mockImplementation(async (ms) => {
+			const sleep = spyOn(Bun, "sleep").mockImplementation(async ms => {
 				delays.push(ms);
 			});
 			try {
 				await expect(
-					withFileLock(target, async () => {
-						bodyRuns += 1;
-					}, { retries: 3, retryDelayMs: 7 }),
+					withFileLock(
+						target,
+						async () => {
+							bodyRuns += 1;
+						},
+						{ retries: 3, retryDelayMs: 7 },
+					),
 				).rejects.toThrow(/after 3 attempts/);
 				expect((await readLockInfo(lockPath))?.token).toBe(competingToken);
 				expect(renameAttempts).toBe(1);
@@ -617,7 +627,7 @@ describe("file-lock candidate publication errors", () => {
 
 	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
 		"retries public sync acquisition after %s only when a competing owner exists",
-		async (code) => {
+		async code => {
 			const root = await mkRoot();
 			const target = path.join(root, `sync-${code}.json`);
 			const lockPath = getLockPath(target);
@@ -628,21 +638,22 @@ describe("file-lock candidate publication errors", () => {
 			const rename = spyOn(fsSync, "renameSync").mockImplementation((_source, destination) => {
 				renameAttempts += 1;
 				fsSync.mkdirSync(destination);
-				fsSync.writeFileSync(
-					path.join(destination, "info"),
-					JSON.stringify(ownerInfo({ token: competingToken })),
-				);
+				fsSync.writeFileSync(path.join(destination, "info"), JSON.stringify(ownerInfo({ token: competingToken })));
 				throw error;
 			});
 			const delays: number[] = [];
-			const sleep = spyOn(sleepHelpers, "sleepSync").mockImplementation((ms) => {
+			const sleep = spyOn(sleepHelpers, "sleepSync").mockImplementation(ms => {
 				delays.push(ms);
 			});
 			try {
 				expect(() =>
-					withFileLockSync(target, () => {
-						bodyRuns += 1;
-					}, { retries: 3, retryDelayMs: 7 }),
+					withFileLockSync(
+						target,
+						() => {
+							bodyRuns += 1;
+						},
+						{ retries: 3, retryDelayMs: 7 },
+					),
 				).toThrow(/after 3 attempts/);
 				expect(readLockInfoSync(lockPath)?.token).toBe(competingToken);
 				expect(renameAttempts).toBe(1);
@@ -658,7 +669,7 @@ describe("file-lock candidate publication errors", () => {
 
 	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
 		"preserves public async %s when no competing owner exists",
-		async (code) => {
+		async code => {
 			const root = await mkRoot();
 			const target = path.join(root, `async-no-winner-${code}.json`);
 			const error = Object.assign(new Error("rename denied"), { code });
@@ -668,7 +679,9 @@ describe("file-lock candidate publication errors", () => {
 				throw error;
 			});
 			try {
-				await expect(withFileLock(target, async () => undefined, { retries: 3, retryDelayMs: 0 })).rejects.toBe(error);
+				await expect(withFileLock(target, async () => undefined, { retries: 3, retryDelayMs: 0 })).rejects.toBe(
+					error,
+				);
 				expect(renameAttempts).toBe(1);
 				expect(await fs.readdir(root)).toEqual([]);
 			} finally {
@@ -679,7 +692,7 @@ describe("file-lock candidate publication errors", () => {
 
 	test.each(["EPERM", "EACCES", "EBUSY"] as const)(
 		"preserves public sync %s when no competing owner exists",
-		async (code) => {
+		async code => {
 			const root = await mkRoot();
 			const target = path.join(root, `sync-no-winner-${code}.json`);
 			const error = Object.assign(new Error("rename denied"), { code });

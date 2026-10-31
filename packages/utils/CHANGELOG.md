@@ -6,7 +6,7 @@
 
 ### Fixed
 
-- Treat Windows lock publication EPERM as contention only when a competing lock is observable, preserving owner identity and candidate cleanup.
+- Retry lock publication EPERM, EACCES and EBUSY errors only when a competing lock is observable, preserving owner identity and candidate cleanup.
 
 ## [1.7.0] - 2026-10-31
 
