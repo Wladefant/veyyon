@@ -31,6 +31,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"memory_edit",
 	"retain",
 	"recall",
+	"reflect",
 	"secret_request",
 	"learn",
 	"manage_skill",

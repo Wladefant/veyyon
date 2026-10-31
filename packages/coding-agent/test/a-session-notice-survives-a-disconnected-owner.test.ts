@@ -496,7 +496,7 @@ describe("a session reading its notices", () => {
 describe("the header of a delivered notice", () => {
 	const sentAt = Date.UTC(2026, 9, 10, 14, 5); // 16:05 in Europe/Berlin (CEST, UTC+2)
 	const notice = (): SessionNotice => ({
-		version: 1,
+		version: 2,
 		id: "000000000000000-000000-00000000-0000-0000-0000-000000000000",
 		from: "01a0a6a4",
 		to: "target",

@@ -290,6 +290,7 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 				method: "notifications/events/event",
 				params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "invalid-version" },
 			}),
+			"",
 		],
 		[
 			"notification with an invalid JSON-RPC version",
@@ -298,10 +299,12 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 				method: "notifications/events/event",
 				params: { _meta: { "io.modelcontextprotocol/subscriptionId": "__stream_id__" }, marker: "invalid-version" },
 			}),
+			"",
 		],
 		[
 			"matching response with a malformed error",
 			JSON.stringify({ jsonrpc: "2.0", id: "__stream_id__", error: "not an error object" }),
+			"",
 		],
 		[
 			"matching response with both a result and an error",
@@ -311,6 +314,7 @@ describe("MCP HTTP stream invalid-frame handling", () => {
 				result: {},
 				error: { code: -32000, message: "invalid envelope" },
 			}),
+			"",
 		],
 		[
 			"invalid batch member",

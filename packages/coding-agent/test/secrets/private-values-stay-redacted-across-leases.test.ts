@@ -67,7 +67,7 @@ describe("private secret runtime registration", () => {
 			expect(Boolean(refreshedLease.expansionObfuscator)).toBe(expansionEnabled);
 			for (const value of values) {
 				expect(refreshedLease.obfuscateText(value)).not.toContain(value);
-				expect(refreshedLease.expansionObfuscator?.obfuscate(value) ?? value).toBe(value);
+				expect(refreshedLease.expansionObfuscator?.hasNamedSecret(value) ?? false).toBe(false);
 				const args = { command: refreshedLease.obfuscateText(value) };
 				if (expansionEnabled) {
 					expect(fixture.runtime.deobfuscateForExecution(refreshedLease, args, "bash", undefined)).toEqual(args);

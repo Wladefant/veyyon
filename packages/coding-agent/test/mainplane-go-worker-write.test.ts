@@ -4,8 +4,8 @@ import { writeRemoteText } from "../examples/extensions/mainplane-bridge-write";
 
 const input = { worker: "pc2", path: "C:/owned/file.txt", text: "line one\r\né😀\r\n", sessionFile: "/session/one", toolCallId: "write-one" };
 function transportFor(change: Record<string, unknown> = {}, status = 200, request = input): typeof fetch {
-	return (async (_url: string, init: RequestInit) => {
-		const body = JSON.parse(String(init.body));
+	return Object.assign((async (_url: string | URL | Request, init?: RequestInit) => {
+		const body = JSON.parse(String(init?.body));
 		expect(Buffer.from(body.data_base64, "base64").toString("utf8")).toBe(request.text);
 		expect(body.path).toBe(request.path);
 		const session = remoteSessionId(request.sessionFile);
@@ -13,7 +13,7 @@ function transportFor(change: Record<string, unknown> = {}, status = 200, reques
 			idempotency_sha256: digest(remoteRunId(request.sessionFile, request.toolCallId)),
 			request_sha256: mainplaneRequestHash("write", request.worker, session, request.path, digest(request.text)),
 			state: "completed", exit: 0, output_sha256: digest(request.text), full: request.path, ...change }), { status });
-	}) as typeof fetch;
+	}), { preconnect: globalThis.fetch.preconnect });
 }
 
 describe("native worker text writes", () => {
@@ -30,12 +30,12 @@ describe("native worker text writes", () => {
 	});
 	test("uncertain duplicate stays uncertain without another write", async () => {
 		let count = 0; const transport = transportFor({ state: "uncertain", exit: undefined, output_sha256: undefined, full: undefined }, 409);
-		const counted = (async (...args: Parameters<typeof fetch>) => { count++; return transport(...args); }) as typeof fetch;
+		const counted = Object.assign((async (...args: Parameters<typeof fetch>) => { count++; return transport(...args); }), { preconnect: globalThis.fetch.preconnect });
 		const result = await writeRemoteText("https://fleet.example/", "fixture-key", input, undefined, counted);
 		expect(result.result.state).toBe("uncertain"); expect(result.replayed).toBe(true); expect(count).toBe(1);
 	});
 	test("rejects oversized and malformed Unicode before sending", async () => {
-		let count = 0; const transport = (async () => { count++; return new Response(); }) as typeof fetch;
+		let count = 0; const transport = Object.assign((async () => { count++; return new Response(); }), { preconnect: globalThis.fetch.preconnect });
 		for (const text of ["x".repeat(1024 * 1024 + 1), "\ud800"]) {
 			await expect(writeRemoteText("https://fleet.example/", "fixture-key", { ...input, text }, undefined, transport)).rejects.toThrow();
 		}
@@ -43,10 +43,10 @@ describe("native worker text writes", () => {
 	});
 	test("rejects lone-surrogate worker paths before authenticated HTTP", async () => {
 		let calls = 0;
-		const transport = (async () => {
+		const transport = Object.assign(async () => {
 			calls++;
 			throw new Error("Invalid remote path must not be sent to Mainplane");
-		}) as unknown as typeof fetch;
+		}, { preconnect: globalThis.fetch.preconnect });
 		for (const path of ["C:/owned/\ud800.txt", "C:/owned/\udc00.txt"]) {
 			await expect(writeRemoteText("https://fleet.example/", "fixture-key", { ...input, path }, undefined, transport))
 				.rejects.toThrow("Invalid worker or remote path");

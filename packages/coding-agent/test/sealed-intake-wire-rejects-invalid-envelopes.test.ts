@@ -1,3 +1,4 @@
+import type { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
@@ -15,14 +16,14 @@ import {
 
 interface SyntheticFixture {
 	metadata: SecretRequestMetadata;
-	testOnlyServerPrivateJwk: JsonWebKey;
-	testOnlyClientPrivateJwk: JsonWebKey;
+	testOnlyServerPrivateJwk: webcrypto.JsonWebKey;
+	testOnlyClientPrivateJwk: webcrypto.JsonWebKey;
 	fixedPlaintext: string;
 	fixedSubmission: {
 		version: 1;
 		requestId: string;
 		nonce: string;
-		clientPublicKeyJwk: JsonWebKey;
+		clientPublicKeyJwk: webcrypto.JsonWebKey;
 		iv: string;
 		ciphertext: string;
 	};

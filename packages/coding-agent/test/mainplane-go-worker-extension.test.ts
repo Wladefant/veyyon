@@ -24,17 +24,17 @@ describe("Mainplane request-bound execution", () => {
 		expect(bridgeOrigin("http://127.0.0.1:8080/")).toBe("http://127.0.0.1:8080");
 	});
 	test("accepts only a receipt bound to this request", async () => {
-		const transport = (async () => new Response(JSON.stringify(receipt()))) as typeof fetch;
+		const transport = Object.assign((async () => new Response(JSON.stringify(receipt()))), { preconnect: globalThis.fetch.preconnect });
 		const result = await runRemote("https://fleet.example/", "fixture-key", args, undefined, transport);
 		expect(result.result.exit).toBe(0);
 		expect(result.output_available).toBe(true);
-		const wrong = (async () => new Response(JSON.stringify({ ...receipt(), request_sha256: "0".repeat(64) }))) as typeof fetch;
+		const wrong = Object.assign((async () => new Response(JSON.stringify({ ...receipt(), request_sha256: "0".repeat(64) }))), { preconnect: globalThis.fetch.preconnect });
 		await expect(runRemote("https://fleet.example/", "fixture-key", args, undefined, wrong)).rejects.toThrow("different work");
 	});
 	test("duplicate uncertain receipts do not trigger another request", async () => {
 		let calls = 0;
 		const { exit: _exit, output_sha256: _digest, body: _body, ...uncertain } = receipt();
-		const transport = (async () => { calls++; return new Response(JSON.stringify({ ...uncertain, state: "uncertain" }), { status: 409 }); }) as typeof fetch;
+		const transport = Object.assign((async () => { calls++; return new Response(JSON.stringify({ ...uncertain, state: "uncertain" }), { status: 409 }); }), { preconnect: globalThis.fetch.preconnect });
 		const result = await runRemote("https://fleet.example/", "fixture-key", args, undefined, transport);
 		expect(result.replayed).toBe(true); expect(result.result.state).toBe("uncertain"); expect(calls).toBe(1);
 	});
@@ -45,7 +45,7 @@ describe("Mainplane request-bound execution", () => {
 	});
 	test("pre-aborted operations never reach transport", async () => {
 		let called = false; const abort = new AbortController(); abort.abort();
-		const transport = (async () => { called = true; throw new Error("fixture-private-secret"); }) as typeof fetch;
+		const transport = Object.assign((async () => { called = true; throw new Error("fixture-private-secret"); }), { preconnect: globalThis.fetch.preconnect });
 		await expect(runRemote("https://fleet.example/", "fixture-key", args, abort.signal, transport)).rejects.toThrow("transport failed");
 		expect(called).toBe(false);
 	});
@@ -55,7 +55,7 @@ describe("Mainplane request-bound execution", () => {
 		const response = { ...receipt(), body, output_sha256: digest(body) };
 		const envelope = JSON.stringify(response);
 		expect(envelope.length).toBeGreaterThan(600 * 1024);
-		const transport = (async () => { calls++; return new Response(envelope); }) as typeof fetch;
+		const transport = Object.assign((async () => { calls++; return new Response(envelope); }), { preconnect: globalThis.fetch.preconnect });
 		const result = await runRemote("https://fleet.example/", "fixture-key", args, undefined, transport);
 		expect(result.result.body).toBe(body);
 		expect(calls).toBe(1);
@@ -64,13 +64,13 @@ describe("Mainplane request-bound execution", () => {
 		expect(Buffer.byteLength(oversizedEnvelope)).toBeGreaterThan(1024 * 1024);
 		let oversizedCalls = 0;
 		let cancelled = false;
-		const oversizedTransport = (async () => {
+		const oversizedTransport = Object.assign((async () => {
 			oversizedCalls++;
 			return new Response(new ReadableStream<Uint8Array>({
 				start(controller) { controller.enqueue(new TextEncoder().encode(oversizedEnvelope)); },
 				cancel() { cancelled = true; },
 			}));
-		}) as typeof fetch;
+		}), { preconnect: globalThis.fetch.preconnect });
 		await expect(runRemote("https://fleet.example/", "fixture-key", args, undefined, oversizedTransport)).rejects.toThrow("response exceeded limit");
 		expect(oversizedCalls).toBe(1);
 		expect(cancelled).toBe(true);

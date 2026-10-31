@@ -1,3 +1,5 @@
+import type { webcrypto } from "node:crypto";
+
 export const SECRET_INTAKE_VERSION = 1 as const;
 export const MAX_SECRET_UTF8_BYTES = 8192;
 
@@ -16,7 +18,7 @@ export interface SecretRequestMetadata {
 	deliveryPolicy: SecretDeliveryPolicy;
 	expiresAt: string;
 	nonce: string;
-	serverPublicKeyJwk: JsonWebKey;
+	serverPublicKeyJwk: webcrypto.JsonWebKey;
 	status: SecretRequestStatus;
 }
 
@@ -24,7 +26,7 @@ export interface SecretSubmission {
 	version: typeof SECRET_INTAKE_VERSION;
 	requestId: string;
 	nonce: string;
-	clientPublicKeyJwk: JsonWebKey;
+	clientPublicKeyJwk: webcrypto.JsonWebKey;
 	iv: string;
 	ciphertext: string;
 }
@@ -68,7 +70,7 @@ function toBase64Url(bytes: Uint8Array): string {
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function publicP256Jwk(value: unknown): JsonWebKey {
+function publicP256Jwk(value: unknown): webcrypto.JsonWebKey {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return invalid();
 	const jwk = value as Record<string, unknown>;
 	const fields = Object.keys(jwk);
@@ -120,7 +122,7 @@ export function parseSecretSubmission(value: unknown): SecretSubmission {
 	};
 }
 
-export function secretRequestAad(metadataValue: SecretRequestMetadata): Uint8Array {
+export function secretRequestAad(metadataValue: SecretRequestMetadata): Uint8Array<ArrayBuffer> {
 	const metadata = parseSecretRequestMetadata(metadataValue);
 	return encoder.encode(JSON.stringify({
 		version: metadata.version,
@@ -132,7 +134,7 @@ export function secretRequestAad(metadataValue: SecretRequestMetadata): Uint8Arr
 	}));
 }
 
-export function decodeSecretIntakeBase64Url(value: string, minBytes: number, maxBytes: number): Uint8Array {
+export function decodeSecretIntakeBase64Url(value: string, minBytes: number, maxBytes: number): Uint8Array<ArrayBuffer> {
 	const text = canonicalBase64Url(value, minBytes, maxBytes);
 	const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
 	const binary = atob(padded);

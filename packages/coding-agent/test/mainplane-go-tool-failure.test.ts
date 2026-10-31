@@ -11,9 +11,9 @@ test("registered run tool marks a nonzero remote exit as an error", async () => 
 		execute: (...args: unknown[]) => Promise<{ isError?: boolean; content: unknown[] }>;
 	};
 	const file = "/session/fixture.json"; const id = remoteRunId(file, "call-one"); const session = remoteSessionId(file);
-	const transport = (async () => new Response(JSON.stringify({ schema_version: 2, operation: "run",
+	const transport = Object.assign((async () => new Response(JSON.stringify({ schema_version: 2, operation: "run",
 		idempotency_sha256: digest(id), request_sha256: mainplaneRequestHash("run", "pc2", session, "bash", "30", "exit 7"),
-		worker: "pc2", session, state: "completed", exit: 7, output_sha256: digest(""), body: "" }))) as typeof fetch;
+		worker: "pc2", session, state: "completed", exit: 7, output_sha256: digest(""), body: "" }))), { preconnect: globalThis.fetch.preconnect });
 	const fetchMock = spyOn(globalThis, "fetch").mockImplementation(transport);
 	const previousURL = process.env.MAINPLANE_BRIDGE_URL; const previousKey = process.env.MAINPLANE_API_KEY;
 	process.env.MAINPLANE_BRIDGE_URL = "https://fleet.example/"; process.env.MAINPLANE_API_KEY = "fixture-key";

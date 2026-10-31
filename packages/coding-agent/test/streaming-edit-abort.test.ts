@@ -382,7 +382,7 @@ it("resolves local:// internal-scheme paths through the protocol handler instead
 		// auto-generated guard should have been invoked with a concrete fs path
 		// (absolute, no internal scheme) plus the original local:// display path.
 		expect(checkSpy).toHaveBeenCalled();
-		const [absolutePath, displayPath] = checkSpy.mock.calls[0] ?? [];
+		const [absolutePath, , displayPath] = checkSpy.mock.calls[0] ?? [];
 		expect(typeof absolutePath).toBe("string");
 		expect(absolutePath).toMatch(/^(?:\/|[A-Za-z]:[\\/])/);
 		expect(absolutePath).not.toMatch(/^[a-z]+:\/\//);

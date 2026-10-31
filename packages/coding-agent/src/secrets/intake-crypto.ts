@@ -1,3 +1,4 @@
+import type { webcrypto } from "node:crypto";
 import {
 	decodeSecretIntakeBase64Url,
 	encodeSecretIntakeBase64Url,
@@ -19,7 +20,7 @@ function safeFailure(): never {
 	throw new TypeError("Secret intake operation failed");
 }
 
-async function deriveAesKey(privateKey: CryptoKey, publicKey: CryptoKey, nonce: Uint8Array): Promise<CryptoKey> {
+async function deriveAesKey(privateKey: CryptoKey, publicKey: CryptoKey, nonce: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
 	let shared: ArrayBuffer | undefined;
 	try {
 		shared = await subtle.deriveBits({ name: "ECDH", public: publicKey }, privateKey, 256);
@@ -36,7 +37,7 @@ async function deriveAesKey(privateKey: CryptoKey, publicKey: CryptoKey, nonce: 
 	}
 }
 
-async function importPublicJwk(jwk: JsonWebKey): Promise<CryptoKey> {
+async function importPublicJwk(jwk: webcrypto.JsonWebKey): Promise<CryptoKey> {
 	return subtle.importKey("jwk", jwk, { name: "ECDH", namedCurve: "P-256" }, false, []);
 }
 
@@ -49,8 +50,8 @@ export async function createSecretIntakeKeyPair(): Promise<CryptoKeyPair> {
 }
 
 export async function sealSecretSubmission(metadataValue: SecretRequestMetadata, value: string): Promise<SecretSubmission> {
-	let plaintext: Uint8Array | undefined;
-	let nonce: Uint8Array | undefined;
+	let plaintext: Uint8Array<ArrayBuffer> | undefined;
+	let nonce: Uint8Array<ArrayBuffer> | undefined;
 	try {
 		const metadata = parseSecretRequestMetadata(metadataValue);
 		if (typeof value !== "string") return safeFailure();
@@ -95,8 +96,8 @@ export async function openSecretSubmission(
 	submissionValue: SecretSubmission,
 	privateKey: CryptoKey,
 ): Promise<string> {
-	let ciphertext: Uint8Array | undefined;
-	let nonce: Uint8Array | undefined;
+	let ciphertext: Uint8Array<ArrayBuffer> | undefined;
+	let nonce: Uint8Array<ArrayBuffer> | undefined;
 	let plaintext: ArrayBuffer | undefined;
 	try {
 		const metadata = parseSecretRequestMetadata(metadataValue);
