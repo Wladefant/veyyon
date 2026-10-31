@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-10-31
+
 ### Fixed
 
 - Retry recovery-lock publication access errors during startup contention ([#816](https://github.com/Wladefant/veyyon/issues/816)).
