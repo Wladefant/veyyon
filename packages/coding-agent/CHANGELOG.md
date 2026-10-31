@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- The MCP HTTP transport skips malformed frames and invalid batch members while preserving valid messages and continuing the stream ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - OVH TypeScript checks stop their process group when a step ends or receives cancellation ([Refs #741](https://github.com/Wladefant/veyyon/issues/741)).
 - Preserved video input types in session messages and model metadata patches ([#712](https://github.com/Wladefant/veyyon/issues/712)).
 - Compaction aborts without changing the session when saving a kept-tail recovery artifact fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
