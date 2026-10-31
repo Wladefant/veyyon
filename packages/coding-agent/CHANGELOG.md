@@ -5,6 +5,7 @@
 ### Fixed
 
 - Artifact reads stay within their selected execution session, support explicit owner selectors and bounded availability metadata, and refuse duplicate numeric-ID matches ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- `read` honors `artifact://<id>?view=metadata` and rejects unknown or duplicate views instead of returning artifact bytes ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Exact history pages require a matching branch and record revision across continuations, honor the active branch, and bound stored-line scanning before oversized allocation ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
