@@ -359,8 +359,20 @@ export class HistoryRewrites {
 			if (replacement.length > 0) replacementTokens += countTokens(replacement);
 			return { region, replacement };
 		});
+		// A rejected transcript write must not strand live placeholders whose originals remain on disk.
+		// Revert only our unchanged publication; a concurrent edit belongs to its other writer.
+		const originals = [...selected.keys()].map(entry => ({ entry, before: structuredClone(entry) }));
 		applyShakeRegions(items);
-		await this.#commit(regions.map(region => region.entry));
+		const applied = new Map(originals.map(({ entry }) => [entry, JSON.stringify(entry)]));
+		try {
+			await this.#host.sessionStore.rewriteEntries(regions.map(region => region.entry));
+		} catch (error) {
+			for (const { entry, before } of originals) {
+				if (JSON.stringify(entry) === applied.get(entry)) Object.assign(entry, before);
+			}
+			throw error;
+		}
+		this.#refreshContext();
 		return {
 			toolResultsDropped,
 			blocksDropped,
@@ -508,22 +520,7 @@ export class HistoryRewrites {
 		}
 	}
 
-	/**
-	 * The epilogue of every in-place rewrite: persist the new shape, rebuild the agent's context from
-	 * it, reset the advisor runtimes, close the provider sessions that cache message identity, and
-	 * mark the context report.
-	 *
-	 * Provider usage from this turn was computed over a prompt the rewrite shortened. Without the
-	 * mark, the report counts the removed bytes until a response that describes the new shape
-	 * arrives, and the compaction decision, which takes the larger of the provider figure and a local
-	 * estimate, never skips a summarization that the rewrite made unnecessary.
-	 */
-	async #commit(updated: Iterable<SessionEntry>): Promise<void> {
-		const host = this.#host;
-		await host.sessionStore.rewriteEntries(updated);
-		this.#refreshContext();
-	}
-
+	/** Rebuild cached context and provider sessions only after the transcript commit succeeds. */
 	#refreshContext(): void {
 		const host = this.#host;
 		host.agent.replaceMessages(host.rebuiltMessages());

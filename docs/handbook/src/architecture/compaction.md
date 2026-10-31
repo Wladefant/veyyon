@@ -205,7 +205,9 @@ its archive only while that session remains alive. Reported savings exclude reco
 Shake and dedup elision also verify that the selected branch and original entries still match after
 saving their recovery artifact. If another operation changes the selected evidence during that
 asynchronous save, the old selection aborts instead of replacing newer bytes with a pointer to
-the wrong archived text. A fresh selection may then archive and elide the new result.
+the wrong archived text. If transcript persistence then fails, unchanged live elisions are
+rolled back without overwriting a concurrent edit. The previously saved recovery artifact remains
+available, and a fresh selection may archive and elide the new result.
 
 Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
 from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized

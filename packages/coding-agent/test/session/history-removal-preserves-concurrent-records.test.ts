@@ -358,6 +358,92 @@ describe("history removals preserve concurrent records", () => {
 		expect(agent.state.messages).toEqual(manager.buildSessionContext().messages);
 	});
 
+	it("restores shake originals after a transcript failure while retaining the recovery artifact", async () => {
+		const originalText = "Shake output must remain intact after a rejected transcript write.";
+		const id = manager.appendMessage({
+			role: "toolResult", toolCallId: "failed-shake", toolName: "read",
+			content: [{ type: "text", text: originalText }], isError: false, timestamp: Date.now(),
+		});
+		await syncLiveMessages();
+		const selected = manager.getEntry(id);
+		if (selected?.type !== "message" || selected.message.role !== "toolResult") {
+			throw new Error("Expected selected tool result");
+		}
+		const original = structuredClone(selected);
+		const diskBefore = await fs.readFile(file, "utf8");
+		const promptBefore = structuredClone(agent.state.messages);
+		let savedArtifact: string | undefined;
+		const save = manager.saveArtifact.bind(manager);
+		vi.spyOn(manager, "saveArtifact").mockImplementation(async (content, toolType) => {
+			savedArtifact = await save(content, toolType);
+			return savedArtifact;
+		});
+		vi.spyOn(storage, "writeTextAtomic").mockRejectedValue(new Error("shake transcript rejected"));
+		vi.spyOn(storage, "rewriteTailAtomic").mockRejectedValue(new Error("shake transcript rejected"));
+		const region: ShakeRegion = {
+			kind: "toolResult", entry: selected, label: "read", tokens: 200, originalText,
+		};
+		await expect(rewrites.offloadAndApply([region])).rejects.toThrow("shake transcript rejected");
+		expect(manager.getEntry(id)).toEqual(original);
+		expect(await fs.readFile(file, "utf8")).toBe(diskBefore);
+		expect(agent.state.messages).toEqual(promptBefore);
+		if (!savedArtifact) throw new Error("Expected archive saved before failed transcript");
+		const savedPath = await manager.getArtifactPath(savedArtifact);
+		if (!savedPath) throw new Error("Expected recovery artifact path");
+		expect(await fs.readFile(savedPath, "utf8")).toContain(originalText);
+
+		vi.restoreAllMocks();
+		const retried = await rewrites.offloadAndApply([region]);
+		expect(retried.toolResultsDropped).toBe(1);
+		if (!retried.artifactId) throw new Error("Expected successful retry archive");
+		const retryPath = await manager.getArtifactPath(retried.artifactId);
+		if (!retryPath) throw new Error("Expected retry recovery artifact");
+		expect(await fs.readFile(retryPath, "utf8")).toContain(originalText);
+		expect(JSON.stringify(manager.getEntry(id))).toContain(`artifact://${retried.artifactId}`);
+		expect(await fs.readFile(file, "utf8")).not.toBe(diskBefore);
+		expect(agent.state.messages).toEqual(manager.buildSessionContext().messages);
+	});
+
+	it("does not overwrite a concurrent live shake edit during failed transcript persistence", async () => {
+		const originalText = "Original shaken synthetic output.";
+		const id = manager.appendMessage({
+			role: "toolResult", toolCallId: "concurrent-shake", toolName: "read",
+			content: [{ type: "text", text: originalText }], isError: false, timestamp: Date.now(),
+		});
+		await syncLiveMessages();
+		const selected = manager.getEntry(id);
+		if (selected?.type !== "message" || selected.message.role !== "toolResult") {
+			throw new Error("Expected selected tool result");
+		}
+		const diskBefore = await fs.readFile(file, "utf8");
+		const promptBefore = structuredClone(agent.state.messages);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const rejectPersist = async (): Promise<void> => {
+			entered.resolve();
+			await release.promise;
+			throw new Error("shake transcript rejected");
+		};
+		vi.spyOn(storage, "writeTextAtomic").mockImplementation(rejectPersist);
+		vi.spyOn(storage, "rewriteTailAtomic").mockImplementation(rejectPersist);
+		const region: ShakeRegion = {
+			kind: "toolResult", entry: selected, label: "read", tokens: 200, originalText,
+		};
+		const pending = rewrites.offloadAndApply([region]).then(() => null, error => error);
+		await entered.promise;
+		selected.timestamp = UPDATED_ENTRY_TIME;
+		selected.message.content.push({ type: "text", text: "Concurrent retained note." });
+		release.resolve();
+		const failure = await pending;
+		expect(failure instanceof Error ? failure.message : failure).toBe("shake transcript rejected");
+		expect(manager.getEntry(id)).toBe(selected);
+		expect(selected.timestamp).toBe(UPDATED_ENTRY_TIME);
+		expect(JSON.stringify(selected.message.content)).toContain("Concurrent retained note.");
+		expect(JSON.stringify(selected.message.content)).toContain("artifact://");
+		expect(await fs.readFile(file, "utf8")).toBe(diskBefore);
+		expect(agent.state.messages).toEqual(promptBefore);
+	});
+
 	it("preserves a concurrent content update while an image archive is pending", async () => {
 		const id = appendImageResult("concurrent-content");
 		await syncLiveMessages();
