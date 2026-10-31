@@ -343,6 +343,10 @@ describe("history exact record lookup", () => {
 				'{"type":"message","id":42}',
 				'{"id":"new-tip"}',
 				'{"type":"session"}',
+				'{"type":"message","id":"invalid-parent-number","parentId":42}',
+				'{"type":"message","id":"invalid-parent-boolean","parentId":false}',
+				'{"type":"message","id":"invalid-parent-array","parentId":[]}',
+				'{"type":"message","id":"invalid-parent-object","parentId":{}}',
 				'{}',
 			]) {
 				await fs.writeFile(file, prefix + invalid + "\n");
