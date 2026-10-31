@@ -73,6 +73,10 @@
 
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
+### Fixed
+
+- Native Mainplane run receipts now allow Go JSON escaping within a 1 MiB response bound.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
