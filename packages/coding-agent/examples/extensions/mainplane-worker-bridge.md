@@ -1,17 +1,28 @@
-# Mainplane Go worker bridge (optional Veyyon tool extension)
+# Optional native Mainplane Go tools
 
-Refs [Veyyon #775](https://github.com/Wladefant/veyyon/issues/775) and [Superboard #1774](https://github.com/Wladefant/superboard/issues/1774).
+Refs Veyyon #788/#775 and Superboard #1774/#1811. Requires the **schema-2 Go
+bridge overlay** on a separate authorized Mainplane pilot. This file is not a
+default extension and changes no provider codec, grant, registration or broker.
 
-This extension reuses Veyyon's own extension tool API and the **native Go execution bridge** staged by [Superboard PR #1800](https://github.com/Wladefant/superboard/pull/1800). It does not modify provider credentials, model calls, codecs, grants or default tools. It is explicitly loaded only for a pilot; without the Go overlay, these tools cannot run.
+Inject MAINPLANE_BRIDGE_URL and MAINPLANE_API_KEY through the existing approved
+secret flow, then explicitly load mainplane-worker-bridge.ts with --extension.
+Do not put keys in prompts, issues, command arguments or a versioned bundle.
 
-1. Prepare and qualify the pinned Go bridge on a separate Mainplane harness; do not overwrite a running stock server.
-2. Inject `MAINPLANE_BRIDGE_URL` (the bare HTTPS origin, or loopback HTTP) and `MAINPLANE_API_KEY` into the Veyyon process from the existing approved secret mechanism. Never put the API key in the Veyyon prompt or an issue.
-3. Load `mainplane-worker-bridge.ts` from the Veyyon extension path, or via the existing `--extension` flag.
-4. Enable and qualify the `mainplane_worker_run` and `mainplane_run_receipt` tools within the current permission profile. The bridge is a high-privilege remote shell on owned machines; only the explicitly installed extension exposes it.
-5. Verify one named worker, a refused/disconnected worker, cancellation, a lost reply, a repeated tool call and cross-host job ownership before making it part of the default agent.
+Run requests use a stable session/tool-call key and the same length-framed UTF-8
+SHA-256 contract as Go. Responses must match that key, request, worker and session.
+Old schemas, mismatched identities and contradictory terminal data are errors.
+A completed process with a nonzero exit is an **error** tool result. Uncertain or
+submitting duplicate receipts are also errors and must not be blindly replayed.
+A duplicate completed receipt may lack the original output; output_available is
+explicit and the command is not re-executed to recover it.
 
-The run tool derives a stable idempotency key from the persisted Veyyon session and tool-call ID and submits it to the Go bridge. The Go side reserves that key before execution. A duplicate receives the durable receipt instead of running again. On an HTTP error or network loss, the tool says the result may be uncertain and tells you to query the receipt. **No automatic retry or fallback shell execution.**
+Requests have independent finite deadlines, strict byte ceilings and no redirects.
+Reader overflow cancels the stream. Network exceptions are sanitized, not echoed.
+Text reads require schema/worker identity, integer lengths, canonical base64 and
+SHA-256. Invalid UTF-8 is refused and display truncation preserves surrogate pairs.
+These checks are integrity/error semantics, not a replacement for runtime grants.
 
-The Go bridge currently implements Run only. Background jobs, file read/write, kill and robust remote-result delivery are later slices. Session names are hashed before leaving Veyyon, and the extension never logs the API key. Tool code/output still belongs to the active Veyyon session, as any shell tool does.
-
-Tests: `bun test packages/coding-agent/test/mainplane-go-worker-extension.test.ts`. Runtime and remote CI verification pending; no live server was accessed.
+Tests include Go/TypeScript digest fixtures and execution of the registered tool
+with a simulated nonzero exit. Real workers, broker refresh, cancellation of a
+remote process tree, T3 session propagation and live binary compatibility still
+need separate qualification. Remote CI is required before adoption.
