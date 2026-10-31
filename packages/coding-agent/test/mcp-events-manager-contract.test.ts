@@ -358,6 +358,8 @@ describe("MCPManager event subscription contracts", () => {
 			await settleNetwork();
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(1);
 			await advanceTimers(1);
+			await settleNetwork();
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
 			await secondStreamOpened.promise;
 			await secondEventReceived.promise;
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
@@ -371,6 +373,8 @@ describe("MCPManager event subscription contracts", () => {
 			await settleNetwork();
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
 			await advanceTimers(1);
+			await settleNetwork();
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(3);
 			await thirdStreamOpened.promise;
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(3);
 
