@@ -22,6 +22,8 @@
 
 - Deterministic persistence recovery burst verification distinguishes append retries from explicit flushes; no user-facing change.
 
+- Added `--mcp-config` to load explicit run-only MCP connectors in direct and ACP sessions without rewriting a profile; server-name collisions and connector setup failures stop activation ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

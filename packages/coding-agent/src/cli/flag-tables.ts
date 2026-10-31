@@ -160,6 +160,10 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--config": (result, value) => {
 		result.config = [...(result.config ?? []), value];
 	},
+	"--mcp-config": (result, value) => {
+		if (result.mcpConfig !== undefined) throw new CliUsageError("--mcp-config may be supplied only once");
+		result.mcpConfig = value;
+	},
 	"--mode": (result, value) => {
 		if (!isKnownMode(value)) throw invalidFlagValue("--mode", value, MODE_VALUES);
 		result.mode = value;

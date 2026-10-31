@@ -31,6 +31,7 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { LspStartupServerInfo } from "../lsp";
 import type { MCPManager } from "../mcp";
+import type { RuntimeMCPConfig } from "../mcp/runtime-config";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { AgentRegistry } from "../registry/agent-registry";
@@ -196,6 +197,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
+	/** Explicit servers supplied for this launch; never persisted to a profile. */
+	runtimeMCPConfig?: RuntimeMCPConfig;
 	/** Existing MCP manager to reuse (skips discovery, propagates to toolSession). */
 	mcpManager?: MCPManager;
 	/**

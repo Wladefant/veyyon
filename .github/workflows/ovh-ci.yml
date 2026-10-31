@@ -1,6 +1,14 @@
 name: OVH CI
 
 on:
+  # Fleet pilot changes use the existing self-hosted runner and related-test
+  # selector. Ordinary PRs retain their established trigger behavior.
+  pull_request:
+    paths:
+      - 'packages/coding-agent/src/mcp/runtime-config.ts'
+      - 'packages/coding-agent/src/config/context-continuity.ts'
+      - 'packages/coding-agent/test/mcp-runtime-config.test.ts'
+      - 'packages/coding-agent/test/context-pilot-info-cli.test.ts'
   workflow_dispatch:
     inputs:
       target_sha:
