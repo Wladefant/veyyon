@@ -1,3 +1,4 @@
+// WHY: A 32-byte useless result can grow after adding its recovery reference. This suite covers all-skip, mixed, stale, and overflow cost decisions; it does not measure provider billing or RSS.
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import { Agent } from "@veyyon/agent-core";
