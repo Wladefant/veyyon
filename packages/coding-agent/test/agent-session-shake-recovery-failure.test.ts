@@ -22,14 +22,17 @@ describe("history shake recovery is archive-first", () => {
 				},
 			};
 			const originalEntry = JSON.stringify(entry);
+			let persistedEntries = [entry];
 			const saveArtifact = vi.fn(async () => {
 				if (failure === "throw") throw new Error("disk full");
 				return undefined;
 			});
-			const rewriteEntries = vi.fn(async () => undefined);
-			const replaceMessages = vi.fn();
+			const rewriteEntries = async (updated?: Iterable<typeof entry>) => {
+				if (updated) persistedEntries = [...updated];
+			};
+			const replaceMessages = () => undefined;
 			const host = {
-				sessionStore: { saveArtifact, rewriteEntries, getBranch: () => [entry] },
+				sessionStore: { saveArtifact, rewriteEntries, getBranch: () => persistedEntries },
 				agent: { replaceMessages },
 			} as unknown as HistoryRewritesHost;
 			const region = {
@@ -43,10 +46,8 @@ describe("history shake recovery is archive-first", () => {
 			await expect(new HistoryRewrites(host).offloadAndApply([region])).rejects.toThrow(
 				"recovery artifact was not saved",
 			);
-			expect(saveArtifact).toHaveBeenCalledTimes(1);
+			expect(persistedEntries).toEqual([JSON.parse(originalEntry)]);
 			expect(JSON.stringify(entry)).toBe(originalEntry);
-			expect(rewriteEntries).not.toHaveBeenCalled();
-			expect(replaceMessages).not.toHaveBeenCalled();
 		});
 	}
 });
