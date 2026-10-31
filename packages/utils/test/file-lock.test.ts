@@ -626,6 +626,36 @@ describe("Windows candidate publication rename contention (#816)", () => {
 		if (retry) releaseLockSync(lockPath, retry);
 	});
 
+	test("Windows EPERM without a published winner stays a permission error (async)", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "no-winner-async.json"));
+		await expect(
+			tryAcquireLock(
+				lockPath,
+				async () => {
+					throw windowsRenameContention();
+				},
+				true,
+			),
+		).rejects.toMatchObject({ code: "EPERM" });
+		expect((await fs.readdir(root)).filter(name => name.includes(".candidate-"))).toEqual([]);
+	});
+
+	test("Windows EPERM without a published winner stays a permission error (sync)", async () => {
+		const root = await mkRoot();
+		const lockPath = getLockPath(path.join(root, "no-winner-sync.json"));
+		expect(() =>
+			tryAcquireLockSync(
+				lockPath,
+				() => {
+					throw windowsRenameContention();
+				},
+				true,
+			),
+		).toThrow("Windows lock publication is occupied");
+		expect(fsSync.readdirSync(root).filter(name => name.includes(".candidate-"))).toEqual([]);
+	});
+
 	test("async non-Windows EPERM remains an error, with no abandoned candidate", async () => {
 		const root = await mkRoot();
 		const lockPath = getLockPath(path.join(root, "permissions.json"));

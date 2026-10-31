@@ -757,14 +757,13 @@ function discardCandidateSync(candidatePath: string, expected: LockObservation):
 }
 
 /**
- * Only candidate -> canonical lock publication treats a Windows EPERM as a race.
- * Permission errors from preparing a candidate, checking its parent or retiring
- * an old lock still fail closed. Windows can report EPERM where other systems
- * report EEXIST/ENOTEMPTY when a competing publisher wins the rename.
+ * A failed candidate -> canonical rename is contention only for known
+ * collisions or for Windows EPERM when another lock is actually observable.
+ * Unrelated ACL/parent/retirement failures must stay errors, not retries.
  */
-function isPublicationContention(error: unknown, windows: boolean): boolean {
+function isPublicationContention(error: unknown, windows: boolean, occupied: boolean): boolean {
 	const code = (error as NodeJS.ErrnoException)?.code;
-	return code === "EEXIST" || code === "ENOTEMPTY" || (windows && code === "EPERM");
+	return code === "EEXIST" || code === "ENOTEMPTY" || (windows && code === "EPERM" && occupied);
 }
 
 async function tryAcquireLock(
@@ -782,7 +781,12 @@ async function tryAcquireLock(
 		try {
 			await publishCandidate(candidate.path, lockPath);
 		} catch (error) {
-			if (isPublicationContention(error, windows)) return null;
+			const windowsEperm = windows && (error as NodeJS.ErrnoException)?.code === "EPERM";
+			const occupied = windowsEperm
+				? (await inspectLockDirectory(lockPath)) !== null ||
+					(await inspectLockDirectory(getTransitionPath(lockPath))) !== null
+				: false;
+			if (isPublicationContention(error, windows, occupied)) return null;
 			throw error;
 		}
 		published = true;
@@ -814,7 +818,12 @@ function tryAcquireLockSync(
 		try {
 			publishCandidate(candidate.path, lockPath);
 		} catch (error) {
-			if (isPublicationContention(error, windows)) return null;
+			const windowsEperm = windows && (error as NodeJS.ErrnoException)?.code === "EPERM";
+			const occupied = windowsEperm
+				? inspectLockDirectorySync(lockPath) !== null ||
+					inspectLockDirectorySync(getTransitionPath(lockPath)) !== null
+				: false;
+			if (isPublicationContention(error, windows, occupied)) return null;
 			throw error;
 		}
 		published = true;

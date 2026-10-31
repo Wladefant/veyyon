@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Treat Windows lock publication EPERM as contention only when a competing lock is observable, preserving owner identity and candidate cleanup.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
