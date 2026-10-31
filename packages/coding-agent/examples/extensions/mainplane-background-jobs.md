@@ -10,6 +10,11 @@ task succeeded. Status reads distinguish accepted, completed, cancelled and
 uncertain. A restarted or untracked bridge reports uncertainty; the tools never
 infer liveness from a PID, automatically poll, or relaunch the job.
 
+The registered status tool and exported status reader require a persisted current
+session **before** contacting the bridge. A missing session never causes a receipt
+GET; a receipt from another session is rejected without returning its body or job
+metadata. This is a read-only ownership boundary, not a worker permission change.
+
 The common receipt validator checks the deterministic job ID, owner instance,
 PID/log shape, key/request identity and lifecycle semantics. Completed job output
 is available through mainplane_recover_output, with the same session and artifact
