@@ -157,7 +157,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				client,
 				initialSnapshot: {
 					...initial.snapshot,
-					credentials: [{ ...entry, credential: localCredential }],
+					credentials: [
+						{
+							...entry,
+							// Deliberately invalid local credential fixture.
+							credential: localCredential as unknown as SnapshotResponse["credentials"][number]["credential"],
+						},
+					],
 				},
 				streamSnapshots: false,
 			});
@@ -208,7 +214,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				label: "unredacted refresh secret",
 				entry: {
 					...entry,
-					credential: { ...entry.credential, refresh: "synthetic-refresh-not-for-workers" },
+					// Deliberately invalid broker response fixture: the refresh is not redacted.
+					credential: {
+						...entry.credential,
+						refresh: "synthetic-refresh-not-for-workers",
+					} as unknown as SnapshotResponse["credentials"][number]["credential"],
 				},
 			},
 		];
@@ -268,7 +278,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			{ ...entry, provider: "openai-codex" },
 			{ ...entry, credential: { ...entry.credential, refresh: "synthetic-refresh-not-for-workers" } },
 		]) {
-			refresh.mockResolvedValue({ entry: other });
+			refresh.mockResolvedValue({
+				// Deliberately invalid broker response fixture.
+				entry: other as unknown as SnapshotResponse["credentials"][number],
+			});
 			await expect(remote.markCredentialSuspect(entry.id)).rejects.toThrow(/broker.*(identity|redact)/i);
 			expect(remote.snapshot.credentials).toEqual(before);
 		}
