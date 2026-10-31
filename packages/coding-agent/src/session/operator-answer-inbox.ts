@@ -101,7 +101,12 @@ export class OperatorAnswerInbox {
 			// An answer still waiting in the runtime queue is a replay. One the operator cleared from the queue is
 			// gone: no user message was written, so the retry delivers it again. A dequeue that lands between the
 			// runtime taking the message and journaling it is a window of milliseconds against a retry's seconds.
-			if (this.#queued.has(key) && !consumed.has(questionId) && !this.#isQueued(questionId)) this.#queued.delete(key);
+			// A replacement inbox may receive the sender's retry before recover() inspects a still-queued
+			// answer. The durable pending record, not only this instance's mark, requires checking the queue.
+			if (!consumed.has(questionId) && (pending.has(questionId) || this.#queued.has(key))) {
+				if (this.#isQueued(questionId)) this.#queued.add(key);
+				else this.#queued.delete(key);
+			}
 			if (consumed.has(questionId) || this.#queued.has(key)) {
 				logger.info(`DUPLICATE-ANSWER ${questionId}`);
 				return "duplicate";

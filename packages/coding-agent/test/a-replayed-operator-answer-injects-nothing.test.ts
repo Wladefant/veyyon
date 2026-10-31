@@ -288,3 +288,63 @@ test("an unavailable runtime queue during recovery does not block startup or con
 	await ready.recover();
 	expect(queue).toEqual([answer]);
 });
+
+test("a sender retry before replacement-inbox recovery does not duplicate a pending queued answer", async () => {
+	const { manager, dir } = newSession();
+	const queue: string[] = [];
+	const answer = envelope("q-accept-reconnect", "evt-original");
+	const original = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	expect(await original.accept(answer, "followUp")).toBe("queued");
+	await manager.flush();
+	const reopened = await SessionManager.open(manager.getSessionFile() as string, dir.path());
+	const replacement = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	const replay = envelope("q-accept-reconnect", "evt-retry");
+
+	// A fresh instance has no in-memory queue marker; the live queue is still authoritative.
+	expect(await replacement.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([answer]);
+	expect(await replacement.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([answer]);
+
+	// Clearing an unconsumed follow-up allows a subsequent retry using the journaled original.
+	queue.length = 0;
+	expect(await replacement.accept(replay, "followUp")).toBe("queued");
+	expect(queue).toEqual([answer]);
+	reopened.appendMessage({ role: "user", content: answer, timestamp: Date.now() });
+	await reopened.flush();
+	queue.length = 0;
+
+	const afterConsumption = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	expect(await afterConsumption.accept(replay, "followUp")).toBe("duplicate");
+	expect(queue).toEqual([]);
+});
+
+test("a pending answer whose queue state is unknown stays retryable without a false ack", async () => {
+	const { manager } = newSession();
+	const answer = envelope("q-accept-unknown", "evt-original");
+	const notReady = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("dispatch not ready");
+		},
+		() => false,
+	);
+	await expect(notReady.accept(answer, "auto")).rejects.toThrow("dispatch not ready");
+
+	const queue: string[] = [];
+	const unavailable = new OperatorAnswerInbox(
+		() => manager,
+		queueingInto(queue),
+		() => {
+			throw new Error("runtime queue inspection unavailable");
+		},
+	);
+	await expect(unavailable.accept(envelope("q-accept-unknown", "evt-retry"), "auto")).rejects.toThrow(
+		"runtime queue inspection unavailable",
+	);
+	expect(queue).toEqual([]);
+
+	const ready = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	expect(await ready.accept(envelope("q-accept-unknown", "evt-retry"), "auto")).toBe("queued");
+	expect(queue).toEqual([answer]);
+});
