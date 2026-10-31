@@ -11,11 +11,14 @@ import { registerMainplaneDiscovery } from "./mainplane-bridge-discovery";
 // Go JSON control escaping can expand the two retained 50 KiB outputs sixfold.
 const MAX_RUN_REPLY = 1024 * 1024;
 
-export async function readRemoteReceipt(origin: string, token: string, runId: string,
+export async function readRemoteReceipt(origin: string, token: string, runId: string, sessionFile: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch): Promise<BridgeReceipt> {
 	if (!WORKER_ID.test(runId)) throw new MainplaneError("Invalid Mainplane run identifier");
+	const session = remoteSessionId(sessionFile);
 	const { data } = await bridgeRequest(origin, token, { path: "/fleet/runs/" + runId, method: "GET" }, signal, transport);
-	return validateReceipt(data, runId);
+	const receipt = validateReceipt(data, runId);
+	if (receipt.session !== session) throw new MainplaneError("Mainplane receipt belongs to another Veyyon session");
+	return receipt;
 }
 export interface RunInput { worker: string; interpreter: string; code: string; timeoutSeconds: number; sessionFile: string; toolCallId: string; }
 export async function runRemote(origin: string, token: string, args: RunInput,
@@ -33,7 +36,10 @@ export async function runRemote(origin: string, token: string, args: RunInput,
 }
 export async function readRemoteText(origin: string, token: string, worker: string, path: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch) {
-	if (!WORKER_ID.test(worker) || !path || Buffer.byteLength(path, "utf8") > 4096 || path.includes("\0")) throw new MainplaneError("Invalid worker or remote path");
+	if (!WORKER_ID.test(worker) || !path || Buffer.byteLength(path, "utf8") > 4096 ||
+		path.includes("\0") || Buffer.from(path, "utf8").toString("utf8") !== path) {
+		throw new MainplaneError("Invalid worker or remote path");
+	}
 	const { data } = await bridgeRequest(origin, token, { path: "/fleet/read", method: "POST", timeoutMs: 35_000,
 		responseLimit: 2 * 1024 * 1024, body: JSON.stringify({ worker, path }) }, signal, transport);
 	if (data.schema_version !== 1 || data.worker !== worker || typeof data.data_base64 !== "string" || typeof data.bytes !== "number" || !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > 1024 * 1024 || typeof data.sha256 !== "string" || !SHA256.test(data.sha256)) throw new MainplaneError("Mainplane returned invalid read metadata");
@@ -81,9 +87,11 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 		name: "mainplane_run_receipt", label: "Mainplane operation receipt",
 		description: "Inspect a validated durable operation receipt; never executes or retries work. Accepted jobs remain pending.",
 		parameters: z.object({ runId: z.string().regex(WORKER_ID) }),
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const sessionFile = ctx.sessionManager.getSessionFile();
+			if (!sessionFile) return { content: [{ type: "text", text: "Receipt inspection requires the persisted current session" }], isError: true };
 			try {
-				const result = await readRemoteReceipt(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", params.runId, signal);
+				const result = await readRemoteReceipt(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", params.runId, sessionFile, signal);
 				return { content: [{ type: "text", text: JSON.stringify(result) }], isError: receiptIsError(result) };
 			} catch (error) { return { content: [{ type: "text", text: visibleError(error) }], isError: true }; }
 		},

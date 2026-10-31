@@ -46,7 +46,7 @@ describe("native worker text writes", () => {
 		const transport = (async () => {
 			calls++;
 			throw new Error("Invalid remote path must not be sent to Mainplane");
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 		for (const path of ["C:/owned/\ud800.txt", "C:/owned/\udc00.txt"]) {
 			await expect(writeRemoteText("https://fleet.example/", "fixture-key", { ...input, path }, undefined, transport))
 				.rejects.toThrow("Invalid worker or remote path");

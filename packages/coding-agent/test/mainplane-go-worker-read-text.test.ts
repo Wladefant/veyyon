@@ -7,6 +7,37 @@ function response(data: Buffer, extra: Record<string, unknown> = {}): Response {
 		bytes: data.length, sha256: createHash("sha256").update(data).digest("hex"), ...extra }));
 }
 
+// WHY: Go replaces lone UTF-16 surrogates in JSON paths with U+FFFD.
+// Exercise production preflight and request bytes; no native host is accessed.
+describe("Mainplane worker read path identity", () => {
+	test("rejects lone high and low surrogate paths before authenticated transport", async () => {
+		let calls = 0;
+		const transport = (async () => {
+			calls++;
+			return response(Buffer.from("sample"));
+		}) as unknown as typeof fetch;
+		for (const path of ["/owned/\ud800.txt", "/owned/\udc00.txt"]) {
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				path, undefined, transport)).rejects.toThrow("Invalid worker or remote path");
+		}
+		expect(calls).toBe(0);
+	});
+	test("preserves Unicode, emoji and literal replacement-character paths on the wire", async () => {
+		for (const path of ["/owned/München-東京-😀.txt", "/owned/\ufffd.txt"]) {
+			let observedPath: unknown;
+			const transport = (async (_url: unknown, init?: RequestInit) => {
+				const body = Buffer.from(String(init?.body), "utf8").toString("utf8");
+				observedPath = JSON.parse(body).path;
+				return response(Buffer.from("sample"));
+			}) as unknown as typeof fetch;
+			const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				path, undefined, transport);
+			expect(observedPath).toBe(path);
+			expect(result.text).toBe("sample");
+		}
+	});
+});
+
 describe("Mainplane worker read integrity", () => {
 	test("preserves verified UTF-8", async () => {
 		const transport = (async () => response(Buffer.from("sample"))) as typeof fetch;
@@ -24,23 +55,26 @@ describe("Mainplane worker read integrity", () => {
 		const transport = (async () => response(Buffer.from([0xff, 0]))) as typeof fetch;
 		await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/image", undefined, transport)).rejects.toThrow("binary");
 	});
-	test("rejects digest-valid UTF-8 NUL bytes, including beyond the preview slice", async () => {
-		for (const text of ["ok\0hidden", "x".repeat(50_001) + "\0hidden"]) {
-			const transport = (async () => response(Buffer.from(text, "utf8"))) as typeof fetch;
-			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/binary-like.bin", undefined, transport)).rejects.toThrow("binary");
-		}
-	});
-	test("keeps legitimate Unicode and newlines readable", async () => {
-		const text = "München\n東京";
-		const transport = (async () => response(Buffer.from(text, "utf8"))) as typeof fetch;
-		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/unicode.txt", undefined, transport);
-		expect(result.text).toBe(text);
-		expect(result.truncated).toBe(false);
-	});
 	test("display truncation does not split a surrogate pair", async () => {
 		const transport = (async () => response(Buffer.from("x".repeat(49_999) + "😀tail"))) as typeof fetch;
 		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/file", undefined, transport);
 		expect(result.text).toBe("x".repeat(49_999));
 		expect(result.truncated).toBe(true);
+	});
+	test("rejects digest-valid NUL-containing UTF-8 even beyond the preview", async () => {
+		for (const value of ["ok\0hidden", "x".repeat(50_001) + "\0hidden"]) {
+			const transport = (async () => response(Buffer.from(value, "utf8"))) as typeof fetch;
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2",
+				"/binary-like", undefined, transport)).rejects.toThrow("binary");
+		}
+	});
+	test("preserves ordinary Unicode and line breaks across the binary boundary", async () => {
+		const content = "München\n東京";
+		const transport = (async () => response(Buffer.from(content, "utf8"))) as typeof fetch;
+		const result = await readRemoteText("https://fleet.example/", "fixture-key",
+			"pc2", "/unicode", undefined, transport);
+		expect(result.text).toBe(content);
+		expect(result.bytes).toBe(Buffer.byteLength(content, "utf8"));
+		expect(result.truncated).toBe(false);
 	});
 });

@@ -73,8 +73,13 @@
 
 - Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
+### Added
+
+- Added experimental native Mainplane tools for fleet discovery, worker operations, current-session receipts and cancellation, background jobs, and output recovery, disabled by default; demo, settings differential, and bench proof remain open ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
 ### Fixed
 
+- Native Mainplane text reads reject malformed Unicode paths before transport while preserving valid Unicode filenames ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 - Preserved a UTF-8 BOM in recovered output pages instead of dropping the leading marker ([Refs #797](https://github.com/Wladefant/veyyon/issues/797)).
 - Native Mainplane run receipts now allow Go JSON escaping within a 1 MiB response bound.
 

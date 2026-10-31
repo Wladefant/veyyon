@@ -9,3 +9,8 @@ Use this tool before selecting a remote worker or interpreter rather than invent
 The client requires the reviewed upstream source and schema, rejects duplicate/malformed/oversized records, and projects only names, connection state, OS, architecture, version and interpreters. Unknown fields are discarded. Provider credentials, scratch paths, drive settings and refusal text are not part of the tool result. No endpoint is contacted unless the explicitly loaded extension tool is invoked.
 
 Focused remote CI discovers `mainplane-*.test.ts`; this change adds `mainplane-fleet-discovery.test.ts`. Live fleet discovery and machine enrollment remain separate acceptance evidence.
+
+This surface remains experimental and disabled by default with the extension.
+Its registered-tool demo, seeded settings differential and exact-parity bench
+are still missing; see the [shared proof backlog](mainplane-worker-bridge.md#experimental-status-and-missing-proof)
+and [#803](https://github.com/Wladefant/veyyon/issues/803).
