@@ -302,6 +302,95 @@ describe("MCPManager event subscription contracts", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	// WHY: an immediately reopened or increasingly delayed push stream can hide a dead subscription or
+	// grow reconnect latency after repeated transport failures. This pins the fixed delay and stop
+	// behavior through real stream requests and delivered events; it does not cover server-side recovery.
+	it("bounds repeated push reconnects and cancels a pending reconnect on stop", async () => {
+		const streamOpened = Promise.withResolvers<void>();
+		const secondStreamOpened = Promise.withResolvers<void>();
+		const thirdStreamOpened = Promise.withResolvers<void>();
+		const received: string[] = [];
+		const eventReceived = Promise.withResolvers<void>();
+		const secondEventReceived = Promise.withResolvers<void>();
+		// Fake timer advancement drains promises, but not the real HTTP server's I/O.
+		// Let any prematurely opened request reach the server before asserting absence.
+		const settleNetwork = async () => {
+			const response = await fetch(server.url, {
+				method: "POST",
+				body: JSON.stringify({ id: "network-fence", method: "tools/list" }),
+			});
+			await response.json();
+		};
+		const server = fakeMcpServer({
+			delivery: "push",
+			onStream(controller, streamId, ordinal) {
+				if (ordinal === 1) streamOpened.resolve();
+				if (ordinal === 2) secondStreamOpened.resolve();
+				if (ordinal === 3) thirdStreamOpened.resolve();
+				if (ordinal <= 2 && streamId !== undefined) {
+					emitStreamNotification(controller, streamId, "notifications/events/event", event(`stream-${ordinal}`));
+				}
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEvent((_name, occurrence) => {
+			received.push(occurrence.eventId);
+			eventReceived.resolve();
+			if (occurrence.eventId === "stream-2") secondEventReceived.resolve();
+		});
+		vi.useFakeTimers();
+		try {
+			await connect(manager, "bounded-reconnect-server", managerConfig(server, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+			}));
+			await streamOpened.promise;
+			await eventReceived.promise;
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(1);
+			expect(received).toEqual(["stream-1"]);
+
+			emitStreamNotification(server.streamControllers[0]!, server.requests.filter(request => request.method === "events/stream")[0]!.id!, "notifications/events/event", {
+				eventId: "failed-1", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
+			});
+			await server.streamCancellations[0]!;
+			await advanceTimers(4_999);
+			await settleNetwork();
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(1);
+			await advanceTimers(1);
+			await secondStreamOpened.promise;
+			await secondEventReceived.promise;
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
+			expect(received).toEqual(["stream-1", "stream-2"]);
+
+			emitStreamNotification(server.streamControllers[1]!, server.requests.filter(request => request.method === "events/stream")[1]!.id!, "notifications/events/event", {
+				eventId: "failed-2", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
+			});
+			await server.streamCancellations[1]!;
+			await advanceTimers(4_999);
+			await settleNetwork();
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
+			await advanceTimers(1);
+			await thirdStreamOpened.promise;
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(3);
+
+			emitStreamNotification(server.streamControllers[2]!, server.requests.filter(request => request.method === "events/stream")[2]!.id!, "notifications/events/event", {
+				eventId: "failed-3", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
+			});
+			await server.streamCancellations[2]!;
+			const stop = manager.stopEvents();
+			await stop;
+			await advanceTimers(10_001);
+			await settleNetwork();
+			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(3);
+			expect(received).toEqual(["stream-1", "stream-2"]);
+		} finally {
+			await manager.stopEvents();
+			server.stop();
+			vi.useRealTimers();
+		}
+	});
+
 	it("waits for concurrent duplicate persistence and retries the failed event after reconnect", async () => {
 		const firstPersistence = Promise.withResolvers<void>();
 		const firstAttemptStarted = Promise.withResolvers<void>();
