@@ -22,6 +22,7 @@ import {
 import {
 	DEFAULT_DELIVERY_TTL_MS,
 	listLiveSessionOwners,
+	SESSION_NOTICE_CAPABILITY,
 	SessionNoticeCapabilityError,
 	sendSessionNotice,
 	type SessionNoticeOwner,
@@ -565,10 +566,14 @@ function executeList(
 		.filter(owner => owner.sessionId !== currentSessionId)
 		.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 	if (sessionPeers.length) {
-		lines.push("", "Other live sessions (direct notices; not in-process lanes):");
+		lines.push("", "Other live sessions (notice capability shown; not in-process lanes):");
 		for (const owner of sessionPeers) {
+			// The roster must not advertise a legacy live owner as a supported notice destination.
+			const noticeSupport = owner.capabilities === undefined
+				? "unverified"
+				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
 			lines.push(
-				`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}]`,
+				`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}; notices ${noticeSupport}]`,
 			);
 		}
 	}

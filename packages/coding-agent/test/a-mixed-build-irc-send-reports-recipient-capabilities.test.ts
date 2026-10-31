@@ -99,6 +99,36 @@ describe("mixed-build session notices", () => {
 		expect(claimSessionNotices("unrelated-session", root)).toEqual([]);
 	});
 
+	it("labels mixed-build live owners by actual notice capability before a project send", async () => {
+		writeLiveOwner("notice-ready", 1, {
+			cwd: path.join(root, "polysimulator"),
+			capabilities: ["session-notices"],
+		});
+		writeLiveOwner("older-binary", 1, {
+			cwd: path.join(root, "legacy"),
+			capabilities: ["deliver-ack"],
+		});
+		writeLiveOwner("unknown-build", 1, { cwd: path.join(root, "unverified") });
+		const tool = makeTool();
+		const roster = await tool.execute("list-mixed-notice-capabilities", { op: "list" });
+		const text = roster.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		expect(text).toContain(
+			`session:notice-ready [live; project polysimulator; cwd ${path.join(root, "polysimulator")}; notices supported]`,
+		);
+		expect(text).toContain(
+			`session:older-binary [live; project legacy; cwd ${path.join(root, "legacy")}; notices unsupported]`,
+		);
+		expect(text).toContain(
+			`session:unknown-build [live; project unverified; cwd ${path.join(root, "unverified")}; notices unverified]`,
+		);
+		const refused = await tool.execute("send-unsupported-project", {
+			op: "send", to: "session:project=legacy", message: "Must not queue",
+		});
+		expect(refused.isError).toBe(true);
+		expect(fs.existsSync(path.join(root, "run", "notices", "older-binary"))).toBe(false);
+		expect(fs.existsSync(path.join(root, "run", "notices", "notice-ready"))).toBe(false);
+	});
+
 	it("records the loaded build and notice capability, then delivers through the supported production path", async () => {
 		const close = await serveTerminalControl(
 			{
