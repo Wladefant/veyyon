@@ -138,6 +138,7 @@ import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
 import {
 	ArgotStreamDisplayDecoder,
+	expandAgentReturn,
 	expandAssistantContent,
 	expandSessionContext,
 	expandSessionMessageEntries,
@@ -323,7 +324,7 @@ import { ContextAccounting } from "./runtime/context-accounting";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
-import { IrcInbox } from "./runtime/irc-inbox";
+import { IrcContinuationOutbox, IrcInbox } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
@@ -353,6 +354,11 @@ import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./run
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { YieldTracker } from "./runtime/yield-tracker";
+import { isTerminalYieldToolResult } from "./runtime/yield-tracker";
+import type { YieldDetails } from "../tools/agent/yield";
+import type { YieldItem } from "../task/types";
+import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
+import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
@@ -1086,6 +1092,9 @@ export class AgentSession {
 	readonly #checkpoint = new CheckpointRuntime();
 	/** The `yield` call that ended the run and whether the run is terminal. */
 	readonly #yields = new YieldTracker();
+	#ircContinuations: IrcContinuationOutbox | undefined;
+	#ircActivePhase: string | undefined;
+	#ircWakeSettled: Promise<void> | undefined;
 	/**
 	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
@@ -1147,16 +1156,18 @@ export class AgentSession {
 		if (this.#isDisposed || this.isStreaming) return;
 		if (this.#ircInbox.isEmpty) return;
 		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
+		const completionWake = this.#ircInbox.completionWake;
 		const records = this.#takeIrcRecords();
+		if (completionWake) records.push(completionWake);
 		if (this.#planMode.enabled) {
 			// Plan mode: fold stranded IRC asides into context without waking an
 			// autonomous turn. Convergence to ask/resolve stays user-driven.
 			for (const record of records) {
-				this.#appendCustomMessageToContext(record);
+				if (record.customType !== "task:continuation") this.#appendCustomMessageToContext(record);
 			}
 			return;
 		}
-		this.#wakeForIrc(records);
+		void this.#wakeForIrc(records).catch(error => logger.warn("Persisting an IRC wake failed", { error: errorMessage(error) }));
 	}
 
 	/** Fire-and-forget wake turn for incoming IRC — idle delivery and stranded-aside resume both
@@ -1166,7 +1177,70 @@ export class AgentSession {
 	 *  it, so park the follow-up queue across the wake and restore it after. It stays queued post-wake
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
-	#wakeForIrc(records: CustomMessage[]): void {
+	#wakeForIrc(records: CustomMessage[], recovering = false): Promise<void> {
+		const selfId = this.#config.agentId;
+		const parentRecord = records.find(record => record.customType === "task:continuation" ||
+			(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"));
+		const completionId = parentRecord?.customType === "task:continuation"
+			? Reflect.get(parentRecord.details ?? {}, "completionId") : undefined;
+		const phaseId = typeof completionId === "string" ? `completion:${completionId}`
+			: parentRecord ? Reflect.get(parentRecord.details ?? {}, "id") : undefined;
+		const parentId = parentRecord?.customType === "task:continuation" && selfId
+			? AgentRegistry.global().actorContext(selfId).parentId
+			: parentRecord ? Reflect.get(parentRecord.details ?? {}, "from") : undefined;
+		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+		if (typeof phaseId === "string" && selfId) {
+			if (this.#ircActivePhase === phaseId) return Promise.resolve();
+			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord)) return Promise.resolve();
+			this.#ircActivePhase = phaseId;
+		}
+		const yields: YieldItem[] = [];
+		let terminal = false;
+		let published = false;
+		let phaseEnd: number | undefined;
+		const unsubscribe = this.subscribe(event => {
+			if (event.type !== "tool_execution_end" || event.toolName !== "yield" || event.isError) return;
+			const details = event.result?.details as YieldDetails | undefined;
+			if (!details || (details.status !== "success" && details.status !== "aborted")) return;
+			yields.push(details);
+			terminal ||= isTerminalYieldToolResult(event);
+		});
+		const publish = async (failure?: unknown): Promise<void> => {
+			if (!selfId || typeof parentId !== "string" || typeof phaseId !== "string") return;
+			const last = yields.at(-1);
+			let lastAssistantText: string | undefined;
+			for (let index = Math.min(this.agent.state.messages.length, phaseEnd ?? this.agent.state.messages.length) - 1; index >= phaseStart; index--) {
+				const message = this.agent.state.messages[index];
+				if (message?.role !== "assistant") continue;
+				const text = contentText(message.content, { separator: "" });
+				if (text.trim()) { lastAssistantText = text; break; }
+			}
+			const init = this.sessionManager.getEntries().findLast(entry => entry.type === "session_init");
+			const assembled = terminal && last?.status !== "aborted" ? assembleYieldResult(yields, lastAssistantText,
+				init?.outputSchema === undefined ? undefined : arrayValuedLabels(init.outputSchema)) : undefined;
+			let resultSource: "agent" | "harness" = failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
+				? "harness" : "agent";
+			let output = failure !== undefined || !terminal
+				? JSON.stringify({ error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure), source: "harness" })
+				: last?.status === "aborted"
+					? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
+					: !assembled || assembled.missingData
+						? JSON.stringify({ error: "Phase yielded no result data", source: "harness" })
+						: assembled.rawText ? String(assembled.data) : JSON.stringify(assembled.data);
+			if (terminal && failure === undefined && last?.status !== "aborted" && assembled && !assembled.missingData &&
+				init?.outputSchema !== undefined) {
+				const { validator, error } = buildOutputValidator(init.outputSchema);
+				const validation = validator?.validate(assembled.data);
+				if (error) { output = JSON.stringify({ error, source: "harness" }); resultSource = "harness"; }
+				else if (validator && validation && !validation.success) {
+					resultSource = "harness";
+					output = JSON.stringify({ error: "schema_violation", source: "harness",
+						...summarizeValidationFailure(validation, assembled.data, validator.requiredFields) });
+				}
+			}
+			await outbox.complete(selfId, parentId, phaseId, expandAgentReturn(this.getArgotSession(), output), resultSource);
+			await this.replayIrcContinuations();
+		};
 		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
 		// already-resumable follow-up can ride the wake turn normally without reordering.
 		const parkedFollowUps =
@@ -1180,20 +1254,64 @@ export class AgentSession {
 		}
 		this.#resetPromptMaintenanceState();
 		this.#inFlight.begin();
-		void this.agent
-			.prompt(records)
-			.catch(error => {
-				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
+		const retainedIndex = parentRecord ? this.agent.state.messages.findIndex(message => message.role === "custom" &&
+			message.customType === parentRecord.customType &&
+			Reflect.get(message.details ?? {}, "id") === Reflect.get(parentRecord.details ?? {}, "id")) : -1;
+		const phaseStart = retainedIndex >= 0 ? retainedIndex + 1 : this.agent.state.messages.length;
+		if (retainedIndex >= 0) {
+			// A crash after native yield persistence must publish B, not execute the phase again.
+			for (let index = retainedIndex + 1; index < this.agent.state.messages.length; index++) {
+				const message = this.agent.state.messages[index]!;
+				if (message.role === "custom" && (message.customType === "task:continuation" ||
+					(message.customType === "irc:incoming" && Reflect.get(message.details ?? {}, "relation") === "parent"))) {
+					phaseEnd = index;
+					break;
+				}
+				if (message.role !== "toolResult" || message.toolName !== "yield" || message.isError) continue;
+				const details = message.details as YieldDetails | undefined;
+				if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
+				yields.push(details);
+				terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
+				if (terminal) { phaseEnd = index + 1; break; }
+			}
+		}
+		const ready = this.#ircActivePhase === phaseId && typeof phaseId === "string"
+			? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
+			: Promise.resolve();
+		const settled = ready.then(() => terminal ? undefined : records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue())
+			.then(() => publish(), error => publish(error))
+			.then(async () => {
+				if (typeof completionId === "string") {
+					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
+					this.sessionManager.flushSync();
+					await this.sessionManager.sync();
+				}
+				published = true;
 			})
-			.finally(() => {
+			.catch(error => {
+				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", { error: errorMessage(error) });
+			})
+			.finally(async () => {
+				unsubscribe();
+				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
 				if (parkedFollowUps.length > 0) {
 					this.agent.replaceQueues(
 						this.agent.peekSteeringQueue().slice(),
 						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
 					);
 				}
+				// Claim the next retained phase before dropping this turn's idle accounting.
+				if (published) {
+					await this.replayIrcContinuations(true).catch(error =>
+						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }));
+				}
 				this.#endInFlight();
 			});
+		this.#ircWakeSettled = settled;
+		void settled.finally(() => {
+			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
+		});
+		return ready;
 	}
 
 	/**
@@ -3999,6 +4117,11 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
+		while (this.#ircWakeSettled) {
+			await this.#ircWakeSettled;
+			await this.agent.waitForIdle();
+			await this.#waitForPostPromptRecovery();
+		}
 	}
 
 	/**
@@ -7387,6 +7510,21 @@ export class AgentSession {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
 		}
+		if (msg.completion) {
+			const completionId = msg.completion.id;
+			if (this.sessionManager.getEntries().some(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" &&
+				Reflect.get(entry.details ?? {}, "completionId") === completionId)) {
+				await this.sessionManager.ensureOnDisk();
+				await this.sessionManager.sync();
+				return "injected";
+			}
+		}
+		if (!msg.completion && (this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager)).hasPhase(msg.id)) {
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			return "injected";
+		}
 		// Auto-reply eligibility: the sender is blocked on an answer and this
 		// session cannot produce a real reply turn in time — either mid-turn with
 		// async execution disabled (no step boundary until the sender's own batch
@@ -7394,29 +7532,71 @@ export class AgentSession {
 		const planModeIdle = !this.isStreaming && this.#planMode.enabled;
 		const autoReply =
 			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
+		const registry = AgentRegistry.global();
+		const identity = registry.actorContext(msg.to);
+		const relation = registry.relationTo(msg.to, msg.from);
 		const record: CustomMessage = {
 			role: "custom",
-			customType: "irc:incoming",
+			customType: msg.completion ? "task:continuation" : "irc:incoming",
 			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
 				from: msg.from,
 				message: msg.body,
+				source: "agent",
 				replyTo: msg.replyTo ?? "",
 				autoReplied: autoReply,
 				interrupting: this.isStreaming,
+				...identity,
+				parentId: identity.parentId ?? "unknown",
+				ancestorIds: identity.ancestorIds.join(", ") || "none verified",
+				relation,
+				parentUpdate: relation === "parent",
+				phaseId: msg.id,
+				completionHandle: msg.completion?.handle,
+				completionSource: msg.completion?.resultSource,
 			}),
 			display: true,
-			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
+			details: { id: msg.id, from: msg.from, message: msg.body, source: "agent", relation, ...identity,
+				actor: { source: "agent", relation, ...identity },
+				...(msg.completion ? { completionId: msg.completion.id, phaseId: msg.completion.phaseId, handle: msg.completion.handle, resultSource: msg.completion.resultSource } : {}),
+				...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
 			attribution: "agent",
 			timestamp: msg.ts,
 		};
+		if (msg.completion) {
+			// Persist before acknowledging delivery. A sender crash may replay the same result.
+			this.#appendCustomMessageToContext(record);
+			this.sessionManager.flushSync();
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			void this.#emitSessionEvent({ type: "irc_message", message: record });
+			if (this.isStreaming) {
+				this.#ircInbox.queueCompletionWake(record);
+				return "injected";
+			}
+			if (this.#planMode.enabled) return "injected";
+			// The record is already in context; wake on it without persisting a second copy.
+			await this.#wakeForIrc([record]);
+			return "woken";
+		}
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
+		if (relation === "parent") {
+			const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
+				// Preserve both phase boundaries and the order of input retained across a restart.
+				outbox.begin(msg.id, record);
+				await this.sessionManager.ensureOnDisk();
+				await this.sessionManager.sync();
+				if (!this.#ircActivePhase) await this.replayIrcContinuations();
+				return "injected";
+			}
+		}
 		if (this.isStreaming) {
-			const recipientParentId = AgentRegistry.global().get(msg.to)?.parentId;
-			if (recipientParentId === msg.from) {
+			if (relation === "parent") {
 				this.agent.steer({
 					role: "user",
 					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
 						from: msg.from,
+						selfId: msg.to,
 						message: msg.body,
 					}),
 					attribution: "agent",
@@ -7436,8 +7616,55 @@ export class AgentSession {
 			return "injected";
 		}
 		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
-		this.#wakeForIrc([record]);
+		await this.#wakeForIrc([record]);
 		return "woken";
+	}
+
+	/** Replay durable result deliveries on a retained agent's next native activation. */
+	async replayIrcContinuations(settling = false): Promise<void> {
+		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+		await outbox.flush(async completion => {
+			const registry = AgentRegistry.global();
+			const context = registry.actorContext(completion.agentId);
+			// Only this agent's verified lineage can receive its result, never a foreign peer.
+			for (const parentId of context.ancestorIds) {
+				const parent = registry.get(parentId);
+				if (!parent || parent.status === "aborted") continue;
+				const receipt = await IrcBus.global().send(
+					{ from: completion.agentId, to: parentId, body: completion.output },
+					{ completion: { version: 1, id: completion.id, handle: completion.handle, phaseId: completion.phaseId, resultSource: completion.resultSource } },
+				);
+				if (receipt.outcome !== "failed") return true;
+			}
+			return false;
+		});
+		if (this.agent.state.isStreaming || (!settling && this.isStreaming) || this.#planMode.enabled || this.#ircActivePhase) return;
+		const consumed = new Set(this.sessionManager.getEntries().flatMap(entry =>
+			entry.type === "custom" && entry.customType === "irc:completion-consumed" &&
+			typeof entry.data === "string" ? [entry.data] : []));
+		const pendingCompletion = this.agent.state.messages.find(message =>
+			message.role === "custom" && message.customType === "task:continuation" &&
+			typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
+			!consumed.has(Reflect.get(message.details ?? {}, "completionId")));
+		if (pendingCompletion?.role === "custom") {
+			const from = Reflect.get(pendingCompletion.details ?? {}, "from");
+			const selfId = this.#config.agentId;
+			if (selfId && typeof from === "string" &&
+				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)) {
+				await this.#wakeForIrc([pendingCompletion], true);
+				return;
+			}
+		}
+		const retained = outbox.unfinished().find(record => {
+			const from = Reflect.get(record.details ?? {}, "from");
+			const selfId = this.#config.agentId;
+			if (typeof from !== "string" || selfId === undefined) return false;
+			const registry = AgentRegistry.global();
+			return record.customType === "task:continuation"
+				? registry.actorContext(from).ancestorIds.includes(selfId)
+				: registry.relationTo(selfId, from) === "parent";
+		});
+		if (retained) await this.#wakeForIrc([retained], true);
 	}
 
 	/**
@@ -7451,9 +7678,17 @@ export class AgentSession {
 	 */
 	async #runIrcAutoReply(msg: IrcMessage): Promise<void> {
 		try {
+			const registry = AgentRegistry.global();
+			const identity = registry.actorContext(msg.to);
+			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
 					from: msg.from,
+					...identity,
+					parentId: identity.parentId ?? "unknown",
+					ancestorIds: identity.ancestorIds.join(", ") || "none verified",
+					relation,
+					parentUpdate: relation === "parent",
 					message: msg.body,
 					replyTo: msg.replyTo ?? "",
 				}),
@@ -7594,12 +7829,11 @@ export class AgentSession {
 
 	/**
 	 * Claim the notices other sessions queued for this one (`launch/session-notices.ts`) and hand each
-	 * to the model as a `session:notice` record, plus to every running lane over the IrcBus: a notice
-	 * addressed to a session is for the lanes it runs too.
+	 * to the addressed session as informational `session:notice` records, never as parent instructions
+	 * to its lanes. The addressed session can decide whether any verified information affects its work.
 	 *
 	 * Runs at the start of every prompt and, at most once a second, at each step boundary. Only the
-	 * driving session reads its queue; a spawned one gets the notice from the bus. Delivery is at least
-	 * once: a claim offered again is dropped here by notice id.
+	 * driving session reads its queue. A claim offered again is dropped here by notice id.
 	 */
 	#pullSessionNotices(force: boolean): void {
 		if (this.#isDisposed || this.#isSpawned) return;
@@ -7615,7 +7849,6 @@ export class AgentSession {
 			logger.warn("Reading session notices failed", { error: errorMessage(error) });
 			return;
 		}
-		const agentId = this.#config.agentId;
 		for (const notice of notices) {
 			if (this.#noticesInInbox.has(notice.id)) continue; // claimed again while still waiting for its turn
 			if (this.#noticesSeen.has(notice.id)) {
@@ -7627,23 +7860,21 @@ export class AgentSession {
 			const record: CustomMessage = {
 				role: "custom",
 				customType: "session:notice",
-				content: formatNoticeMessage(notice, Date.now()),
+				content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
+					from: notice.from, message: formatNoticeMessage(notice, Date.now()),
+					source: "external-session notice",
+					selfId: this.#config.agentId ?? sessionId, relation: "external-session notice",
+					parentId: "not agent lineage",
+					ancestorIds: "not agent lineage", parentUpdate: false, phaseId: notice.id,
+				}),
 				display: true,
-				details: { id: notice.id, from: notice.from, message: notice.body },
+				details: { id: notice.id, from: notice.from, message: notice.body, source: "external-session-notice" },
 				attribution: "agent",
 				timestamp: notice.ts,
 			};
 			void this.#emitSessionEvent({ type: "irc_message", message: record });
 			this.#ircInbox.queueAside(record);
 			this.#noticesInInbox.add(notice.id);
-			if (!agentId) continue;
-			const registry = AgentRegistry.global();
-			for (const lane of registry.listVisibleTo(agentId)) {
-				if (lane.status !== "running" || lane.kind === "main") continue;
-				void IrcBus.global()
-					.send({ from: agentId, to: lane.id, body: record.content as string })
-					.catch(error => logger.warn("Session notice relay failed", { to: lane.id, error: errorMessage(error) }));
-			}
 		}
 	}
 

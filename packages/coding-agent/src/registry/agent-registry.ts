@@ -187,6 +187,14 @@ export interface AgentRef {
 	approvalWaitedMs?: number;
 }
 
+/** Host-resolved lineage. Names and message bodies never establish a relationship. */
+export interface AgentActorContext {
+	selfId: string;
+	parentId?: string;
+	ancestorIds: string[];
+	scope?: string;
+}
+
 export type RegistryEvent =
 	| { type: "registered"; ref: AgentRef }
 	| { type: "status_changed"; ref: AgentRef }
@@ -286,6 +294,30 @@ export class AgentRegistry {
 		this.#refs.set(ref.id, ref);
 		this.#emit({ type: "registered", ref });
 		return ref;
+	}
+
+	actorContext(id: string): AgentActorContext {
+		const self = this.#refs.get(id);
+		const ancestorIds: string[] = [];
+		const seen = new Set([id]);
+		let parentId = self?.parentId;
+		while (parentId && !seen.has(parentId)) {
+			const parent = this.#refs.get(parentId);
+			if (!parent || (self?.scope && parent.scope && self.scope !== parent.scope)) break;
+			seen.add(parentId);
+			ancestorIds.push(parentId);
+			parentId = parent.parentId;
+		}
+		return { selfId: id, parentId: ancestorIds[0], ancestorIds, scope: self?.scope };
+	}
+
+	relationTo(recipientId: string, senderId: string): "self" | "parent" | "ancestor" | "peer" | "unknown" {
+		if (!this.#refs.has(senderId) || !this.#refs.has(recipientId)) return "unknown";
+		if (recipientId === senderId) return "self";
+		const context = this.actorContext(recipientId);
+		if (context.parentId === senderId) return "parent";
+		if (context.ancestorIds.includes(senderId)) return "ancestor";
+		return "peer";
 	}
 
 	#deriveScope(input: RegisterInput): string | undefined {

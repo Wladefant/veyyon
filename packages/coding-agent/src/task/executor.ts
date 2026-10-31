@@ -1980,11 +1980,13 @@ function deriveAgentTelemetry(options: ExecutorOptions): AgentTelemetryConfig | 
 export type AgentPromptInputs = Pick<
 	ExecutorOptions,
 	"agent" | "context" | "planReference" | "worktree" | "outputSchema" | "outputSchemaOverridesAgent"
->;
+> & Partial<Pick<ExecutorOptions, "id" | "parentAgentId">>;
 
 /** The agent's own system prompt section; it depends only on the run's fixed inputs. */
 export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
 	const { normalized: normalizedOutputSchema } = normalizeSchema(options.outputSchema);
+	const registry = AgentRegistry.global();
+	const parent = options.parentAgentId ? registry.get(options.parentAgentId) : undefined;
 	return prompt.render(agentPrompts["agent/system-prompt"].text, {
 		agent: options.agent.systemPrompt,
 		context: options.context?.trim() ?? "",
@@ -1994,6 +1996,9 @@ export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: 
 		outputSchema: normalizedOutputSchema,
 		outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
 		ircEnabled,
+		selfId: options.id,
+		parentId: parent?.id,
+		ancestorIds: parent ? [parent.id, ...registry.actorContext(parent.id).ancestorIds].join(", ") : "",
 	});
 }
 
@@ -2021,6 +2026,8 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
 		agent: options.agent,
+		id: options.id,
+		parentAgentId: options.parentAgentId,
 		context: options.context,
 		planReference: options.planReference,
 		worktree: options.worktree,

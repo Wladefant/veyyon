@@ -319,11 +319,18 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 		(a, b) =>
 			(PEER_STATUS_ORDER[a.status] ?? 9) - (PEER_STATUS_ORDER[b.status] ?? 9) || b.lastActivity - a.lastActivity,
 	);
+	const lines: ViewLine[] = details.identity
+		? [
+				[{ text: replaceTabs(`Self: ${details.identity.selfId}`) }],
+				[{ text: replaceTabs(`Direct parent: ${details.identity.parentId ?? "unknown"}`) }],
+				[{ text: replaceTabs(`Ancestors: ${details.identity.ancestorIds.join(", ") || "none verified"}`) }],
+			]
+		: [];
 	if (peers.length === 0) {
 		return messageCard(
 			{ kind: "statusRow", status: "info", title: "IRC peers", meta: [[{ text: "no other agents" }]] },
 			"success",
-			[],
+			lines.length > 0 ? [{ lines }] : [],
 		);
 	}
 	const counts = new Map<string, number>();
@@ -333,10 +340,10 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 	if (unreadTotal > 0) meta.push([{ text: `${unreadTotal} unread`, tone: "warning" }]);
 
 	const shown = shownItems(peers.length, expanded);
-	const lines: ViewLine[] = [];
 	for (let i = 0; i < shown; i++) {
 		const peer = peers[i]!;
-		const kindText = peer.parentId ? `${peer.kind} of ${peer.parentId}` : peer.kind;
+		const relation = peer.id === details.identity?.parentId ? "direct parent" : peer.ancestor ? "ancestor" : "peer";
+		const kindText = `${relation} · ${peer.parentId ? `${peer.kind} of ${peer.parentId}` : peer.kind}`;
 		const line: ViewSpan[] = [
 			...peerStatusSpans(peer.status),
 			{ text: " " },

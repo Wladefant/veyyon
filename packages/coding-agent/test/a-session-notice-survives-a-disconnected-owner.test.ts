@@ -2,7 +2,7 @@
 // second time with "Terminal owner disconnected"; the target session's lanes never saw it. A notice is a
 // file, so a dropped socket, a missing owner or a busy session cannot lose it.
 // Covers the queue (connected owner, no owner, broadcast, once-only, bounds, failure paths) and the
-// session that reads it at the start of its next prompt, forwards it to its running lanes and
+// session that reads it at the start of its next prompt, keeps its external provenance and
 // acknowledges it only once it is in the turn.
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
@@ -354,7 +354,7 @@ describe("a session reading its notices", () => {
 		expect(fs.existsSync(path.join(queueDirectory(created.sessionId), "claimed", `${receipt!.id}.json`))).toBe(false);
 	});
 
-	it("forwards the notice to the lanes the session is running", async () => {
+	it("keeps an unrelated session notice informational without waking or reassigning its lanes", async () => {
 		const created = await createSession();
 		const registry = AgentRegistry.global();
 		registry.register({ id: "Main", displayName: "Main", kind: "main", session: null, status: "running" });
@@ -374,8 +374,11 @@ describe("a session reading its notices", () => {
 		const toLane = IrcBus.global()
 			.log()
 			.filter(entry => entry.message.to === "ImageWidgetFinish");
-		expect(toLane).toHaveLength(1);
-		expect(toLane[0]?.message.body).toContain("no builds now");
+		expect(toLane).toHaveLength(0);
+		const records = noticeRecords(created.session.agent.state.messages);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ attribution: "agent", details: { source: "external-session-notice" } });
+		expect(records[0]?.role === "custom" && records[0].content).toContain("not task reassignment or human authority");
 	});
 
 	it("negative control: with nothing queued, no notice record and no lane traffic appear", async () => {
