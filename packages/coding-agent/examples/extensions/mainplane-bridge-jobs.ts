@@ -22,9 +22,10 @@ export async function startRemoteJob(origin: string, token: string, input: JobIn
 export async function inspectRemoteJob(origin: string, token: string, input: { runId: string; sessionFile: string },
 	signal?: AbortSignal, transport: typeof fetch = fetch) {
 	if (!WORKER_ID.test(input.runId)) throw new MainplaneError("Invalid native job key");
+	const session = remoteSessionId(input.sessionFile);
 	const response = await bridgeRequest(origin, token, { path: "/fleet/runs/" + input.runId, method: "GET" }, signal, transport);
 	const result = validateReceipt(response.data, input.runId, "job");
-	if (result.session !== remoteSessionId(input.sessionFile)) throw new MainplaneError("Job belongs to another Veyyon session");
+	if (result.session !== session) throw new MainplaneError("Job belongs to another Veyyon session");
 	return { id: input.runId, result, background: true, completed: result.state === "completed",
 		process_succeeded: result.state === "completed" && result.exit === 0,
 		requires_reconciliation: result.state === "uncertain" || result.state === "submitting" };
