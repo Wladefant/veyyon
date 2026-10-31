@@ -169,6 +169,36 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("keeps matching ancestors despite 501 hits in an abandoned sibling", async () => {
+		const dir = TempDir.createSync("@veyyon-history-sibling-cap-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records: Array<{ type: string; id: string; parentId?: string | null; message?: string }> = [
+				{ type: "session", id: "s-branch" },
+				{ type: "message", id: "root", parentId: null, message: "needle ancestor" },
+			];
+			for (let i = 0; i < 501; i++) {
+				records.push({
+					type: "message", id: `s${i}`, parentId: i === 0 ? "root" : `s${i - 1}`,
+					message: `needle abandoned sibling ${i}`,
+				});
+			}
+			records.push({ type: "message", id: "active", parentId: "root", message: "needle active" });
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const current = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(current.status).toBe("ok");
+			expect(current.leafId).toBe("active");
+			expect(current.matches.map(match => match.entryId)).toEqual(["active", "root"]);
+			const archived = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "s500", limit: 3,
+			});
+			expect(archived.status).toBe("partial");
+			expect(archived.matches.map(match => match.entryId)).toEqual(["s500", "s499", "s498"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("returns bounded partial results for more than 500 readable matches without losing the current leaf", async () => {
 		const dir = TempDir.createSync("@veyyon-history-search-many-");
 		try {
