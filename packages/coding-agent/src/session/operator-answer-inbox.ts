@@ -129,6 +129,13 @@ export class OperatorAnswerInbox {
 				logger.info(`DUPLICATE-ANSWER ${questionId}`);
 				return "duplicate";
 			}
+			// A separately opened manager can have an older in-memory journal even after our per-session
+			// operation lock has settled. Its empty queue is not proof that no durable answer exists.
+			// Refuse to append from that stale snapshot; a reopened manager can recover the original.
+			if (await journal.holdsForeignEntries()) {
+				throw new Error("Operator-answer journal is stale; reopen session before accepting");
+			}
+			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before journaling");
 			const answer: PendingAnswer = pending.get(questionId) ?? {
 				version: 1, sessionId, questionId, inputId: `operator-answer:${questionId}`, text, mode,
 			};
@@ -147,6 +154,12 @@ export class OperatorAnswerInbox {
 	 */
 	recover(): Promise<void> {
 		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) return;
+			// Recovery must not replay an already-consumed answer from a retained stale manager.
+			if (await journal.holdsForeignEntries()) {
+				logger.warn("Skipping operator-answer recovery on stale session journal; reopen session");
+				return;
+			}
 			if (this.#journal() !== journal) return;
 			const { pending, consumed } = this.#scan(journal);
 			for (const answer of pending.values()) {
