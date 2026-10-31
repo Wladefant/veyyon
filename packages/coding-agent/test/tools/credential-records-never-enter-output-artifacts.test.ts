@@ -1,11 +1,12 @@
-// WHY: raw backing artifacts and streamed previews previously preceded consumer redaction.
-// These tests cover recognizable records and known values, not encoded data or image content.
+// WHY: Credential inventories with benign labels could leak through live output and raw artifacts.
+// These tests sweep shell, JSON, Python, and PowerShell shapes; they do not cover encoded or arbitrary exfiltration.
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
+import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "@veyyon/coding-agent/secrets/producer-output";
+import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -27,8 +28,11 @@ for (const record of [
 		const artifactPath = path.join(directory, "output.txt");
 		const live: string[] = [];
 		const sink = new OutputSink({
-			outputGuard: new ProducerOutputGuard(), artifactPath, artifactId: "fake-output",
-			spillThreshold: 1, onChunk: chunk => live.push(chunk),
+			outputGuard: new ProducerOutputGuard(),
+			artifactPath,
+			artifactId: "fake-output",
+			spillThreshold: 1,
+			onChunk: chunk => live.push(chunk),
 		});
 		// Every boundary, including within both the key and value, is hostile to chunk-local filtering.
 		for (const character of record + "\n") sink.push(character);
@@ -43,14 +47,16 @@ for (const record of [
 
 test("known values redact at EOF and on minimizer replacement without enumerating environment", async () => {
 	const live: string[] = [];
-	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-known-value", origin: "environment" }]);
+	const redacted = secrets.obfuscate("fake-known-value");
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
 	const sink = new OutputSink({ outputGuard: guard, onChunk: chunk => live.push(chunk) });
 	for (const character of "result fake-known-value") sink.push(character);
 	expect(live).toEqual([]);
-	expect((await sink.dump()).output).toBe("result <redacted>");
-	expect(live.join("")).toBe("result <redacted>");
+	expect((await sink.dump()).output).toBe(`result ${redacted}`);
+	expect(live.join("")).toBe(`result ${redacted}`);
 	sink.replace("replacement fake-known-value");
-	expect((await sink.dump()).output).toBe("replacement <redacted>");
+	expect((await sink.dump()).output).toBe(`replacement ${redacted}`);
 });
 
 test("unterminated oversized records never leak their suffix and memory stays bounded", () => {
@@ -62,12 +68,15 @@ test("unterminated oversized records never leak their suffix and memory stays bo
 
 test("bounded benign assignments and lookups retain exact output", async () => {
 	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
-	for (const character of "MODE=test\n/bin:/usr/bin\nan access token\nready") sink.push(character);
-	expect((await sink.dump()).output).toBe("MODE=test\n/bin:/usr/bin\nan access token\nready");
+	for (const character of "MODE=test\nFEATURE_FLAG=enabled\n/bin:/usr/bin\nan access token\nready")
+		sink.push(character);
+	expect((await sink.dump()).output).toBe("MODE=test\nFEATURE_FLAG=enabled\n/bin:/usr/bin\nan access token\nready");
 });
 
 test("redactor failure withholds the record instead of falling back to raw output", () => {
-	const guard = new ProducerOutputGuard(() => { throw new Error("synthetic failure"); });
+	const guard = new ProducerOutputGuard(() => {
+		throw new Error("synthetic failure");
+	});
 	expect(guard.push("fake-credential-123\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
 	expect(guard.finish()).toBe("");
 });
@@ -103,19 +112,18 @@ test("ANSI between a credential key and delimiter cannot hide a record", async (
 });
 
 test("ANSI within a known value cannot bypass its secret owner", () => {
-	const guard = new ProducerOutputGuard(text => text.replaceAll("fake-known-value", "<redacted>"));
-	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe("<redacted>");
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-known-value", origin: "environment" }]);
+	const redacted = secrets.obfuscate("fake-known-value");
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
+	expect(guard.sanitize("fake-\x1b[32mknown\x1b[0m-value")).toBe(redacted);
 	expect(guard.sanitize("\x1b[32mordinary output\x1b[0m")).toBe("\x1b[32mordinary output\x1b[0m");
 });
 
 test("credential labels split by a dump cannot be reassembled in output", () => {
 	const guard = new ProducerOutputGuard();
-	const output = [
-		guard.push("API_KE"),
-		guard.finish(),
-		guard.push("Y=fake-credential-123\n"),
-		guard.finish(),
-	].join("");
+	const output = [guard.push("API_KE"), guard.finish(), guard.push("Y=fake-credential-123\n"), guard.finish()].join(
+		"",
+	);
 	expect(output).not.toContain("API_KEY=fake-credential-123");
 	expect(output).not.toContain("fake-credential-123");
 });
@@ -127,7 +135,7 @@ for (const record of [
 ]) {
 	test(`recognizes credential label form: ${record.split(/[=:]/)[0]}`, () => {
 		const guard = new ProducerOutputGuard();
-		expect(guard.push(`${record}\n`)).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+		expect(guard.push(record + "\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
 		expect(guard.finish()).toBe("");
 	});
 }

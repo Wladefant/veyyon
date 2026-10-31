@@ -519,7 +519,9 @@ function executeList(registry: AgentRegistry, senderId: string): AgentToolResult
 			if (group.length === 0) continue;
 			lines.push(heading);
 			if (group === ancestorPeers) {
-				lines.push("An ancestor may still have uncommitted edits. Confirm the assigned writer and paths before overlapping writes.");
+				lines.push(
+					"An ancestor may still have uncommitted edits. Confirm the assigned writer and paths before overlapping writes.",
+				);
 			}
 			for (const peer of group) {
 				const extras = [
