@@ -1,28 +1,28 @@
 # Optional native Mainplane Go tools
 
-Refs Veyyon #788/#775 and Superboard #1774/#1811. Requires the **schema-2 Go
-bridge overlay** on a separate authorized Mainplane pilot. This file is not a
-default extension and changes no provider codec, grant, registration or broker.
+Refs Veyyon #788/#790/#775 and Superboard #1774/#1815. Explicitly load only
+mainplane-worker-bridge.ts; its transport and write modules are helpers, not
+separate extensions. This requires the schema-2 Go bridge with Run/Read/Write.
+No default tools, provider codecs, grants or credential refresh rules change.
 
-Inject MAINPLANE_BRIDGE_URL and MAINPLANE_API_KEY through the existing approved
-secret flow, then explicitly load mainplane-worker-bridge.ts with --extension.
-Do not put keys in prompts, issues, command arguments or a versioned bundle.
+Inject MAINPLANE_BRIDGE_URL and MAINPLANE_API_KEY using the existing secret flow.
+Never put a key in prompts, issues, argv or versioned bundles. Each operation binds
+the persisted Veyyon session/tool call to the exact native worker request. Errors
+include the stable receipt key for reconciliation, never a raw network exception.
 
-Run requests use a stable session/tool-call key and the same length-framed UTF-8
-SHA-256 contract as Go. Responses must match that key, request, worker and session.
-Old schemas, mismatched identities and contradictory terminal data are errors.
-A completed process with a nonzero exit is an **error** tool result. Uncertain or
-submitting duplicate receipts are also errors and must not be blindly replayed.
-A duplicate completed receipt may lack the original output; output_available is
-explicit and the command is not re-executed to recover it.
+Run: nonzero shell exits and unconfirmed duplicates are error tool results.
+Read: schema, worker, integer length, canonical base64, SHA-256 and UTF-8 are
+validated; display truncation preserves Unicode pairs.
+Write: mainplane_worker_write_text preserves exact UTF-8 and CRLF, caps bytes,
+uses native Go Write/Read and requires the returned readback digest and path to
+match. Both file text and remote path must round-trip exactly through UTF-8;
+malformed lone-surrogate paths fail locally before any write, while valid Unicode
+paths (including supplementary characters) remain unchanged. It overwrites the
+specified path. Uncertain writes are never retried, and responses contain
+metadata only. This is not atomic compare-and-swap against concurrent external
+writers; success is readback at one instant.
 
-Requests have independent finite deadlines, strict byte ceilings and no redirects.
-Reader overflow cancels the stream. Network exceptions are sanitized, not echoed.
-Text reads require schema/worker identity, integer lengths, canonical base64 and
-SHA-256. Invalid UTF-8 is refused and display truncation preserves surrogate pairs.
-These checks are integrity/error semantics, not a replacement for runtime grants.
-
-Tests include Go/TypeScript digest fixtures and execution of the registered tool
-with a simulated nonzero exit. Real workers, broker refresh, cancellation of a
-remote process tree, T3 session propagation and live binary compatibility still
-need separate qualification. Remote CI is required before adoption.
+The transport helper is shared by the actual Run/Read/Write callers. No legacy
+aliases remain. Timeouts, byte ceilings, redirect refusal and sanitized errors
+apply to all calls. Real host permissions, worker processes, central broker refresh
+and T3 ACP propagation still require separate qualification. Remote CI is required.
