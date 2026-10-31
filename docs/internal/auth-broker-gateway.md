@@ -41,6 +41,8 @@ Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packag
 
 The broker is the only writer of OAuth refresh tokens. Clients (including the gateway itself) load a redacted snapshot in which every `refresh` field has been replaced with `REMOTE_REFRESH_SENTINEL`; when an access token expires the client calls `POST /v1/credential/:id/refresh` and the broker performs the refresh server-side. `RemoteAuthCredentialStore` rejects local replace/upsert/delete-by-provider mutations, with errors pointing at `veyyon auth-broker login` / `veyyon auth-broker logout`.
 
+**Refresh-response identity boundary.** A remote store must accept the refresh response only if its credential row ID and provider equal the credential it requested, the payload is OAuth, and its refresh slot is the broker redaction sentinel. A mismatched row or a non-redacted refresh field is a broker protocol failure: no returned access token may be handed to a model and no local snapshot entry may be replaced. The broker remains the only refresh-token owner. This validation is independent of server correctness and must be covered with synthetic mismatched-ID, mismatched-provider, leaked-refresh and matching-response cases; it does not grant a remote host vault access.
+
 ## auth-broker
 
 ### CLI
