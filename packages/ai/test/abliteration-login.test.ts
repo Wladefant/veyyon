@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import { AuthStorage } from "../src/auth-storage";
+import { SqliteAuthCredentialStore } from "../src/auth-storage-sqlite";
 import { getOAuthProviders } from "../src/registry/oauth";
 import { getEnvApiKey } from "../src/stream";
 import type { FetchImpl } from "../src/types";
