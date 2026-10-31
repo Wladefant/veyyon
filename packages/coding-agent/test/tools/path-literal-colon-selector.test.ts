@@ -1,3 +1,4 @@
+import type { AnyAgentTool } from "@veyyon/agent-core";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -417,16 +418,20 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(await Bun.file(abs).text()).toBe("replaced\nsecond\n");
 	});
 
-	it("keeps bare, ranged, raw, Windows absolute, and per-entry selectors in real read calls", async () => {
+	it("keeps selector behavior in real reads and parses Windows absolute paths portably", async () => {
 		const relative = "selector-fixture.txt";
 		const absolute = path.join(tmpDir, relative);
 		await fs.writeFile(absolute, ["zero", "one", "two", "three", "four"].join("\n"));
-		let readTool: ReadTool;
-		const session = createSession({ getToolByName: name => (name === "read" ? readTool : undefined) });
+		let readTool: AnyAgentTool;
+		const session = createSession({
+			getToolByName: name => (name === "read" ? readTool : undefined),
+		});
 		readTool = new ReadTool(session);
 		const read = async (readPath: string): Promise<string> => {
 			const result = await callSessionTool("read", { path: readPath }, { session });
-			return typeof result === "string" ? result : result.text;
+			if (typeof result === "string") return result;
+			if ("text" in result && typeof result.text === "string") return result.text;
+			throw new Error("Read tool returned a non-text bridge result");
 		};
 
 		const bare = await read(relative);
@@ -438,8 +443,14 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(await read(`${relative}:raw:2-3`)).toBe("one\ntwo");
 
 		const windowsAbsolute = absolute.replaceAll("/", "\\");
-		const absoluteRange = await read(`${windowsAbsolute}:raw:3-4`);
-		expect(absoluteRange).toBe("two\nthree");
+		if (process.platform === "win32") {
+			const absoluteRange = await read(`${windowsAbsolute}:raw:3-4`);
+			expect(absoluteRange).toBe("two\nthree");
+		} else {
+			// Linux cannot open a Windows absolute path; check the shared parser against Windows syntax here.
+			const windowsPath = "C:\\workspace\\selector-fixture.txt";
+			expect(splitPathAndSel(`${windowsPath}:raw:3-4`)).toEqual({ path: windowsPath, sel: "raw:3-4" });
+		}
 
 		const perEntry = await read(`${relative}:raw:1-1;${relative}:raw:5-5`);
 		expect(perEntry).toContain("zero");

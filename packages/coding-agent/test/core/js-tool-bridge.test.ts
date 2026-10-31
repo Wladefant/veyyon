@@ -4,7 +4,7 @@
  * Unknown-key coercion belongs to the separate validation contract, not this regression.
  */
 import { describe, expect, it, vi } from "bun:test";
-import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import type { AnyAgentTool, AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
@@ -101,8 +101,10 @@ describe("callSessionTool", () => {
 		const fixture = path.join(tempDir.path(), "fixture.ts");
 		await writeFile(fixture, "function needle() { return 1; }\n");
 		const base = createSession([]);
-		const search = new SearchTool({ ...base, cwd: tempDir.path() } as ToolSession);
-		const session = { ...base, cwd: tempDir.path(), getToolByName: (name: string) => (name === "search" ? search : undefined) };
+		const session: ToolSession = { ...base, cwd: tempDir.path() };
+		const search = new SearchTool(session);
+		const registeredSearch: AnyAgentTool = search;
+		session.getToolByName = name => (name === "search" ? registeredSearch : undefined);
 
 		const inputs: Record<SearchType, string> = {
 			files: "*.ts",
