@@ -19,7 +19,7 @@ on:
         description: JSON array of related test paths (empty uses dependency selection)
         type: string
       fleet_adapter:
-        description: Run fixed fleet adapter contracts
+        description: Run the complete discovered fleet adapter contracts
         type: boolean
         default: false
       native:
@@ -115,8 +115,17 @@ jobs:
           import path from 'node:path';
           const root = fs.realpathSync('.');
           const files = JSON.parse(process.env.FOCUSED_TESTS);
-          const fleetExpected = ["packages/coding-agent/test/mainplane-go-worker-extension.test.ts","packages/coding-agent/test/mainplane-go-worker-read-text.test.ts","packages/coding-agent/test/mainplane-go-tool-failure.test.ts","packages/coding-agent/test/mainplane-go-worker-write.test.ts"];
-          if (process.env.FLEET_ADAPTER === 'true' && (!Array.isArray(files) || files.length !== 4 || new Set(files).size !== 4 || fleetExpected.some(file => !files.includes(file)))) throw new Error('Fleet adapter requires exactly the four fixed test paths');
+          if (process.env.FLEET_ADAPTER === 'true') {
+            const testDir = 'packages/coding-agent/test';
+            const fleetExpected = fs.readdirSync(testDir, { withFileTypes: true })
+              .filter(entry => entry.isFile() && /^mainplane-.*\.test\.ts$/.test(entry.name))
+              .map(entry => `${testDir}/${entry.name}`).sort();
+            if (fleetExpected.length < 4 || fleetExpected.length > 30 || !Array.isArray(files) ||
+                files.length !== fleetExpected.length || new Set(files).size !== files.length ||
+                fleetExpected.some(file => !files.includes(file))) {
+              throw new Error('Fleet adapter requires exactly all discovered mainplane-*.test.ts paths');
+            }
+          }
           if (!Array.isArray(files) || files.length === 0 || files.length > 30 ||
               files.some(file => typeof file !== 'string' || !/^[A-Za-z0-9_./-]+\.(test|spec)\.[cm]?[jt]sx?$/.test(file) ||
                 file.split('/').includes('..') || file.startsWith('/') || !fs.statSync(file).isFile())) {

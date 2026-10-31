@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@veyyon/coding-agent";
 import { bindReceipt, bridgeRequest, type BridgeReceipt, digest, MainplaneError, mainplaneRequestHash,
 	remoteRunId, remoteSessionId, SHA256, validateReceipt, visibleError, WORKER_ID } from "./mainplane-bridge-wire";
 import { registerMainplaneWrite } from "./mainplane-bridge-write";
+import { registerMainplaneCancellation } from "./mainplane-bridge-cancel";
 
 // Go JSON control escaping can expand the two retained 50 KiB outputs sixfold.
 const MAX_RUN_REPLY = 1024 * 1024;
@@ -13,18 +14,11 @@ export async function readRemoteReceipt(origin: string, token: string, runId: st
 	const { data } = await bridgeRequest(origin, token, { path: "/fleet/runs/" + runId, method: "GET" }, signal, transport);
 	return validateReceipt(data, runId);
 }
-
-export interface RunInput {
-	worker: string; interpreter: string; code: string; timeoutSeconds: number; sessionFile: string; toolCallId: string;
-}
+export interface RunInput { worker: string; interpreter: string; code: string; timeoutSeconds: number; sessionFile: string; toolCallId: string; }
 export async function runRemote(origin: string, token: string, args: RunInput,
 	signal?: AbortSignal, transport: typeof fetch = fetch) {
-	if (!WORKER_ID.test(args.worker) || !WORKER_ID.test(args.interpreter) ||
-		!Number.isInteger(args.timeoutSeconds) || args.timeoutSeconds < 1 || args.timeoutSeconds > 600 || !args.code.trim()) {
-		throw new MainplaneError("Invalid Mainplane worker execution fields");
-	}
-	const id = remoteRunId(args.sessionFile, args.toolCallId);
-	const session = remoteSessionId(args.sessionFile);
+	if (!WORKER_ID.test(args.worker) || !WORKER_ID.test(args.interpreter) || !Number.isInteger(args.timeoutSeconds) || args.timeoutSeconds < 1 || args.timeoutSeconds > 600 || !args.code.trim()) throw new MainplaneError("Invalid Mainplane worker execution fields");
+	const id = remoteRunId(args.sessionFile, args.toolCallId); const session = remoteSessionId(args.sessionFile);
 	const fingerprint = mainplaneRequestHash("run", args.worker, session, args.interpreter, String(args.timeoutSeconds), args.code);
 	try {
 		const response = await bridgeRequest(origin, token, { path: "/fleet/run", method: "POST", key: id,
@@ -32,19 +26,14 @@ export async function runRemote(origin: string, token: string, args: RunInput,
 			body: JSON.stringify({ worker: args.worker, session, interpreter: args.interpreter, code: args.code, timeout: args.timeoutSeconds }) }, signal, transport);
 		const result = bindReceipt(response.data, response.status, id, "run", args.worker, session, fingerprint);
 		return { id, result, replayed: response.status === 409, output_available: result.body !== undefined };
-	} catch (error) {
-		throw new MainplaneError(visibleError(error) + "; inspect receipt " + id + " before any retry");
-	}
+	} catch (error) { throw new MainplaneError(visibleError(error) + "; inspect receipt " + id + " before any retry"); }
 }
-
 export async function readRemoteText(origin: string, token: string, worker: string, path: string,
 	signal?: AbortSignal, transport: typeof fetch = fetch) {
 	if (!WORKER_ID.test(worker) || !path || Buffer.byteLength(path, "utf8") > 4096 || path.includes("\0")) throw new MainplaneError("Invalid worker or remote path");
 	const { data } = await bridgeRequest(origin, token, { path: "/fleet/read", method: "POST", timeoutMs: 35_000,
 		responseLimit: 2 * 1024 * 1024, body: JSON.stringify({ worker, path }) }, signal, transport);
-	if (data.schema_version !== 1 || data.worker !== worker || typeof data.data_base64 !== "string" ||
-		typeof data.bytes !== "number" || !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > 1024 * 1024 ||
-		typeof data.sha256 !== "string" || !SHA256.test(data.sha256)) throw new MainplaneError("Mainplane returned invalid read metadata");
+	if (data.schema_version !== 1 || data.worker !== worker || typeof data.data_base64 !== "string" || typeof data.bytes !== "number" || !Number.isSafeInteger(data.bytes) || data.bytes < 0 || data.bytes > 1024 * 1024 || typeof data.sha256 !== "string" || !SHA256.test(data.sha256)) throw new MainplaneError("Mainplane returned invalid read metadata");
 	const bytes = Buffer.from(data.data_base64, "base64");
 	if (bytes.toString("base64") !== data.data_base64 || bytes.byteLength !== data.bytes || digest(bytes) !== data.sha256) throw new MainplaneError("Mainplane read digest or length mismatch");
 	let value: string;
@@ -58,22 +47,18 @@ export async function readRemoteText(origin: string, token: string, worker: stri
 	if (end < value.length && /[\uD800-\uDBFF]/.test(value.charAt(end - 1))) end--;
 	return { text: value.slice(0, end), bytes: bytes.byteLength, sha256: data.sha256, truncated: end < value.length };
 }
-
 export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 	const { z } = pi.zod;
 	pi.registerTool({
 		name: "mainplane_worker_run", label: "Mainplane native worker run",
 		description: "Run on an owned Go worker. Uncertain outcomes and nonzero exits are errors; never blindly replay.",
-		parameters: z.object({ worker: z.string().regex(WORKER_ID), interpreter: z.string().regex(WORKER_ID),
-			code: z.string().min(1).max(256 * 1024), timeoutSeconds: z.number().int().min(1).max(600).default(90) }),
+		parameters: z.object({ worker: z.string().regex(WORKER_ID), interpreter: z.string().regex(WORKER_ID), code: z.string().min(1).max(256 * 1024), timeoutSeconds: z.number().int().min(1).max(600).default(90) }),
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const sessionFile = ctx.sessionManager.getSessionFile();
 			if (!sessionFile) return { content: [{ type: "text", text: "A persisted Veyyon session is required" }], isError: true };
 			try {
-				const answer = await runRemote(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "",
-					{ ...params, sessionFile, toolCallId }, signal);
-				return { content: [{ type: "text", text: JSON.stringify(answer) }],
-					isError: answer.result.state !== "completed" || answer.result.exit !== 0,
+				const answer = await runRemote(process.env.MAINPLANE_BRIDGE_URL ?? "", process.env.MAINPLANE_API_KEY ?? "", { ...params, sessionFile, toolCallId }, signal);
+				return { content: [{ type: "text", text: JSON.stringify(answer) }], isError: answer.result.state !== "completed" || answer.result.exit !== 0,
 					details: { run_id: answer.id, state: answer.result.state, exit: answer.result.exit, replayed: answer.replayed } };
 			} catch (error) { return { content: [{ type: "text", text: visibleError(error) }], isError: true }; }
 		},
@@ -101,4 +86,5 @@ export default function mainplaneWorkerBridge(pi: ExtensionAPI) {
 		},
 	});
 	registerMainplaneWrite(pi);
+	registerMainplaneCancellation(pi);
 }
