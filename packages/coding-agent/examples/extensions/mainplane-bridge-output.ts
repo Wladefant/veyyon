@@ -39,7 +39,7 @@ export async function recoverRemoteOutput(origin: string, token: string, input: 
 		throw new MainplaneError("Output artifact integrity mismatch");
 	}
 	let text: string;
-	try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+	try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
 	catch { throw new MainplaneError("Output is binary; use a binary-aware recovery tool"); }
 	if (text.includes("\0")) throw new MainplaneError("Output contains binary NUL bytes; use a binary-aware recovery tool");
 	const characters = Array.from(text);
