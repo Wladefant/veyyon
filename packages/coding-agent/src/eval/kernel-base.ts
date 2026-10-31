@@ -409,6 +409,14 @@ export function spawnKernelProcess(
 	});
 }
 
+/** A failed initializer still owns this runner until shutdown confirms its exit. */
+export class UnconfirmedKernelStartupError extends Error {
+	constructor(readonly kernel: SessionKernel, cause: unknown) {
+		super(errorMessage(cause), { cause });
+		this.name = cause instanceof Error ? cause.name : "Error";
+	}
+}
+
 export async function initializeKernelSubprocess<TKernel extends BaseKernel>(
 	kernel: TKernel,
 	options: {
@@ -438,7 +446,8 @@ export async function initializeKernelSubprocess<TKernel extends BaseKernel>(
 		);
 		return kernel;
 	} catch (err) {
-		await releaseKernel(kernel, options.releaseReason, { timeoutMs: KERNEL_SHUTDOWN_GRACE_MS });
+		const result = await releaseKernel(kernel, options.releaseReason, { timeoutMs: KERNEL_SHUTDOWN_GRACE_MS });
+		if (!result.confirmed) throw new UnconfirmedKernelStartupError(kernel, err);
 		throw err;
 	}
 }
@@ -610,14 +619,16 @@ export async function releaseKernel(
 	kernel: Pick<SessionKernel, "shutdown">,
 	context: string,
 	options?: KernelShutdownOptions,
-): Promise<void> {
+): Promise<KernelShutdownResult> {
 	try {
 		const result = await kernel.shutdown(options);
 		if (!result.confirmed) {
 			logger.warn("kernel shutdown was not confirmed", { context });
 		}
+		return result;
 	} catch (error) {
 		logger.warn("kernel shutdown failed", { context, error: errorMessage(error) });
+		return { confirmed: false };
 	}
 }
 

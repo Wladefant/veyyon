@@ -24,6 +24,7 @@ import {
 	type KernelStartOptions,
 	releaseKernel,
 	type SessionKernel,
+	UnconfirmedKernelStartupError,
 } from "./kernel-base";
 import { ensureKernelToolBridge, type KernelToolBridgeInfo, registerKernelToolBridge } from "./kernel-tool-bridge";
 import type { KernelDisplayOutput } from "./py/display";
@@ -735,6 +736,7 @@ export class KernelSessionPool<
 	readonly #resettingSessions = new Map<string, Promise<void>>();
 	readonly #transitions = new Map<string, Promise<void>>();
 	readonly #retiring = new Set<ManagedKernelSession<TKernel>>();
+	readonly #failedStartups = new Map<string, ManagedKernelSession<SessionKernel>>();
 	readonly #options: KernelSessionPoolOptions<TOptions, TKernel>;
 	readonly #cancelledErrorClass: CancelledErrorClass;
 
@@ -769,6 +771,10 @@ export class KernelSessionPool<
 		const transition = this.#transitions.get(sessionKey);
 		if (transition) {
 			await transition;
+			return await this.acquireSession(sessionKey, sessionId, cwd, options);
+		}
+		if (this.#failedStartups.has(sessionKey)) {
+			await this.#retireFailedStartup(sessionKey);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing && this.#retiring.has(existing)) {
@@ -823,7 +829,9 @@ export class KernelSessionPool<
 				this.#logOwnership(session, "owned");
 			}
 			return session;
-		})();
+		})().catch(error => {
+			throw this.#retainFailedStartup(error, sessionKey, sessionId, cwd, startingSession);
+		});
 
 		startingSession = {
 			ownerIds: new Set(),
@@ -886,10 +894,16 @@ export class KernelSessionPool<
 		}
 		this.#retiring.add(session);
 		const replacing = (async () => {
+			if (this.#failedStartups.has(session.sessionKey)) await this.#confirmFailedStartupShutdown(session.sessionKey);
 			await this.#confirmShutdown(session, getRemainingTimeoutMs(options.deadlineMs));
 			if (!this.hasSession(session.sessionKey, session)) throw new this.#cancelledErrorClass(false);
 			requireRemainingTimeoutMs(options.deadlineMs, this.#cancelledErrorClass);
-			const nextKernel = await this.#options.startKernel(cwd, options);
+			let nextKernel: TKernel;
+			try {
+				nextKernel = await this.#options.startKernel(cwd, options);
+			} catch (error) {
+				throw this.#retainFailedStartup(error, session.sessionKey, session.sessionId, cwd, session);
+			}
 			session.kernel = nextKernel;
 			this.#retiring.delete(session);
 			this.#logOwnership(session, "owned");
@@ -902,7 +916,7 @@ export class KernelSessionPool<
 		}
 	}
 
-	#logOwnership(session: ManagedKernelSession<TKernel>, state: "owned" | "retiring" | "released"): void {
+	#logOwnership(session: ManagedKernelSession<SessionKernel>, state: "owned" | "retiring" | "released"): void {
 		logger.info("eval kernel session ownership", {
 			language: this.#options.languageName,
 			pid: session.kernel.processId,
@@ -912,12 +926,68 @@ export class KernelSessionPool<
 		});
 	}
 
-	async #confirmShutdown(session: ManagedKernelSession<TKernel>, remainingMs?: number): Promise<void> {
+	async #confirmShutdown(session: ManagedKernelSession<SessionKernel>, remainingMs?: number): Promise<void> {
 		this.#logOwnership(session, "retiring");
 		const grace = this.#options.shutdownGraceMs ?? KERNEL_SHUTDOWN_GRACE_MS;
 		const result = await session.kernel.shutdown({ timeoutMs: Math.max(0, Math.min(grace, remainingMs ?? grace)) });
 		if (!result.confirmed) {
 			throw new Error(`${this.#options.languageName} kernel shutdown was not confirmed; replacement refused`);
+		}
+	}
+
+	#retainFailedStartup(
+		error: unknown,
+		sessionKey: string,
+		sessionId: string,
+		cwd: string,
+		owners: SessionOwnerState,
+	): unknown {
+		if (!(error instanceof UnconfirmedKernelStartupError)) return error;
+		this.#failedStartups.set(sessionKey, {
+			sessionKey,
+			sessionId,
+			cwd,
+			kernel: error.kernel,
+			ownerIds: new Set(owners.ownerIds),
+			hasFallbackOwner: owners.hasFallbackOwner,
+		});
+		return error.cause;
+	}
+
+	async #confirmFailedStartupShutdown(sessionKey: string): Promise<void> {
+		const session = this.#failedStartups.get(sessionKey);
+		if (!session) return;
+		await this.#confirmShutdown(session);
+		if (this.#failedStartups.get(sessionKey) === session) this.#failedStartups.delete(sessionKey);
+		this.#logOwnership(session, "released");
+	}
+
+	async #retireFailedStartup(sessionKey: string): Promise<void> {
+		const pending = this.#transitions.get(sessionKey);
+		if (pending) await pending;
+		if (!this.#failedStartups.has(sessionKey)) return;
+		const retiring = this.#confirmFailedStartupShutdown(sessionKey);
+		this.#transitions.set(sessionKey, retiring);
+		try {
+			await retiring;
+		} finally {
+			if (this.#transitions.get(sessionKey) === retiring) this.#transitions.delete(sessionKey);
+		}
+	}
+
+	async #disposeFailedStartups(ownerId?: string): Promise<void> {
+		const failed = [...this.#failedStartups.values()].filter(
+			session => !ownerId || session.ownerIds.size === 0 || session.ownerIds.has(ownerId),
+		);
+		const results = await Promise.allSettled(failed.map(session => this.#retireFailedStartup(session.sessionKey)));
+		for (let i = 0; i < results.length; i += 1) {
+			const result = results[i];
+			if (result.status === "rejected") {
+				logger.warn(`${this.#options.languageName} failed startup shutdown not confirmed`, {
+					sessionKey: failed[i].sessionKey,
+					reason: result.reason,
+				});
+			}
 		}
 	}
 
@@ -944,6 +1014,7 @@ export class KernelSessionPool<
 		const session =
 			this.#sessions.get(sessionKey) ??
 			(await this.#startingSessions.get(sessionKey)?.promise.catch(() => undefined));
+		if (this.#failedStartups.has(sessionKey)) await this.#retireFailedStartup(sessionKey);
 		if (!session) return;
 		await this.#retireSession(session);
 	}
@@ -951,6 +1022,7 @@ export class KernelSessionPool<
 	async disposeAll(): Promise<void> {
 		const pending = [...this.#startingSessions.values()].map(starting => starting.promise);
 		const started = await Promise.allSettled(pending);
+		await this.#disposeFailedStartups();
 		const all = [...this.#sessions.entries()];
 		for (const result of started) {
 			if (result.status !== "fulfilled") continue;
@@ -974,6 +1046,7 @@ export class KernelSessionPool<
 	}
 
 	async disposeByOwner(ownerId: string): Promise<void> {
+		const failedDisposal = this.#failedStartups.size ? this.#disposeFailedStartups(ownerId) : undefined;
 		const toShutdown: ManagedKernelSession<TKernel>[] = [];
 		for (const session of [...this.#sessions.values()]) {
 			if (!session.ownerIds.has(ownerId)) continue;
@@ -1008,6 +1081,7 @@ export class KernelSessionPool<
 				reason,
 			});
 		}
+		await failedDisposal;
 	}
 }
 

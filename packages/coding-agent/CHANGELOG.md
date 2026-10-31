@@ -5,6 +5,7 @@
 ### Fixed
 
 - Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
+- Failed kernel initialization retains runner ownership and blocks replacement until shutdown confirms exit.
 
 ## [1.6.8] - 2026-10-30
 
