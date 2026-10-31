@@ -3,6 +3,7 @@ import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { STREAM_NO_TERMINAL_REASON_PATTERN } from "@veyyon/ai/error/domains/network";
+import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
@@ -5897,7 +5898,8 @@ describe("openai-codex abort cause preservation and bounded error reads", () => 
 		const result = await resultPromise;
 		expect(requestCount).toBe(1);
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("timed out");
+		expect(AIError.is(result.errorId!, AIError.Flag.Timeout)).toBe(true);
+		expect(result.errorMessage).toMatch(/^Timed out after 10 ms waiting for the first event:/);
 	});
 });
 
@@ -6046,9 +6048,21 @@ describe("openai-codex stream retry guards and balancing end events", () => {
  * provider. Not covered: the websocket transport, which reads the same request metadata.
  */
 describe("openai-codex ephemeral fork metadata", () => {
-	function createMetadataCapturingFetch(sent: Array<Record<string, unknown>>): FetchImpl {
-		return vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-			const body = requireRecord(JSON.parse(String(init?.body)), "request body");
+	beforeEach(resetCodexAccessProgramListings);
+	afterEach(resetCodexAccessProgramListings);
+
+	function createMetadataCapturingFetch(sent: Array<Record<string, unknown>>, requests: string[]): FetchImpl {
+		return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = new URL(input instanceof Request ? input.url : input);
+			const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+			requests.push(`${method} ${url.pathname}`);
+			if (method === "GET" && url.pathname === "/backend-api/codex/models") {
+				return Response.json({ models: [] });
+			}
+			if (method !== "POST" || url.pathname !== "/backend-api/codex/responses") {
+				throw new Error(`unexpected Codex request: ${method} ${url.pathname}`);
+			}
+			const body = requireRecord(JSON.parse(decodeCodexRequestBody(init?.body)), "request body");
 			sent.push(parseTurnMetadata(requireRecord(body.client_metadata, "client_metadata")));
 			return new Response(createCompletedCodexSse("ok"), {
 				status: 200,
@@ -6074,20 +6088,28 @@ describe("openai-codex ephemeral fork metadata", () => {
 	it("names the parent's thread and the thread source on a fork of a live session", async () => {
 		setAgentDir(TempDir.createSync("@pi-codex-fork-").path());
 		const sent: Array<Record<string, unknown>> = [];
-		const fetchMock = createMetadataCapturingFetch(sent);
+		const requests: string[] = [];
+		const fetchMock = createMetadataCapturingFetch(sent, requests);
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
 
-		await streamSimple(
+		const parentResult = await streamSimple(
 			model,
 			createCodexTestContext(),
 			sseOptions(fetchMock, "parent", providerSessionState),
 		).result();
-		await streamSimple(model, createCodexTestContext(), {
+		const forkResult = await streamSimple(model, createCodexTestContext(), {
 			...sseOptions(fetchMock, "parent:side:1", providerSessionState),
 			codexFork: { parentSessionId: "parent", threadSource: "composer_predictions" },
 		}).result();
 
+		expect(parentResult.stopReason).toBe("stop");
+		expect(forkResult.stopReason).toBe("stop");
+		expect(requests).toEqual([
+			"GET /backend-api/codex/models",
+			"POST /backend-api/codex/responses",
+			"POST /backend-api/codex/responses",
+		]);
 		const [parent, fork] = sent;
 		expect(parent?.thread_source).toBeUndefined();
 		expect(parent?.forked_from_thread_id).toBeUndefined();
@@ -6100,13 +6122,16 @@ describe("openai-codex ephemeral fork metadata", () => {
 	it("still names the thread source when the parent has sent no Codex turn", async () => {
 		setAgentDir(TempDir.createSync("@pi-codex-fork-").path());
 		const sent: Array<Record<string, unknown>> = [];
+		const requests: string[] = [];
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 
-		await streamSimple(model, createCodexTestContext(), {
-			...sseOptions(createMetadataCapturingFetch(sent), "fresh:side:1", new Map()),
+		const result = await streamSimple(model, createCodexTestContext(), {
+			...sseOptions(createMetadataCapturingFetch(sent, requests), "fresh:side:1", new Map()),
 			codexFork: { parentSessionId: "fresh", threadSource: "composer_predictions" },
 		}).result();
 
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toEqual(["GET /backend-api/codex/models", "POST /backend-api/codex/responses"]);
 		expect(sent[0]?.thread_source).toBe("composer_predictions");
 		expect(sent[0]?.forked_from_thread_id).toBeUndefined();
 	});
@@ -6114,13 +6139,16 @@ describe("openai-codex ephemeral fork metadata", () => {
 	it("lets no caller metadata impersonate a fork", async () => {
 		setAgentDir(TempDir.createSync("@pi-codex-fork-").path());
 		const sent: Array<Record<string, unknown>> = [];
+		const requests: string[] = [];
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 
-		await streamOpenAICodexResponses(model, createCodexTestContext(), {
-			...sseOptions(createMetadataCapturingFetch(sent), "plain", new Map()),
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			...sseOptions(createMetadataCapturingFetch(sent, requests), "plain", new Map()),
 			clientMetadata: { thread_source: "composer_predictions", forked_from_thread_id: "thread-x" },
 		}).result();
 
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toEqual(["GET /backend-api/codex/models", "POST /backend-api/codex/responses"]);
 		expect(sent[0]?.thread_source).toBeUndefined();
 		expect(sent[0]?.forked_from_thread_id).toBeUndefined();
 	});
