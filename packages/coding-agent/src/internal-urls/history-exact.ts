@@ -226,13 +226,23 @@ export async function readStoredHistoryEntry(
 				incomplete = true;
 				continue;
 			}
-			if (!record || typeof record !== "object") continue;
-			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
-			if (entry.type === "session") {
-				if (typeof entry.id === "string") sessionId = entry.id;
+			if (!record || typeof record !== "object" || Array.isArray(record)) {
+				incomplete = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
+			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
+			// A fixed-width title slot can precede the session header. It is not an entry.
+			if (entry.type === "title" && !sessionId && !lastId) continue;
+			if (entry.type === "session") {
+				if (typeof entry.id === "string") sessionId = entry.id;
+				else incomplete = true;
+				continue;
+			}
+			if (typeof entry.id !== "string" || typeof entry.type !== "string"
+				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
+				incomplete = true;
+				continue;
+			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
 				incomplete = true;
 				break;
@@ -384,13 +394,23 @@ export async function searchStoredHistoryEntries(
 				unreadable = true;
 				continue;
 			}
-			if (!record || typeof record !== "object") continue;
-			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
-			if (entry.type === "session") {
-				if (typeof entry.id === "string") sessionId = entry.id;
+			if (!record || typeof record !== "object" || Array.isArray(record)) {
+				unreadable = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string") continue;
+			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
+			// A fixed-width title slot can precede the session header. It is not an entry.
+			if (entry.type === "title" && !sessionId && !lastId) continue;
+			if (entry.type === "session") {
+				if (typeof entry.id === "string") sessionId = entry.id;
+				else unreadable = true;
+				continue;
+			}
+			if (typeof entry.id !== "string" || typeof entry.type !== "string"
+				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
+				unreadable = true;
+				continue;
+			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
 				unreadable = true;
 				break;

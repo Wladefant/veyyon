@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Refuse implicit history-branch selection after a structurally invalid stored JSONL entry (Refs #774).
+
 ## [1.7.0] - 2026-10-31
 
 - The terminal launch status row now reads file-backed Git HEAD without eagerly loading Git subprocess and diff helpers; background status and PR queries still load the full Git implementation when needed ([#701](https://github.com/Wladefant/veyyon/issues/701)).
