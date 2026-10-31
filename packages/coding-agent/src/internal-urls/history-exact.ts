@@ -349,8 +349,9 @@ function previewAt(raw: string, term: string): string {
 
 /**
  * Stream a stored session to search its serialized records. Only the latest
- * 500 candidate snippets remain resident; if more match, the status is partial
- * rather than a false assertion that all matching history was searched.
+ * 500 selected-branch candidate snippets remain resident; if more match,
+ * the status is partial. Two read-only passes resolve ancestry before limiting
+ * hits, refusing concurrent transcript changes rather than mixing versions.
  * Search covers stored JSONL text, not externalized blob contents.
  */
 export async function searchStoredHistoryEntries(
@@ -358,15 +359,15 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
-	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
 	let unreadable = false;
-	let truncated = false;
 	let startedJsonl = false;
+	const topologyHash = createHash("sha256");
 	try {
 		for await (const line of storedLines(filePath)) {
+			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
 				continue;
@@ -396,14 +397,6 @@ export async function searchStoredHistoryEntries(
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
-			if (!line.toLowerCase().includes(query)) continue;
-			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
-				candidates.shift();
-				truncated = true;
-			}
-			candidates.push({
-				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query), digest: recordDigest(line),
-			});
 		}
 	} catch (error) {
 		if (!isFileReadError(error)) throw error;
@@ -428,13 +421,63 @@ export async function searchStoredHistoryEntries(
 			detail: "Requested session branch was not found",
 		};
 	}
-	const matches = candidates.filter(item => onBranch(parents, item.entryId, leafId)).reverse().slice(0, request.limit)
+	// Select the lineage before enforcing the candidate cap. Otherwise
+	// unrelated sibling matches can evict an older matching ancestor.
+	const selectedIds = new Set<string>();
+	let ancestor: string | undefined = leafId;
+	while (ancestor && !selectedIds.has(ancestor)) {
+		selectedIds.add(ancestor);
+		ancestor = parents.get(ancestor);
+	}
+	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
+	let truncated = false;
+	const matchesHash = createHash("sha256");
+	try {
+		for await (const line of storedLines(filePath)) {
+			matchesHash.update(line ?? "\0unreadable").update("\n");
+			if (line === undefined || !line.trimStart().startsWith("{")) continue;
+			let record: unknown;
+			try {
+				record = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (!record || typeof record !== "object") continue;
+			const entry = record as { type?: unknown; id?: unknown };
+			if (entry.type === "session" || typeof entry.id !== "string" || typeof entry.type !== "string"
+				|| !selectedIds.has(entry.id) || !line.toLowerCase().includes(query)) continue;
+			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
+				candidates.shift();
+				truncated = true;
+			}
+			candidates.push({
+				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query), digest: recordDigest(line),
+			});
+		}
+	} catch (error) {
+		if (!isFileReadError(error)) throw error;
+		return {
+			status: "unavailable", sessionId, leafId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Stored session file could not be read; this is not a negative evidence lookup",
+		};
+	}
+	// Session history can be rewritten while this read-only search runs.
+	// A second pass must not combine newer text with an older branch graph.
+	if (topologyHash.digest("hex") !== matchesHash.digest("hex")) {
+		return {
+			status: "unavailable", sessionId, leafId, query: request.query,
+			source: "stored-jsonl", matches: [],
+			detail: "Stored session changed during search; retry to select a consistent branch",
+		};
+	}
+	const matches = candidates.reverse().slice(0, request.limit)
 		.map(({ digest, ...match }) => ({ ...match, revision: recordRevision(digest, "stored-jsonl", leafId, sessionId) }));
 	return {
 		status: unreadable || truncated ? "partial" : "ok", sessionId, leafId, query: request.query,
 		source: "stored-jsonl", matches,
 		detail: unreadable || truncated
-			? "Not exhaustive: malformed/oversized records or more than 500 candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
+			? "Not exhaustive: malformed/oversized records or more than 500 selected-branch candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
 			: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
 }
