@@ -12,6 +12,14 @@
 
 ### Fixed
 
+- Image removal archives original image records, leaves recovery references, and restores only unchanged live records when persistence fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal leaves cold assistant payloads unloaded when they contain no supported images ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Image removal refuses user and developer image records with preserved native OpenAI Responses history ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Useless-result pruning retains entries unless their complete recovery placeholders reduce context tokens ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Superseded-read pruning archives the original results before replacing them and retains their recovery references across resume ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Invalid JSON-RPC records no longer terminate MCP HTTP event streams or block valid batch notifications ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - MCP HTTP streams no longer treat request extension fields as final responses ([Refs #718](https://github.com/Wladefant/veyyon/issues/718)).
 - Edit and write tools use their session's generated-file protection setting without requiring global settings initialization ([Refs #759](https://github.com/Wladefant/veyyon/issues/759)).

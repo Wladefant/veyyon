@@ -202,6 +202,13 @@ restores the original live entries. If the branch or selected entries change whi
 being written, the pass aborts without replacing newer evidence. An in-memory session can recover
 its archive only while that session remains alive. Reported savings exclude recovery-reference text.
 
+Shake and dedup elision also verify that the selected branch and original entries still match after
+saving their recovery artifact. If another operation changes the selected evidence during that
+asynchronous save, the old selection aborts instead of replacing newer bytes with a pointer to
+the wrong archived text. If transcript persistence then fails, unchanged live elisions are
+rolled back without overwriting a concurrent edit. The previously saved recovery artifact remains
+available, and a fresh selection may archive and elide the new result.
+
 Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
 from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized
 away, so the passes neither rewrite nor read them, and a turn costs the same after hundreds of
@@ -605,4 +612,36 @@ These values are consumed at runtime by `AgentSession` and compaction/branch sum
 
 ### Stale-result recovery
 
-The per-turn stale-read and useless-result pass uses the same staged archive-before-commit path as threshold pruning. Its recovery envelope has operation `prune-stale`; each retained marker names the archive and original entry. A later read of a path does not make the earlier bytes disposable evidence. Archive or transcript failures keep the original result available, and reported savings include the recovery-reference cost.
+The per-turn stale-read and useless-result pass stages changes before saving originals, as threshold pruning does.
+Its `prune-stale` envelope retains each complete original entry.
+Each retained marker names its archive and entry, so a newer read does not discard the earlier bytes.
+Archive failure leaves live entries and the transcript unchanged.
+Persistence failure restores only records that still match this pass's published snapshot.
+The pass never overwrites concurrent edits while handling that failure.
+
+Useless-result pruning prices the complete replacement, including its actual recovery reference.
+It keeps a result when that replacement would save no tokens.
+It reports the number of entries actually changed and their net estimated savings, clamped at zero.
+The saved archive may also contain selected originals that remain unchanged after this cost check.
+
+### Image recovery
+
+`dropImages`, including shake image mode, stages supported message, tool-result detail, file-mention and custom-message images.
+It saves complete original entries in a `drop-images` recovery envelope before publishing removals.
+Retained text names the archive and entry.
+Each affected file mention carries its own reference.
+A previous cost-negative useless-result prune never suppresses explicit image removal:
+still-present images in tool-result details are archived and stripped even when the text was too short to prune.
+
+Archive failure leaves live entries and persisted bytes unchanged.
+Persistence failure restores unchanged records, but never overwrites concurrent edits.
+Repeating a successful pass does not archive placeholders again.
+The pass does not load cold assistant content.
+
+#### Provider-native image limitation
+
+The pass does not rewrite user or developer records with preserved native OpenAI Responses history.
+If a selected image record has this payload, the whole image pass fails before saving an archive or changing history.
+Canonical content, native payloads and persisted bytes remain unchanged.
+Provider serializers can replay native items instead of canonical content, so deleting only the canonical image is unsafe.
+This pass does not edit native images.

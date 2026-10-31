@@ -249,7 +249,7 @@ describe("a history rewrite lists every entry it changed", () => {
 			expectEveryListedRewriteWhole(1);
 			const reloaded = await reload();
 			expect(JSON.stringify(reloaded.getEntries())).not.toContain(PNG.data);
-			expect(toolResultText(reloaded.getEntries(), screenshotCall)).toBe("captured");
+			expect(toolResultText(reloaded.getEntries(), screenshotCall)).toMatch(/^captured\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
 		});
 	}
 
@@ -318,8 +318,12 @@ describe("a history rewrite lists every entry it changed", () => {
 
 		expectEveryListedRewriteWhole(1);
 		const reloaded = (await reload()).getEntries();
-		expect(toolResultText(reloaded, staleRead)).toBe(compactionModule.SUPERSEDED_NOTICE);
-		expect(toolResultText(reloaded, uselessSearch)).toBe(compactionModule.USELESS_NOTICE);
+		const staleText = toolResultText(reloaded, staleRead);
+		expect(staleText.startsWith(`${compactionModule.SUPERSEDED_NOTICE}\n[recover: artifact://`)).toBe(true);
+		expect(staleText).toMatch(/\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
+		const uselessText = toolResultText(reloaded, uselessSearch);
+		expect(uselessText.startsWith(`${compactionModule.USELESS_NOTICE}\n[recover: artifact://`)).toBe(true);
+		expect(uselessText).toMatch(/\n\[recover: artifact:\/\/[^\s)]+ \(entry [^)]+\)\]$/);
 		expect(toolResultText(reloaded, freshRead)).toBe("FRESH\n".repeat(200));
 	});
 
@@ -354,10 +358,10 @@ describe("a history rewrite lists every entry it changed", () => {
 		expect(toolResultText(reloaded, calls[3]!)).toBe("L3\n".repeat(3000));
 	});
 
-	// `prepareCompaction` replaces the elided message before the artifact is saved, so the entry is
-	// changed whether or not its recovery pointer lands.
+	// A pre-compaction truncation already archives the build result's middle. A saved tail
+	// archive permits the compaction and dead-end stamp; failure must keep that earlier recovery valid.
 	for (const artifact of ["saved", "not saved"] as const) {
-		it(`persists the tail elision and the dead-end stamp a threshold compaction writes, artifact ${artifact}`, async () => {
+		it(`persists only recoverable threshold compaction changes, artifact ${artifact}`, async () => {
 			start({
 				"compaction.enabled": true,
 				"compaction.strategy": "summary",
@@ -405,13 +409,28 @@ describe("a history rewrite lists every entry it changed", () => {
 
 			await session.prompt("Continue.");
 
-			expectEveryListedRewriteWhole(2);
+			expectEveryListedRewriteWhole(artifact === "saved" ? 2 : 1);
 			const reloaded = (await reload()).getEntries();
 			const buildText = toolResultText(reloaded, buildCall);
-			expect(buildText).not.toContain("BUILD LINE");
-			expect(buildText.includes("artifact://")).toBe(artifact === "saved");
 			const compaction = reloaded.filter((entry): entry is CompactionEntry => entry.type === "compaction").at(-1);
-			expect(compaction?.warning).toContain("Compaction freed too little context to make progress");
+			if (artifact === "not saved") {
+				const marker = buildText.match(/\n\[truncated ~\d+ tokens; recover: artifact:\/\/(\d+) \(region 1\)\]\n/);
+				if (!marker) throw new Error("Expected the earlier truncation's recovery reference");
+				const archivePath = await manager.getArtifactPath(marker[1]!);
+				if (!archivePath) throw new Error("Expected the earlier truncation's persisted archive");
+				const archived = await fs.readFile(archivePath, "utf8");
+				const bodyStart = archived.indexOf("\n\n");
+				expect(bodyStart).toBeGreaterThan(0);
+				const originalMiddle = archived.slice(bodyStart + 2, -1);
+				expect(buildText.replace(marker[0], originalMiddle)).toBe("BUILD LINE\n".repeat(3000));
+				expect(toolResultText(manager.getBranch(), buildCall)).toBe(buildText);
+				expect(compaction).toBeUndefined();
+				expect(session.agent.state.messages).toEqual(manager.buildSessionContext().messages);
+			} else {
+				expect(buildText).not.toContain("BUILD LINE");
+				expect(buildText).toContain("artifact://");
+				expect(compaction?.warning).toContain("Compaction freed too little context to make progress");
+			}
 		});
 	}
 });
