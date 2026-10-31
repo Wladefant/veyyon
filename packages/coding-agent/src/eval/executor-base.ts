@@ -770,7 +770,7 @@ export class KernelSessionPool<
 		const existing = this.#sessions.get(sessionKey);
 		const transition = this.#transitions.get(sessionKey);
 		if (transition) {
-			await transition;
+			await waitForPromiseWithCancellation(transition, options, this.#cancelledErrorClass);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (this.#failedStartups.has(sessionKey)) {
@@ -887,10 +887,11 @@ export class KernelSessionPool<
 
 	async replaceSessionKernel(session: ManagedKernelSession<TKernel>, cwd: string, options: TOptions): Promise<void> {
 		const oldKernel = session.kernel;
-		const pending = this.#transitions.get(session.sessionKey);
-		if (pending) {
+		let pending = this.#transitions.get(session.sessionKey);
+		while (pending) {
 			await pending;
 			if (session.kernel !== oldKernel) return;
+			pending = this.#transitions.get(session.sessionKey);
 		}
 		this.#retiring.add(session);
 		const replacing = (async () => {

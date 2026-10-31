@@ -31,6 +31,7 @@
 
 - Shared kernel startup no longer inherits one waiter's cancellation signal or deadline.
 - Failed kernel initialization retains runner ownership and blocks replacement until shutdown confirms exit.
+- Queued kernel replacements preserve runner ownership and honor each waiting caller's cancellation and deadline ([#751](https://github.com/Wladefant/veyyon/issues/751)).
 
 - Native browser ARIA snapshots and structured observations omit password-control values, including values inherited through another control's accessible name, while preserving labels and ordinary input values ([Refs #760](https://github.com/Wladefant/veyyon/issues/760)).
 ## [1.6.8] - 2026-10-30
