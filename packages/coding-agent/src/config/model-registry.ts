@@ -16,6 +16,7 @@ import { bundledCatalogDigest, getBundledModels, getBundledProviders } from "@ve
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
+	openAICodexModelCacheProviderId,
 	type OpenAICodexAccount,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
@@ -941,7 +942,9 @@ export class ModelRegistry {
 	}
 
 	#resolveStartupModelCacheProviderId(providerId: string): string {
-		if (providerId === "openai-codex") return openaiCodexCacheProviderId(this.#codexAccountIds());
+		if (providerId === "openai-codex") {
+			return openAICodexModelCacheProviderId(resolveCodexAccountFingerprint(this.authStorage));
+		}
 		const descriptor = PROVIDER_DESCRIPTORS.find(candidate => candidate.providerId === providerId);
 		if (!descriptor?.resolveCacheProviderId) return providerId;
 		const registry = this;
@@ -957,12 +960,6 @@ export class ModelRegistry {
 		});
 	}
 
-	/** Account ids of the stored Codex logins. They select Codex's model cache row. */
-	#codexAccountIds(): string[] {
-		return this.authStorage
-			.listOAuthAccounts("openai-codex")
-			.flatMap(account => (account.accountId ? [account.accountId] : []));
-	}
 
 	#loadCachedStandardProviderModels(): {
 		models: Model<Api>[];
