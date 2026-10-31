@@ -4,10 +4,11 @@ import * as fs from "node:fs/promises";
 import { Agent } from "@veyyon/agent-core";
 import { USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { HistoryRewrites } from "@veyyon/coding-agent/session/runtime/history-rewrites";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
 
@@ -87,12 +88,12 @@ async function createHarness(texts: readonly string[]): Promise<UselessPruneHarn
 	}
 }
 
-function getToolResult(manager: SessionManager, id: string) {
+function getToolResult(manager: SessionManager, id: string): SessionMessageEntry & { message: ToolResultMessage } {
 	const entry = manager.getEntry(id);
 	if (entry?.type !== "message" || entry.message.role !== "toolResult") {
 		throw new Error("Expected a persisted tool result");
 	}
-	return entry;
+	return entry as SessionMessageEntry & { message: ToolResultMessage };
 }
 
 async function closeHarness(harness: UselessPruneHarness): Promise<void> {
