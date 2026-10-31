@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal ownership scans skip explicit claims for other sessions, batch Windows file ACL checks, and log verification failures ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

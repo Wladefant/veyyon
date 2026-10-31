@@ -1,7 +1,8 @@
 /**
  * Reads of discovery records: small JSON files a process publishes under the config root so a peer can
  * find a live session or terminal. A record counts as evidence only when the current user wrote it.
- * A reader refuses any record another user could have written or can read, before it parses one.
+ * A single-record reader refuses unsafe records before parsing; the batch reader can discard explicit
+ * non-matches from untrusted bytes, but verifies every record it returns.
  *
  * WHY: a record that is broadly readable or writable is not proof of ownership. Another local user can
  * plant one (a live pid, a socket path that answers), and a reader that trusts it refuses a session it
@@ -31,10 +32,15 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import * as path from "node:path";
 import { isFsError } from "./fs-error";
-import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
+import {
+	verifyOwnerOnlyWindowsAcl,
+	verifyOwnerOnlyWindowsAclSync,
+	verifyOwnerOnlyWindowsAcls,
+	type WindowsAclOptions,
+} from "./windows-acl";
 
 /** A discovery record is a few hundred bytes. A larger file is not one this build published. */
 const MAX_DISCOVERY_RECORD_BYTES = 64 * 1024;
@@ -156,6 +162,60 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 		return await handle.readFile({ encoding: "utf8" });
 	} finally {
 		await handle.close();
+	}
+}
+
+/**
+ * Read sibling records, checking their parent once and batching Windows file ACL checks.
+ * `couldMatch` sees UNTRUSTED bytes only to exclude explicit non-matches, never to accept an owner.
+ * Malformed or ambiguous claims must remain candidates. Every returned record passes the file checks.
+ * Discovery is a snapshot: a same-user writer can change a claim after any read.
+ */
+export async function readOwnerOnlyFiles(
+	filePaths: readonly string[],
+	couldMatch: (untrusted: string) => boolean,
+	options: OwnerOnlyReadOptions = {},
+): Promise<string[]> {
+	if (filePaths.length === 0) return [];
+	const platform = options.platform ?? process.platform;
+	const parent = path.dirname(filePaths[0]);
+	for (const filePath of filePaths) {
+		if (path.dirname(filePath) !== parent) throw new Error("Discovery records must share a parent directory");
+		if (platform === "win32") assertWindowsFilePath(filePath);
+	}
+	await checkParent(filePaths[0], platform, options);
+	const candidates: Array<{ filePath: string; handle: fsp.FileHandle; stats: fs.Stats; content: string }> = [];
+	try {
+		for (const filePath of filePaths) {
+			let handle: fsp.FileHandle | undefined;
+			try {
+				if (platform === "win32" && (await fsp.lstat(filePath)).isSymbolicLink()) {
+					throw refuse(filePath, "is a symbolic link");
+				}
+				handle = await fsp.open(filePath, platform === "win32" ? "r" : POSIX_READ_FLAGS);
+				const stats = await handle.stat();
+				assertRecordStats(filePath, stats, platform);
+				const content = await handle.readFile({ encoding: "utf8" });
+				if (couldMatch(content)) {
+					candidates.push({ filePath, handle, stats, content });
+					handle = undefined;
+				}
+			} catch (error) {
+				if (!isFsError(error) || error.code !== "ENOENT") throw error;
+			} finally {
+				await handle?.close();
+			}
+		}
+		await verifyOwnerOnlyWindowsAcls(
+			candidates.map(candidate => candidate.filePath),
+			{ ...options.windowsAcl, platform },
+		);
+		for (const candidate of candidates) {
+			assertSameFile(candidate.filePath, await fsp.lstat(candidate.filePath), candidate.stats);
+		}
+		return candidates.map(candidate => candidate.content);
+	} finally {
+		await Promise.all(candidates.map(candidate => candidate.handle.close()));
 	}
 }
 

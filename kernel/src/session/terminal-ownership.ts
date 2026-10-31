@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir, readOwnerOnlyFile } from "@veyyon/utils";
+import { errorMessage, getConfigRootDir, logger, type OwnerOnlyReadOptions, readOwnerOnlyFiles } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -22,7 +22,11 @@ async function isEndpointServing(endpoint: string): Promise<boolean> {
 }
 
 /** Live terminal discovery is an ownership claim, never permission to open another writer. */
-export async function assertNotTerminalOwned(sessionFile: string, root = getConfigRootDir()): Promise<void> {
+export async function assertNotTerminalOwned(
+	sessionFile: string,
+	root = getConfigRootDir(),
+	options: OwnerOnlyReadOptions = {},
+): Promise<void> {
 	const directory = path.join(root, "run", "terminals");
 	let files: string[];
 	try {
@@ -33,15 +37,36 @@ export async function assertNotTerminalOwned(sessionFile: string, root = getConf
 	}
 	const resolved = path.resolve(sessionFile);
 	const target = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	for (const file of files) {
-		if (!file.endsWith(".json")) continue;
+	const recordPaths = files.filter(file => file.endsWith(".json")).map(file => path.join(directory, file));
+	let records: string[];
+	try {
+		records = await readOwnerOnlyFiles(
+			recordPaths,
+			untrusted => {
+				try {
+					const claim: { sessionFile?: unknown } | null = JSON.parse(untrusted);
+					if (typeof claim?.sessionFile !== "string") return true;
+					const candidate = path.resolve(claim.sessionFile);
+					return (process.platform === "win32" ? candidate.toLowerCase() : candidate) === target;
+				} catch {
+					return true;
+				}
+			},
+			options,
+		);
+	} catch (error) {
+		logger.warn("Cannot establish terminal writer ownership", { path: directory, reason: errorMessage(error) });
+		throw new Error("Cannot establish terminal writer ownership", { cause: error });
+	}
+	for (const record of records) {
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
-		// A record another user can read or write is refused, not skipped: a claim we cannot verify may be a
-		// live owner, so the session is not opened. A missing record is still no owner.
 		try {
-			owner = JSON.parse(await readOwnerOnlyFile(path.join(directory, file)));
+			owner = JSON.parse(record);
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			logger.warn("Cannot establish terminal writer ownership", {
+				path: directory,
+				reason: "Invalid discovery JSON",
+			});
 			throw new Error("Cannot establish terminal writer ownership", { cause: error });
 		}
 		if (

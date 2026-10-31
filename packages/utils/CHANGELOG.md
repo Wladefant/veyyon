@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Discovery readers can check sibling records with one parent ACL check and one batch of candidate file ACL checks ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
