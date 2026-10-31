@@ -85,7 +85,9 @@ describe("mixed-build session notices", () => {
 		const roster = await tool.execute("list-project", { op: "list" });
 		const rosterText = roster.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
 		expect(rosterText).toContain(`session:${targetSessionId} [live; project polysimulator`);
-		expect(roster.details?.sessionPeers?.map(owner => owner.sessionId).sort()).toEqual(["unrelated-session", targetSessionId].sort());
+		expect(roster.details?.sessionPeers?.map(owner => owner.sessionId).sort()).toEqual(
+			["unrelated-session", targetSessionId].sort(),
+		);
 		const sent = await tool.execute("send-project", {
 			op: "send",
 			to: "session:project=polysimulator",

@@ -131,10 +131,17 @@ describe("the notice queue", () => {
 			body: "OVH runner alert",
 			root,
 		});
-		expect(receipt).toMatchObject({ to: "poly-main", route: "live", project: "PolySimulator", cwd: path.join(root, "PolySimulator") });
+		expect(receipt).toMatchObject({
+			to: "poly-main",
+			route: "live",
+			project: "PolySimulator",
+			cwd: path.join(root, "PolySimulator"),
+		});
 		const delivered = takeAll("poly-main");
 		expect(delivered.map(notice => notice.body)).toEqual(["OVH runner alert"]);
-		expect(formatNoticeMessage(delivered[0]!, Date.now())).toContain(`Origin: project shipnovo, cwd ${path.join(root, "shipnovo")}`);
+		expect(formatNoticeMessage(delivered[0]!, Date.now())).toContain(
+			`Origin: project shipnovo, cwd ${path.join(root, "shipnovo")}`,
+		);
 		expect(takeAll("unrelated")).toEqual([]);
 		expect(takeAll("sender")).toEqual([]);
 	});
@@ -143,9 +150,15 @@ describe("the notice queue", () => {
 		await liveOwner("sender", path.join(root, "shipnovo"));
 		await liveOwner("poly-a", path.join(root, "polysimulator"));
 		await liveOwner("poly-b", path.join(root, "polysimulator"));
-		expect(() => sendSessionNotice({ from: "sender", to: "project=polysimulator", body: "do not broadcast", root })).toThrow(/Ambiguous session project.*poly-a.*poly-b/);
-		expect(() => sendSessionNotice({ from: "sender", to: "project=unknown-project", body: "do not broadcast", root })).toThrow(/Unknown session project.*candidates/);
-		expect(() => sendSessionNotice({ from: "sender", to: "project=shipnovo", body: "self", root })).toThrow("own session");
+		expect(() =>
+			sendSessionNotice({ from: "sender", to: "project=polysimulator", body: "do not broadcast", root }),
+		).toThrow(/Ambiguous session project.*poly-a.*poly-b/);
+		expect(() =>
+			sendSessionNotice({ from: "sender", to: "project=unknown-project", body: "do not broadcast", root }),
+		).toThrow(/Unknown session project.*candidates/);
+		expect(() => sendSessionNotice({ from: "sender", to: "project=shipnovo", body: "self", root })).toThrow(
+			"own session",
+		);
 		expect(takeAll("poly-a")).toEqual([]);
 		expect(takeAll("poly-b")).toEqual([]);
 		expect(takeAll("sender")).toEqual([]);
@@ -155,12 +168,20 @@ describe("the notice queue", () => {
 		await liveOwner("sender", path.join(root, "shipnovo"));
 		await liveOwner("poly", path.join(root, "polysimulator"));
 		await liveOwner("other", path.join(root, "other"));
-		const [one] = sendSessionNotice({ from: "sender", to: `cwd=${path.join(root, "polysimulator")}`, body: "only poly", root });
+		const [one] = sendSessionNotice({
+			from: "sender",
+			to: `cwd=${path.join(root, "polysimulator")}`,
+			body: "only poly",
+			root,
+		});
 		expect(one?.to).toBe("poly");
 		expect(takeAll("poly").map(notice => notice.body)).toEqual(["only poly"]);
 		expect(takeAll("other")).toEqual([]);
 		const receipts = sendSessionNotice({ from: "sender", to: "all", body: "broadcast", root });
-		expect(receipts.map(receipt => [receipt.to, receipt.project]).sort()).toEqual([["other", "other"], ["poly", "polysimulator"]]);
+		expect(receipts.map(receipt => [receipt.to, receipt.project]).sort()).toEqual([
+			["other", "other"],
+			["poly", "polysimulator"],
+		]);
 	});
 
 	it("keeps order and never hands one notice to two readers", () => {

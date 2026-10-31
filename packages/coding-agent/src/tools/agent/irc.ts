@@ -50,7 +50,9 @@ const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
 const ircSchema = lazy(() =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
-		"to?": type("string").describe('send: agent id, "all", "session:<id>", "session:project=<cwd-leaf>", "session:cwd=<absolute path>", or "session:all"'),
+		"to?": type("string").describe(
+			'send: agent id, "all", "session:<id>", "session:project=<cwd-leaf>", "session:cwd=<absolute path>", or "session:all"',
+		),
 		"message?": type("string").describe("send: message body"),
 		"replyTo?": type("string").describe("send: message id being answered"),
 		"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
@@ -205,9 +207,12 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 					: [
 							`Queued for ${receipts.length} session(s); each reads it at its next step or turn, with your name and the send time. ` +
 								`If it is not read within ${limit} min it expires: it is not injected and you get a "Not delivered" notice:`,
-							...receipts.map(receipt =>
-								`- session:${receipt.to}${receipt.project ? ` (project ${receipt.project}, cwd ${receipt.cwd ?? "unknown"})` : ""}: queued (${receipt.route}), id ${receipt.id}`,
-							),
+							...receipts.map(receipt => {
+								const label = receipt.project
+									? ` (project ${receipt.project}, cwd ${receipt.cwd ?? "unknown"})`
+									: "";
+								return `- session:${receipt.to}${label}: queued (${receipt.route}), id ${receipt.id}`;
+							}),
 						];
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
@@ -556,11 +561,15 @@ function executeList(
 			lines.push("Parked agents are revived automatically when you message them.");
 		}
 	}
-	const sessionPeers = liveSessions.filter(owner => owner.sessionId !== currentSessionId).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+	const sessionPeers = liveSessions
+		.filter(owner => owner.sessionId !== currentSessionId)
+		.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 	if (sessionPeers.length) {
 		lines.push("", "Other live sessions (direct notices; not in-process lanes):");
 		for (const owner of sessionPeers) {
-			lines.push(`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}]`);
+			lines.push(
+				`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}]`,
+			);
 		}
 	}
 	return {

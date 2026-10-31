@@ -233,7 +233,10 @@ export function sendSessionNotice(args: {
 			const candidates = (matches.length ? matches : [...owners.values()]).map(
 				owner => `session:${owner.sessionId} (project ${owner.project ?? "unknown"}, cwd ${owner.cwd ?? "unknown"})`,
 			);
-			throw new Error(`${matches.length ? "Ambiguous" : "Unknown"} session ${kind} ${JSON.stringify(query)}; candidates: ${candidates.length ? candidates.join("; ") : "none live"}`);
+			throw new Error(
+				`${matches.length ? "Ambiguous" : "Unknown"} session ${kind} ${JSON.stringify(query)}; ` +
+					`candidates: ${candidates.length ? candidates.join("; ") : "none live"}`,
+			);
 		}
 		return [matches[0]!.sessionId];
 	})();
@@ -281,7 +284,16 @@ export function sendSessionNotice(args: {
 /** Write one notice file into a queue directory and return its id. */
 function writeNotice(
 	directory: string,
-	fields: { from: string; to: string; body: string; ts: number; ttlMs?: number; kind?: "status"; fromProject?: string; fromCwd?: string },
+	fields: {
+		from: string;
+		to: string;
+		body: string;
+		ts: number;
+		ttlMs?: number;
+		kind?: "status";
+		fromProject?: string;
+		fromCwd?: string;
+	},
 ): string {
 	const id = `${fields.ts.toString().padStart(TIMESTAMP_DIGITS, "0")}-${(noticeSequence++).toString().padStart(6, "0")}-${crypto.randomUUID()}`;
 	const notice: SessionNotice = { version: 1, id, ...fields };
