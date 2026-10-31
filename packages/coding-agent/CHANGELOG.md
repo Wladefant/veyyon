@@ -59,6 +59,10 @@
 - Fixed run-only MCP config validation to accept shared server options across stdio, HTTP and SSE while rejecting unknown keys ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 - ACP session creation, load, resume and fork now wait for run-only MCP tool discovery before the first provider turn ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
+### Fixed
+
+- Threshold pruning preserves original entries in a recovery artifact before replacing tool output ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).
