@@ -13,13 +13,9 @@
  */
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import {
-	AuthStorage,
-	type CompletionProbe,
-	type CredentialHealthResult,
-	SqliteAuthCredentialStore,
-} from "@veyyon/ai/auth-storage";
+import { AuthStorage, type CompletionProbe, type CredentialHealthResult } from "@veyyon/ai/auth-storage";
 import { redactUsageError } from "@veyyon/ai/auth-storage/usage-redaction";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import type { UsageLimit, UsageLogger, UsageProvider, UsageReport } from "@veyyon/ai/usage";
