@@ -1,3 +1,4 @@
+import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -414,5 +415,36 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(result.isError).toBeFalsy();
 		expect(getText(result)).not.toMatch(/not found/i);
 		expect(await Bun.file(abs).text()).toBe("replaced\nsecond\n");
+	});
+
+	it("keeps bare, ranged, raw, Windows absolute, and per-entry selectors in real read calls", async () => {
+		const relative = "selector-fixture.txt";
+		const absolute = path.join(tmpDir, relative);
+		await fs.writeFile(absolute, ["zero", "one", "two", "three", "four"].join("\n"));
+		let readTool: ReadTool;
+		const session = createSession({ getToolByName: name => (name === "read" ? readTool : undefined) });
+		readTool = new ReadTool(session);
+		const read = async (readPath: string): Promise<string> => {
+			const result = await callSessionTool("read", { path: readPath }, { session });
+			return typeof result === "string" ? result : result.text;
+		};
+
+		const bare = await read(relative);
+		expect(bare).toContain("zero");
+		expect(bare).toContain("four");
+		const relativeRange = await read(`${relative}:2-3`);
+		expect(relativeRange).toContain("one");
+		expect(relativeRange).toContain("two");
+		expect(await read(`${relative}:raw:2-3`)).toBe("one\ntwo");
+
+		const windowsAbsolute = absolute.replaceAll("/", "\\");
+		const absoluteRange = await read(`${windowsAbsolute}:raw:3-4`);
+		expect(absoluteRange).toBe("two\nthree");
+
+		const perEntry = await read(`${relative}:raw:1-1;${relative}:raw:5-5`);
+		expect(perEntry).toContain("zero");
+		expect(perEntry).toContain("four");
+		expect(perEntry).not.toContain("one");
+		expect(perEntry).not.toContain("three");
 	});
 });
