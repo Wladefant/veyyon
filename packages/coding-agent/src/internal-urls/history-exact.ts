@@ -238,7 +238,8 @@ export async function readStoredHistoryEntry(
 				else incomplete = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string") {
+			if (typeof entry.id !== "string" || typeof entry.type !== "string"
+				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
 				incomplete = true;
 				continue;
 			}
@@ -405,7 +406,8 @@ export async function searchStoredHistoryEntries(
 				else unreadable = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string") {
+			if (typeof entry.id !== "string" || typeof entry.type !== "string"
+				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
 				unreadable = true;
 				continue;
 			}
