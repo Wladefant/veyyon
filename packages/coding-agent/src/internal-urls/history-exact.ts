@@ -144,11 +144,18 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
+	let startedJsonl = false;
 	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
 	const lines = createInterface({ input, crlfDelay: Infinity });
 	try {
 		for await (const line of lines) {
-			if (!line.startsWith("{")) continue; // optional title slot and blank lines
+			// A title may precede JSONL; afterward a nonblank unknown line
+			// can hide the actual branch tip and must invalidate inference.
+			if (!line.trimStart().startsWith("{")) {
+				if (startedJsonl && line.trim().length > 0) incomplete = true;
+				continue;
+			}
+			startedJsonl = true;
 			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
 				incomplete = true;
 				continue; // refuse to materialize exceptionally large records
@@ -291,11 +298,17 @@ export async function searchStoredHistoryEntries(
 	let sessionId: string | undefined;
 	let unreadable = false;
 	let truncated = false;
+	let startedJsonl = false;
 	const input = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
 	const lines = createInterface({ input, crlfDelay: Infinity });
 	try {
 		for await (const line of lines) {
-			if (!line.startsWith("{")) continue;
+			// A malformed nonblank tail cannot establish the implicit leaf.
+			if (!line.trimStart().startsWith("{")) {
+				if (startedJsonl && line.trim().length > 0) unreadable = true;
+				continue;
+			}
+			startedJsonl = true;
 			if (Buffer.byteLength(line, "utf8") > MAX_RECORD_BYTES) {
 				unreadable = true;
 				continue;

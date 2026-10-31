@@ -250,6 +250,46 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses non-JSON corruption after records without rejecting initial titles or blanks", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonjson-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s1" },
+				{ type: "message", id: "a", parentId: null, message: "root" },
+				{ type: "message", id: "b", parentId: "a", message: "archived-branch-only" },
+			];
+			await fs.writeFile(file, ["Optional title", "", ...records.map(record => JSON.stringify(record)), ""].join("\n") + "\n");
+			// Initial title and blank lines must not spoil valid implicit selection.
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 })).status)
+				.toBe("ok");
+			const healthy = await searchStoredHistoryEntries(file, { query: "archived-branch-only", limit: 5 });
+			expect(healthy.status).toBe("ok");
+			expect(healthy.matches.map(match => match.entryId)).toEqual(["b"]);
+
+			await fs.appendFile(file, "NOT-JSON\n");
+			const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 });
+			expect(implicitRead.status).toBe("unavailable");
+			expect(implicitRead.fragment).toBeUndefined();
+			const implicitSearch = await searchStoredHistoryEntries(file, { query: "archived-branch-only", limit: 5 });
+			expect(implicitSearch.status).toBe("unavailable");
+			expect(implicitSearch.matches).toEqual([]);
+
+			// Deliberately selected historic branch stays readable; search is partial.
+			const explicitRead = await readStoredHistoryEntry(file, {
+				entryId: "b", leafId: "b", offset: 0, limit: 100,
+			});
+			expect(explicitRead.status).toBe("ok");
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "archived-branch-only", leafId: "b", limit: 5,
+			});
+			expect(explicitSearch.status).toBe("partial");
+			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
