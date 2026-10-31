@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Scoped model regeneration preserves the previous snapshot of unselected providers even when generation policies mutate restored models.
 - Preserve per-account Codex access in discovery and reject stale schema-14 model cache rows.
 - Honor Kimi Code effort declarations, filter unsupported overlay providers, and avoid rewriting unchanged failed-probe cache rows.
 - The model generator reads Antigravity's primary endpoint from the catalog provider-endpoints module.

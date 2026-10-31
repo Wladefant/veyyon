@@ -17,12 +17,12 @@ import type { OAuthProvider } from "@veyyon/ai/oauth/types";
 import { getGitLabDuoModels } from "@veyyon/ai/providers/gitlab-duo";
 import { $env, getSharedAuthDir } from "@veyyon/utils";
 import { fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
-import { ANTIGRAVITY_PRIMARY_ENDPOINT } from "../src/provider-endpoints";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { isOpenAIOSeriesModelId } from "../src/identity/family";
 import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
+import { ANTIGRAVITY_PRIMARY_ENDPOINT } from "../src/provider-endpoints";
 import { toModelSpec } from "../src/provider-models/bundled-references";
 import {
 	CODEX_IMAGE_MODEL,
@@ -112,7 +112,9 @@ export function mergePreviousSnapshotModels(
 				!RETIRED_PROVIDERS.has(model.provider) &&
 				!excludedProviders.has(model.provider)
 			) {
-				merged.push(model);
+				// Later policies mutate restored specs. Preserve the original snapshot so a
+				// --providers run cannot rewrite providers outside its requested output.
+				merged.push(structuredClone(model));
 			}
 		}
 	}

@@ -210,6 +210,7 @@ describe("discovery", () => {
 	it("offers no effort control for `only` without an effort block", async () => {
 		const model = find(await discover(k3({ type: "only" })), "k3");
 		expect(model.thinking).toBeUndefined();
+		expect(model.reasoningOptions).toEqual({ noEffortControl: true, requiresEffort: true });
 	});
 
 	/** No declaration the parser can read: the bundled ladder stands, with no off state and no default. */
@@ -348,6 +349,30 @@ describe("the wire", () => {
 					thinking: { type: "enabled" },
 					effort,
 				});
+			}
+		}
+	});
+
+	it("keeps always-thinking rows without an effort ladder on, without inventing a control on either wire", async () => {
+		const ids = ["kimi-for-coding-highspeed", "k3"];
+		const models = await discover(
+			LISTING.filter(entry => ids.includes(entry.id)).map(entry => ({ ...entry, reasoning: { type: "only" } })),
+		);
+		const turns: Turn[] = [{}, { disableReasoning: true }, { disableReasoning: true, forceTitle: true }];
+		for (const id of ids) {
+			const model = find(models, id);
+			expect(model.thinking).toBeUndefined();
+			for (const turn of turns) {
+				const anthropic = await anthropicBody(model, turn);
+				expect(anthropic.thinking).toBeUndefined();
+				expect(anthropic.output_config?.effort).toBeUndefined();
+				const chat = await chatBody(model, turn);
+				expect(chat.thinking).toBeUndefined();
+				expect(chat.reasoning_effort).toBeUndefined();
+				if (turn.forceTitle) {
+					expect(anthropic.tool_choice).toEqual({ type: "auto" });
+					expect(chat.tool_choice).toBe("auto");
+				}
 			}
 		}
 	});

@@ -29,6 +29,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
+import { MAX_PROVIDER_ERROR_BODY_BYTES } from "@veyyon/ai/error/error-body";
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import { streamAzureOpenAIResponses } from "@veyyon/ai/providers/azure-openai-responses";
 import { streamGoogle } from "@veyyon/ai/providers/google";
@@ -456,6 +457,11 @@ describe("an event stream decodes whatever it is labelled", () => {
 				label: undefined,
 			},
 			{ name: "behind a comment", chunks: [": keep-alive\n\n", provider.answer], label: "application/octet-stream" },
+			{
+				name: "with its first field just inside the prefix byte ceiling",
+				chunks: ["\n".repeat(MAX_PROVIDER_ERROR_BODY_BYTES - 1), provider.answer],
+				label: undefined,
+			},
 		];
 		for (const variant of variants) {
 			it(`${provider.name}: ${variant.name}`, async () => {
@@ -469,6 +475,64 @@ describe("an event stream decodes whatever it is labelled", () => {
 			});
 		}
 	}
+});
+
+describe("an unlabelled blank prefix is bounded before the event-stream decoder reads it", () => {
+	for (const blank of [" ", "\n"]) {
+		it(`bounds and releases a continuing ${JSON.stringify(blank)} prefix`, async () => {
+			const chunk = new TextEncoder().encode(blank.repeat(4096));
+			let pulledBytes = 0;
+			let released = false;
+			const body = new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						// Finite guard keeps the regression safe even if the bound is removed.
+						if (pulledBytes >= 2 * MAX_PROVIDER_ERROR_BODY_BYTES) {
+							controller.close();
+							return;
+						}
+						pulledBytes += chunk.byteLength;
+						controller.enqueue(chunk);
+					},
+					cancel() {
+						released = true;
+					},
+				},
+				{ highWaterMark: 0 },
+			);
+			const stream = eventStreamBody(new Response(null, { status: 200 }), body, undefined);
+			const result = await stream
+				.getReader()
+				.read()
+				.catch((error: unknown) => error);
+			expect(result).toBeInstanceOf(Error);
+			expect((result as Error).message).toContain("no event-stream content within the first");
+			expect(AIError.retriable(AIError.classify(result))).toBe(false);
+			expect(released).toBe(true);
+			expect(pulledBytes).toBeLessThanOrEqual(MAX_PROVIDER_ERROR_BODY_BYTES);
+		});
+	}
+
+	it("rejects a single oversized blank chunk before replaying any prefix", async () => {
+		let released = false;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(" ".repeat(2 * MAX_PROVIDER_ERROR_BODY_BYTES)));
+				},
+				pull(controller) {
+					controller.close();
+				},
+				cancel() {
+					released = true;
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		const stream = eventStreamBody(new Response(null, { status: 200 }), body, undefined);
+		await expect(stream.getReader().read()).rejects.toThrow("no event-stream content within the first");
+		expect(released).toBe(true);
+	});
 });
 
 describe("a blank unlabelled body is an empty event stream", () => {

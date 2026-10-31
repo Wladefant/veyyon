@@ -26,6 +26,7 @@
 
 - Send Codex access programs and routing hints from search, image generation, and prewarm requests.
 - Preserve required tool calls through session requests and avoid unchanged failed-discovery cache writes.
+
 ## [1.6.8] - 2026-10-30
 
 - Added lazy-session ownership regression coverage; no user-facing application change ([#716](https://github.com/Wladefant/veyyon/issues/716)).

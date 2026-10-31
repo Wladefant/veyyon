@@ -3378,7 +3378,12 @@ function mapKimiCodeReasoning(value: unknown): KimiCodeReasoning | undefined {
 	if (type === "none") return { reasoning: false, reasoningOptions: { noEffortControl: true } };
 	if (type !== "only" && type !== "both") return undefined;
 	const effort = isRecord(value.effort) ? value.effort : undefined;
-	if (effort === undefined) return { reasoning: true, reasoningOptions: { noEffortControl: true } };
+	if (effort === undefined) {
+		return {
+			reasoning: true,
+			reasoningOptions: { noEffortControl: true, ...(type === "only" ? { requiresEffort: true } : {}) },
+		};
+	}
 	const valid = Array.isArray(effort.valid) ? effort.valid.filter(isEffort) : [];
 	if (valid.length === 0) return { reasoning: true };
 	const efforts = canonicalizeEfforts(valid);

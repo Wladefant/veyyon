@@ -22,7 +22,7 @@ import { Effort } from "@veyyon/catalog/effort";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import type { ApiKeyResolver } from "../auth-retry";
-
+import type { AuthStorage } from "../auth-storage";
 import { classifyGatewayError } from "../error/gateway";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
@@ -31,6 +31,7 @@ import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
+import { json } from "../utils/http-server";
 import { parseBind } from "../utils/parse-bind";
 import {
 	type AuthGatewayBootOptions,
@@ -38,7 +39,6 @@ import {
 	mirrorRequestAbort,
 	resolveGatewayApiKey,
 } from "./dispatch";
-import { json } from "../utils/http-server";
 import {
 	captureRequestHeaders,
 	corsHeaders,
@@ -75,7 +75,9 @@ const COMPLETION_ROUTES = {
 export type AuthGatewayCompletionPath = keyof typeof COMPLETION_ROUTES;
 
 /** Every path a completion route answers `POST` on. */
-export const AUTH_GATEWAY_COMPLETION_PATHS: readonly string[] = Object.keys(COMPLETION_ROUTES);
+export const AUTH_GATEWAY_COMPLETION_PATHS: readonly AuthGatewayCompletionPath[] = Object.keys(
+	COMPLETION_ROUTES,
+) as AuthGatewayCompletionPath[];
 
 // (passthrough fast-path removed — it bypassed pi-ai provider logic, in
 // particular the Anthropic Claude-Code OAuth system-prompt prefix injection.
@@ -240,8 +242,6 @@ export function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal
 	return opts;
 }
 
-
-
 /** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
 function abortOnClientClose(controller: AbortController): (reason?: unknown) => void {
 	return reason => {
@@ -350,7 +350,11 @@ class GatewayExchange<O> {
 	 * gateway resolves the credential itself; for an OAuth provider it is the access token, refreshed
 	 * through the broker override on `AuthStorage` when needed.
 	 */
-	async apiKey(bootOpts: AuthGatewayBootOptions, model: Model<Api>, sessionId: string): Promise<ApiKeyResolver | Response> {
+	async apiKey(
+		bootOpts: AuthGatewayBootOptions,
+		model: Model<Api>,
+		sessionId: string,
+	): Promise<ApiKeyResolver | Response> {
 		const { signal } = this;
 		const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, signal, this.#peer);
 		if (signal.aborted) return this.closed();
@@ -671,77 +675,87 @@ export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServe
 	const server = Bun.serve({
 		hostname: bind.hostname,
 		port: bind.port,
-		fetch: async (req): Promise<Response> => logger.withLogRedaction(
-			() => '{"message":"auth-gateway provider activity; private diagnostics withheld"}\n',
-			async () => {
-			const secrets: string[] = [];
-			const collect = (value: unknown): void => {
-				if (typeof value === "string" && value.length > 0) secrets.push(value, JSON.stringify(value).slice(1, -1));
-				else if (value && typeof value === "object") {
-					for (const [key, child] of Object.entries(value)) {
-						if (typeof child === "object" || /key|access|refresh|token|secret|password/i.test(key)) collect(child);
+		fetch: async (req): Promise<Response> =>
+			logger.withLogRedaction(
+				() => '{"message":"auth-gateway provider activity; private diagnostics withheld"}\n',
+				async () => {
+					const secrets: string[] = [];
+					const collect = (value: unknown): void => {
+						if (typeof value === "string" && value.length > 0)
+							secrets.push(value, JSON.stringify(value).slice(1, -1));
+						else if (value && typeof value === "object") {
+							for (const [key, child] of Object.entries(value)) {
+								if (typeof child === "object" || /key|access|refresh|token|secret|password/i.test(key))
+									collect(child);
+							}
+						}
+					};
+					const requestOpts: AuthGatewayBootOptions = {
+						...opts,
+						rememberCredential: credential => {
+							collect(credential);
+							try {
+								collect(JSON.parse(credential));
+							} catch {
+								/* Raw bearer, not a structured OAuth credential. */
+							}
+						},
+					};
+					const url = new URL(req.url);
+					const pathname = url.pathname;
+					const peer = "authenticated-device";
+					// CORS preflight is the only credential-free request.
+					if (req.method === "OPTIONS") {
+						return new Response(null, { status: 204, headers: corsHeaders(req) });
 					}
-				}
-			};
-			const requestOpts: AuthGatewayBootOptions = {
-				...opts,
-				rememberCredential: credential => {
-					collect(credential);
-					try { collect(JSON.parse(credential)); } catch { /* Raw bearer, not a structured OAuth credential. */ }
+					try {
+						if (!isAuthorized(req, await tokens())) {
+							logger.info("auth-gateway request unauthorized", { method: req.method });
+							return withCors(json(401, { error: "unauthorized" }), req);
+						}
+						collect(opts.storage.exportSnapshot?.().credentials);
+						if (req.method === "GET" && pathname === "/healthz") {
+							return withCors(json(200, { ok: true, version }), req);
+						}
+
+						if (opts.resolveBearerTokens && (pathname === "/v1/usage" || pathname === "/v1/credentials/check")) {
+							return withCors(json(404, { error: "not found" }), req);
+						}
+						// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
+						// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
+						// same client struct.
+						if (req.method === "GET" && pathname === "/v1/usage") {
+							return redactResponse(withCors(await handleUsage(opts.storage, req.signal), req), secrets);
+						}
+
+						// Per-credential auth probe — diagnoses which row in a multi-account
+						// pool is producing 401s. Aggregated `/v1/usage` silently drops failed
+						// credentials, so we need a separate endpoint that captures errors.
+						if (req.method === "GET" && pathname === "/v1/credentials/check") {
+							return redactResponse(
+								withCors(await handleCredentialsCheck(opts.storage, req.signal), req),
+								secrets,
+							);
+						}
+
+						// All completion routes, including pi-native, use the shared exchange.
+						const completion = COMPLETION_ROUTES[pathname as AuthGatewayCompletionPath];
+						if (completion && req.method === "POST") {
+							return redactResponse(withCors(await completion(requestOpts, req, peer), req), secrets);
+						}
+
+						// Model catalog.
+						if (req.method === "GET" && pathname === "/v1/models") {
+							return redactResponse(withCors(handleModelsList(opts), req), secrets);
+						}
+
+						return withCors(json(404, { error: "not found" }), req);
+					} catch {
+						logger.error("auth-gateway handler crashed", { method: req.method });
+						return withCors(json(500, { error: "internal error" }), req);
+					}
 				},
-			};
-			const url = new URL(req.url);
-			const pathname = url.pathname;
-			const peer = "authenticated-device";
-			// CORS preflight is the only credential-free request.
-			if (req.method === "OPTIONS") {
-				return new Response(null, { status: 204, headers: corsHeaders(req) });
-			}
-			try {
-				if (!isAuthorized(req, await tokens())) {
-					logger.info("auth-gateway request unauthorized", { method: req.method });
-					return withCors(json(401, { error: "unauthorized" }), req);
-				}
-				collect(opts.storage.exportSnapshot?.().credentials);
-				if (req.method === "GET" && pathname === "/healthz") {
-					return withCors(json(200, { ok: true, version }), req);
-				}
-
-				if (opts.resolveBearerTokens && (pathname === "/v1/usage" || pathname === "/v1/credentials/check")) {
-					return withCors(json(404, { error: "not found" }), req);
-				}
-				// Aggregated usage — backed by AuthStorage's 5-min per-credential cache.
-				// Same shape as the broker's `/v1/usage`, so widget/llm-git speak to either with the
-				// same client struct.
-				if (req.method === "GET" && pathname === "/v1/usage") {
-					return redactResponse(withCors(await handleUsage(opts.storage, req.signal), req), secrets);
-				}
-
-				// Per-credential auth probe — diagnoses which row in a multi-account
-				// pool is producing 401s. Aggregated `/v1/usage` silently drops failed
-				// credentials, so we need a separate endpoint that captures errors.
-				if (req.method === "GET" && pathname === "/v1/credentials/check") {
-					return redactResponse(withCors(await handleCredentialsCheck(opts.storage, req.signal), req), secrets);
-				}
-
-				// All completion routes, including pi-native, use the shared exchange.
-				const completion = COMPLETION_ROUTES[pathname as AuthGatewayCompletionPath];
-				if (completion && req.method === "POST") {
-					return redactResponse(withCors(await completion(requestOpts, req, peer), req), secrets);
-				}
-
-				// Model catalog.
-				if (req.method === "GET" && pathname === "/v1/models") {
-					return redactResponse(withCors(handleModelsList(opts), req), secrets);
-				}
-
-				return withCors(json(404, { error: "not found" }), req);
-			} catch {
-				logger.error("auth-gateway handler crashed", { method: req.method });
-				return withCors(json(500, { error: "internal error" }), req);
-			}
-			},
-		),
+			),
 		// Max-out Bun's idle timeout. Long thinking-budget calls can sit idle
 		// for minutes before the first token arrives; the default kills them.
 		idleTimeout: 255,

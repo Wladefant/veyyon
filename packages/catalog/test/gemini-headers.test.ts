@@ -98,9 +98,6 @@ describe("getAntigravityModelWireProfile", () => {
 			"gemini-3.6-flash-tiered": { maxOutputTokens: 65536 },
 			"gemini-3.7-flash-tiered": { maxOutputTokens: 65536 },
 			"gemini-3.8-flash-tiered": { maxOutputTokens: 65536 },
-			"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536 },
-			"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536 },
-			"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536 },
 			"claude-sonnet-4-6": { maxOutputTokens: 64000 },
 			"claude-opus-4-6-thinking": { maxOutputTokens: 64000 },
 		});

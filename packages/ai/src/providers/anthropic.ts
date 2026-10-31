@@ -4038,6 +4038,9 @@ function buildAnthropicThinkingParams(
 	options?: AnthropicOptions,
 ): { thinking?: MessageCreateParamsStreaming["thinking"]; outputConfigEffort?: AnthropicOutputEffort } {
 	if (!model.reasoning) return {};
+	// An always-thinking endpoint with no effort control reasons as shipped. Keep its forced-tool
+	// guard, but send neither an off switch nor an invented thinking budget.
+	if (model.compat.requiresThinkingEnabled && model.reasoningOptions?.noEffortControl === true) return {};
 	if (options?.thinkingEnabled || model.compat.requiresThinkingEnabled) {
 		const thinkingOptions = options ?? {};
 		const mode = model.thinking?.mode;

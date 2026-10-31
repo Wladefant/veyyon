@@ -274,6 +274,12 @@ describe("issue #10416 — retired provider snapshot pruning", () => {
 		);
 
 		expect(merged.map(model => `${model.provider}/${model.id}`)).toEqual(["fixture-provider/live-fallback-model"]);
+		// Generation policies modify both top-level and nested fields after restoration.
+		// An unselected provider must still be emitted from its unchanged prior snapshot.
+		merged[0]!.contextPromotionTarget = "fixture-provider/replacement";
+		merged[0]!.input.push("image");
+		expect(liveModel.contextPromotionTarget).toBeUndefined();
+		expect(liveModel.input).toEqual(["text"]);
 
 		const fetchedModel: ModelSpec = { ...liveModel, contextWindow: 256_000 };
 		const previous = { "fixture-provider": { [liveModel.id]: liveModel } };
