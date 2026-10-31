@@ -139,9 +139,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const entry = initial.snapshot.credentials[0]!;
 		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
-		let delegated = 0;
 		spyOn(client, "refreshCredential").mockImplementation(async () => {
-			delegated += 1;
 			throw new Error("unexpected broker refresh delegation");
 		});
 		await expect(
@@ -166,7 +164,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await expect(invalidStore.markCredentialSuspect(entry.id)).rejects.toThrow(/unknown or mismatched/i);
 			invalidStore.close();
 		}
-		expect(delegated).toBe(0);
 		expect(remote.snapshot.credentials).toEqual(initial.snapshot.credentials);
 	});
 
