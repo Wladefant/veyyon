@@ -320,12 +320,32 @@ export class HistoryRewrites {
 	 * rewrite. `regions` is non-empty.
 	 */
 	async offloadAndApply(regions: ShakeRegion[]): Promise<ElisionOutcome> {
+		// A shake region was selected against this branch. An async artifact write must not
+		// let a newer tool result be elided using a recovery file containing older bytes.
+		const branch = this.#host.sessionStore.getBranch();
+		const branchEntries = new Set(branch);
+		const selected = new Map<SessionEntry, string>();
+		for (const region of regions) {
+			if (!branchEntries.has(region.entry)) {
+				throw new Error("Cannot elide history: selected entry is no longer on the branch");
+			}
+			selected.set(region.entry, JSON.stringify(region.entry));
+		}
+		const leaf = branch.at(-1);
 		const artifactId = await this.#saveArtifact(regions);
 		// Never mutate or persist elided messages without an addressable copy of
 		// their exact originals. Keeping the bytes in context is preferable to an
 		// apparently successful reduction that cannot be recovered after restart.
 		if (!artifactId) {
 			throw new Error("Cannot elide session history: recovery artifact was not saved");
+		}
+		const currentBranch = this.#host.sessionStore.getBranch();
+		const currentEntries = new Set(currentBranch);
+		if (
+			currentBranch.at(-1) !== leaf ||
+			[...selected].some(([entry, original]) => !currentEntries.has(entry) || JSON.stringify(entry) !== original)
+		) {
+			throw new Error("History changed while saving shake artifact; retry the rewrite");
 		}
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;

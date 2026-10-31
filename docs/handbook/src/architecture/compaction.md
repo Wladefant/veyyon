@@ -202,6 +202,11 @@ restores the original live entries. If the branch or selected entries change whi
 being written, the pass aborts without replacing newer evidence. An in-memory session can recover
 its archive only while that session remains alive. Reported savings exclude recovery-reference text.
 
+Shake and dedup elision also verify that the selected branch and original entries still match after
+saving their recovery artifact. If another operation changes the selected evidence during that
+asynchronous save, the old selection aborts instead of replacing newer bytes with a pointer to
+the wrong archived text. A fresh selection may then archive and elide the new result.
+
 Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
 from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized
 away, so the passes neither rewrite nor read them, and a turn costs the same after hundreds of

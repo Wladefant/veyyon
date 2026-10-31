@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import { Agent } from "@veyyon/agent-core";
+import type { ShakeRegion } from "@veyyon/agent-core/compaction";
 import { USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { createOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -290,6 +291,71 @@ describe("history removals preserve concurrent records", () => {
 		expect(await operation).toBeInstanceOf(Error);
 		expect(manager.getBranch()).toEqual([]);
 		expect(manager.getEntry(id)).toEqual(original);
+	});
+
+
+	it("refuses a stale shake archive selection and preserves the newer persisted tool result", async () => {
+		const oldText = "original synthetic tool result";
+		const newerText = "newer synthetic tool result that must stay recoverable";
+		const id = manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "shake-race",
+			toolName: "read",
+			content: [{ type: "text", text: oldText }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		await syncLiveMessages();
+		const selected = manager.getEntry(id);
+		if (selected?.type !== "message" || selected.message.role !== "toolResult") {
+			throw new Error("Expected selected tool result");
+		}
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const save = manager.saveArtifact.bind(manager);
+		vi.spyOn(manager, "saveArtifact").mockImplementation(async (content, type) => {
+			entered.resolve();
+			await release.promise;
+			return save(content, type);
+		});
+		const region: ShakeRegion = {
+			kind: "toolResult",
+			entry: selected,
+			label: "read",
+			tokens: 250,
+			originalText: oldText,
+		};
+		const pending = rewrites.offloadAndApply([region]).then(() => null, error => error);
+		await entered.promise;
+		selected.message.content = [{ type: "text", text: newerText }];
+		await manager.rewriteEntries([selected]);
+		agent.replaceMessages(manager.buildSessionContext().messages);
+		const authoritativeEntry = structuredClone(selected);
+		const authoritativeDisk = await fs.readFile(file, "utf8");
+		const authoritativeAgent = structuredClone(agent.state.messages);
+		release.resolve();
+
+		const failure = await pending;
+		expect(failure instanceof Error ? failure.message : failure).toBe(
+			"History changed while saving shake artifact; retry the rewrite",
+		);
+		expect(manager.getEntry(id)).toEqual(authoritativeEntry);
+		expect(await fs.readFile(file, "utf8")).toBe(authoritativeDisk);
+		expect(agent.state.messages).toEqual(authoritativeAgent);
+
+		// An updated selection can still save the exact new bytes before replacing them.
+		const outcome = await rewrites.offloadAndApply([{ ...region, originalText: newerText }]);
+		expect(outcome.toolResultsDropped).toBe(1);
+		if (!outcome.artifactId) throw new Error("Expected recovery artifact for the new selection");
+		const artifactPath = await manager.getArtifactPath(outcome.artifactId);
+		if (!artifactPath) throw new Error("Expected retained recovery artifact");
+		expect(await fs.readFile(artifactPath, "utf8")).toContain(newerText);
+		const rewritten = manager.getEntry(id);
+		if (rewritten?.type !== "message" || rewritten.message.role !== "toolResult") {
+			throw new Error("Expected persisted elided tool result");
+		}
+		expect(JSON.stringify(rewritten.message.content)).toContain(`artifact://${outcome.artifactId}`);
+		expect(agent.state.messages).toEqual(manager.buildSessionContext().messages);
 	});
 
 	it("preserves a concurrent content update while an image archive is pending", async () => {
