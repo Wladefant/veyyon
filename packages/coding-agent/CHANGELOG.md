@@ -6,6 +6,8 @@
 
 ### Added
 
+- Directed cross-session IRC notices can resolve a unique live project/cwd and report session identity instead of broadcasting ([Refs #694](https://github.com/Wladefant/veyyon/issues/694)).
+
 - Explicit task successors load durable predecessor results and enforce a two-successor limit per slice.
 
 ### Fixed
