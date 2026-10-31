@@ -12,6 +12,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Agent } from "@veyyon/agent-core";
+import type { Model } from "@veyyon/ai";
+import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { InternalUrlRouter } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
 import {
@@ -19,8 +23,9 @@ import {
 	resetRegisteredArtifactDirsForTests,
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -364,6 +369,123 @@ describe("history:// protocol", () => {
 
 			const resource = await InternalUrlRouter.instance().resolve("history://Parent.Child");
 			expect(resource.content).toContain("# Parent.Child (on disk)");
+		});
+	});
+
+	/**
+	 * WHY: a registered live agent with no sessionFile must use its active
+	 * in-memory branch for exact reads and searches, even when an older transcript
+	 * with the same id remains in its artifacts directory.
+	 *
+	 * The real SessionManager and AgentSession drive the registered ref. The
+	 * test does not cover persisted-session precedence or explicit leaf selection.
+	 */
+	it("uses a live branch for exact and search URLs when a stale artifact has the same id", async () => {
+		await withTempDir(async dir => {
+			const artifactsDir = path.join(dir, "session");
+			await fs.mkdir(artifactsDir, { recursive: true });
+			await Bun.write(path.join(artifactsDir, "LiveAgent.jsonl"), sessionFixtureJsonl());
+			registerArtifactsDir(artifactsDir);
+
+			const manager = SessionManager.inMemory();
+			let liveEntryId: string;
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: {
+						model: { provider: "test", id: "history-model", api: "openai-completions" } as Model,
+						systemPrompt: ["test"],
+						tools: [],
+						messages: [{ role: "user", content: "live branch needle", timestamp: 10 }],
+					},
+				}),
+				sessionManager: manager,
+				settings: Settings.isolated({}),
+				modelRegistry: {} as ModelRegistry,
+			});
+			liveEntryId = manager.appendMessage({ role: "user", content: "live branch needle", timestamp: 10 });
+			try {
+				AgentRegistry.global().register({
+					id: "LiveAgent",
+					displayName: "task",
+					kind: "sub",
+					session,
+					sessionFile: null,
+					status: "running",
+				});
+				expect(manager.getBranch().map(entry => entry.id)).toContain(liveEntryId);
+				const router = InternalUrlRouter.instance();
+				const exact = await router.resolve(`history://LiveAgent?entry=${liveEntryId}`);
+				const exactRecord = JSON.parse(exact.content) as { status: string; fragment: string; source: string; entryId: string };
+				expect(exactRecord.status).toBe("ok");
+				expect(exactRecord.entryId).toBe(liveEntryId);
+				expect(exactRecord.fragment).toContain("live branch needle");
+				expect(exactRecord.fragment).not.toContain("parked hello");
+				expect(exactRecord.source).toBe("live-session");
+
+				const search = await router.resolve("history://LiveAgent?q=needle");
+				const searchResult = JSON.parse(search.content) as { matches: Array<{ entryId: string; preview: string }>; source: string };
+				expect(searchResult.source).toBe("live-session");
+				expect(searchResult.matches).toHaveLength(1);
+				expect(searchResult.matches[0]?.entryId).toBe(liveEntryId);
+				expect(searchResult.matches[0]?.preview).toContain("live branch needle");
+				expect(searchResult.matches[0]?.preview).not.toContain("parked hello");
+
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
+
+	it("does not substitute the stored tail when a persisted live session has no branch leaf", async () => {
+		await withTempDir(async dir => {
+			const manager = SessionManager.create(dir, dir);
+			try {
+				manager.appendMessage({ role: "user", content: "persisted archived prompt", timestamp: 1 });
+				const tailId = manager.appendMessage({
+					role: "assistant",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "fixture",
+					content: [{ type: "text", text: "archived stored tail" }],
+					stopReason: "stop",
+					timestamp: 2,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				});
+				await manager.flush();
+				const sessionFile = manager.getSessionFile();
+				if (!sessionFile) throw new Error("Expected a persisted session fixture");
+				await fs.access(sessionFile);
+				manager.resetLeaf();
+				expect(manager.getLeafId()).toBeNull();
+				expect(manager.getBranch()).toHaveLength(0);
+				AgentRegistry.global().register({
+					id: "LivePersisted",
+					displayName: "task",
+					kind: "sub",
+					session: { sessionManager: manager } as AgentSession,
+					sessionFile,
+					status: "running",
+				});
+
+				const router = InternalUrlRouter.instance();
+				await expect(router.resolve(`history://LivePersisted?entry=${tailId}`)).rejects.toThrow(/no branch leaf/);
+				await expect(router.resolve("history://LivePersisted?q=archived")).rejects.toThrow(/no branch leaf/);
+				const explicit = await router.resolve(`history://LivePersisted?entry=${tailId}&leaf=${tailId}`);
+				const exact = JSON.parse(explicit.content) as { status: string; entryId: string; leafId?: string; fragment?: string };
+				expect(exact.status).toBe("ok");
+				expect(exact.entryId).toBe(tailId);
+				expect(exact.leafId).toBe(tailId);
+				expect(exact.fragment).toContain("archived stored tail");
+			} finally {
+				await manager.close();
+			}
 		});
 	});
 

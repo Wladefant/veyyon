@@ -6,6 +6,8 @@
  *
  * URL form:
  * - artifact://<id> - Full artifact content
+ * - artifact://<id>?session=<executionSessionId> - Explicit source session
+ * - artifact://<id>?session=<executionSessionId>&view=metadata - Availability without content
  *
  * Pagination is handled by the read tool via offset/limit parameters.
  */
@@ -14,6 +16,7 @@ import * as path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { AgentRegistry } from "../registry/agent-registry";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
@@ -24,6 +27,48 @@ export interface ResolvedArtifactFile {
 	id: string;
 	path: string;
 	size: number;
+	sessionId?: string;
+}
+
+export class ArtifactResolutionError extends Error {
+	constructor(readonly status: "missing" | "ambiguous" | "unavailable", message: string) {
+		super(message);
+		this.name = "ArtifactResolutionError";
+	}
+}
+
+function requestedSession(url: InternalUrl): string | undefined {
+	const values = url.searchParams.getAll("session");
+	if (values.length === 0) return undefined;
+	if (values.length !== 1 || !/^[A-Za-z0-9_.:-]{1,128}$/.test(values[0])) {
+		throw new Error("artifact:// session must be one valid execution session ID");
+	}
+	return values[0];
+}
+
+/** Select an owner before looking for its numeric artifact; an absent ID never changes owner. */
+function artifactScope(url: InternalUrl, context?: ResolveContext): { dirs: string[]; sessionId?: string } {
+	const requested = requestedSession(url);
+	const caller = context?.localProtocolOptions?.getSessionId?.() ?? undefined;
+	const pinned = context?.localProtocolOptions?.getArtifactsDir?.() ?? undefined;
+	if (requested === undefined) {
+		return { dirs: pinned ? [pinned] : artifactsDirsFromRegistry(), sessionId: pinned ? caller : undefined };
+	}
+	if (requested === caller && pinned) return { dirs: [pinned], sessionId: requested };
+	const dirs = new Set<string>();
+	for (const ref of AgentRegistry.global().list()) {
+		const manager = ref.session?.sessionManager;
+		if (manager?.getSessionId() !== requested) continue;
+		const directory = manager.getArtifactsDir();
+		if (directory) dirs.add(directory);
+	}
+	if (dirs.size === 0) {
+		throw new ArtifactResolutionError("unavailable", "The source execution session is unavailable; resume its owner to read this artifact");
+	}
+	if (dirs.size !== 1) {
+		throw new ArtifactResolutionError("ambiguous", "The source execution session maps to multiple artifact stores");
+	}
+	return { dirs: [...dirs], sessionId: requested };
 }
 
 function parseArtifactId(url: InternalUrl): string {
@@ -41,19 +86,10 @@ function parseArtifactId(url: InternalUrl): string {
 export async function resolveArtifactFile(url: InternalUrl, context?: ResolveContext): Promise<ResolvedArtifactFile> {
 	const id = parseArtifactId(url);
 
-	// Artifact ids are per-session counters; in multi-session hosts the same
-	// id exists in several dirs. Pin resolution to the calling session's
-	// artifacts dir first so `artifact://3` means *this* session's #3.
-	const dirs = artifactsDirsFromRegistry();
-	const pinnedDir = context?.localProtocolOptions?.getArtifactsDir?.() ?? null;
-	if (pinnedDir) {
-		const pinnedIndex = dirs.indexOf(pinnedDir);
-		if (pinnedIndex >= 0) dirs.splice(pinnedIndex, 1);
-		dirs.unshift(pinnedDir);
-	}
+	const { dirs, sessionId } = artifactScope(url, context);
 
 	if (dirs.length === 0) {
-		throw new Error("No session - artifacts unavailable");
+		throw new ArtifactResolutionError("unavailable", "No session - artifacts unavailable");
 	}
 
 	const matches: string[] = [];
@@ -69,14 +105,9 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 			if (isEnoent(err)) continue;
 			throw err;
 		}
-		const match = files.find(f => f.startsWith(`${id}.`));
-		if (match) {
-			matches.push(path.join(dir, match));
-			// The CALLER already disambiguated. `pinnedDir` is the session that issued
-			// the read, and it is scanned first, so a hit there is the artifact they
-			// asked for by construction. Stopping here is what preserves the ordinary
-			// single-session path and every nested-peer read.
-			if (pinnedDir && dir === pinnedDir) break;
+		const found = files.filter(f => f.startsWith(`${id}.`));
+		if (found.length > 0) {
+			matches.push(...found.map(match => path.join(dir, match)));
 			continue;
 		}
 		for (const f of files) {
@@ -86,49 +117,35 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 	}
 
 	if (!anyDirExists) {
-		throw new Error("No artifacts directory found");
+		throw new ArtifactResolutionError("unavailable", "No artifacts directory found");
 	}
 
-	// AMBIGUITY REFUSES rather than guessing, and says so.
-	//
-	// This used to `break` on the first hit. Artifact ids are per-session counters,
-	// so a collision is the NORM in a multi-session host rather than an edge case:
-	// `artifact://3` would silently resolve to whichever conversation the registry
-	// happened to enumerate first, and hand back another conversation's third
-	// artifact as though it were the caller's. Wrong output presented as correct
-	// output, with nothing for the operator to notice.
-	//
-	// Refusing on the ID being ambiguous, rather than on there merely being several
-	// dirs, is deliberate: the cross-session scan is REQUIRED (see
-	// `artifactsDirsFromRegistry`, which must reach a nested peer's write-time dir or
-	// `agent://` 404s a live agent). Scanning three dirs is fine; the id resolving in
-	// two of them is the failure.
-	//
-	// THE PROPER FIX IS TO NAMESPACE ARTIFACT IDS PER CONVERSATION, which would make
-	// the collision impossible instead of merely detected. That was deliberately not
-	// done here: it touches id generation, every existing reference, and persisted
-	// transcripts, so it needs its own scoped change rather than being smuggled into
-	// a sibling sweep. This is a guard, not the end state.
+	// A legacy caller without owner context may scan several stores, but a collision
+	// (including duplicate IDs within one store) never picks an enumeration winner.
 	if (matches.length > 1) {
-		throw new Error(
-			`Artifact ${id} is ambiguous: ${matches.length} conversations in this process each have an artifact ${id}. ` +
+		throw new ArtifactResolutionError("ambiguous",
+			`Artifact ${id} is ambiguous: ${matches.length} files match the selected owner set. ` +
 				`Artifact ids are per-session counters, so the id alone cannot say which one you mean. ` +
-				`Re-read it from the session that produced it, or use the artifact's file path directly. ` +
-				`Candidates: ${matches.join(", ")}`,
+				`Use artifact://${id}?session=<execution-session-id> or re-read it from its owner.`,
 		);
 	}
 
 	const foundPath = matches[0];
 	if (!foundPath) {
 		const newestFirst = Array.from(availableIds).sort((a, b) => Number(b) - Number(a));
-		throw new Error(`Artifact ${id} not found. Available: ${formatBoundedList(newestFirst)}`);
+		throw new ArtifactResolutionError("missing", `Artifact ${id} not found in the selected owner. Available: ${formatBoundedList(newestFirst)}`);
 	}
 
-	const stat = await Bun.file(foundPath).stat();
-	if (stat.isDirectory()) {
-		throw new Error(`Artifact ${id} resolved to a directory, not a file`);
+	const handle = await fs.open(foundPath, "r");
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile()) {
+			throw new ArtifactResolutionError("unavailable", `Artifact ${id} resolved to a directory or special file`);
+		}
+		return { id, path: foundPath, size: stat.size, sessionId };
+	} finally {
+		await handle.close();
 	}
-	return { id, path: foundPath, size: stat.size };
 }
 
 export class ArtifactProtocolHandler implements ProtocolHandler {
@@ -136,6 +153,28 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 	readonly immutable = true;
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		const views = url.searchParams.getAll("view");
+		if (views.length > 1 || (views.length === 1 && views[0] !== "metadata")) {
+			throw new Error("artifact:// view must be metadata when provided");
+		}
+		if (views[0] === "metadata") {
+			const id = parseArtifactId(url);
+			const sessionId = requestedSession(url) ?? context?.localProtocolOptions?.getSessionId?.() ?? null;
+			let metadata: object;
+			try {
+				const artifact = await resolveArtifactFile(url, context);
+				metadata = { version: 1, status: "available", id, sessionId: artifact.sessionId ?? null,
+					size: artifact.size, inlineAvailable: artifact.size <= MAX_INLINE_ARTIFACT_BYTES };
+			} catch (error) {
+				if (error instanceof ArtifactResolutionError) {
+					metadata = { version: 1, status: error.status, id, sessionId, detail: error.message };
+				} else if (error instanceof Error && "code" in error) {
+					metadata = { version: 1, status: "unavailable", id, sessionId, detail: "Artifact storage could not be inspected" };
+				} else throw error;
+			}
+			const content = JSON.stringify(metadata, null, 2);
+			return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8") };
+		}
 		const artifact = await resolveArtifactFile(url, context);
 
 		// Path-only callers (search/grep, bash URL expansion) never touch the
@@ -153,7 +192,7 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 		if (artifact.size > MAX_INLINE_ARTIFACT_BYTES) {
 			throw new Error(
-				`Artifact ${artifact.id} is ${artifact.size} bytes; full internal resolution is blocked. Use read selectors such as artifact://${artifact.id}:1-3000 or artifact://${artifact.id}:raw:1-3000, and use the artifact file path for search/copy workflows: ${artifact.path}`,
+				`Artifact ${artifact.id} is ${artifact.size} bytes; full internal resolution is blocked. Use read selectors such as ${url.href}:1-3000 or ${url.href}:raw:1-3000, and use the artifact file path for search/copy workflows: ${artifact.path}`,
 			);
 		}
 
@@ -187,3 +226,4 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 			.map(value => ({ value }));
 	}
 }
+
