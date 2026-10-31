@@ -2,36 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readRemoteText } from "../examples/extensions/mainplane-worker-bridge";
 
-describe("Mainplane worker file read", () => {
- test("checks byte count and digest before presenting text", async () => {
-   const data = Buffer.from("sample");
-   const transport = (async (_url: string, init: RequestInit) => {
-     expect(init.method).toBe("POST");
-     return new Response(JSON.stringify({
-       data_base64: data.toString("base64"), bytes: data.length,
-       sha256: createHash("sha256").update(data).digest("hex"),
-     }));
-   }) as typeof fetch;
-   const result = await readRemoteText("https://fleet.example.org/", "fixture-secret",
-     "pc2", "C:/owned/file.txt", undefined, transport);
-   expect(result.text).toBe("sample");
-   expect(result.truncated).toBe(false);
- });
- test("rejects mismatched digests", async () => {
-   const transport = (async () => new Response(JSON.stringify({
-     data_base64: Buffer.from("wrong").toString("base64"), bytes: 5,
-     sha256: "0".repeat(64),
-   }))) as typeof fetch;
-   await expect(readRemoteText("https://fleet.example.org/", "fixture-secret",
-     "pc2", "/tmp/file", undefined, transport)).rejects.toThrow("mismatch");
- });
- test("does not decode arbitrary binary as text", async () => {
-   const data = Buffer.from([0xff, 0]);
-   const transport = (async () => new Response(JSON.stringify({
-     data_base64: data.toString("base64"), bytes: data.length,
-     sha256: createHash("sha256").update(data).digest("hex"),
-   }))) as typeof fetch;
-   await expect(readRemoteText("https://fleet.example.org/", "fixture-secret",
-     "pc2", "/tmp/image.bin", undefined, transport)).rejects.toThrow("binary");
- });
+function response(data: Buffer, extra: Record<string, unknown> = {}): Response {
+	return new Response(JSON.stringify({ schema_version: 1, worker: "pc2", data_base64: data.toString("base64"),
+		bytes: data.length, sha256: createHash("sha256").update(data).digest("hex"), ...extra }));
+}
+
+describe("Mainplane worker read integrity", () => {
+	test("preserves verified UTF-8", async () => {
+		const transport = (async () => response(Buffer.from("sample"))) as typeof fetch;
+		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/file", undefined, transport);
+		expect(result.text).toBe("sample");
+		expect(result.truncated).toBe(false);
+	});
+	test("rejects forged digests, foreign workers, invalid lengths and noncanonical base64", async () => {
+		for (const extra of [{ sha256: "0".repeat(64) }, { worker: "pc3" }, { bytes: -1 }, { bytes: 1.5 }, { data_base64: "eA==\n" }]) {
+			const transport = (async () => response(Buffer.from("x"), extra)) as typeof fetch;
+			await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/file", undefined, transport)).rejects.toThrow();
+		}
+	});
+	test("does not decode invalid UTF-8 as text", async () => {
+		const transport = (async () => response(Buffer.from([0xff, 0]))) as typeof fetch;
+		await expect(readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/image", undefined, transport)).rejects.toThrow("binary");
+	});
+	test("display truncation does not split a surrogate pair", async () => {
+		const transport = (async () => response(Buffer.from("x".repeat(49_999) + "😀tail"))) as typeof fetch;
+		const result = await readRemoteText("https://fleet.example/", "fixture-key", "pc2", "/file", undefined, transport);
+		expect(result.text).toBe("x".repeat(49_999));
+		expect(result.truncated).toBe(true);
+	});
 });
