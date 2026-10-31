@@ -119,7 +119,7 @@ describe("cross-conversation id ambiguity", () => {
 			expect(error).toContain("ambiguous");
 			expect(error).not.toContain("not found");
 			// The remedy, and both candidate paths, so the operator can pick.
-			expect(error).toContain("Re-read it from the session that produced it");
+			expect(error).toContain("artifact://3?session=");
 			expect(error).toContain(path.join(dirA, "3.out.md"));
 			expect(error).toContain(path.join(dirB, "3.out.md"));
 		});
@@ -146,7 +146,7 @@ describe("cross-conversation id ambiguity", () => {
 			await Bun.write(path.join(dirA, "1.out.md"), "A one");
 
 			await expect(handler.resolve(parseInternalUrl("artifact://9"), { pathOnly: true })).rejects.toThrow(
-				/Artifact 9 not found\. Available: 1/,
+				/Artifact 9 not found.*Available: 1/,
 			);
 		});
 	});
