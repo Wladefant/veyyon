@@ -265,7 +265,9 @@ describe("BashTool ACP terminal routing", () => {
 			(error: unknown) => ({ kind: "failure" as const, error }),
 		);
 		const observer = Promise.withResolvers<{ kind: "no-settlement" }>();
-		const observerTimer = setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_200);
+		// Allow the bounded 250ms post-kill output grace after the 1000ms
+		// command deadline, but never let a stuck poll wait indefinitely.
+		const observerTimer = setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_600);
 		try {
 			const observed = await driveFakeTime(Promise.race([outcome, observer.promise]));
 			expect(observed.kind).toBe("failure");
