@@ -37,3 +37,84 @@ describe("ACP client bridge permission requests", () => {
 		});
 	});
 });
+
+// WHY: a cancelled tool must not remain blocked behind a client permission
+// dialog whose external RPC will never respond. These tests exercise the
+// real ACP ClientBridge with only the external editor response deferred.
+// They do not claim to cancel the editor's visible modal.
+async function withinPermissionAbortPhase<T>(operation: Promise<T>, label: string): Promise<T> {
+	const timeout = Promise.withResolvers<never>();
+	const timer = setTimeout(() => timeout.reject(new Error("Timed out waiting for " + label)), 3_000);
+	try {
+		return await Promise.race([operation, timeout.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+it("settles a cancelled ACP permission before an unresponsive client sends any reply", async () => {
+	const entered = Promise.withResolvers<void>();
+	const reply = Promise.withResolvers<{ outcome: { outcome: "selected"; optionId: string } }>();
+	let calls = 0;
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			calls++;
+			entered.resolve();
+			return reply.promise;
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-never-answer", {});
+	const controller = new AbortController();
+	const request = bridge.requestPermission!(
+		{ toolCallId: "unresponsive-permission", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	void request.catch(() => undefined);
+	try {
+		await withinPermissionAbortPhase(entered.promise, "ACP permission RPC entry");
+		controller.abort();
+		expect(await withinPermissionAbortPhase(request, "local permission cancellation")).toEqual({
+			outcome: "cancelled",
+		});
+		expect(calls).toBe(1);
+	} finally {
+		controller.abort();
+		// Clean up only the owned fake. The real client may remain unanswered.
+		reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+	}
+}, 10_000);
+
+it("observes a client rejection delivered after the local permission was cancelled", async () => {
+	const entered = Promise.withResolvers<void>();
+	const reply = Promise.withResolvers<{ outcome: { outcome: "selected"; optionId: string } }>();
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			entered.resolve();
+			return reply.promise;
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-late-reject", {});
+	const controller = new AbortController();
+	const request = bridge.requestPermission!(
+		{ toolCallId: "late-reject", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	void request.catch(() => undefined);
+	try {
+		await withinPermissionAbortPhase(entered.promise, "late rejection permission RPC");
+		controller.abort();
+		expect(await withinPermissionAbortPhase(request, "cancelled before client error")).toEqual({
+			outcome: "cancelled",
+		});
+	} finally {
+		controller.abort();
+		reply.reject(new Error("Synthetic editor permission request disconnected after cancellation"));
+	}
+	// Give the late rejection a turn to propagate. The test runner reports
+	// unhandled rejected promises; the bridge must already have observed it.
+	const settled = Promise.withResolvers<void>();
+	setImmediate(settled.resolve);
+	await withinPermissionAbortPhase(settled.promise, "late client rejection observation");
+}, 10_000);
