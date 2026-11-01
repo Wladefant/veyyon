@@ -169,7 +169,7 @@ Remote broker credential readers reject a delayed full-snapshot GET when an SSE 
 
 Broker credential-upload responses have the same ordering hazard: a `POST /v1/credential` response can be delayed until after the client has accepted a newer snapshot or stream removal. The remote store fences each upload reply against the applied-state revision at the start of that upload and ignores a superseded provider list rather than restoring a revoked credential. Ordinary broker stream or snapshot reconciliation still supplies the current state; ignoring a delayed reply neither rolls back a broker write nor grants a worker refresh-token authority.
 
-Failed credential-block reconciliation is scoped to the latest outstanding mutation for a credential ID. An obsolete failed POST or DELETE cannot use a full broker GET to remove a newer speculative same-credential block before its own broker acknowledgment or SSE delivery; a lone failed block still reconciles, with bounded retries after unrelated stream revisions.
+Failed credential-block reconciliation is scoped to the latest outstanding mutation for a credential ID. An obsolete failed POST or DELETE cannot use a full broker GET to remove a newer speculative same-credential block before its own broker acknowledgment or SSE delivery; an older successful write similarly skips an otherwise premature non-streaming refresh; a lone failed block still reconciles, with bounded retries after unrelated stream revisions.
 
 ## Client snapshot cache
 

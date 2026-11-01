@@ -876,6 +876,78 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+	test("does not refresh away a newer pending same-ID block after an older successful POST", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const realFetch = client.fetchSnapshot.bind(client);
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) {
+				await untilAborted(opts.signal);
+				throw new Error("background poll aborted");
+			}
+			fullReads += 1;
+			return realFetch(opts);
+		});
+		const actualPost = client.upsertCredentialBlock.bind(client);
+		const olderCommitted = Promise.withResolvers<void>();
+		const olderRelease = Promise.withResolvers<void>();
+		const newerRelease = Promise.withResolvers<void>();
+		const newerCommitted = Promise.withResolvers<void>();
+		let posts = 0;
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+			posts += 1;
+			if (posts === 1) {
+				const ack = await actualPost(credentialId, body);
+				olderCommitted.resolve();
+				await olderRelease.promise;
+				return ack;
+			}
+			if (posts !== 2) throw new Error("unexpected third synthetic POST");
+			await newerRelease.promise;
+			const ack = await actualPost(credentialId, body);
+			newerCommitted.resolve();
+			return ack;
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+		});
+		const olderUntilMs = Date.now() + 90_000;
+		const newerUntilMs = olderUntilMs + 60_000;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: olderUntilMs, updatedAtMs: Date.now(),
+		});
+		await olderCommitted.promise;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: newerUntilMs, updatedAtMs: Date.now(),
+		});
+		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
+		try {
+			olderRelease.resolve();
+			await Bun.sleep(40);
+			// A stale successful POST must not start a normal non-SSE refresh
+			// which would see only the older committed block at this point.
+			expect(fullReads).toBe(0);
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
+			newerRelease.resolve();
+			await newerCommitted.promise;
+			await waitUntil(() => fullReads === 1);
+			const brokerNow = await peer.fetchSnapshot();
+			if (brokerNow.status !== 200) throw new Error("expected final broker snapshot");
+			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks)
+				.toMatchObject([{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs }]);
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
+		} finally {
+			olderRelease.resolve();
+			newerRelease.resolve();
+		}
+	});
+
 	test("does not reconcile away a newer same-ID pending block after an older POST is refused", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

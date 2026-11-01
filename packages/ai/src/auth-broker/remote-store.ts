@@ -583,10 +583,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * a full GET without resolving this credential; make a few fresh attempts.
 	 * Never apply an obsolete GET over a newer same-credential edit.
 	 */
-	#clearCredentialBlockMutation(id: number, mutation: symbol): void {
-		if (this.#latestCredentialBlockMutation.get(id) === mutation) {
-			this.#latestCredentialBlockMutation.delete(id);
-		}
+	#clearCredentialBlockMutation(id: number, mutation: symbol): boolean {
+		if (this.#latestCredentialBlockMutation.get(id) !== mutation) return false;
+		this.#latestCredentialBlockMutation.delete(id);
+		return true;
 	}
 
 	async #reconcileFailedCredentialBlockMutation(kind: "upsert" | "delete", id: number, mutation: symbol): Promise<void> {
@@ -633,8 +633,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (!response.ok) {
 					throw new AIError.AuthBrokerError(`Broker refused credential block upsert id=${block.credentialId}`);
 				}
-				this.#clearCredentialBlockMutation(block.credentialId, mutation);
-				this.#maybeRefreshSnapshot("credential block");
+				// Even a successful older POST must not start a GET that clears a
+				// newer same-ID block still waiting on its broker acknowledgment.
+				if (this.#clearCredentialBlockMutation(block.credentialId, mutation)) {
+					this.#maybeRefreshSnapshot("credential block");
+				}
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential block propagation failed", {
@@ -669,8 +672,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					}
 					this.#invalidateUsageCache();
 				}
-				this.#clearCredentialBlockMutation(credentialId, mutation);
-				this.#maybeRefreshSnapshot("credential blocks delete");
+				if (this.#clearCredentialBlockMutation(credentialId, mutation)) {
+					this.#maybeRefreshSnapshot("credential blocks delete");
+				}
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential blocks delete propagation failed", {
