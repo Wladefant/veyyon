@@ -1059,6 +1059,9 @@ export class MCPManager {
 								...(error?.data ? { data: error.data } : {}),
 							},
 						});
+						// A terminated control may finish after a user stop; never silently
+						// revive a subscription that shutdown already removed.
+						if (!isCurrent()) return;
 						this.#stopEvent(key, subscription, false);
 						if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
 							void this.#refreshEventDescriptors(serverName);

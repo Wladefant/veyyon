@@ -25,6 +25,8 @@ const scenarios = [
 	{ frame: "event", stop: "server" },
 	{ frame: "gap", stop: "all" },
 	{ frame: "truncated-active", stop: "all" },
+	{ frame: "terminated", stop: "all" },
+	{ frame: "terminated", stop: "inside-callback" },
 	{ frame: "event", stop: "inside-callback" },
 	{ frame: "gap", stop: "inside-callback" },
 ] as const;
@@ -113,7 +115,7 @@ for (const scenario of scenarios) {
 			return "queued" as const;
 		});
 		manager.setOnEventControl(async (_server, _key, control) => {
-			if (control.type !== "gap") throw new Error("Unexpected synthetic control");
+			if (control.type !== "gap" && control.type !== "terminated") throw new Error("Unexpected synthetic control");
 			await pauseAcceptance();
 			if (scenario.stop === "inside-callback") {
 				await manager.stopEvents();
@@ -146,10 +148,13 @@ for (const scenario of scenarios) {
 			};
 			const method = scenario.frame === "event"
 				? "notifications/events/event"
-				: scenario.frame === "gap" ? "notifications/events/gap" : "notifications/events/active";
+				: scenario.frame === "gap" ? "notifications/events/gap"
+				: scenario.frame === "terminated" ? "notifications/events/terminated" : "notifications/events/active";
 			const payload = scenario.frame === "event"
 				? occurrence
-				: scenario.frame === "gap" ? { cursor: "after-first" } : { cursor: "after-first", truncated: true };
+				: scenario.frame === "gap" ? { cursor: "after-first" }
+				: scenario.frame === "terminated" ? { error: { code: -32023, message: "authorization revoked" } }
+				: { cursor: "after-first", truncated: true };
 			const message = {
 				jsonrpc: "2.0", method,
 				params: { ...payload, _meta: { "io.modelcontextprotocol/subscriptionId": id } },
