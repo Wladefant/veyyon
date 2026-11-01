@@ -166,6 +166,12 @@ async function requestPermission(
 			optionId: outcome.optionId,
 			...(matched ? { kind: matched.kind } : {}),
 		};
+	} catch (error) {
+		// An editor can synchronously signal cancellation and reject (or throw)
+		// before Promise.race chooses its winner. Never promote that transport
+		// failure to an active permission error once the caller has aborted.
+		if (signal?.aborted) return { outcome: "cancelled" };
+		throw error;
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
