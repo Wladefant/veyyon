@@ -129,6 +129,22 @@ export class HttpTransport implements MCPTransport {
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
 
+	/**
+	 * MCP Streamable HTTP assigns session identity only in a successful,
+	 * correlated initialization result. Other replies cannot rotate the
+	 * session used on future client requests, even if HTTP is 200.
+	 */
+	#acceptInitializationSessionHeader(response: Response, method: string): void {
+		if (method !== "initialize") return;
+		const value = response.headers.get("Mcp-Session-Id");
+		if (value === null) return;
+		// MCP session ids use only visible ASCII, 0x21 through 0x7E.
+		if (!/^[\x21-\x7e]+$/.test(value)) {
+			throw new Error("MCP initialization response has invalid session identifier");
+		}
+		this.#sessionId = value;
+	}
+
 	get connected(): boolean {
 		return this.#connected;
 	}
@@ -312,8 +328,6 @@ export class HttpTransport implements MCPTransport {
 						});
 					}
 				}
-				const sessionId = response.headers.get("Mcp-Session-Id");
-				if (sessionId) this.#sessionId = sessionId;
 				if (response.ok && response.headers.get("Content-Type")?.includes("application/json")) {
 					const raw: unknown = await untilAborted(signal, response.json());
 					// A matching id alone does not establish a valid JSON-RPC 2.0
@@ -329,6 +343,7 @@ export class HttpTransport implements MCPTransport {
 						});
 					}
 					if (!("result" in frame)) throw new Error("MCP event stream response has no result");
+					this.#acceptInitializationSessionHeader(response, method);
 					resolve();
 					return;
 				}
@@ -366,6 +381,7 @@ export class HttpTransport implements MCPTransport {
 									data: message.error.data,
 								});
 							}
+							this.#acceptInitializationSessionHeader(response, method);
 							resolve();
 							return;
 						}
@@ -479,12 +495,6 @@ export class HttpTransport implements MCPTransport {
 			signal: operation.signal,
 		});
 
-		// Check for session ID in response
-		const newSessionId = response.headers.get("Mcp-Session-Id");
-		if (newSessionId) {
-			this.#sessionId = newSessionId;
-		}
-
 		if (!response.ok) {
 			const text = await untilAborted(operation.signal, response.text());
 			const wwwAuthenticate = response.headers.get("WWW-Authenticate");
@@ -502,7 +512,7 @@ export class HttpTransport implements MCPTransport {
 
 		// Handle SSE response
 		if (contentType.includes("text/event-stream")) {
-			return this.#parseSSEResponse<T>(response, id, operation, timeout);
+			return this.#parseSSEResponse<T>(response, id, method, operation, timeout);
 		}
 
 		// Handle JSON response. HTTP 200 does not establish JSON-RPC request identity:
@@ -546,12 +556,14 @@ export class HttpTransport implements MCPTransport {
 			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
 		}
 
+		this.#acceptInitializationSessionHeader(response, method);
 		return result.result as T;
 	}
 
 	#parseSSEResponse<T>(
 		response: Response,
 		expectedId: string | number,
+		method: string,
 		operation: MCPTimeoutOperation,
 		timeout: number,
 	): Promise<T> {
@@ -593,7 +605,12 @@ export class HttpTransport implements MCPTransport {
 							if ("error" in message) {
 								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
 							} else {
-								resolve(message.result as T);
+								try {
+									this.#acceptInitializationSessionHeader(response, method);
+									resolve(message.result as T);
+								} catch (error) {
+									reject(error instanceof Error ? error : new Error("Invalid MCP initialization session"));
+								}
 							}
 							continue;
 						}
