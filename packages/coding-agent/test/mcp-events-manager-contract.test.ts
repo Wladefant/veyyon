@@ -1968,4 +1968,118 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+	// WHY: stopEvents() is an external shutdown boundary, not just a local
+	// subscription cancellation. A callback already in flight must not
+	// repopulate the feed while an external stop awaits that callback's drain.
+	// Gap: this synthetic poll contract does not exercise a live remote provider.
+	it("does not let a callback resurrect event subscriptions during external stopEvents", async () => {
+		const serverName = "external-stop-stale-consumer-restart";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldSettled = Promise.withResolvers<void>();
+		let polls = 0;
+		let replacementDeliveries = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("stop-before-reenable", "old-occurrence-cursor")],
+					cursor: "old-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return {
+					events: [event("should-not-restart", "new-occurrence-cursor")],
+					cursor: "new-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "stop-before-reenable") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEvent((_name, replacement) => {
+				if (replacement.eventId === "should-not-restart") replacementDeliveries++;
+			});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "obsolete restart after external stop");
+			oldSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "external-stop initial connection");
+			await withinHandlerChange(oldEntered.promise, "external-stop original callback entered");
+			const externalStop = manager.stopEvents();
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			releaseOld.resolve();
+			await withinHandlerChange(oldSettled.promise, "old callback returned after external stop");
+			await withinHandlerChange(externalStop, "external stop drained old callback");
+			await delay(75);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(replacementDeliveries).toBe(0);
+			expect(polls).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external-stop test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: the external stop fence cannot inadvertently prohibit a callback
+	// deliberately stopping its own feed and starting a successor within
+	// that same active callback scope. This keeps the existing self-stop path.
+	it("lets the current callback deliberately restart after its own stopEvents", async () => {
+		const serverName = "self-stop-then-restart";
+		const restarted = Promise.withResolvers<void>();
+		const secondDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("self-stop-original", "first-cursor")],
+					cursor: "first-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				if (polls === 2) return {
+					events: [event("self-stop-successor", "second-cursor")],
+					cursor: "second-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "self-stop-original") return;
+			await withinHandlerChange(manager.stopEvents(), "callback-owned stopEvents");
+			manager.setOnEvent((_name, replacement) => {
+				if (replacement.eventId === "self-stop-successor") secondDelivered.resolve();
+			});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "callback-owned restarted event subscription");
+			restarted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "self-stop initial connection");
+			await withinHandlerChange(restarted.promise, "callback-owned stop and restart");
+			await withinHandlerChange(secondDelivered.promise, "self-stop successor delivery");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "self-stop test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 });
