@@ -118,3 +118,34 @@ it("observes a client rejection delivered after the local permission was cancell
 	setImmediate(settled.resolve);
 	await withinPermissionAbortPhase(settled.promise, "late client rejection observation");
 }, 10_000);
+
+it("starts a live ACP permission RPC synchronously, before its caller can abort the returned promise", async () => {
+	const selected = Promise.withResolvers<{ outcome: { outcome: "selected"; optionId: string } }>();
+	let requests = 0;
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			requests++;
+			return selected.promise;
+		},
+	} as unknown as AgentSideConnection;
+	const controller = new AbortController();
+	const bridge = createAcpClientBridge(connection, "session-eager-send", {});
+	const pending = bridge.requestPermission!(
+		{ toolCallId: "eager-permission", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	void pending.catch(() => undefined);
+	try {
+		// A normal bridge request historically sends the permission RPC
+		// immediately, not in a queued microtask that may run after abort.
+		expect(requests).toBe(1);
+		controller.abort();
+		expect(await withinPermissionAbortPhase(pending, "eager permission cancellation")).toEqual({
+			outcome: "cancelled",
+		});
+	} finally {
+		controller.abort();
+		selected.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+	}
+}, 10_000);
