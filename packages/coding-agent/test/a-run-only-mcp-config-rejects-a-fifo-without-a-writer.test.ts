@@ -9,10 +9,13 @@ import { loadRuntimeMCPConfig } from "../src/mcp/runtime-config";
 const execFileAsync = promisify(execFile);
 const childOptions = { timeout: 5_000, killSignal: "SIGKILL" as const, maxBuffer: 64 * 1024 };
 const loaderUrl = new URL("../src/mcp/runtime-config.ts", import.meta.url).href;
+const loaderEntryMarker = "entered-runtime-mcp-loader\n";
 
 // WHY: the old read-only open waits for a FIFO writer before fstat can reject
 // the non-regular file. Keep this negative fixture in its own bounded child so
 // a regression cannot strand a blocked filesystem worker in the test runner.
+// The entry marker distinguishes a loader hang from an import/setup failure;
+// neither a setup failure nor a post-entry non-timeout proves the old defect.
 // The child inherits the admitted test sandbox; no isolation markers change.
 for (const route of ["direct", "symlink"] as const) {
 	test.skipIf(process.platform === "win32")(
@@ -29,8 +32,9 @@ for (const route of ["direct", "symlink"] as const) {
 				// No writer is opened. Only the production loader decides whether
 				// this input is a regular configuration file.
 				const program = `
-					const { loadRuntimeMCPConfig } = await import(${JSON.stringify(loaderUrl)});
+					import { loadRuntimeMCPConfig } from ${JSON.stringify(loaderUrl)};
 					let failure;
+					process.stdout.write(${JSON.stringify(loaderEntryMarker)});
 					try {
 						await loadRuntimeMCPConfig(${JSON.stringify(input)});
 					} catch (error) {
@@ -41,8 +45,19 @@ for (const route of ["direct", "symlink"] as const) {
 					}
 					process.stdout.write("rejected-non-regular\\n");
 				`;
-				const { stdout } = await execFileAsync(process.execPath, ["--eval", program], childOptions);
-				expect(stdout).toBe("rejected-non-regular\n");
+				const { stdout } = await execFileAsync(process.execPath, ["--eval", program], childOptions).catch(
+					(error: unknown) => {
+						const entered = error !== null && typeof error === "object" && "stdout" in error &&
+							typeof error.stdout === "string" && error.stdout.startsWith(loaderEntryMarker);
+						throw new Error(
+							entered
+								? "FIFO child failed after loader entry; inspect the cause for the intended blocking-open timeout"
+								: "FIFO child failed before loader entry; this is not a valid blocking-open negative control",
+							{ cause: error },
+						);
+					},
+				);
+				expect(stdout).toBe(`${loaderEntryMarker}rejected-non-regular\n`);
 				expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
 				if (route === "symlink") expect(await fs.readlink(input)).toBe(fifo);
 			} finally {
