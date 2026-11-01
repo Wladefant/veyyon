@@ -1975,7 +1975,7 @@ export class SessionManager {
 		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
 		const referencedIds = new Set<string>();
 		for (const entry of retainedEntries) {
-			for (const match of JSON.stringify(entry).matchAll(/\\bartifact:\\/\\/(\\d+)\\b/g)) {
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)\b/g)) {
 				if (match[1]) referencedIds.add(match[1]);
 			}
 		}
