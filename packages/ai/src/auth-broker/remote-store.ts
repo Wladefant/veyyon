@@ -773,7 +773,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			for (const entry of existing) {
 				// Abort replacement if the broker cannot disable an old grant.
 				// Only broker-confirmed removes may disappear from the local view.
+				const revisionAtDisable = this.#appliedSnapshotRevision;
 				await this.#disableCredentialConfirmed(entry.id, "replaced by newer credential");
+				// A delayed confirmation may refer to the old grant while another
+				// broker snapshot has accepted a newer grant under the same ID.
+				if (
+					revisionAtDisable !== this.#appliedSnapshotRevision &&
+					this.#snapshot.credentials.some(current => current.id === entry.id)
+				) {
+					this.#maybeRefreshSnapshot("replace disable superseded");
+					throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${entry.id}`);
+				}
 				this.#removeCredentialById(entry.id);
 				changed = true;
 			}
@@ -800,7 +810,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		let disabledAny = false;
 		try {
 			for (const entry of existing) {
+				const revisionAtDisable = this.#appliedSnapshotRevision;
 				await this.#disableCredentialConfirmed(entry.id, disabledCause);
+				if (
+					revisionAtDisable !== this.#appliedSnapshotRevision &&
+					this.#snapshot.credentials.some(current => current.id === entry.id)
+				) {
+					this.#maybeRefreshSnapshot("logout disable superseded");
+					throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${entry.id}`);
+				}
 				this.#removeCredentialById(entry.id);
 				disabledAny = true;
 			}
