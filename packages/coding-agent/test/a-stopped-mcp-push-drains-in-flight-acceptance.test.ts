@@ -25,6 +25,8 @@ const scenarios = [
 	{ frame: "event", stop: "server" },
 	{ frame: "gap", stop: "all" },
 	{ frame: "truncated-active", stop: "all" },
+	{ frame: "event", stop: "inside-callback" },
+	{ frame: "gap", stop: "inside-callback" },
 ] as const;
 
 for (const scenario of scenarios) {
@@ -37,6 +39,8 @@ for (const scenario of scenarios) {
 			response: ServerResponse;
 		}>();
 		const streamClosed = Promise.withResolvers<void>();
+		const callbackStopped = Promise.withResolvers<void>();
+		const callbackSettled = Promise.withResolvers<void>();
 		const delivered: string[] = [];
 		const acceptedControls: string[] = [];
 		const committedCursors: Array<string | null> = [];
@@ -100,13 +104,23 @@ for (const scenario of scenarios) {
 		};
 		manager.setOnEvent(async (_server: string, occurrence: MCPEventOccurrence) => {
 			await pauseAcceptance();
+			if (scenario.stop === "inside-callback") {
+				await manager.stopEvents();
+				callbackStopped.resolve();
+			}
 			delivered.push(occurrence.eventId);
+			callbackSettled.resolve();
 			return "queued" as const;
 		});
 		manager.setOnEventControl(async (_server, _key, control) => {
 			if (control.type !== "gap") throw new Error("Unexpected synthetic control");
 			await pauseAcceptance();
+			if (scenario.stop === "inside-callback") {
+				await manager.stopEvents();
+				callbackStopped.resolve();
+			}
 			acceptedControls.push(control.messageId);
+			callbackSettled.resolve();
 			return "queued" as const;
 		});
 		manager.setOnEventCursor((_server, _key, cursor) => {
@@ -143,14 +157,24 @@ for (const scenario of scenarios) {
 			response.write("data: " + JSON.stringify(message) + "\n\n");
 			await within(acceptanceStarted.promise, "in-flight push acceptance");
 			let stopped = false;
-			const stop = (
-				scenario.stop === "server" ? manager.disconnectServer("push-stop-server") : manager.stopEvents()
-			).then(() => { stopped = true; });
-			await within(streamClosed.promise, "push stream cancellation");
-			await delay(30);
-			expect(stopped).toBe(false);
-			releaseAcceptance.resolve();
-			await within(stop, "subscription stop");
+			if (scenario.stop === "inside-callback") {
+				// A callback asking for its own cancellation must not await its own
+				// streamProcessing chain. The old unqualified drain hangs here.
+				releaseAcceptance.resolve();
+				await within(streamClosed.promise, "reentrant push stream cancellation");
+				await within(callbackStopped.promise, "reentrant stop completion");
+				await within(callbackSettled.promise, "reentrant callback continuation");
+				stopped = true;
+			} else {
+				const stop = (
+					scenario.stop === "server" ? manager.disconnectServer("push-stop-server") : manager.stopEvents()
+				).then(() => { stopped = true; });
+				await within(streamClosed.promise, "push stream cancellation");
+				await delay(30);
+				expect(stopped).toBe(false);
+				releaseAcceptance.resolve();
+				await within(stop, "subscription stop");
+			}
 			expect(stopped).toBe(true);
 			expect(delivered).toEqual(scenario.frame === "event" ? ["first"] : []);
 			expect(acceptedControls).toHaveLength(scenario.frame === "event" ? 0 : 1);

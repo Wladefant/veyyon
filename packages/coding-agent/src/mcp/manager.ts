@@ -4,6 +4,7 @@
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import * as url from "node:url";
 import type { TSchema } from "@veyyon/ai";
@@ -410,6 +411,9 @@ export class MCPManager {
 		| "duplicate"
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
+	// Identify a callback requesting shutdown from inside its own in-flight stream.
+	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
+	#eventCallbackContext = new AsyncLocalStorage<ActiveMCPEventSubscription>();
 	#eventStartupControllers = new Map<string, AbortController>();
 	#eventStartupPromises = new Map<string, Promise<void>>();
 
@@ -512,9 +516,15 @@ export class MCPManager {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		this.#eventStartupControllers.delete(serverName);
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
+		const callbackOwner = this.#eventCallbackContext.getStore();
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.streamProcessing, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			matching.flatMap(([, subscription]) => [
+				subscription.stream?.done,
+				subscription === callbackOwner ? undefined : subscription.streamProcessing,
+				subscription === callbackOwner ? undefined : subscription.lifecycle,
+				subscription.unsubscribe,
+			]).filter(Boolean),
 		);
 	}
 
@@ -522,9 +532,15 @@ export class MCPManager {
 		for (const controller of this.#eventStartupControllers.values()) controller.abort();
 		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
+		const callbackOwner = this.#eventCallbackContext.getStore();
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.streamProcessing, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			active.flatMap(([, subscription]) => [
+				subscription.stream?.done,
+				subscription === callbackOwner ? undefined : subscription.streamProcessing,
+				subscription === callbackOwner ? undefined : subscription.lifecycle,
+				subscription.unsubscribe,
+			]).filter(Boolean),
 		);
 		for (const [port, host] of this.#webhookHosts) {
 			this.#webhookHosts.delete(port);
@@ -813,7 +829,7 @@ export class MCPManager {
 	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
 		const handler = this.#onEventCursor;
 		if (!handler) throw new Error("MCP event cursor callback is not configured");
-		await handler(subscription.serverName, subscription.key, cursor);
+		await this.#eventCallbackContext.run(subscription, () => handler(subscription.serverName, subscription.key, cursor));
 		subscription.cursor = cursor;
 	}
 
@@ -824,7 +840,10 @@ export class MCPManager {
 	): Promise<void | "queued" | "duplicate"> {
 		const handler = this.#onEventControl;
 		if (!handler) throw new Error("MCP event control callback is not configured");
-		return await handler(serverName, key, control);
+		const subscription = this.#activeEvents.get(key);
+		return await (subscription
+			? this.#eventCallbackContext.run(subscription, () => handler(serverName, key, control))
+			: handler(serverName, key, control));
 	}
 
 	#eventKey(serverName: string, subscription: MCPServerEventSubscriptionConfig): string {
@@ -851,7 +870,7 @@ export class MCPManager {
 		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
-		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
+		const outcome = await this.#eventCallbackContext.run(subscription, () => this.#onEvent!(serverName, deliveryEvent, key));
 		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
 		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) {
 			// Delivery already reached the owning journal. Keep the accepted/duplicate
