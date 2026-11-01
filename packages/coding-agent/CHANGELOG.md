@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP event delivery preserves replayable cursors when poll or push subscriptions stop during in-flight acceptance ([Refs #614](https://github.com/Wladefant/veyyon/issues/614)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
