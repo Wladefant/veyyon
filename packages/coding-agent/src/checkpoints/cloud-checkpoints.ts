@@ -273,6 +273,9 @@ export class CheckpointClient {
 			});
 			if (!next || next.ownerNode !== lease.ownerNode)
 				throw new Error("Checkpoint authority lease owner mismatch");
+			// Renewing an existing lease cannot invent or jump a fencing epoch.
+			if (!Number.isSafeInteger(next.epoch) || next.epoch !== lease.epoch)
+				throw new Error("Checkpoint authority lease epoch mismatch");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {

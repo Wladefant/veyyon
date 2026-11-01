@@ -111,12 +111,14 @@ export class SynchronizedSession {
 		if (!this.#timer) {
 			this.#timer = setInterval(() => {
 				if (this.#lost || this.#renewal) return;
-				const renewal = this.client.renewLease(this.sessionId).then(
-					lease => {
+				const renewal = this.client.renewLease(this.sessionId)
+					.then(async lease => {
+						// HTTP 200 is not an admission proof when the returned deadline
+						// is expired or cannot be parsed. Fence even without a new admit().
+						await this.client.assertWritable(this.sessionId, lease.epoch);
 						if (!this.#lost) this.#lease = lease;
-					},
-					() => this.#loseOwnership(),
-				);
+					})
+					.catch(() => this.#loseOwnership());
 				this.#renewal = renewal;
 				void renewal.finally(() => {
 					if (this.#renewal === renewal) this.#renewal = undefined;

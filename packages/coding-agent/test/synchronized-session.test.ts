@@ -516,6 +516,56 @@ test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoc
 	}
 });
 
+test("invalid periodic HTTP-200 lease renewals fence further admission and stop ticks", async () => {
+	const invalid = [
+		{ label: "expired", expiresAt: "2000-01-01T00:00:00Z", epoch: 1 },
+		{ label: "malformed-deadline", expiresAt: "not-a-date", epoch: 1 },
+		{ label: "changed-epoch", expiresAt: "2099-01-01T00:00:00Z", epoch: 2 },
+	];
+	for (const scenario of invalid) {
+		const actions: string[] = [];
+		const secondRenew = Promise.withResolvers<void>();
+		let renewCount = 0;
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop()!;
+			actions.push(action);
+			if (action === "renew") {
+				renewCount++;
+				if (renewCount === 2) secondRenew.resolve();
+			}
+			return Response.json({
+				ownerNode: "test-owner",
+				epoch: action === "release" ? 2 : action === "renew" && renewCount === 2 ? scenario.epoch : 1,
+				expiresAt: action === "renew" && renewCount === 2 ? scenario.expiresAt : "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			});
+		};
+		const session = new SynchronizedSession(
+			`periodic-${scenario.label}`,
+			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+			undefined,
+			"test-owner",
+			undefined,
+			5,
+		);
+		const deadline = setTimeout(() => secondRenew.reject(new Error("Periodic renewal was never issued")), 500);
+		try {
+			await session.admit();
+			await secondRenew.promise;
+			// The second fake response has entered the normal renewal callback.
+			await new Promise(resolve => setTimeout(resolve, 30));
+			await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+			await new Promise(resolve => setTimeout(resolve, 25));
+			expect(renewCount).toBe(2);
+			expect(actions.filter(action => action === "renew")).toHaveLength(2);
+		} finally {
+			clearTimeout(deadline);
+			await session.close();
+		}
+	}
+});
+
 test("successful transfer retains its persisted resume capability on release", async () => {
 	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
 	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
