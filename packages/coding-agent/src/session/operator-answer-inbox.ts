@@ -40,7 +40,11 @@ export class OperatorAnswerInbox {
 
 	constructor(
 		journal: () => SessionManager,
-		dispatch: (text: string, mode: DeliveryMode) => Promise<string>,
+		dispatch: (
+			text: string,
+			mode: DeliveryMode,
+			options?: { telegramTrace?: TelegramDeliveryTraceData },
+		) => Promise<string>,
 		isQueued: (questionId: string) => boolean,
 	) {
 		this.#journal = journal;
