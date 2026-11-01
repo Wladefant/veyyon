@@ -134,13 +134,13 @@ export interface ConsumedTelegramTrace {
 interface TelegramTraceMetadata {
 	trace: TelegramDeliveryTraceData;
 	sessionId?: string;
+	consumed: boolean;
 }
 
 const traceMap = new WeakMap<object, TelegramTraceMetadata>();
-const consumedSet = new WeakSet<object>();
 
 export function attachTelegramTrace(message: object, trace: TelegramDeliveryTraceData, sessionId?: string): void {
-	traceMap.set(message, { trace, sessionId });
+	traceMap.set(message, { trace, sessionId, consumed: false });
 }
 
 export function getTelegramTrace(message: object): TelegramDeliveryTraceData | undefined {
@@ -154,10 +154,8 @@ export function getTelegramTraceSessionId(message: object): string | undefined {
 export function transferTelegramTrace(source: object, target: object): void {
 	const metadata = traceMap.get(source);
 	if (metadata) {
+		// Every copy shares the same consumption flag, even if transferred before first use.
 		traceMap.set(target, metadata);
-		if (consumedSet.has(source)) {
-			consumedSet.add(target);
-		}
 	}
 }
 
@@ -166,10 +164,10 @@ export function consumeTelegramTrace(message: object, fallbackSessionId?: string
 	if (!metadata) {
 		return undefined;
 	}
-	if (consumedSet.has(message)) {
+	if (metadata.consumed) {
 		return undefined;
 	}
-	consumedSet.add(message);
+	metadata.consumed = true;
 	const effectiveSessionId = metadata.sessionId ?? fallbackSessionId;
 	logTelegramDeliveryTrace(metadata.trace, {
 		stage: "turn_consumption",
