@@ -2024,6 +2024,11 @@ export class MCPManager {
 		}
 
 		if (this.#tripReconnectBreaker(name)) {
+			// A suspended transport is no longer an event-feed owner. Without
+			// this drain, manual recovery has no oldConnection to retire, and
+			// the stale key prevents the replacement from enrolling events.
+			this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+			await this.#stopServerEvents(name);
 			return null;
 		}
 
