@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as logger from "@veyyon/utils/logger";
 import { AuthStorage, REMOTE_REFRESH_SENTINEL, SqliteAuthCredentialStore } from "@veyyon/ai";
 import {
 	AuthBrokerClient,
@@ -501,11 +502,33 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: seeded.snapshot, streamSnapshots: false,
 		});
-		const deny = spyOn(client, "deleteCredentialBlocks");
-		deny.mockRejectedValueOnce(new Error("synthetic broker unavailable")).mockResolvedValueOnce({ ok: false });
-		for (let attempt = 0; attempt < 2; attempt += 1) {
+		// The synchronous store method reports asynchronous broker failures by
+		// warning. Wait for that actual failure-handling boundary, not elapsed
+		// time: a no-op or never-settling DELETE must not pass this regression.
+		const replies = [Promise.withResolvers<{ ok: boolean }>(), Promise.withResolvers<{ ok: boolean }>()];
+		let requestsStarted = 0;
+		let failuresHandled = 0;
+		spyOn(client, "deleteCredentialBlocks").mockImplementation(() => {
+			const reply = replies[requestsStarted];
+			requestsStarted += 1;
+			if (!reply) throw new Error("unexpected synthetic broker DELETE");
+			return reply.promise;
+		});
+		spyOn(logger, "warn").mockImplementation((message, context) => {
+			if (message === "auth-broker credential blocks delete propagation failed" && context?.id === id) {
+				failuresHandled += 1;
+			}
+		});
+		for (let attempt = 0; attempt < replies.length; attempt += 1) {
 			remote.deleteCredentialBlocks(id);
-			await Bun.sleep(10);
+			await waitUntil(() => requestsStarted === attempt + 1);
+			// The local block remains enforced even before a failed response arrives.
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+			if (attempt === 0) replies[attempt]!.reject(new Error("synthetic broker unavailable"));
+			else replies[attempt]!.resolve({ ok: false });
+			// This bounded wait fails if DELETE was never called, never settles,
+			// or its rejection/negative acknowledgment never reaches the handler.
+			await waitUntil(() => failuresHandled === attempt + 1);
 			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
 		}
 		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
