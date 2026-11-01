@@ -338,6 +338,67 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials[0]!.credential).toMatchObject({ access: "access-new" });
 	});
 
+	test("an awaited broker disable cannot evict a newer accepted grant with the same id", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+
+		const acknowledgement = Promise.withResolvers<{ ok: boolean }>();
+		const disableStarted = Promise.withResolvers<void>();
+		spyOn(client, "disableCredential").mockImplementation(async target => {
+			expect(target).toBe(id);
+			disableStarted.resolve();
+			return acknowledgement.promise;
+		});
+
+		// Prevent the write-triggered GET from masking a transient erroneous local
+		// eviction: this test must inspect the production store *before* reconciliation.
+		const realFetch = client.fetchSnapshot.bind(client);
+		const reconciliationStarted = Promise.withResolvers<void>();
+		const releaseReconciliation = Promise.withResolvers<void>();
+		let holdReconciliation = false;
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			if (holdReconciliation && options?.waitMs === undefined) {
+				reconciliationStarted.resolve();
+				await releaseReconciliation.promise;
+			}
+			return realFetch(options);
+		});
+
+		const pending = remote.deleteAuthCredentialRemote(id, "synthetic delayed confirmed disable");
+		await disableStarted.promise;
+		// Another broker mutation is accepted while the earlier disable waits.
+		store!.updateAuthCredential(id, mintOAuthCredential("new", Date.now() + 120_000));
+		await storage!.reload();
+		await remote.refreshSnapshot();
+		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+			access: "access-new",
+			refresh: REMOTE_REFRESH_SENTINEL,
+		});
+		holdReconciliation = true;
+
+		try {
+			acknowledgement.resolve({ ok: true });
+			await expect(pending).rejects.toThrow(/disable superseded by newer state/i);
+			await reconciliationStarted.promise;
+			// The confirmed older disable is not a confirmation that the now-current
+			// grant was disabled: it must remain readable while reconciliation waits.
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+				access: "access-new",
+				refresh: REMOTE_REFRESH_SENTINEL,
+			});
+			const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(authoritative.snapshot.credentials[0]?.credential).toMatchObject({ access: "access-new" });
+		} finally {
+			acknowledgement.resolve({ ok: true });
+			releaseReconciliation.resolve();
+		}
+	});
+
 	test("remote synchronous compare-and-disable refuses an unverifiable grant CAS", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
