@@ -12,12 +12,19 @@ export function bridgeOrigin(value: string): string {
 	if (url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new MainplaneError("Mainplane bridge requires HTTPS except local loopback");
 	return url.origin;
 }
+function exactNativeIdentity(value: string): boolean {
+	// Node silently substitutes U+FFFD for lone UTF-16 surrogates during UTF-8
+	// hashing. An alias here would reuse another session's durable Go receipt.
+	return value.length > 0 && !value.includes("\0") && Buffer.from(value, "utf8").toString("utf8") === value;
+}
 export function remoteRunId(sessionFile: string, toolCallId: string): string {
-	if (!sessionFile || !toolCallId || sessionFile.includes("\0") || toolCallId.includes("\0")) throw new MainplaneError("Persisted session and tool-call identities are required");
+	if (!exactNativeIdentity(sessionFile) || !exactNativeIdentity(toolCallId)) {
+		throw new MainplaneError("Persisted session and tool-call identities must be exact UTF-8");
+	}
 	return "sb-" + digest(sessionFile + "\0" + toolCallId).slice(0, 48);
 }
 export function remoteSessionId(sessionFile: string): string {
-	if (!sessionFile) throw new MainplaneError("Persisted session is required");
+	if (!exactNativeIdentity(sessionFile)) throw new MainplaneError("Persisted session must be an exact UTF-8 identity");
 	return "sb-" + digest(sessionFile).slice(0, 40);
 }
 export function remoteJobId(runId: string): string { return "sb-" + digest(runId).slice(0, 48); }
