@@ -309,11 +309,19 @@ export async function captureNativeCheckpoint(
 	const sessionId = header.id as string;
 	const artifactRoot = journalPath.slice(0, -6);
 	const artifacts: Record<string, string> = {};
+	// An absent sibling artifact directory is optional. Once it exists, however,
+	// every failed traversal/read must abort capture: a child removed after
+	// enumeration is NOT equivalent to a missing optional root.
+	let artifactRootExists = false;
 	try {
-		for (const rel of await walkFiles(artifactRoot))
-			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact"));
+		await lstat(artifactRoot);
+		artifactRootExists = true;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	if (artifactRootExists) {
+		for (const rel of await walkFiles(artifactRoot))
+			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact"));
 	}
 	const blobs: Record<string, string> = {};
 	const journals = [
