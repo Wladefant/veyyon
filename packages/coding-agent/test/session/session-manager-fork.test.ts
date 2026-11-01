@@ -91,3 +91,96 @@ describe("SessionManager.forkFrom", () => {
 		}
 	});
 });
+
+
+describe("SessionManager.fork preserves inherited artifact evidence", () => {
+  const originalBytes = "original archived output Ω 😀\\r\\nwith exact spacing  ";
+  async function readSaved(manager: SessionManager, id: string): Promise<string> {
+    const artifactPath = await manager.getArtifactPath(id);
+    if (!artifactPath) throw new Error(`missing expected artifact ${id}`);
+    return fs.readFile(artifactPath, "utf8");
+  }
+
+  it("copies the original evidence before switching and keeps the next artifact ID distinct", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-archive-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const id = await manager.saveArtifact(originalBytes, "bash");
+      expect(id).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Restore the recorded [full output](artifact://0)", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persistent source file");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original artifact path");
+
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected persistent fork");
+      expect(fork.oldSessionFile).toBe(sourceFile);
+      expect(fork.newSessionFile).not.toBe(sourceFile);
+      expect(manager.getSessionFile()).toBe(fork.newSessionFile);
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
+
+      const nextId = await manager.saveArtifact("new unrelated output", "bash");
+      expect(nextId).toBe("1");
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+      expect(await readSaved(manager, "1")).toBe("new unrelated output");
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("refuses to switch when an inherited artifact is missing, leaving the original recoverable", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-archive-missing-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const id = await manager.saveArtifact(originalBytes, "bash");
+      expect(id).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Recorded evidence: artifact://0", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sessionFile = manager.getSessionFile();
+      if (!sessionFile) throw new Error("expected persistent source file");
+      const sessionId = manager.getSessionId();
+      const fileBefore = await fs.readFile(sessionFile, "utf8");
+      const oldDir = sessionFile.slice(0, -6);
+      const parkedDir = path.join(temp.path(), "unavailable-original-artifacts");
+      await fs.rename(oldDir, parkedDir);
+      try {
+        await expect(manager.fork()).rejects.toThrow(/artifact.*(missing|unavailable)/i);
+        expect(manager.getSessionFile()).toBe(sessionFile);
+        expect(manager.getSessionId()).toBe(sessionId);
+        expect(await fs.readFile(sessionFile, "utf8")).toBe(fileBefore);
+        expect(await fs.readFile(path.join(parkedDir, "0.bash.log"), "utf8")).toBe(originalBytes);
+      } finally {
+        await fs.rename(parkedDir, oldDir);
+      }
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("preserves the permitted no-artifacts fork when no recovery references exist", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-empty-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      manager.appendMessage({ role: "user", content: "No archived artifacts", timestamp: Date.now() });
+      await manager.flush();
+      const oldFile = manager.getSessionFile();
+      if (!oldFile) throw new Error("expected persistent source file");
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected successful artifact-free fork");
+      expect(fork.oldSessionFile).toBe(oldFile);
+      expect(fork.newSessionFile).not.toBe(oldFile);
+      expect(manager.getEntries().some(e => e.type === "message" && e.message.role === "user")).toBe(true);
+    } finally {
+      await manager.close();
+    }
+  });
+});
