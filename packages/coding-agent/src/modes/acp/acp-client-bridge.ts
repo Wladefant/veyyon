@@ -141,6 +141,9 @@ async function requestPermission(
 		return { outcome: "cancelled" };
 	}
 	const response = await connection.requestPermission(request);
+	// A client may select an option after the requesting tool call was aborted.
+	// Never let that late answer become a fresh permission grant.
+	if (signal?.aborted) return { outcome: "cancelled" };
 	const outcome = response.outcome;
 	if (outcome.outcome === "cancelled") {
 		return { outcome: "cancelled" };
