@@ -1,5 +1,8 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 interface Step {
@@ -196,22 +199,60 @@ function validate(workflow: Workflow): void {
 		});
 	}
 
-	check("all cleanup jobs use the workflow commit, not a checked-out older target", () => {
+	check("all cleanup jobs execute the workflow-pinned reaper for an older checked-out SHA", () => {
 		for (const job of Object.values(workflow.jobs)) {
 			const cleanup = job.steps.find(step => step.name === "Clean orphaned processes");
 			equal(cleanup?.shell, "bash");
 			equal(cleanup?.if, "always()");
-			for (const fixture of [
-				context(),
-				context({ event: "workflow_dispatch", target: head }),
-			]) {
-				equal(evaluate(cleanup?.env?.WORKFLOW_SHA, fixture), workflowCommit);
+			equal(evaluate(cleanup?.env?.WORKFLOW_SHA,
+				context({ event: "workflow_dispatch", target: head })), workflowCommit);
+			if (typeof cleanup?.run !== "string") throw new Error("Cleanup command missing");
+			const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-reaper-"));
+			try {
+				const bin = join(sandbox, "bin");
+				mkdirSync(bin);
+				const git = join(bin, "git");
+				writeFileSync(git, [
+					"#!/bin/sh",
+					'if [ "$1" = "cat-file" ] && [ "$2" = "-e" ]; then',
+					'  printf "cat:%s\\n" "$3" >> "$RUNNER_TEMP/trace"',
+					'  [ "$TEST_MISSING_WORKFLOW_COMMIT" != "1" ] || exit 88',
+					"  exit 0",
+					"fi",
+					'if [ "$1" = "show" ]; then',
+					'  printf "show:%s\\n" "$2" >> "$RUNNER_TEMP/trace"',
+					'  printf \'echo "executed:$1" >> "$RUNNER_TEMP/trace"\\n\'',
+					"  exit 0",
+					"fi",
+					"exit 89",
+				].join("\n") + "\n");
+				chmodSync(git, 0o755);
+				const env = {
+					...process.env,
+					PATH: bin + ":" + process.env.PATH,
+					RUNNER_TEMP: sandbox,
+					WORKFLOW_SHA: workflowCommit,
+				};
+				const run = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env, encoding: "utf8", timeout: 10_000,
+				});
+				equal(run.status, 0);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim().split("\n"), [
+					"cat:" + workflowCommit + "^{commit}",
+					"show:" + workflowCommit + ":scripts/ovh-process-group.sh",
+					"executed:--cleanup",
+				]);
+				writeFileSync(join(sandbox, "trace"), "");
+				const missing = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env: { ...env, TEST_MISSING_WORKFLOW_COMMIT: "1" },
+					encoding: "utf8", timeout: 10_000,
+				});
+				equal(missing.status === 0, false);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim(),
+					"cat:" + workflowCommit + "^{commit}");
+			} finally {
+				rmSync(sandbox, { recursive: true, force: true });
 			}
-			const run = cleanup?.run ?? "";
-			equal(run.includes('git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh"'), true);
-			equal(run.includes('bash "$cleanup_script" --cleanup'), true);
-			equal(run.includes('bash scripts/ovh-process-group.sh --cleanup'), false);
-			equal(run.includes('set -euo pipefail'), true);
 		}
 	});
 
