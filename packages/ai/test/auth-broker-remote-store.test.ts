@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import * as logger from "@veyyon/utils/logger";
 import { AuthStorage, REMOTE_REFRESH_SENTINEL, SqliteAuthCredentialStore } from "@veyyon/ai";
 import {
@@ -258,6 +259,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				} else {
 					remote.deleteAuthCredential(id, "synthetic immediate disable");
 				}
+				if (disableMode === "fire-and-forget") {
+					// The void API must wait for the broker's real acknowledgment.
+					await waitUntil(() => remote!.snapshot.credentials.length === 0);
+				}
 				expect(remote.snapshot.credentials).toEqual([]);
 				releaseStale.resolve();
 				await pendingStale;
@@ -274,6 +279,79 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 	}
+
+	test("synchronous broker delete retains the grant until explicit confirmation", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+
+		const realDisable = client.disableCredential.bind(client);
+		const refused = Promise.withResolvers<{ ok: boolean }>();
+		let first = true;
+		spyOn(client, "disableCredential").mockImplementation((target, cause, signal) => {
+			if (first) {
+				first = false;
+				return refused.promise;
+			}
+			return realDisable(target, cause, signal);
+		});
+
+		remote.deleteAuthCredential(id, "synthetic refused disable");
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		refused.resolve({ ok: false });
+		await scheduler.wait(0);
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		const afterRefusal = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (afterRefusal.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(afterRefusal.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+
+		remote.deleteAuthCredential(id, "synthetic confirmed disable");
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		const afterConfirmation = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (afterConfirmation.status !== 200) throw new Error("expected broker snapshot after confirmed disable");
+		expect(afterConfirmation.snapshot.credentials).toEqual([]);
+	});
+
+	test("a delayed synchronous disable reply cannot erase a newer broker snapshot", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const lateAcknowledgment = Promise.withResolvers<{ ok: boolean }>();
+		spyOn(client, "disableCredential").mockImplementation(() => lateAcknowledgment.promise);
+
+		remote.deleteAuthCredential(id, "synthetic delayed disable");
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		store!.updateAuthCredential(id, mintOAuthCredential("new", Date.now() + 120_000));
+		await storage!.reload();
+		await remote.refreshSnapshot();
+		expect(remote.snapshot.credentials[0]!.credential).toMatchObject({ access: "access-new" });
+
+		lateAcknowledgment.resolve({ ok: true });
+		await scheduler.wait(0);
+		expect(remote.snapshot.credentials[0]!.credential).toMatchObject({ access: "access-new" });
+		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected broker snapshot");
+		expect(authoritative.snapshot.credentials[0]!.credential).toMatchObject({ access: "access-new" });
+	});
+
+	test("remote synchronous compare-and-disable refuses an unverifiable grant CAS", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+
+		const disabled = remote.tryDisableAuthCredentialIfMatches(id, "synthetic-old-serialized-grant", "synthetic refresh failure");
+		expect(disabled).toBe(false);
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected broker snapshot");
+		expect(authoritative.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+	});
 
 	// Provider-wide mutation is not a transaction: a confirmed earlier disable
 	// must remain visible, but a later failed disable must abort the operation.
