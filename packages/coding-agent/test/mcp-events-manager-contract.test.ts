@@ -1354,6 +1354,132 @@ describe("MCPManager event subscription contracts", () => {
 	}, 30_000);
 
 
+
+	// WHY: setOnEvent(undefined) called by an in-flight callback previously
+	// retained that callback's poll lifecycle in the same-key enrollment barrier.
+	// A replacement handler awaited from that callback could never start. This
+	// is a synthetic MCPManager/loopback repro, not Cloudflare or disk proof.
+	it("allows a poll callback to clear and re-enable its own consumer without self-deadlock", async () => {
+		const serverName = "reentrant-consumer-poll";
+		const callbackCompleted = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) {
+					return {
+						events: [event("reentrant-original", "stopped-event-cursor")],
+						cursor: "stopped-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				}
+				renewedPoll.resolve();
+				return { events: [], cursor: "renewed-only", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const recordedCursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => recordedCursors.push(cursor));
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "reentrant-original") return;
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			manager.setOnEvent(() => {});
+			const nextStartup = manager.getEventStartupPromise(serverName);
+			if (!nextStartup) throw new Error("Replacement MCP event startup was not registered");
+			await withinHandlerChange(nextStartup, "reentrant poll replacement startup");
+			callbackCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reentrant poll initial connection");
+			await withinHandlerChange(callbackCompleted.promise, "reentrant poll callback completion");
+			await withinHandlerChange(renewedPoll.promise, "reentrant poll replacement request");
+			expect(polls).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(recordedCursors).not.toContain("stopped-event-cursor");
+			expect(recordedCursors).not.toContain("stopped-page-cursor");
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "reentrant poll cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: bypassing every handler-clear processing barrier would fix the
+	// callback deadlock but let an externally replaced handler start ahead of
+	// the old pending acceptance. Preserve external draining as the control.
+	it("externally replacing a poll consumer waits for its old in-flight acceptance", async () => {
+		const serverName = "external-consumer-poll";
+		const firstAcceptanceEntered = Promise.withResolvers<void>();
+		const releaseFirstAcceptance = Promise.withResolvers<void>();
+		const secondList = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		let polls = 0;
+		let lists = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			eventsList: () => {
+				lists++;
+				if (lists === 2) secondList.resolve();
+				return {
+					events: [{ name: EVENT_NAME, description: "synthetic poll", inputSchema: { type: "object" }, delivery: ["poll"] }],
+				};
+			},
+			poll: () => {
+				polls++;
+				if (polls === 1) {
+					return {
+						events: [event("external-original", "old-event-cursor")],
+						cursor: "old-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				}
+				renewedPoll.resolve();
+				return { events: [], cursor: "renewed-only", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const cursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => cursors.push(cursor));
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId === "external-original") {
+				firstAcceptanceEntered.resolve();
+				await releaseFirstAcceptance.promise;
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "external poll initial connection");
+			await withinHandlerChange(firstAcceptanceEntered.promise, "old consumer acceptance");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondList.promise, "external replacement discovery");
+			await delay(75); // Let the loopback server observe any wrongly premature poll request.
+			expect(polls).toBe(1);
+			releaseFirstAcceptance.resolve();
+			await withinHandlerChange(renewedPoll.promise, "external poll after accepted callback drains");
+			expect(polls).toBe(2);
+			expect(cursors).not.toContain("old-event-cursor");
+			expect(cursors).not.toContain("old-page-cursor");
+		} finally {
+			releaseFirstAcceptance.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external replacement cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
