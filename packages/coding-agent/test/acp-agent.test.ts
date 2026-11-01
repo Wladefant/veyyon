@@ -1332,7 +1332,7 @@ describe("ACP agent", () => {
 		const session = harness.findSession(created.sessionId);
 		if (!session) throw new Error("session not registered");
 
-		const firstMessage = makeAssistantMessage("T3_LEADING_CHAR_TRACE_OK");
+		const firstMessage = makeAssistantMessage("T3-VERIFY-20261101");
 		const secondMessage = makeAssistantMessage("second answer");
 		session.prompt = async (text: string): Promise<boolean> => {
 			session.promptCalls.push(text);
@@ -1341,13 +1341,13 @@ describe("ACP agent", () => {
 				listener({
 					type: "message_update",
 					message: firstMessage,
-					assistantMessageEvent: { type: "text_delta", delta: "T" },
+					assistantMessageEvent: { type: "text_delta", delta: "T3-VERIFY" },
 				} as AgentSessionEvent);
 				listener({ type: "message_start", message: firstMessage } as AgentSessionEvent);
 				listener({
 					type: "message_update",
 					message: firstMessage,
-					assistantMessageEvent: { type: "text_delta", delta: "3_LEADING_CHAR_TRACE_OK" },
+					assistantMessageEvent: { type: "text_delta", delta: "-20261101" },
 				} as AgentSessionEvent);
 				listener({ type: "message_end", message: firstMessage } as AgentSessionEvent);
 				listener({
@@ -1384,10 +1384,10 @@ describe("ACP agent", () => {
 				.filter(chunk => getChunkMessageId(chunk) === firstId)
 				.map(chunk => (chunk.update.content.type === "text" ? chunk.update.content.text : ""))
 				.join(""),
-		).toBe("T3_LEADING_CHAR_TRACE_OK");
+		).toBe("T3-VERIFY-20261101");
 		expect(chunks.filter(chunk => getChunkMessageId(chunk) === firstId).map(chunk => chunk.update.content)).toEqual([
-			{ type: "text", text: "T" },
-			{ type: "text", text: "3_LEADING_CHAR_TRACE_OK" },
+			{ type: "text", text: "T3-VERIFY" },
+			{ type: "text", text: "-20261101" },
 		]);
 		expect(chunks.map(chunk => getChunkMessageId(chunk))).toHaveLength(3);
 		expect(chunks.map(chunk => getChunkMessageId(chunk))).toEqual([firstId, firstId, getChunkMessageId(chunks[2]!)]);
