@@ -296,6 +296,30 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("fails closed for missing local evidence with case-insensitive artifact schemes", async () => {
+    for (const scheme of ["ARTIFACT", "ArTiFaCt"]) {
+      using temp = TempDir.createSync("@veyyon-fork-artifact-scheme-");
+      const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      try {
+        manager.appendMessage({
+          role: "user", content: `Preserve the recorded ${scheme}://0 evidence`, timestamp: Date.now(),
+        });
+        await manager.flush();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected source session file");
+        const sourceId = manager.getSessionId();
+        const original = await fs.readFile(sourceFile, "utf8");
+
+        await expect(manager.fork()).rejects.toThrow(/referenced artifacts unavailable/i);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(original);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
   it("preserves the permitted no-artifacts fork when no recovery references exist", async () => {
     using temp = TempDir.createSync("@veyyon-fork-empty-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
