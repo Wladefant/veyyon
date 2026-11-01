@@ -1595,6 +1595,68 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: the generation fence prevents a stale callback from setting a
+	// new handler, but an obsolete callback must not be able to stop the
+	// externally installed successor through the async stopEvents entrypoint.
+	// This synthetic poll test exercises the real manager, not a copied setter.
+	it("does not let an obsolete callback stop a newer event consumer", async () => {
+		const serverName = "stale-stop-while-new-consumer-active";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const staleStopSettled = Promise.withResolvers<void>();
+		const successorDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("stale-stop-original", "original-cursor")],
+					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				if (polls === 2) return {
+					events: [event("stale-stop-successor", "successor-cursor")],
+					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "stale-stop-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// This callback's handler revision was superseded externally.
+			await manager.stopEvents();
+			staleStopSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale stop initial poll connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete callback entered");
+			// Deliberately install the successor without clearing the feed. The
+			// manager may continue the current subscription with the new callback.
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "stale-stop-successor") successorDelivered.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(staleStopSettled.promise, "obsolete stop settled");
+			await withinHandlerChange(successorDelivered.promise, "successor event delivered");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale stop manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
