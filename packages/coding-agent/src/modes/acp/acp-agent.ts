@@ -1236,6 +1236,7 @@ export class AcpAgent implements Agent {
 					cwd: record.session.sessionManager.getCwd(),
 					resolveImageData: resolveImageDataForAcp,
 				});
+		clearLiveAssistantMessageAfterEvent(record, event);
 		for (const notification of notifications) {
 			const delivery = this.#connection.sessionUpdate(notification);
 			if (streamedAssistantError) {
@@ -1253,7 +1254,6 @@ export class AcpAgent implements Agent {
 		if (event.type === "tool_execution_end") {
 			record.toolArgsById.delete(event.toolCallId);
 		}
-		clearLiveAssistantMessageAfterEvent(record, event);
 
 		if (event.type === "agent_end") {
 			if (!record.background) {
@@ -2291,12 +2291,12 @@ function prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentS
 }
 
 /**
- * Reset live-message tracking once the assistant `message_end` is handled.
- * The `agent_end` reset happens inside the `agent_end` branch of
- * `#handlePromptEvent` — after `#flushMissedFinalAssistantText` — so a
- * `message_end` that arrives during the end-of-turn waits maps against the
- * real progress instead of resurrecting a fresh one (which would double-emit
- * the final answer).
+ * Reset live-message tracking after the assistant `message_end` has been
+ * mapped, before notification delivery can yield to a later event. The
+ * `agent_end` reset stays inside its branch, after
+ * `#flushMissedFinalAssistantText`, so a `message_end` during end-of-turn
+ * waits maps against real progress instead of resurrecting it and emitting
+ * the final answer twice.
  */
 function clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 	if (event.type === "message_end" && event.message.role === "assistant") {
