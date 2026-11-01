@@ -201,6 +201,8 @@ Read tool integration:
 - A failed preflight can leave an orphaned *new* destination directory; it never deletes the original and never reports an exact-evidence fork as successful. Cleanup of orphaned data needs separate owned verification, not an automatic destructive fallback.
 - On success, the new session's `ArtifactManager` rescans the copied `{id}.*.log` files and starts new output IDs after the highest inherited ID, preventing old `artifact://N` links from resolving to unrelated new output.
 
+`SessionManager.forkFrom(sourcePath, ...)` uses the same source-owned artifact preflight and non-overwriting copy before it publishes a new JSONL. An inherited local `artifact://N` keeps its original bytes and reserves its ID against later unrelated output. A missing local reference refuses publication without changing the source; explicit foreign-session links remain unchanged and do not require copying another session's files. An explicitly supplied destination equal to the source path is rejected. As with `fork()`, a failed copy may leave an unreferenced new destination that requires separately authorized cleanup.
+
 `SessionManager.fork()` still records the previous session as `parentSession`. Global content-addressed blobs remain shared and require no per-session copy.
 
 Blob implications after fork:
@@ -242,7 +244,7 @@ The two systems intersect only indirectly: both reduce session JSONL bloat, but 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): `BlobStore`/`ArtifactManager` construction, persistence-transform and blob-rehydration call sites, session fork/move interactions.
 - [`kernel/src/session/session-persistence.ts`](../../kernel/src/session/session-persistence.ts): `prepareEntryForPersistence()`: large-string externalization to `blobtext:` refs, transient-field stripping, and synchronous image-blob externalization.
 - [`kernel/src/session/session-loader.ts`](../../kernel/src/session/session-loader.ts): `resolveBlobRefsInEntries()`: blob-ref rehydration to base64 / data URLs on load.
-- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): artifact directory copy during interactive fork.
+- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): interactive fork coordination and session switch; artifact preservation is performed in the kernel.
 - [`src/internal-urls/artifact-protocol.ts`](../../packages/coding-agent/src/internal-urls/artifact-protocol.ts): `artifact://` resolver.
 - [`src/internal-urls/agent-protocol.ts`](../../packages/coding-agent/src/internal-urls/agent-protocol.ts): `agent://` resolver + JSON extraction.
 - [`src/internal-urls/router.ts`](../../packages/coding-agent/src/internal-urls/router.ts): internal URL router wiring.
