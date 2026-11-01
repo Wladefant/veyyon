@@ -1543,7 +1543,12 @@ async function readFinalClientTerminalOutput(
 			if (signal?.aborted) throw new ToolAbortError("Command aborted");
 			return handle.currentOutput();
 		});
-		return await Promise.race([output, aborted.promise, ...(expired ? [expired] : [])]);
+		const finalOutput = await Promise.race([output, aborted.promise, ...(expired ? [expired] : [])]);
+		// An abort/expiry can arrive in the same microtask turn as an output
+		// response. Do not promote a late reply to a successful tool result.
+		if (signal?.aborted) throw new ToolAbortError("Command aborted");
+		if (deadlineAt !== undefined && performance.now() >= deadlineAt) throw timeoutError();
+		return finalOutput;
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
