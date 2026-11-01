@@ -287,7 +287,14 @@ export class CheckpointClient {
 	}
 	async assertWritable(sessionId: string, epoch: number): Promise<void> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease || this.#lost.has(sessionId) || lease.epoch !== epoch || Date.parse(lease.expiresAt) <= Date.now())
+		const expiresAt = lease ? Date.parse(lease.expiresAt) : Number.NaN;
+		if (
+			!lease ||
+			this.#lost.has(sessionId) ||
+			lease.epoch !== epoch ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= Date.now()
+		)
 			throw new Error("Checkpoint lease lost; synchronized writes are fenced");
 	}
 	async commit(sessionId: string, bundle: CheckpointBundle, expectedHead: number): Promise<unknown> {

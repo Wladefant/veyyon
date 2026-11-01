@@ -108,4 +108,32 @@ describe("cloud checkpoints", () => {
 		client.loseLease("s1");
 		await expect(client.assertWritable("s1", lease.epoch)).rejects.toThrow(/lease/i);
 	});
+
+
+	test("unparseable lease deadlines cannot authorize checkpoint writes", async () => {
+		let expiresAt = "2099-01-01T00:00:00Z";
+		const fake: CheckpointFetch = async () => Response.json({
+			ownerNode: "node-a",
+			epoch: 4,
+			expiresAt,
+			headSequence: 0,
+			manifestHash: "",
+		});
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32).fill(1),
+			fetch: fake,
+		});
+		for (const [index, invalid] of ["not-a-date", "", "2026-99-99T00:00:00Z"].entries()) {
+			expiresAt = invalid;
+			const id = `invalid-expiry-${index}`;
+			const lease = await client.acquireLease(id, "node-a");
+			await expect(client.assertWritable(id, lease.epoch)).rejects.toThrow(/Checkpoint lease lost/);
+		}
+		expiresAt = "2099-01-01T00:00:00Z";
+		const valid = await client.acquireLease("valid-expiry", "node-a");
+		await expect(client.assertWritable("valid-expiry", valid.epoch)).resolves.toBeUndefined();
+	});
+
 });
