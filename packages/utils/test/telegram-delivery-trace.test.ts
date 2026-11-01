@@ -163,7 +163,10 @@ describe("telegram-delivery-trace", () => {
 			attachTelegramTrace(msgFallback, trace);
 			const consumedFallback = consumeTelegramTrace(msgFallback, "session-fallback");
 			expect(consumedFallback).toEqual({ trace, sessionId: "session-fallback" });
-			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual(["turn_consumption", "turn_consumption"]);
+			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual([
+				"turn_consumption",
+				"turn_consumption",
+			]);
 			expect(infoSpy.mock.calls[1][1]).toMatchObject({
 				stage: "turn_consumption",
 				traceId: "c1:1:2",
