@@ -10,7 +10,7 @@ import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { HistoryProtocolHandler } from "../history-protocol";
-import { registerArtifactsDir, resetRegisteredArtifactDirsForTests } from "../registry-helpers";
+import { registerArtifactsDir, resetRegisteredArtifactDirsForTests, sessionFilesFromDisk } from "../registry-helpers";
 
 afterEach(() => {
 	AgentRegistry.resetGlobalForTests();
@@ -30,8 +30,8 @@ function register(id: string, live = false): void {
 	});
 }
 
-async function createDiskArchive(root: string, id: string): Promise<void> {
-	const dir = path.join(root, "saved");
+async function createDiskArchive(root: string, id: string, folder = "saved"): Promise<void> {
+	const dir = path.join(root, folder);
 	await fs.mkdir(dir, { recursive: true });
 	await fs.writeFile(path.join(dir, `${id}.jsonl`), [
 		JSON.stringify({ type: "session", id: "saved-session" }),
@@ -79,6 +79,31 @@ describe("history:// case-folded disk roster", () => {
 			expect(idRows(index.content)).toHaveLength(1);
 			expect(idRows(index.content)[0]).toContain("| reviewer | on disk |");
 			expect((await handler.complete()).map(item => item.value)).toContain("reviewer");
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it("keeps disk-only completions and the index consistent with disk discovery", async () => {
+		const temp = TempDir.createSync("@veyyon-history-roster-disk-variants-");
+		try {
+			registerArtifactsDir(temp.path());
+			// Two directories allow both names even on a case-insensitive host.
+			await createDiskArchive(temp.path(), "Reviewer", "first");
+			await createDiskArchive(temp.path(), "reviewer", "second");
+
+			// Before #872, disk discovery may expose both spellings; #872 will
+			// instead reject their collision. Neither policy may be silently
+			// overridden by the index/completer's registered-name deduplication.
+			const diskNames = [...(await sessionFilesFromDisk()).keys()]
+				.filter(id => id.toLowerCase() === "reviewer").sort();
+			const handler = new HistoryProtocolHandler();
+			const indexed = idRows((await handler.resolve(new URL("history://") as never)).content)
+				.map(row => row.split("|")[1]?.trim()).sort();
+			const completed = (await handler.complete()).map(item => item.value)
+				.filter(id => id.toLowerCase() === "reviewer").sort();
+			expect(indexed).toEqual(diskNames);
+			expect(completed).toEqual(diskNames);
 		} finally {
 			await temp.remove();
 		}
