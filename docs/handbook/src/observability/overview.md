@@ -5,10 +5,25 @@
 - Status line token and cost segments during interactive sessions
 - `veyyon stats` (CLI) and `/usage` (TUI) via `@veyyon/stats` when enabled
 - Structured logging in the coding-agent logger
+- Telegram delivery tracing for delivery lifecycle events across terminal and agent sessions
 
 ## OpenTelemetry
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set, the process exports agent-loop traces over OTLP/protobuf. See [Soundness and telemetry](../repair/soundness.md) and `packages/coding-agent/src/telemetry-export.ts`.
+
+## Telegram delivery tracing
+
+Telegram deliveries record tracing metadata across five pipeline stages:
+
+1. `session_acceptance`: The socket interface accepts the delivery request for the target session.
+2. `terminal_delivery_start`: Terminal control begins routing the delivery to the interactive session or active stream.
+3. `turn_consumption`: The message enters the runtime turn from idle prompt or queue drain.
+4. `provider_call_start`: The agent loop initiates the first provider stream for the turn.
+5. `delivery_outcome`: The socket delivery promise settles with a terminal status or error.
+
+Trace records are emitted through `@veyyon/utils` logger with fixed message `Telegram delivery trace`.
+Allowlisted metadata includes `traceId` (`${chatId}:${updateId}:${messageId}`), `stage`, `wallTimeMs`, `monotonicMs`, `processId`, `bootId`, and `sessionId`.
+Prompt text, tokens, and credentials are never included in trace records or serialized to transcripts.
 
 ## Session debugging
 
