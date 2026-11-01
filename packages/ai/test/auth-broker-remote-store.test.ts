@@ -1197,15 +1197,99 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (brokerNow.status !== 200) throw new Error("expected authoritative broker snapshot");
 			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks)
 				.toMatchObject([{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs }]);
-			await Bun.sleep(20);
-			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
-			expect(fullReads).toBe(0);
+			await waitUntil(() => fullReads >= 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs);
+			expect(fullReads).toBe(1);
 		} finally {
 			olderReply.resolve({ ok: false });
 			newerRelease.resolve();
 		}
 	});
 
+
+
+	test("reconciles a failed longer same-scope block after a shorter newer block commits with stalled SSE", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected background poll with stalled SSE");
+			fullReads += 1;
+			return realFetch(opts);
+		});
+		const olderReply = Promise.withResolvers<{ ok: boolean }>();
+		const releaseNewerPost = Promise.withResolvers<void>();
+		const newerStarted = Promise.withResolvers<void>();
+		const newerCommitted = Promise.withResolvers<void>();
+		const realUpsert = client.upsertCredentialBlock.bind(client);
+		let posts = 0;
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+			posts += 1;
+			if (posts === 1) return olderReply.promise;
+			if (posts !== 2) throw new Error("unexpected third synthetic broker POST");
+			newerStarted.resolve();
+			await releaseNewerPost.promise;
+			const response = await realUpsert(credentialId, body);
+			newerCommitted.resolve();
+			return response;
+		});
+		let failedHandled = false;
+		spyOn(logger, "warn").mockImplementation((message, context) => {
+			if (message === "auth-broker credential block propagation failed" && context?.id === id) {
+				failedHandled = true;
+			}
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		const shorterUntilMs = Date.now() + 5 * 60_000;
+		const longerUntilMs = shorterUntilMs + 55 * 60_000;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: longerUntilMs, updatedAtMs: Date.now(),
+		});
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: shorterUntilMs, updatedAtMs: Date.now(),
+		});
+		await newerStarted.promise;
+		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(longerUntilMs);
+		try {
+			olderReply.resolve({ ok: false });
+			await waitUntil(() => failedHandled);
+			// A failed longer projection cannot shorten the still-pending B block,
+			// nor can an interim broker GET erase the unacknowledged mutation.
+			expect(fullReads).toBe(0);
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(longerUntilMs);
+			releaseNewerPost.resolve();
+			await newerCommitted.promise;
+			const brokerNow = await peer.fetchSnapshot();
+			if (brokerNow.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: shorterUntilMs },
+			]);
+			// The newer confirmed 5-minute restriction, not A's rejected 60-minute
+			// speculative projection, must become the exact local deadline.
+			await waitUntil(() =>
+				fullReads >= 1 &&
+				remote!.getCredentialBlock(id, "anthropic", "credential") === shorterUntilMs,
+			);
+			expect(remote.listCredentialBlocks([id])).toMatchObject([
+				{ credentialId: id, providerKey: "anthropic", blockScope: "credential", blockedUntilMs: shorterUntilMs },
+			]);
+		} finally {
+			olderReply.resolve({ ok: false });
+			releaseNewerPost.resolve();
+		}
+	});
 
 	test("reconciles a failed cross-scope block after another scope commits on the same credential", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
