@@ -1657,6 +1657,75 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: replacing an event consumer must also fence its cursor writer.
+	// A paused obsolete callback can otherwise rebind persistence after the
+	// current owner sets the authoritative successor callback. This drives
+	// the real MCPManager with a disposable loopback poll server.
+	it("does not let an obsolete callback replace a newer consumer's cursor writer", async () => {
+		const serverName = "stale-cursor-after-event-replacement";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const staleSetterSettled = Promise.withResolvers<void>();
+		const successorDelivered = Promise.withResolvers<void>();
+		const successorCursorPersisted = Promise.withResolvers<void>();
+		let polls = 0;
+		let staleCursorWrites = 0;
+		const successorCursors: Array<string | null> = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("cursor-original", "original-occurrence-cursor")],
+					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				if (polls === 2) return {
+					events: [event("cursor-successor", "successor-occurrence-cursor")],
+					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "cursor-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEventCursor(() => { staleCursorWrites++; });
+			staleSetterSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale cursor initial connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete cursor callback entered");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "cursor-successor") successorDelivered.resolve();
+			});
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				successorCursors.push(cursor);
+				if (cursor === "successor-occurrence-cursor") successorCursorPersisted.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(staleSetterSettled.promise, "obsolete cursor setter completed");
+			await withinHandlerChange(successorDelivered.promise, "successor event delivery");
+			await withinHandlerChange(successorCursorPersisted.promise, "successor durable cursor callback");
+			expect(staleCursorWrites).toBe(0);
+			expect(successorCursors).toContain("successor-occurrence-cursor");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale cursor manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
