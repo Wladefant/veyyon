@@ -327,7 +327,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
 		const previousCredentials = this.#snapshot.credentials;
-		const previousById = new Map(previousCredentials.map(entry => [entry.id, entry]));
+		const previousById = new Map<number, SnapshotEntry>(previousCredentials.map(entry => [entry.id, entry] as const));
 		const credentials = snapshot.credentials.map(entry =>
 			this.#retainPendingCredentialBlocks(normalizeSnapshotEntryBlocks(entry, nowMs), previousById.get(entry.id)),
 		);
