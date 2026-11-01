@@ -1975,8 +1975,21 @@ export class SessionManager {
 		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
 		const referencedIds = new Set<string>();
 		for (const entry of retainedEntries) {
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)\b/g)) {
-				if (match[1]) referencedIds.add(match[1]);
+			// Artifact IDs are per session. An explicit foreign-session reference
+			// must not be checked or copied from this session's artifact store.
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)(?:\?([^\s"'\\<>)\],;]+))?/g)) {
+				const id = match[1];
+				if (!id) continue;
+				const query = match[2];
+				if (query !== undefined) {
+					const sessions = new URLSearchParams(query).getAll("session");
+					if (
+						sessions.length === 1 &&
+						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
+						sessions[0] !== parentSessionId
+					) continue;
+				}
+				referencedIds.add(id);
 			}
 		}
 		let sourceNames: string[] | undefined;
