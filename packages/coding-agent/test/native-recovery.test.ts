@@ -143,6 +143,35 @@ describe("native recovery", () => {
 		});
 	}
 
+	test("workspace capture rejects an ancestor redirected outside after initial approval", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const folder = join(root, "approved");
+		const originalFolder = join(root, "original-approved");
+		const file = join(folder, "evidence.txt");
+		await mkdir(folder);
+		await writeFile(file, "APPROVED ONLY");
+		await writeFile(join(outside, "evidence.txt"), "SYNTHETIC OUTSIDE; no private data");
+		// The initial approval sees a legitimate directory and ordinary leaf.
+		expect((await lstat(folder)).isDirectory()).toBe(true);
+		expect((await lstat(file)).isFile()).toBe(true);
+		await rename(folder, originalFolder);
+		await symlink(outside, folder, process.platform === "win32" ? "junction" : "dir");
+		// A leaf-only check still sees a regular file, and the opened handle and
+		// the final path can agree on the outside inode. Guard the actual reader.
+		const preliminary = await lstat(file);
+		expect(preliminary.isFile()).toBe(true);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(file, 4096, preliminary, handle, before, root))
+				.rejects.toThrow(/workspace source changed or escaped approved root/);
+		} finally {
+			await handle.close();
+		}
+		expect(await readFile(join(outside, "evidence.txt"), "utf8")).toBe("SYNTHETIC OUTSIDE; no private data");
+	});
+
 	test("unchanged opened checkpoint descriptor still reads exact bytes", async () => {
 		const root = await scratch();
 		const file = join(root, "stable.txt");
@@ -151,7 +180,7 @@ describe("native recovery", () => {
 		const handle = await open(file, "r");
 		try {
 			const before = await handle.stat();
-			expect(Buffer.from(await readOpenedCheckpointFile(file, 4096, preliminary, handle, before)).toString())
+			expect(Buffer.from(await readOpenedCheckpointFile(file, 4096, preliminary, handle, before, root)).toString())
 				.toBe("stable bytes");
 		} finally {
 			await handle.close();

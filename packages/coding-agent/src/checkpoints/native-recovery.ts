@@ -74,6 +74,33 @@ function captureFileSignature(value: Stats): string {
 }
 
 /**
+ * Recheck a workspace leaf's complete ancestry at the actual descriptor-read
+ * boundary. Leaf-only O_NOFOLLOW cannot detect an ancestor replaced with a
+ * symlink after the initial workspace approval. This is a path-level race
+ * guard, not an atomic directory-handle confinement primitive.
+ */
+async function assertWorkspaceSourceConfined(path: string, workspaceRoot: string, opened: Stats): Promise<void> {
+	const relativePath = relative(workspaceRoot, path);
+	const escaped = (value: string): boolean =>
+		!value || value === ".." || value.startsWith(`..${sep}`) || isAbsolute(value);
+	const deny = (): never => {
+		throw new Error(`Checkpoint workspace source changed or escaped approved root: ${path}`);
+	};
+	if (escaped(relativePath)) deny();
+	const components = relativePath.split(sep);
+	let ancestor = workspaceRoot;
+	for (const [index, component] of components.entries()) {
+		ancestor = join(ancestor, component);
+		const info = await lstat(ancestor);
+		if (info.isSymbolicLink() || (index === components.length - 1 ? !info.isFile() : !info.isDirectory())) deny();
+	}
+	const canonicalPath = await realpath(path);
+	if (escaped(relative(workspaceRoot, canonicalPath))) deny();
+	const current = await lstat(path);
+	if (!current.isFile() || captureFileSignature(current) !== captureFileSignature(opened)) deny();
+}
+
+/**
  * Descriptor-bound capture body. Taking `before` separately allows the same
  * production read loop to be tested with an actual file grown immediately
  * after its initial fstat, without test-only hooks or copied algorithms.
@@ -84,6 +111,7 @@ export async function readOpenedCheckpointFile(
 	preliminary: Stats,
 	handle: FileHandle,
 	before: Stats,
+	workspaceRoot?: string,
 ): Promise<Uint8Array> {
 	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
 	// A symlink replacing an approved regular file between lstat and open must
@@ -94,6 +122,9 @@ export async function readOpenedCheckpointFile(
 		throw new Error(`Checkpoint capture exceeds raw-byte budget: ${path}`);
 	};
 	if (before.size > maxBytes) exceedsBudget();
+	// An approved ancestor may have been replaced while the caller assembled the
+	// workspace list. Refuse any redirected source before reading its bytes.
+	if (workspaceRoot) await assertWorkspaceSourceConfined(path, workspaceRoot, before);
 
 	const chunks: Buffer[] = [];
 	let length = 0;
@@ -136,10 +167,11 @@ export async function readOpenedCheckpointFile(
 		captureFileSignature(afterSecond) !== captureFileSignature(afterPath)
 	)
 		throw new Error(`Checkpoint source changed during capture: ${path}`);
+	if (workspaceRoot) await assertWorkspaceSourceConfined(path, workspaceRoot, afterSecond);
 	return first;
 }
 
-async function readStable(path: string, maxBytes: number): Promise<Uint8Array> {
+async function readStable(path: string, maxBytes: number, workspaceRoot?: string): Promise<Uint8Array> {
 	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
 	const preliminary = await lstat(path);
 	// Reject FIFO/device inputs before open: their read can wait forever for a writer.
@@ -150,7 +182,7 @@ async function readStable(path: string, maxBytes: number): Promise<Uint8Array> {
 	const handle = await open(path, flags);
 	try {
 		const before = await handle.stat();
-		return await readOpenedCheckpointFile(path, maxBytes, preliminary, handle, before);
+		return await readOpenedCheckpointFile(path, maxBytes, preliminary, handle, before, workspaceRoot);
 	} finally {
 		await handle.close();
 	}
@@ -245,8 +277,8 @@ export async function captureNativeCheckpoint(
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
 	let remainingBytes = nativeCaptureByteBudget(mode);
-	const readIncluded = async (filePath: string): Promise<Uint8Array> => {
-		const content = await readStable(filePath, remainingBytes);
+	const readIncluded = async (filePath: string, approvedWorkspaceRoot?: string): Promise<Uint8Array> => {
+		const content = await readStable(filePath, remainingBytes, approvedWorkspaceRoot);
 		remainingBytes -= content.byteLength;
 		return content;
 	};
@@ -308,7 +340,7 @@ export async function captureNativeCheckpoint(
 			// Apply it to path-only metadata BEFORE reading potential secrets.
 			if (filterCheckpointFiles([{ path: relativePath, content: new Uint8Array(0) }]).length !== 1)
 				throw new Error("Workspace paths include excluded checkpoint files");
-			const content = await readIncluded(full);
+			const content = await readIncluded(full, workspaceRoot);
 			dirty.push(relativePath);
 			files.push({ path: relativePath, content });
 		}
