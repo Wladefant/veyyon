@@ -126,6 +126,9 @@ export async function ambiguousSessionFileIds(): Promise<Set<string>> {
 async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
 	const found = new Map<string, string>();
 	const ambiguous = new Set<string>();
+	// Preserve public display casing, but compare the same folded IDs as history://.
+	const seenByFoldedId = new Map<string, { id: string; full: string }>();
+	const rejectedFoldedIds = new Set<string>();
 	const seenDirs = new Set<string>();
 	const scan = async (dir: string, depth: number): Promise<void> => {
 		if (depth > 8 || seenDirs.has(dir)) return;
@@ -148,18 +151,22 @@ async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>;
 			if (name.startsWith("__advisor")) continue;
 			const id = sessionFileStem(name);
 			const full = path.join(dir, name);
-			const existing = found.get(id);
+			const foldedId = id.toLowerCase();
+			// Once ambiguous, a third or later hit must never resurrect this ID.
+			if (rejectedFoldedIds.has(foldedId)) continue;
+			const existing = seenByFoldedId.get(foldedId);
 			if (existing === undefined) {
+				seenByFoldedId.set(foldedId, { id, full });
 				found.set(id, full);
 				continue;
 			}
-			// The SAME file reached twice through two dir entries is not a collision:
-			// `artifactsDirsFromRegistry` deliberately returns overlapping roots (the
-			// adopted dir and the write-time dir), and the recursive walk can arrive at
-			// one transcript by both routes. Only two DISTINCT paths are ambiguous.
-			if (existing === full) continue;
-			ambiguous.add(id);
-			found.delete(id);
+			// Overlapping roots can observe the same path more than once; that is
+			// not a distinct transcript, unlike differently cased IDs or paths.
+			if (existing.full === full) continue;
+			rejectedFoldedIds.add(foldedId);
+			ambiguous.add(existing.id);
+			seenByFoldedId.delete(foldedId);
+			found.delete(existing.id);
 		}
 	};
 	for (const dir of artifactsDirsFromRegistry()) await scan(dir, 0);
