@@ -198,6 +198,67 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			await source.close();
 		}
 	});
+
+	it("does not replace a valid terminal breadcrumb when inherited evidence preflight refuses", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-breadcrumb-");
+		const overrides = captureDirOverrides();
+		const priorTerminalId = process.env.TERM_SESSION_ID;
+		let source: SessionManager | undefined;
+		let forked: SessionManager | undefined;
+		try {
+			setAgentDir(path.join(temp.path(), "agent"));
+			process.env.TERM_SESSION_ID = "veyyon-forkfrom-breadcrumb-test";
+			const cwd = path.join(temp.path(), "project");
+			const sessions = path.join(temp.path(), "sessions");
+			await fs.mkdir(cwd, { recursive: true });
+			await fs.mkdir(getTerminalSessionsDir(), { recursive: true });
+			const terminalId = getTerminalId();
+			if (!terminalId) throw new Error("expected isolated test terminal ID");
+			const breadcrumbFile = path.join(getTerminalSessionsDir(), terminalId);
+
+			source = SessionManager.create(cwd, sessions);
+			expect(await source.saveArtifact("synthetic preserved evidence", "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Local evidence artifact://0", timestamp: Date.now(),
+			});
+			await source.flush();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("expected persisted source");
+			const beforeBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+			expect(beforeBreadcrumb.split(/\r?\n/)[1]).toBe(sourceFile);
+			const sourceBefore = await fs.readFile(sourceFile, "utf8");
+			const oldArtifacts = sourceFile.slice(0, -".jsonl".length);
+			const parked = path.join(temp.path(), "parked-original-artifacts");
+			await fs.rename(oldArtifacts, parked);
+			try {
+				const inventoryBefore = (await fs.readdir(sessions)).sort();
+				await expect(SessionManager.forkFrom(sourceFile, cwd, sessions)).rejects.toThrow(
+					/referenced artifacts unavailable/i,
+				);
+				expect(await fs.readFile(breadcrumbFile, "utf8")).toBe(beforeBreadcrumb);
+				expect((await fs.readdir(sessions)).sort()).toEqual(inventoryBefore);
+				expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+			} finally {
+				await fs.rename(parked, oldArtifacts);
+			}
+
+			// Positive twin: a successful fork registers only an existing new JSONL.
+			forked = await SessionManager.forkFrom(sourceFile, cwd, sessions);
+			const forkFile = forked.getSessionFile();
+			if (!forkFile) throw new Error("expected persisted fork");
+			expect(await fs.stat(forkFile)).toBeDefined();
+			const afterBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+			expect(afterBreadcrumb.split(/\r?\n/)[1]).toBe(forkFile);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+		} finally {
+			await forked?.close();
+			await source?.close();
+			if (priorTerminalId === undefined) delete process.env.TERM_SESSION_ID;
+			else process.env.TERM_SESSION_ID = priorTerminalId;
+			restoreDirOverrides(overrides);
+		}
+	});
+
 });
 
 describe("SessionManager.fork preserves inherited artifact evidence", () => {
