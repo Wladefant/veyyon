@@ -148,10 +148,11 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 	it("still resolves normal JSON response bodies", async () => {
 		server = Bun.serve({
 			port: 0,
-			fetch() {
+			async fetch(request) {
+				const call = (await request.json()) as { id: string | number };
 				return Response.json({
 					jsonrpc: "2.0",
-					id: 1,
+					id: call.id,
 					result: { tools: [{ name: "fast", inputSchema: { type: "object" } }] },
 				});
 			},

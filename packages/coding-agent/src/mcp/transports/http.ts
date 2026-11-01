@@ -129,6 +129,22 @@ export class HttpTransport implements MCPTransport {
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
 
+	/**
+	 * MCP Streamable HTTP assigns session identity only in a successful,
+	 * correlated initialization result. Other replies cannot rotate the
+	 * session used on future client requests, even if HTTP is 200.
+	 */
+	#acceptInitializationSessionHeader(response: Response, method: string): void {
+		if (method !== "initialize") return;
+		const value = response.headers.get("Mcp-Session-Id");
+		if (value === null) return;
+		// MCP session ids use only visible ASCII, 0x21 through 0x7E.
+		if (!/^[\x21-\x7e]+$/.test(value)) {
+			throw new Error("MCP initialization response has invalid session identifier");
+		}
+		this.#sessionId = value;
+	}
+
 	get connected(): boolean {
 		return this.#connected;
 	}
@@ -312,11 +328,14 @@ export class HttpTransport implements MCPTransport {
 						});
 					}
 				}
-				const sessionId = response.headers.get("Mcp-Session-Id");
-				if (sessionId) this.#sessionId = sessionId;
 				if (response.ok && response.headers.get("Content-Type")?.includes("application/json")) {
-					const frame = (await untilAborted(signal, response.json())) as JsonRpcResponse;
-					if (frame.id !== id) throw new Error("MCP event stream response id does not match its request");
+					const raw: unknown = await untilAborted(signal, response.json());
+					// A matching id alone does not establish a valid JSON-RPC 2.0
+					// acknowledgement; reject malformed envelopes before accepting.
+					if (!isStreamMessage(raw) || "method" in raw || raw.id !== id) {
+						throw new Error("MCP event stream response has invalid JSON-RPC protocol or request identity");
+					}
+					const frame = raw as JsonRpcResponse;
 					if (frame.error) {
 						throw Object.assign(new Error(`MCP error ${frame.error.code}: ${frame.error.message}`), {
 							code: frame.error.code,
@@ -324,6 +343,7 @@ export class HttpTransport implements MCPTransport {
 						});
 					}
 					if (!("result" in frame)) throw new Error("MCP event stream response has no result");
+					this.#acceptInitializationSessionHeader(response, method);
 					resolve();
 					return;
 				}
@@ -361,6 +381,7 @@ export class HttpTransport implements MCPTransport {
 									data: message.error.data,
 								});
 							}
+							this.#acceptInitializationSessionHeader(response, method);
 							resolve();
 							return;
 						}
@@ -474,12 +495,6 @@ export class HttpTransport implements MCPTransport {
 			signal: operation.signal,
 		});
 
-		// Check for session ID in response
-		const newSessionId = response.headers.get("Mcp-Session-Id");
-		if (newSessionId) {
-			this.#sessionId = newSessionId;
-		}
-
 		if (!response.ok) {
 			const text = await untilAborted(operation.signal, response.text());
 			const wwwAuthenticate = response.headers.get("WWW-Authenticate");
@@ -497,22 +512,58 @@ export class HttpTransport implements MCPTransport {
 
 		// Handle SSE response
 		if (contentType.includes("text/event-stream")) {
-			return this.#parseSSEResponse<T>(response, id, operation, timeout);
+			return this.#parseSSEResponse<T>(response, id, method, operation, timeout);
 		}
 
-		// Handle JSON response
-		const result = (await untilAborted(operation.signal, response.json())) as JsonRpcResponse;
-
+		// Handle JSON response. HTTP 200 does not establish JSON-RPC request identity:
+		// a stale reply cannot become the current tool call's result.
+		const raw: unknown = await untilAborted(operation.signal, response.json());
+		if (
+			!raw ||
+			typeof raw !== "object" ||
+			Array.isArray(raw) ||
+			!("jsonrpc" in raw) ||
+			raw.jsonrpc !== "2.0" ||
+			!("id" in raw) ||
+			raw.id !== id
+		) {
+			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid protocol or request identity");
+		}
+		// Response envelopes need exactly one success/error branch. Otherwise
+		// a matching-id HTTP 200 can appear to succeed with an undefined result.
+		const envelope = raw as Record<string, unknown>;
+		const hasResult = Object.hasOwn(envelope, "result");
+		const hasError = Object.hasOwn(envelope, "error");
+		if (hasResult === hasError) {
+			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid result/error shape");
+		}
+		if (hasError) {
+			const peerError = envelope.error;
+			if (
+				!peerError ||
+				typeof peerError !== "object" ||
+				Array.isArray(peerError) ||
+				!("code" in peerError) ||
+				!Number.isSafeInteger(peerError.code) ||
+				!("message" in peerError) ||
+				typeof peerError.message !== "string"
+			) {
+				throw new Error("MCP HTTP server returned a JSON-RPC response with invalid error shape");
+			}
+		}
+		const result = raw as JsonRpcResponse;
 		if (result.error) {
 			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
 		}
 
+		this.#acceptInitializationSessionHeader(response, method);
 		return result.result as T;
 	}
 
 	#parseSSEResponse<T>(
 		response: Response,
 		expectedId: string | number,
+		method: string,
 		operation: MCPTimeoutOperation,
 		timeout: number,
 	): Promise<T> {
@@ -536,19 +587,35 @@ export class HttpTransport implements MCPTransport {
 				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, signal)) {
 					const messages = Array.isArray(raw) ? raw : [raw];
 					for (const message of messages) {
-						if (
-							!captured &&
-							"id" in message &&
+						// Server-to-client requests can have their own ids. Only a
+						// matching response-shaped frame claims this tool's result.
+						const correlated =
+							isRecord(message) &&
 							message.id === expectedId &&
-							("result" in message || "error" in message)
-						) {
+							(!("method" in message) || "result" in message || "error" in message);
+						if (!captured && correlated) {
 							captured = true;
 							operation.clear();
-							if (message.error) {
+							// SSE and JSON responses must satisfy the same JSON-RPC 2.0
+							// union/id boundary before a tool result is accepted.
+							if (!isStreamMessage(message) || "method" in message) {
+								reject(new Error("MCP HTTP SSE response has invalid JSON-RPC envelope"));
+								continue;
+							}
+							if ("error" in message) {
 								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
 							} else {
-								resolve(message.result as T);
+								try {
+									this.#acceptInitializationSessionHeader(response, method);
+									resolve(message.result as T);
+								} catch (error) {
+									reject(error instanceof Error ? error : new Error("Invalid MCP initialization session"));
+								}
 							}
+							continue;
+						}
+						if (!isStreamMessage(message)) {
+							logger.warn("Skipping invalid MCP HTTP SSE stream frame");
 							continue;
 						}
 						if (!this.#connected) continue;
