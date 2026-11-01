@@ -346,3 +346,128 @@ test("close during transfer claim releases the late grant without persisting a r
 		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
 });
+
+
+// WHY: rejected ownership must not keep renewing. A successful lease renews,
+// but an in-flight timer renewal must finish before close sends /release.
+test("lost admission never renews and close drains the periodic renewal before release", async () => {
+	const expiredActions: string[] = [];
+	const expiredFetch: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		expiredActions.push(action);
+		return Response.json({
+			ownerNode: "expired-owner",
+			epoch: 1,
+			expiresAt: "2000-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const expired = new SynchronizedSession(
+		"expired-periodic",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: expiredFetch }),
+		undefined,
+		undefined,
+		undefined,
+		8,
+	);
+	await expect(expired.admit()).rejects.toThrow(/Checkpoint lease lost/);
+
+	const started = Promise.withResolvers<void>();
+	const finishPeriodic = Promise.withResolvers<void>();
+	const controlActions: string[] = [];
+	let renewals = 0;
+	const validLease = {
+		ownerNode: "valid-owner",
+		epoch: 2,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const controlFetch: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		controlActions.push(action);
+		if (action === "renew" && ++renewals === 2) {
+			started.resolve();
+			await finishPeriodic.promise;
+		}
+		return Response.json(validLease);
+	};
+	const live = new SynchronizedSession(
+		"valid-periodic",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: controlFetch }),
+		undefined,
+		undefined,
+		undefined,
+		8,
+	);
+	let closing: Promise<void> | undefined;
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await live.admit();
+		deadline = setTimeout(() => started.reject(new Error("Periodic renewal never fired")), 3000);
+		await started.promise;
+		// The expired session had an earlier opportunity to schedule its tick.
+		expect(expiredActions).toEqual(["lease"]);
+		closing = live.close();
+		await new Promise<void>(resolve => setTimeout(resolve, 25));
+		expect(controlActions).not.toContain("release");
+		finishPeriodic.resolve();
+		await closing;
+		expect(controlActions).toEqual(["lease", "renew", "renew", "release"]);
+		expect(expiredActions).toEqual(["lease"]);
+	} finally {
+		clearTimeout(deadline);
+		finishPeriodic.resolve();
+		await (closing ?? live.close());
+		await expired.close();
+	}
+});
+
+// WHY: after successful transfer finalization, close retains the previously
+// persisted resume capability and advances its epoch on authority release.
+test("successful transfer retains its persisted resume capability on release", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const actions: string[] = [];
+	const persisted: Array<{ token: string; epoch: number }> = [];
+	const token = "a-long-enough-resume-capability";
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "finalize") return Response.json({ ok: true });
+		return Response.json({
+			ownerNode: "runtime-owner",
+			epoch: action === "release" ? 6 : 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			...(action === "claim" ? { resumeToken: token } : {}),
+		});
+	};
+	const claim = {
+		version: 1 as const,
+		sessionId: "successful-transfer",
+		targetNode: "destination-device",
+		transferId: "transfer-success",
+		transferEpoch: 4,
+		claimToken: "a-long-enough-claim-capability",
+		epoch: 4,
+	};
+	const session = new SynchronizedSession(
+		"successful-transfer",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		claim,
+		undefined,
+		async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+	);
+	try {
+		await session.admit();
+		await session.close();
+		expect(persisted).toEqual([{ token, epoch: 5 }, { token, epoch: 6 }]);
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});

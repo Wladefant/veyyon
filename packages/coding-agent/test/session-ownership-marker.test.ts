@@ -113,3 +113,28 @@ test("an existing malformed native journal never acquires ordinary ownership", a
 		/Native session header is missing or exceeds the ownership-read limit/,
 	);
 });
+
+
+// WHY: the first physical JSONL line alone defines the session's identity;
+// a corrupt transfer header cannot be replaced by a later normal header.
+test("a corrupt first native header cannot be replaced by a later ordinary header", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-first-header-"));
+	roots.push(root);
+	const file = join(root, "forged.jsonl");
+	await writeFile(
+		file,
+		'{"type":"session","id":"transfer","checkpointHandoff":\n' +
+			JSON.stringify({ type: "session", id: "transfer", cwd: "/scratch" }) + "\n",
+	);
+	await expect(readSessionOwnershipMarker(file, "transfer")).rejects.toThrow(
+		/Native session header is missing or exceeds the ownership-read limit/,
+	);
+
+	const validFile = join(root, "valid.jsonl");
+	await writeFile(
+		validFile,
+		JSON.stringify({ type: "session", id: "ordinary", cwd: root }) + "\n" +
+			JSON.stringify({ type: "message", id: "entry-1", parentId: null }) + "\n",
+	);
+	await expect(readSessionOwnershipMarker(validFile, "ordinary")).resolves.toBeNull();
+});

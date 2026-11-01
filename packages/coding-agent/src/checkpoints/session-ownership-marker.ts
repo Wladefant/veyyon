@@ -59,45 +59,43 @@ async function readNativeHandoffIdentity(
 	} finally {
 		await file.close();
 	}
-	for (const line of text.split(/\r?\n/, 2)) {
-		if (!line) continue;
-		let value: unknown;
-		try {
-			value = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (!value || typeof value !== "object" || !("type" in value) || value.type !== "session") continue;
-		if (!("id" in value) || value.id !== sessionId) throw new Error("Native session identity does not match the active session");
-		if (!("checkpointHandoff" in value)) return undefined;
-		const marker: unknown = value.checkpointHandoff;
-		if (
-			!marker ||
-			typeof marker !== "object" ||
-			!("version" in marker) ||
-			marker.version !== 1 ||
-			!("targetNode" in marker) ||
-			!isCheckpointNodeLabel(marker.targetNode) ||
-			!("transferId" in marker) ||
-			typeof marker.transferId !== "string" ||
-			!/^[A-Za-z0-9_-]{1,128}$/.test(marker.transferId) ||
-			!("transferEpoch" in marker) ||
-			typeof marker.transferEpoch !== "number" ||
-			!Number.isSafeInteger(marker.transferEpoch) ||
-			marker.transferEpoch < 1
-		)
-			throw new Error("Native session handoff identity is invalid");
-		return {
-			version: 1,
-			targetNode: marker.targetNode,
-			transferId: marker.transferId,
-			transferEpoch: marker.transferEpoch,
-		};
+	// The first physical line alone establishes native session identity.
+	// Never skip a corrupt transfer header for a later forged ordinary header.
+	const line = text.split(/\r?\n/, 2)[0];
+	let value: unknown;
+	try {
+		value = JSON.parse(line);
+	} catch {
+		throw new Error("Native session header is missing or exceeds the ownership-read limit");
 	}
-	// An existing journal without a parseable header cannot prove that it has
-	// no transfer identity. A bounded read may have stopped inside a long header.
-	// Only ENOENT above is the legitimate lazy-session absence case.
-	throw new Error("Native session header is missing or exceeds the ownership-read limit");
+	if (!value || typeof value !== "object" || !("type" in value) || value.type !== "session")
+		throw new Error("Native session header is missing or exceeds the ownership-read limit");
+	if (!("id" in value) || value.id !== sessionId)
+		throw new Error("Native session identity does not match the active session");
+	if (!("checkpointHandoff" in value)) return undefined;
+	const marker: unknown = value.checkpointHandoff;
+	if (
+		!marker ||
+		typeof marker !== "object" ||
+		!("version" in marker) ||
+		marker.version !== 1 ||
+		!("targetNode" in marker) ||
+		!isCheckpointNodeLabel(marker.targetNode) ||
+		!("transferId" in marker) ||
+		typeof marker.transferId !== "string" ||
+		!/^[A-Za-z0-9_-]{1,128}$/.test(marker.transferId) ||
+		!("transferEpoch" in marker) ||
+		typeof marker.transferEpoch !== "number" ||
+		!Number.isSafeInteger(marker.transferEpoch) ||
+		marker.transferEpoch < 1
+	)
+		throw new Error("Native session handoff identity is invalid");
+	return {
+		version: 1,
+		targetNode: marker.targetNode,
+		transferId: marker.transferId,
+		transferEpoch: marker.transferEpoch,
+	};
 }
 
 export async function readSessionOwnershipMarker(sessionFile: string, sessionId: string): Promise<{

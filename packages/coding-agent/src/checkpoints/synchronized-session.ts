@@ -6,6 +6,7 @@ const runtimeOwner = randomUUID();
 export class SynchronizedSession {
 	#lost = false;
 	#timer?: NodeJS.Timeout;
+	#renewal?: Promise<void>;
 	#lease?: CheckpointLease;
 	#admission?: Promise<void>;
 	#resumeToken?: string;
@@ -15,6 +16,7 @@ export class SynchronizedSession {
 		readonly claim?: SessionOwnershipMarker,
 		readonly ownerNode = runtimeOwner,
 		readonly persistOwnership?: (resumeToken: string, epoch: number) => Promise<void>,
+		private readonly renewalIntervalMs = 15_000,
 	) {}
 	admit(): Promise<void> {
 		if (this.#lost) return Promise.reject(new Error("Synchronized ownership lost. Start an explicit local fork."));
@@ -31,6 +33,12 @@ export class SynchronizedSession {
 
 	#assertOpen(): void {
 		if (this.#lost) throw new Error("Synchronized ownership lost. Start an explicit local fork.");
+	}
+
+	#loseOwnership(): void {
+		this.#lost = true;
+		clearInterval(this.#timer);
+		this.#timer = undefined;
 	}
 
 	async #admitOnce(): Promise<void> {
@@ -62,7 +70,6 @@ export class SynchronizedSession {
 						: undefined;
 				if (!grant) throw new Error("Transferred session is missing an authority resume capability");
 				this.#lease = grant.lease;
-				this.#resumeToken = grant.resumeToken;
 				this.#assertOpen();
 				try {
 					await this.persistOwnership(grant.resumeToken, grant.lease.epoch);
@@ -76,8 +83,10 @@ export class SynchronizedSession {
 						grant.resumeToken,
 					);
 					this.#assertOpen();
+					// Close may persist only a successfully finalized resume capability.
+					this.#resumeToken = grant.resumeToken;
 				} catch (error) {
-					this.#lost = true;
+					this.#loseOwnership();
 					throw error;
 				}
 			} else {
@@ -85,18 +94,6 @@ export class SynchronizedSession {
 			}
 			// close() can run while acquisition/finalization is awaiting the authority.
 			this.#assertOpen();
-			this.#timer = setInterval(() => {
-				void this.client.renewLease(this.sessionId).then(
-					lease => {
-						if (!this.#lost) this.#lease = lease;
-					},
-					() => {
-						this.#lost = true;
-						clearInterval(this.#timer);
-					},
-				);
-			}, 15000);
-			this.#timer.unref();
 		}
 		try {
 			await this.client.assertWritable(this.sessionId, this.#lease.epoch);
@@ -105,22 +102,38 @@ export class SynchronizedSession {
 			this.#assertOpen();
 			this.#lease = renewed;
 		} catch (error) {
-			this.#lost = true;
+			this.#loseOwnership();
 			throw error;
+		}
+		// An expired/rejected grant must not leave a background renewer.
+		if (!this.#timer) {
+			this.#timer = setInterval(() => {
+				if (this.#lost || this.#renewal) return;
+				const renewal = this.client.renewLease(this.sessionId).then(
+					lease => {
+						if (!this.#lost) this.#lease = lease;
+					},
+					() => this.#loseOwnership(),
+				);
+				this.#renewal = renewal;
+				void renewal.finally(() => {
+					if (this.#renewal === renewal) this.#renewal = undefined;
+				});
+			}, this.renewalIntervalMs);
+			this.#timer.unref();
 		}
 	}
 	async close(): Promise<void> {
-		// Fence admission immediately. A delayed /lease or /claim must finish before
-		// we release, otherwise close could return while a new owner is still granted.
-		this.#lost = true;
+		// Fence admission and periodic renewal, then drain calls before release.
+		this.#loseOwnership();
 		await this.#admission?.catch(() => {});
-		clearInterval(this.#timer);
+		await this.#renewal;
 		try {
 			const released = await this.client.releaseLease(this.sessionId);
 			if (this.claim && this.#resumeToken && released && this.persistOwnership)
 				await this.persistOwnership(this.#resumeToken, released.epoch);
 		} finally {
-			this.#lost = true;
+			this.#loseOwnership();
 		}
 	}
 }
