@@ -75,3 +75,41 @@ test("a session file that cannot be read for any other reason still fails", asyn
 	await mkdir(directoryInPlaceOfFile);
 	await expect(readSessionOwnershipMarker(directoryInPlaceOfFile, "lazy")).rejects.toThrow();
 });
+
+// WHY: native transfer journals do not have recovery sidecars on the source
+// machine. A header longer than the bounded ownership read used to look like
+// an ordinary, untransferred session and bypass the handoff admission fence.
+test("an oversized native handoff header cannot masquerade as an ordinary session", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-large-header-"));
+	roots.push(root);
+	const transferredFile = join(root, "transferred.jsonl");
+	await writeFile(
+		transferredFile,
+		JSON.stringify({
+			type: "session",
+			id: "transfer",
+			cwd: root,
+			padding: "x".repeat(70 * 1024),
+			checkpointHandoff: identity,
+		}) + "\n",
+	);
+	// There is deliberately no recovery.json or ownership sidecar: this is the
+	// source journal whose transfer fence must live in its own header.
+	await expect(readSessionOwnershipMarker(transferredFile, "transfer")).rejects.toThrow(
+		/Native session header is missing or exceeds the ownership-read limit/,
+	);
+
+	const ordinaryFile = join(root, "ordinary.jsonl");
+	await writeFile(ordinaryFile, JSON.stringify({ type: "session", id: "ordinary", cwd: root }) + "\n");
+	await expect(readSessionOwnershipMarker(ordinaryFile, "ordinary")).resolves.toBeNull();
+});
+
+test("an existing malformed native journal never acquires ordinary ownership", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-invalid-header-"));
+	roots.push(root);
+	const file = join(root, "broken.jsonl");
+	await writeFile(file, '{"type":"session","id":"broken","cwd":');
+	await expect(readSessionOwnershipMarker(file, "broken")).rejects.toThrow(
+		/Native session header is missing or exceeds the ownership-read limit/,
+	);
+});
