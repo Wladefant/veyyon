@@ -416,10 +416,11 @@ export class MCPManager {
 		| "duplicate"
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
-	// A new webhook registration must not race an old key-based unsubscribe.
-	// Every consumer-clear barrier covers old subscriptions, including their
-	// in-flight subscribe/compensating-unsubscribe lifecycle.
-	#eventConsumerStopBarrier: Promise<void> = Promise.resolve();
+	// Key-based webhook unsubscribe blocks only that canonical subscription,
+	// not independent poll/push feeds or unrelated webhook callbacks.
+	#eventConsumerStopBarriers = new Map<string, Promise<void>>();
+	// Callback function equality is insufficient across clear/re-enable cycles.
+	#eventConsumerRevision = 0;
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
 	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean }>();
@@ -491,6 +492,7 @@ export class MCPManager {
 				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
 			| undefined,
 	): void {
+		this.#eventConsumerRevision++;
 		this.#onEvent = handler;
 		if (handler) {
 			for (const [serverName, connection] of this.#connections) {
@@ -506,19 +508,28 @@ export class MCPManager {
 			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 			// The setter remains synchronous; consume teardown rejections and
 			// report failures without exposing transport diagnostics or credentials.
-			const previousStop = this.#eventConsumerStopBarrier;
-			this.#eventConsumerStopBarrier = Promise.allSettled([
-				previousStop,
-				...active.flatMap(([, subscription]) => [
+			// Stop all active feeds immediately, but carry each asynchronous
+			// teardown only on that feed's key. A second clear chains its own
+			// same-key cleanup without losing the previous unsubscribe.
+			for (const [key, subscription] of active) {
+				const previousStop = this.#eventConsumerStopBarriers.get(key);
+				const stopBarrier = Promise.allSettled([
+					previousStop,
 					subscription.stream?.done,
 					subscription.streamProcessing,
 					subscription.lifecycle,
 					subscription.unsubscribe,
-				].filter(Boolean)),
-			]).then(results => {
-				const failed = results.filter(result => result.status === "rejected").length;
-				if (failed > 0) logger.warn("MCP event handler removal cleanup failed", { failed });
-			});
+				].filter(Boolean)).then(results => {
+					const failed = results.filter(result => result.status === "rejected").length;
+					if (failed > 0) logger.warn("MCP event handler removal cleanup failed", { failed });
+				});
+				this.#eventConsumerStopBarriers.set(key, stopBarrier);
+				void stopBarrier.then(() => {
+					if (this.#eventConsumerStopBarriers.get(key) === stopBarrier) {
+						this.#eventConsumerStopBarriers.delete(key);
+					}
+				});
+			}
 		}
 	}
 
@@ -598,12 +609,7 @@ export class MCPManager {
 		connection: MCPServerConnection,
 		config: MCPServerConfig["events"],
 	): Promise<void> {
-		// A webhook unsubscribe is keyed by principal/URL/name/arguments rather
-		// than its response ID. Wait for the previous consumer's teardown before
-		// sending a new subscribe for a potentially identical key.
-		const stopBarrier = this.#eventConsumerStopBarrier;
-		await stopBarrier;
-		if (stopBarrier !== this.#eventConsumerStopBarrier) return;
+		const consumerRevision = this.#eventConsumerRevision;
 		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
 		const eventsConfig = config;
 		this.#eventStartupControllers.get(serverName)?.abort();
@@ -624,15 +630,22 @@ export class MCPManager {
 			}
 			if (
 				controller.signal.aborted ||
+				consumerRevision !== this.#eventConsumerRevision ||
 				!this.#onEvent ||
 				this.#connections.get(serverName) !== connection
 			) {
 				return;
 			}
 			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
-			for (const requested of eventsConfig.subscriptions) {
+			// An old key-based unsubscribe may be held while other keys need
+			// to enroll. Independent launches must not inherit that latency.
+			await Promise.all(eventsConfig.subscriptions.map(async requested => {
+				const key = this.#eventKey(serverName, requested);
+				const stopBarrier = this.#eventConsumerStopBarriers.get(key);
+				if (stopBarrier) await stopBarrier;
 				if (
 					controller.signal.aborted ||
+					consumerRevision !== this.#eventConsumerRevision ||
 					!this.#onEvent ||
 					this.#connections.get(serverName) !== connection
 				) {
@@ -640,20 +653,18 @@ export class MCPManager {
 				}
 				const descriptor = byName.get(requested.name);
 				if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
-					const key = this.#eventKey(serverName, requested);
 					const active = this.#activeEvents.get(key);
 					if (active) this.#stopEvent(key, active);
-					continue;
+					return;
 				}
 				if (requested.mode === "push" && !connection.transport.streamRequest) {
 					logger.warn("Configured MCP event push mode is unsupported by this transport", {
 						path: `mcp:${serverName}`,
 						event: requested.name,
 					});
-					continue;
+					return;
 				}
-				const key = this.#eventKey(serverName, requested);
-				if (this.#activeEvents.has(key)) continue;
+				if (this.#activeEvents.has(key)) return;
 				const subscription: ActiveMCPEventSubscription = {
 					controller: new AbortController(),
 					serverName,
@@ -672,7 +683,7 @@ export class MCPManager {
 				} else {
 					subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
 				}
-			}
+			}));
 		})();
 		this.#eventStartupPromises.set(serverName, promise);
 		try {
