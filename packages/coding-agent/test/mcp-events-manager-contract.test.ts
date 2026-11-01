@@ -2082,4 +2082,82 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+	// WHY: a per-server disconnect waits for the old poll callback before it
+	// removes the connection. That callback must not start a replacement feed on
+	// the same server during the drain, while an unrelated server may still connect.
+	// This synthetic loopback test cannot prove host-side socket recovery.
+	it("does not re-enroll a disconnecting server while an unrelated event server continues", async () => {
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldSettled = Promise.withResolvers<void>();
+		const independentDelivered = Promise.withResolvers<void>();
+		const serverAName = "draining-event-server-A";
+		const serverBName = "independent-event-server-B";
+		let aPolls = 0;
+		let bPolls = 0;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				aPolls++;
+				return aPolls === 1
+					? { events: [event("A-in-flight", "A-original-cursor")], cursor: "A-original-page", hasMore: false, nextPollMs: 30_000 }
+					: { events: [event("A-should-not-restart", "A-next-cursor")], cursor: "A-next-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				bPolls++;
+				return bPolls === 1
+					? { events: [event("B-unrelated", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 }
+					: { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === serverBName && occurrence.eventId === "B-unrelated") {
+				independentDelivered.resolve();
+			}
+			if (name !== serverAName || occurrence.eventId !== "A-in-flight") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// The old connection is still in the manager while disconnect
+			// waits for this very callback. Its attempted new subscription
+			// must not reach events/poll after explicit disconnect began.
+			manager.setOnEvent(() => {});
+			const startup = manager.getEventStartupPromise(serverAName);
+			if (startup) await withinHandlerChange(startup, "stale A restart during disconnect");
+			oldSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverAName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A initial event connection");
+			await withinHandlerChange(oldEntered.promise, "A original event callback");
+			const disconnectA = manager.disconnectServer(serverAName);
+			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
+			await withinHandlerChange(connect(manager, serverBName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "B concurrent event connection");
+			await withinHandlerChange(independentDelivered.promise, "independent B event delivery");
+			releaseOld.resolve();
+			await withinHandlerChange(oldSettled.promise, "A old callback released");
+			await withinHandlerChange(disconnectA, "A disconnect completion");
+			await delay(75);
+			expect(aPolls).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
+			expect(manager.getActiveEventSubscriptionCount(serverBName)).toBe(1);
+			expect(bPolls).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "two-server disconnect race cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
 });
