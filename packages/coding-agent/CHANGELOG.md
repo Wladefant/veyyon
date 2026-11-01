@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bound native checkpoint source reads before cloud export to avoid unbounded allocations from oversized files ([#603](https://github.com/Wladefant/veyyon/issues/603)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
