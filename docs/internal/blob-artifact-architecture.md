@@ -193,17 +193,14 @@ Read tool integration:
 
 ### Fork
 
-`SessionManager.fork()` creates a new session file with new session ID and `parentSession` link, then returns old/new file paths. Artifact copying is handled by `AgentSession.fork()`:
+`AgentSession.fork()` flushes the original session first. `SessionManager.fork()` then preflights the inherited `artifact://N` references and copies the original session's artifact directory into a fresh, non-overwriting destination **before** changing the active session ID, writing the new file or emitting a successful session switch.
 
-- flushes current session first,
-- attempts recursive copy of old artifact directory to new artifact directory,
-- missing old directory is tolerated,
-- non-ENOENT copy errors are logged as warnings and fork still completes.
+- Every inherited referenced artifact must exist unambiguously in the source directory, and the copied directory must contain the original names and matching file sizes before the switch. A successful copy preserves the original output bytes; the source artifacts are not removed.
+- Missing old artifact directories are tolerated **only when no inherited references exist**. A missing referenced artifact, an inaccessible or non-directory source, an incomplete copy or a non-ENOENT copy error rejects the fork without switching the original session.
+- A failed preflight can leave an orphaned *new* destination directory; it never deletes the original and never reports an exact-evidence fork as successful. Cleanup of orphaned data needs separate owned verification, not an automatic destructive fallback.
+- On success, the new session's `ArtifactManager` rescans the copied `{id}.*.log` files and starts new output IDs after the highest inherited ID, preventing old `artifact://N` links from resolving to unrelated new output.
 
-ID implications after fork:
-
-- if copy succeeded, artifact counters in the new session continue after max copied ID when the new `ArtifactManager` first scans,
-- if copy failed/skipped, new session artifact IDs start from `0`.
+`SessionManager.fork()` still records the previous session as `parentSession`. Global content-addressed blobs remain shared and require no per-session copy.
 
 Blob implications after fork:
 
