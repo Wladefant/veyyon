@@ -1409,4 +1409,78 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 30_000);
 
+
+	// WHY: two distinct event configurations may supply one HTTPS callback
+	// path. The second registration must be refused instead of remaining a
+	// phantom active subscription or replacing the first verified route.
+	it("keeps exactly one active webhook when different events claim the same callback path", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const names = [EVENT_NAME, "inventory/changed"];
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: () => ({
+				events: names.map(name => ({
+					name,
+					description: "fake callback event",
+					inputSchema: { type: "object" },
+					delivery: ["webhook"],
+				})),
+			}),
+			webhookSubscribe: async params => ({
+				id: `same-path-${String(params.name)}`,
+				cursor: "accepted-one",
+				refreshBefore: null,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		const callbackUrl = "https://callback.example.test/events/unique";
+		const previousSecret = process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET;
+		process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET = CALLBACK_SECRET;
+		const accepted = Promise.withResolvers<void>();
+		const subscriptions = names.map(name => ({
+			name,
+			mode: "webhook" as const,
+			webhook: {
+				callbackUrl,
+				secretRef: "$MCP_EVENTS_COLLIDING_CALLBACK_SECRET",
+				listenPort,
+			},
+		}));
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor(() => accepted.resolve());
+		try {
+			await withinHandlerChange(
+				connect(manager, "colliding-callbacks", managerConfig(server, {
+					enabled: true,
+					subscriptions,
+				})),
+				"same-callback server connection",
+			);
+			await withinHandlerChange(accepted.promise, "first valid callback registration");
+			let failures = subscriptions.map(subscription =>
+				manager.getEventSubscriptionStatus("colliding-callbacks", subscription),
+			);
+			for (let i = 0; i < 50 && !failures.some(Boolean); i++) {
+				await delay(20);
+				failures = subscriptions.map(subscription =>
+					manager.getEventSubscriptionStatus("colliding-callbacks", subscription),
+				);
+			}
+			expect(failures.filter(Boolean)).toHaveLength(1);
+			expect(failures.find(Boolean)?.reason).toContain("callback path");
+			expect(manager.getActiveEventSubscriptionCount("colliding-callbacks")).toBe(1);
+			expect(server.requests.filter(request => request.method === "events/subscribe")).toHaveLength(1);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "same-callback cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET;
+				else process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET = previousSecret;
+			}
+		}
+	}, 20_000);
+
 });
