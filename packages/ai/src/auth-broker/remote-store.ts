@@ -352,15 +352,29 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 */
 	/**
 	 * An incoming SSE/GET frame can describe broker state from before an in-flight
-	 * block POST completed. Keep that credential's speculative safety projection
-	 * while it is pending, but still accept its non-block fields. After all writes
-	 * settle, reconcile once against the canonical broker rather than trusting
-	 * either the old frame or a stale stream.
+	 * block POST completed. Keep local speculative restrictions while accepting
+	 * distinct broker-authoritative scopes (and the stricter deadline for a shared
+	 * scope). Discarding all incoming blocks would temporarily unblock a peer's
+	 * already-committed restriction while our own POST is still held.
+	 * After all writes settle, reconcile against the canonical broker to retire
+	 * any speculative block that was never accepted.
 	 */
 	#retainPendingCredentialBlocks(incoming: SnapshotEntry, previous: SnapshotEntry | undefined): SnapshotEntry {
 		if (!previous || !this.#pendingCredentialBlockMutations.has(incoming.id)) return incoming;
 		this.#credentialBlockReconciliationPending.add(incoming.id);
-		if (previous.blocks && previous.blocks.length > 0) return { ...incoming, blocks: previous.blocks.slice() };
+		const merged = new Map<string, CredentialBlockSnapshot>();
+		for (const block of incoming.blocks ?? []) {
+			merged.set(credentialBlockKey(incoming.id, block.providerKey, block.blockScope), block);
+		}
+		for (const block of previous.blocks ?? []) {
+			const key = credentialBlockKey(incoming.id, block.providerKey, block.blockScope);
+			const authoritative = merged.get(key);
+			if (!authoritative || block.blockedUntilMs > authoritative.blockedUntilMs) {
+				merged.set(key, block);
+			}
+		}
+		const blocks = [...merged.values()].sort(compareCredentialBlockSnapshots);
+		if (blocks.length > 0) return { ...incoming, blocks };
 		const next: SnapshotEntry = { ...incoming };
 		delete next.blocks;
 		return next;
