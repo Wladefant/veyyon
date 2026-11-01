@@ -1019,6 +1019,98 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("reconciles a failed cross-scope block after another scope commits on the same credential", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected background poll with stalled SSE");
+			fullReads += 1;
+			return realFetch(opts);
+		});
+		const olderReply = Promise.withResolvers<{ ok: boolean }>();
+		const releaseNewerPost = Promise.withResolvers<void>();
+		const newerStarted = Promise.withResolvers<void>();
+		const newerCommitted = Promise.withResolvers<void>();
+		const realUpsert = client.upsertCredentialBlock.bind(client);
+		let posts = 0;
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+			posts += 1;
+			if (posts === 1) {
+				expect(body.blockScope).toBe("scope-A");
+				return olderReply.promise;
+			}
+			if (posts !== 2) throw new Error("unexpected third synthetic block POST");
+			expect(body.blockScope).toBe("scope-B");
+			newerStarted.resolve();
+			await releaseNewerPost.promise;
+			const response = await realUpsert(credentialId, body);
+			newerCommitted.resolve();
+			return response;
+		});
+		let olderFailureHandled = false;
+		spyOn(logger, "warn").mockImplementation((message, context) => {
+			if (message === "auth-broker credential block propagation failed" && context?.blockScope === "scope-A") {
+				olderFailureHandled = true;
+			}
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		const firstUntilMs = Date.now() + 90_000;
+		const secondUntilMs = firstUntilMs + 60_000;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
+			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+		});
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "scope-B",
+			blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+		});
+		await newerStarted.promise;
+		expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(firstUntilMs);
+		expect(remote.getCredentialBlock(id, "anthropic", "scope-B")).toBe(secondUntilMs);
+		try {
+			olderReply.resolve({ ok: false });
+			await waitUntil(() => olderFailureHandled);
+			// A GET while scope B's POST is still pending would discard its
+			// speculative protection before the broker has accepted it.
+			expect(fullReads).toBe(0);
+			expect(remote.getCredentialBlock(id, "anthropic", "scope-B")).toBe(secondUntilMs);
+			releaseNewerPost.resolve();
+			await newerCommitted.promise;
+			const authoritative = await peer.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected authoritative final broker snapshot");
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: secondUntilMs },
+			]);
+			// The apparently healthy but stalled SSE stream cannot strand a
+			// phantom scope-A block simply because scope B committed afterward.
+			await waitUntil(() =>
+				fullReads >= 1 &&
+				remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
+				remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
+			);
+			expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "scope-A")).toBeUndefined();
+			expect(remote.listCredentialBlocks([id])).toMatchObject([
+				{ credentialId: id, providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: secondUntilMs },
+			]);
+		} finally {
+			olderReply.resolve({ ok: false });
+			releaseNewerPost.resolve();
+		}
+	});
+
 	test("reconciles a committed broker block DELETE whose acknowledgment was lost while SSE stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
