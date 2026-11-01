@@ -134,4 +134,93 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		expect(traceAtProvider[0]?.some(record => record.stage === "turn_consumption" && record.traceId === traceId)).toBe(true);
 		expect(JSON.stringify(traceRecords)).not.toContain("traced input");
 	});
+
+	it("attributes queued Telegram steer and follow-up to their own provider calls", async () => {
+		const realMode = mode;
+		const realSession = session;
+		if (!realMode || !realSession || !authStorage) throw new Error("Expected initialized interactive session");
+		const releaseFirstProvider = Promise.withResolvers<void>();
+		const firstProviderEntered = Promise.withResolvers<void>();
+		let responseCount = 0;
+		const fakeProvider = createMockModel({
+			handler: async () => {
+				if (responseCount++ === 0) await releaseFirstProvider.promise;
+				return { content: ["Acknowledged"], stopReason: "stop" };
+			},
+		});
+		authStorage.setRuntimeApiKey("mock", "test-only-token");
+		realSession.agent.setModel(fakeProvider.model);
+		const records: Array<Record<string, unknown>> = [];
+		vi.spyOn(logger, "info").mockImplementation((message, context) => {
+			if (message === "Telegram delivery trace") records.push(context ? { ...context } : {});
+		});
+		const atProvider: Array<{ traceIds: string[]; messages: string }> = [];
+		let observedStartCount = 0;
+		realSession.agent.streamFn = (model, context, options) => {
+			// Snapshot only the start records that appeared since the previous provider invocation.
+			const starts = records.filter(record => record.stage === "provider_call_start");
+			const traceIds = starts.slice(observedStartCount).map(record => String(record.traceId));
+			observedStartCount = starts.length;
+			atProvider.push({ traceIds, messages: JSON.stringify(context.messages) });
+			if (atProvider.length === 1) firstProviderEntered.resolve();
+			return fakeProvider.stream(model, context, options);
+		};
+		const errors: string[] = [];
+		vi.spyOn(realMode, "showError").mockImplementation(message => errors.push(message));
+		const base = { chatId: "-1001999888", topicId: 10 };
+		const initial = realMode.startPendingSubmission({
+			text: "original traced turn",
+			streamingBehavior: "followUp",
+			telegramTrace: { ...base, updateId: 9101, messageId: 51 },
+		});
+		const initialDelivery = submitInteractiveInput(realMode, realSession, initial);
+		let providerTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				firstProviderEntered.promise,
+				new Promise<void>((_, reject) => {
+					providerTimer = setTimeout(() => reject(new Error("First mock provider call did not start")), 10_000);
+				}),
+			]);
+			if (!realSession.isStreaming) throw new Error("Expected first turn to remain in flight");
+			const steering = realMode.startPendingSubmission({
+				text: "steering traced turn",
+				streamingBehavior: "steer",
+				telegramTrace: { ...base, updateId: 9102, messageId: 52 },
+			});
+			await submitInteractiveInput(realMode, realSession, steering);
+			const followUp = realMode.startPendingSubmission({
+				text: "follow-up traced turn",
+				streamingBehavior: "followUp",
+				telegramTrace: { ...base, updateId: 9103, messageId: 53 },
+			});
+			await submitInteractiveInput(realMode, realSession, followUp);
+			expect(steering.started).toBe(true);
+			expect(followUp.started).toBe(true);
+		} finally {
+			if (providerTimer !== undefined) clearTimeout(providerTimer);
+			releaseFirstProvider.resolve();
+		}
+		await initialDelivery;
+		await realSession.waitForIdle();
+		expect(errors).toEqual([]);
+		const expectedTraceIds = ["-1001999888:9101:51", "-1001999888:9102:52", "-1001999888:9103:53"];
+		// A queued steer is delivered before a follow-up; neither trace may leak into
+		// the provider invocation for the previous or subsequent logical user turn.
+		expect(atProvider.map(call => call.traceIds)).toEqual(expectedTraceIds.map(id => [id]));
+		expect(fakeProvider.calls).toHaveLength(3);
+		for (const [index, prompt] of [
+			"original traced turn",
+			"steering traced turn",
+			"follow-up traced turn",
+		].entries()) {
+			expect(atProvider[index]?.messages).toContain(prompt);
+		}
+		expect(records.filter(record => record.stage === "turn_consumption").map(record => record.traceId)).toEqual(
+			expectedTraceIds,
+		);
+		for (const text of ["original traced turn", "steering traced turn", "follow-up traced turn"]) {
+			expect(JSON.stringify(records)).not.toContain(text);
+		}
+	});
 });
