@@ -551,6 +551,10 @@ export class MCPManager {
 	setOnEventCursor(
 		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
 	): void {
+		const scope = this.#eventCallbackContext.getStore();
+		// An obsolete event handler cannot replace the successor's cursor writer
+		// after an external consumer replacement. Current and external setters remain valid.
+		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
 		this.#onEventCursor = handler;
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
