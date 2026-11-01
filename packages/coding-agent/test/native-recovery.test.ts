@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serializeTitleSlot } from "../../../kernel/src/session/session-title-slot";
@@ -39,6 +39,31 @@ describe("native recovery", () => {
 		);
 		const bundle = await captureNativeCheckpoint(file, []);
 		expect(Buffer.from(bundle.blobs[hash] ?? "", "base64")).toEqual(bytes);
+	});
+	test("rejects an oversized journal before decoding or allocating its body", async () => {
+		const root = await scratch();
+		const file = join(root, "oversized.jsonl");
+		await writeFile(file, `${JSON.stringify({ type: "session", id: "oversized", cwd: root })}\n`);
+		// Sparse fixture: cross the raw-byte cap without a huge JS allocation.
+		await truncate(file, 48 * 1024 * 1024 + 1);
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/capture exceeds raw-byte budget/);
+	});
+	test("rejects oversized artifact and approved dirty inputs against the aggregate cap", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, `${JSON.stringify({ type: "session", id: "bounded", cwd: root })}\n`);
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		const large = join(artifacts, "large.bin");
+		await writeFile(large, "");
+		// Each file equals the per-file cap, but the journal already spent bytes.
+		await truncate(large, 48 * 1024 * 1024);
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/capture exceeds raw-byte budget/);
+		await rm(large);
+		const dirty = join(root, "approved.txt");
+		await writeFile(dirty, "");
+		await truncate(dirty, 48 * 1024 * 1024);
+		await expect(captureNativeCheckpoint(file, [dirty])).rejects.toThrow(/capture exceeds raw-byte budget/);
 	});
 	test("preserves the native first-line title slot and forks the second-line header", async () => {
 		const root = await scratch();

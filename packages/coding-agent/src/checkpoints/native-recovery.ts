@@ -1,7 +1,7 @@
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
@@ -56,20 +56,72 @@ async function walkFiles(root: string, base = root): Promise<string[]> {
 	}
 	return found;
 }
-async function readStable(path: string): Promise<Uint8Array> {
-	const before = await stat(path);
-	const first = await readFile(path);
-	const afterFirst = await stat(path);
-	const second = await readFile(path);
-	const afterSecond = await stat(path);
-	const signature = (s: typeof before) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
-	if (
-		signature(before) !== signature(afterFirst) ||
-		signature(afterFirst) !== signature(afterSecond) ||
-		!first.equals(second)
-	)
-		throw new Error(`Checkpoint source changed during capture: ${path}`);
-	return first;
+// Cloud ciphertext is limited to 64 MiB. The original bytes are base64
+// encoded without compression, so more than 48 MiB of raw file bytes could
+// never fit, even before JSON and the AES-GCM envelope are included.
+const MAX_CAPTURE_RAW_BYTES = 48 * 1024 * 1024;
+const CAPTURE_READ_CHUNK_BYTES = 64 * 1024;
+
+async function readStable(path: string, maxBytes: number): Promise<Uint8Array> {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
+	const preliminary = await lstat(path);
+	// Reject FIFO/device inputs before open: their read can wait forever for a writer.
+	if (!preliminary.isFile()) throw new Error(`Checkpoint capture requires a regular file: ${path}`);
+	const handle = await open(path, "r");
+	try {
+		const before = await handle.stat();
+		const exceedsBudget = (): never => {
+			throw new Error(`Checkpoint capture exceeds raw-byte budget: ${path}`);
+		};
+		if (!before.isFile() || before.size > maxBytes) exceedsBudget();
+
+		// The byte budget is enforced on the opened descriptor, not just a
+		// preflight stat that the writer could invalidate by growing the file.
+		const chunks: Buffer[] = [];
+		let length = 0;
+		while (true) {
+			const amount = Math.min(CAPTURE_READ_CHUNK_BYTES, maxBytes - length + 1);
+			const chunk = Buffer.allocUnsafe(amount);
+			const { bytesRead } = await handle.read(chunk, 0, amount, length);
+			if (bytesRead === 0) break;
+			if (bytesRead > maxBytes - length) exceedsBudget();
+			chunks.push(chunk.subarray(0, bytesRead));
+			length += bytesRead;
+		}
+		const first = Buffer.concat(chunks, length);
+		const afterFirst = await handle.stat();
+
+		// Check the contents again using only a small scratch buffer rather
+		// than allocating a second full-size read.
+		const probe = Buffer.allocUnsafe(CAPTURE_READ_CHUNK_BYTES);
+		let verified = 0;
+		while (true) {
+			const amount = Math.min(probe.length, first.byteLength - verified + 1);
+			const { bytesRead } = await handle.read(probe, 0, amount, verified);
+			if (bytesRead === 0) break;
+			if (
+				bytesRead > first.byteLength - verified ||
+				!probe.subarray(0, bytesRead).equals(first.subarray(verified, verified + bytesRead))
+			)
+				throw new Error(`Checkpoint source changed during capture: ${path}`);
+			verified += bytesRead;
+		}
+		const afterSecond = await handle.stat();
+		// Preserve the old path-identity check if the name was replaced mid-read.
+		const afterPath = await stat(path);
+		const signature = (value: typeof before) =>
+			`${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
+		if (
+			verified !== first.byteLength ||
+			signature(before) !== signature(afterFirst) ||
+			signature(afterFirst) !== signature(afterSecond) ||
+			signature(afterSecond) !== signature(afterPath)
+		)
+			throw new Error(`Checkpoint source changed during capture: ${path}`);
+		return first;
+	} finally {
+		await handle.close();
+	}
 }
 function parseHeader(bytes: Uint8Array): Record<string, unknown> {
 	const lines = Buffer.from(bytes).toString("utf8").split(/\r?\n/, 2);
@@ -105,7 +157,7 @@ export async function persistNativeHandoffIdentity(
 	const journalPath = resolve(sessionFile);
 	await assertNoSymlink(journalPath);
 	await assertNotTerminalOwned(journalPath);
-	const original = await readStable(journalPath);
+	const original = await readStable(journalPath, MAX_CAPTURE_RAW_BYTES);
 	const header = parseHeader(original);
 	const prior = header.checkpointHandoff;
 	if (prior && typeof prior === "object" && "targetNode" in prior && prior.targetNode !== identity.targetNode)
@@ -139,7 +191,7 @@ export async function persistNativeHandoffIdentity(
 			text.slice(headerEnd),
 	);
 	if (next.equals(Buffer.from(original))) return;
-	if (!(await readFile(journalPath)).equals(Buffer.from(original)))
+	if (!Buffer.from(await readStable(journalPath, original.byteLength)).equals(Buffer.from(original)))
 		throw new Error("Native session changed while persisting its handoff identity");
 	const temporary = `${journalPath}.${randomUUID()}.tmp`;
 	await writeFile(temporary, next, { flag: "wx", mode: 0o600 });
@@ -158,14 +210,20 @@ export async function captureNativeCheckpoint(
 	await assertNoSymlink(journalPath);
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
-	const bytes = await readStable(journalPath);
+	let remainingBytes = MAX_CAPTURE_RAW_BYTES;
+	const readIncluded = async (filePath: string): Promise<Uint8Array> => {
+		const content = await readStable(filePath, remainingBytes);
+		remainingBytes -= content.byteLength;
+		return content;
+	};
+	const bytes = await readIncluded(journalPath);
 	const header = parseHeader(bytes);
 	const sessionId = header.id as string;
 	const artifactRoot = journalPath.slice(0, -6);
 	const artifacts: Record<string, string> = {};
 	try {
 		for (const rel of await walkFiles(artifactRoot))
-			artifacts[rel] = encode(await readStable(join(artifactRoot, ...rel.split("/"))));
+			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/"))));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
@@ -180,7 +238,7 @@ export async function captureNativeCheckpoint(
 		for (const match of journal.matchAll(/blob(?:text)?:sha256:([a-f0-9]{64})/g)) {
 			const hash = match[1]!;
 			if (!blobs[hash])
-				blobs[hash] = encode(await readStable(join(blobsDirForSessionDir(dirname(journalPath)), hash)));
+				blobs[hash] = encode(await readIncluded(join(blobsDirForSessionDir(dirname(journalPath)), hash)));
 		}
 	}
 	const workspaceRoot = await realpath(header.cwd as string);
@@ -208,7 +266,7 @@ export async function captureNativeCheckpoint(
 		const data = info.isDirectory() ? await walkFiles(path) : [safeRelative(basename(path))];
 		for (const rel of data) {
 			const full = info.isDirectory() ? join(path, ...rel.split("/")) : path;
-			const content = await readStable(full);
+			const content = await readIncluded(full);
 			const relativePath = safeRelative(relative(workspaceRoot, full).split(sep).join("/"));
 			dirty.push(relativePath);
 			files.push({ path: relativePath, content });
@@ -231,7 +289,7 @@ export async function captureNativeCheckpoint(
 			return "unknown";
 		}
 	};
-	if (!Buffer.from(await readStable(journalPath)).equals(Buffer.from(bytes)))
+	if (!Buffer.from(await readStable(journalPath, bytes.byteLength)).equals(Buffer.from(bytes)))
 		throw new Error("Journal changed during checkpoint capture");
 	return {
 		version: 1,
