@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serializeTitleSlot } from "../../../kernel/src/session/session-title-slot";
 import {
 	captureNativeCheckpoint,
 	forkNativeCheckpoint,
+	nativeCaptureByteBudget,
+	readOpenedCheckpointFile,
 	persistNativeHandoffIdentity,
 	restoreNativeCheckpoint,
 } from "../src/checkpoints/native-recovery";
@@ -65,6 +67,73 @@ describe("native recovery", () => {
 		await truncate(dirty, 48 * 1024 * 1024);
 		await expect(captureNativeCheckpoint(file, [dirty])).rejects.toThrow(/capture exceeds raw-byte budget/);
 	});
+	test("local forks do not inherit the Cloudflare ciphertext byte ceiling", async () => {
+		const root = await scratch();
+		const file = join(root, "local.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "local", cwd: root }) + "\n");
+		expect(nativeCaptureByteBudget("cloud")).toBe(48 * 1024 * 1024);
+		expect(nativeCaptureByteBudget("local")).toBe(Number.MAX_SAFE_INTEGER);
+		const local = await captureNativeCheckpoint(file, [], "local");
+		expect(local.native.sessionId).toBe("local");
+	});
+
+	test("read-time budget fails on deterministic growth after the initial descriptor stat", async () => {
+		const root = await scratch();
+		const file = join(root, "growing.bin");
+		await writeFile(file, Buffer.from("first approved bytes"));
+		const preliminary = await lstat(file);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await appendFile(file, Buffer.alloc(1024, 0x78));
+			// Exact production descriptor-reader, not a copied loop or timing race.
+			// Without the inner overrun check, the later signature failure would
+			// have a different error, so this assertion catches that mutation.
+			await expect(readOpenedCheckpointFile(file, before.size, preliminary, handle, before))
+				.rejects.toThrow(/exceeds raw-byte budget/);
+		} finally {
+			await handle.close();
+		}
+	});
+
+	test("pre-open symlink substitution cannot inherit a regular-file capture approval", async () => {
+		const root = await scratch();
+		const file = join(root, "approved.txt");
+		const moved = join(root, "moved.txt");
+		const other = join(root, "other.txt");
+		await writeFile(file, "APPROVED");
+		await writeFile(other, "synthetic UNAPPROVED; no private files");
+		const preliminary = await lstat(file);
+		await rename(file, moved);
+		await symlink(other, file, "file");
+		// Model the Windows fallback where open can follow a link. The production
+		// descriptor reader must reject against the preliminary no-follow stat.
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(file, 4096, preliminary, handle, before))
+				.rejects.toThrow(/Checkpoint source changed during capture/);
+		} finally {
+			await handle.close();
+		}
+		expect(await readFile(other, "utf8")).toBe("synthetic UNAPPROVED; no private files");
+	});
+
+	test("unchanged opened checkpoint descriptor still reads exact bytes", async () => {
+		const root = await scratch();
+		const file = join(root, "stable.txt");
+		await writeFile(file, "stable bytes");
+		const preliminary = await lstat(file);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			expect(Buffer.from(await readOpenedCheckpointFile(file, 4096, preliminary, handle, before)).toString())
+				.toBe("stable bytes");
+		} finally {
+			await handle.close();
+		}
+	});
+
 	test("preserves the native first-line title slot and forks the second-line header", async () => {
 		const root = await scratch();
 		const file = join(root, "session.jsonl");

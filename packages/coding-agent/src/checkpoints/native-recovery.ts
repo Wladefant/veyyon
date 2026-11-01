@@ -1,7 +1,8 @@
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import { lstat, mkdir, open, readdir, realpath, rename, rm, type FileHandle, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
@@ -62,67 +63,99 @@ async function walkFiles(root: string, base = root): Promise<string[]> {
 const MAX_CAPTURE_RAW_BYTES = 48 * 1024 * 1024;
 const CAPTURE_READ_CHUNK_BYTES = 64 * 1024;
 
+/** Offline forks are not Cloudflare 64 MiB ciphertext objects. Preserve their
+ * existing byte behavior while cloud export/handoff keeps its hard ceiling. */
+export function nativeCaptureByteBudget(mode: "cloud" | "local"): number {
+	return mode === "cloud" ? MAX_CAPTURE_RAW_BYTES : Number.MAX_SAFE_INTEGER;
+}
+
+function captureFileSignature(value: Stats): string {
+	return `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
+}
+
+/**
+ * Descriptor-bound capture body. Taking `before` separately allows the same
+ * production read loop to be tested with an actual file grown immediately
+ * after its initial fstat, without test-only hooks or copied algorithms.
+ */
+export async function readOpenedCheckpointFile(
+	path: string,
+	maxBytes: number,
+	preliminary: Stats,
+	handle: FileHandle,
+	before: Stats,
+): Promise<Uint8Array> {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
+	// A symlink replacing an approved regular file between lstat and open must
+	// not inherit its approval, even on platforms without O_NOFOLLOW.
+	if (!preliminary.isFile() || !before.isFile() || captureFileSignature(preliminary) !== captureFileSignature(before))
+		throw new Error(`Checkpoint source changed during capture: ${path}`);
+	const exceedsBudget = (): never => {
+		throw new Error(`Checkpoint capture exceeds raw-byte budget: ${path}`);
+	};
+	if (before.size > maxBytes) exceedsBudget();
+
+	const chunks: Buffer[] = [];
+	let length = 0;
+	while (true) {
+		const amount = Math.min(CAPTURE_READ_CHUNK_BYTES, maxBytes - length + 1);
+		const chunk = Buffer.allocUnsafe(amount);
+		const { bytesRead } = await handle.read(chunk, 0, amount, length);
+		if (bytesRead === 0) break;
+		if (bytesRead > maxBytes - length) exceedsBudget();
+		chunks.push(chunk.subarray(0, bytesRead));
+		length += bytesRead;
+	}
+	const first = Buffer.concat(chunks, length);
+	const afterFirst = await handle.stat();
+
+	// Verify content again using one fixed-size scratch buffer, not a second
+	// full allocation. A growing source is refused within the first loop.
+	const probe = Buffer.allocUnsafe(CAPTURE_READ_CHUNK_BYTES);
+	let verified = 0;
+	while (true) {
+		const amount = Math.min(probe.length, first.byteLength - verified + 1);
+		const { bytesRead } = await handle.read(probe, 0, amount, verified);
+		if (bytesRead === 0) break;
+		if (
+			bytesRead > first.byteLength - verified ||
+			!probe.subarray(0, bytesRead).equals(first.subarray(verified, verified + bytesRead))
+		)
+			throw new Error(`Checkpoint source changed during capture: ${path}`);
+		verified += bytesRead;
+	}
+	const afterSecond = await handle.stat();
+	// lstat, not stat: following a late leaf symlink would compare the linked
+	// target's inode with our descriptor and incorrectly authorize the swap.
+	const afterPath = await lstat(path);
+	if (
+		verified !== first.byteLength ||
+		!afterPath.isFile() ||
+		captureFileSignature(before) !== captureFileSignature(afterFirst) ||
+		captureFileSignature(afterFirst) !== captureFileSignature(afterSecond) ||
+		captureFileSignature(afterSecond) !== captureFileSignature(afterPath)
+	)
+		throw new Error(`Checkpoint source changed during capture: ${path}`);
+	return first;
+}
+
 async function readStable(path: string, maxBytes: number): Promise<Uint8Array> {
 	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
 	const preliminary = await lstat(path);
 	// Reject FIFO/device inputs before open: their read can wait forever for a writer.
 	if (!preliminary.isFile()) throw new Error(`Checkpoint capture requires a regular file: ${path}`);
-	const handle = await open(path, "r");
+	// POSIX rejects a link at open itself; Windows uses the pre-open/fstat and
+	// final no-follow identity comparisons above for the same leaf boundary.
+	const flags = process.platform === "win32" ? "r" : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+	const handle = await open(path, flags);
 	try {
 		const before = await handle.stat();
-		const exceedsBudget = (): never => {
-			throw new Error(`Checkpoint capture exceeds raw-byte budget: ${path}`);
-		};
-		if (!before.isFile() || before.size > maxBytes) exceedsBudget();
-
-		// The byte budget is enforced on the opened descriptor, not just a
-		// preflight stat that the writer could invalidate by growing the file.
-		const chunks: Buffer[] = [];
-		let length = 0;
-		while (true) {
-			const amount = Math.min(CAPTURE_READ_CHUNK_BYTES, maxBytes - length + 1);
-			const chunk = Buffer.allocUnsafe(amount);
-			const { bytesRead } = await handle.read(chunk, 0, amount, length);
-			if (bytesRead === 0) break;
-			if (bytesRead > maxBytes - length) exceedsBudget();
-			chunks.push(chunk.subarray(0, bytesRead));
-			length += bytesRead;
-		}
-		const first = Buffer.concat(chunks, length);
-		const afterFirst = await handle.stat();
-
-		// Check the contents again using only a small scratch buffer rather
-		// than allocating a second full-size read.
-		const probe = Buffer.allocUnsafe(CAPTURE_READ_CHUNK_BYTES);
-		let verified = 0;
-		while (true) {
-			const amount = Math.min(probe.length, first.byteLength - verified + 1);
-			const { bytesRead } = await handle.read(probe, 0, amount, verified);
-			if (bytesRead === 0) break;
-			if (
-				bytesRead > first.byteLength - verified ||
-				!probe.subarray(0, bytesRead).equals(first.subarray(verified, verified + bytesRead))
-			)
-				throw new Error(`Checkpoint source changed during capture: ${path}`);
-			verified += bytesRead;
-		}
-		const afterSecond = await handle.stat();
-		// Preserve the old path-identity check if the name was replaced mid-read.
-		const afterPath = await stat(path);
-		const signature = (value: typeof before) =>
-			`${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
-		if (
-			verified !== first.byteLength ||
-			signature(before) !== signature(afterFirst) ||
-			signature(afterFirst) !== signature(afterSecond) ||
-			signature(afterSecond) !== signature(afterPath)
-		)
-			throw new Error(`Checkpoint source changed during capture: ${path}`);
-		return first;
+		return await readOpenedCheckpointFile(path, maxBytes, preliminary, handle, before);
 	} finally {
 		await handle.close();
 	}
 }
+
 function parseHeader(bytes: Uint8Array): Record<string, unknown> {
 	const lines = Buffer.from(bytes).toString("utf8").split(/\r?\n/, 2);
 	for (const line of lines) {
@@ -205,12 +238,13 @@ export async function persistNativeHandoffIdentity(
 export async function captureNativeCheckpoint(
 	sessionFile: string,
 	workspacePaths: string[],
+	mode: "cloud" | "local" = "cloud",
 ): Promise<NativeCheckpointBundle> {
 	const journalPath = resolve(sessionFile);
 	await assertNoSymlink(journalPath);
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
-	let remainingBytes = MAX_CAPTURE_RAW_BYTES;
+	let remainingBytes = nativeCaptureByteBudget(mode);
 	const readIncluded = async (filePath: string): Promise<Uint8Array> => {
 		const content = await readStable(filePath, remainingBytes);
 		remainingBytes -= content.byteLength;
