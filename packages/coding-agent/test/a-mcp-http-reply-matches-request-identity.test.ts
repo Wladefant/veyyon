@@ -7,6 +7,8 @@ interface Fixture {
 	transport: HttpTransport;
 	setReply(reply: (id: string | number) => JsonRpcReply): void;
 	setFormat(format: "json" | "sse"): void;
+	setSessionHeader(value: string | null): void;
+	seenSessionHeaders(): readonly (string | null)[];
 	close(): Promise<void>;
 }
 
@@ -34,6 +36,8 @@ async function startFixture(): Promise<Fixture> {
 		result: { content: [{ type: "text", text: "accepted" }] },
 	});
 	let format: "json" | "sse" = "json";
+	let nextSessionHeader: string | null = null;
+	const incomingSessionHeaders: Array<string | null> = [];
 	const server = createServer((request, response) => {
 		void (async () => {
 			if (request.method !== "POST" || request.url !== "/mcp") {
@@ -52,12 +56,15 @@ async function startFixture(): Promise<Fixture> {
 				!("id" in call) ||
 				(typeof call.id !== "number" && typeof call.id !== "string")
 			) throw new Error("Fixture expected a JSON-RPC request id");
+			const sessionHeader = request.headers["mcp-session-id"];
+			incomingSessionHeaders.push(typeof sessionHeader === "string" ? sessionHeader : null);
 			const reply = respond(call.id);
+			const sessionHeaders = nextSessionHeader ? { "Mcp-Session-Id": nextSessionHeader } : {};
 			if (format === "sse") {
-				response.writeHead(200, { "Content-Type": "text/event-stream" });
+				response.writeHead(200, { "Content-Type": "text/event-stream", ...sessionHeaders });
 				response.end("data: " + JSON.stringify(reply) + "\n\n");
 			} else {
-				response.writeHead(200, { "Content-Type": "application/json" });
+				response.writeHead(200, { "Content-Type": "application/json", ...sessionHeaders });
 				response.end(JSON.stringify(reply));
 			}
 		})().catch(() => {
@@ -84,6 +91,8 @@ async function startFixture(): Promise<Fixture> {
 		transport,
 		setReply(next) { respond = next; },
 		setFormat(next) { format = next; },
+		setSessionHeader(next) { nextSessionHeader = next; },
+		seenSessionHeaders() { return incomingSessionHeaders.slice(); },
 		async close() {
 			try {
 				await bounded(transport.close(), "HTTP transport close");
@@ -322,5 +331,100 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 			await fixture.close();
 		}
 	}, 12_000);
+
+
+
+	// WHY: an unverified JSON-RPC initialization reply cannot assign the
+	// MCP session used to identify all later requests. Header custody requires
+	// an actual correlated successful initialization response, not HTTP 200.
+	it("does not retain a session header from an invalid initialization response", async () => {
+		const fixture = await startFixture();
+		try {
+			fixture.setSessionHeader("unrelated-session");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id: String(id) + "-wrong", result: { capabilities: {} } }));
+			await expect(bounded(fixture.transport.request("initialize"), "invalid initialization id")).rejects.toThrow(
+				"JSON-RPC response",
+			);
+			fixture.setSessionHeader(null);
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { tools: [] } }));
+			await expect(bounded(fixture.transport.request("tools/list"), "request after invalid init")).resolves.toEqual({
+				tools: [],
+			});
+			expect(fixture.seenSessionHeaders()).toEqual([null, null]);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
+
+	it("accepts a verified initialization session but ignores tool-reply header rotation", async () => {
+		const fixture = await startFixture();
+		const initialization = {
+			protocolVersion: "2025-03-26",
+			capabilities: {},
+			serverInfo: { name: "fixture", version: "1" },
+		};
+		try {
+			fixture.setSessionHeader("accepted-session");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: initialization }));
+			await expect(bounded(fixture.transport.request("initialize"), "verified initialization")).resolves.toEqual(
+				initialization,
+			);
+			fixture.setSessionHeader("different-session");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { tools: [] } }));
+			await expect(bounded(fixture.transport.request("tools/list"), "ordinary tool reply")).resolves.toEqual({
+				tools: [],
+			});
+			fixture.setSessionHeader(null);
+			await bounded(fixture.transport.request("tools/list"), "subsequent tool request");
+			expect(fixture.seenSessionHeaders()).toEqual([null, "accepted-session", "accepted-session"]);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
+
+	it("refuses non-visible-ASCII initialization session ids without persisting them", async () => {
+		const fixture = await startFixture();
+		try {
+			fixture.setSessionHeader("bad session");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { capabilities: {} } }));
+			await expect(bounded(fixture.transport.request("initialize"), "invalid session header")).rejects.toThrow(
+				"MCP initialization response has invalid session identifier",
+			);
+			fixture.setSessionHeader(null);
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { tools: [] } }));
+			await bounded(fixture.transport.request("tools/list"), "tool after invalid header");
+			expect(fixture.seenSessionHeaders()).toEqual([null, null]);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
+
+	it("accepts a correlated SSE initialization session and ignores subscription ACK header changes", async () => {
+		const fixture = await startFixture();
+		const initialization = {
+			protocolVersion: "2025-03-26",
+			capabilities: {},
+			serverInfo: { name: "fixture", version: "1" },
+		};
+		try {
+			fixture.setFormat("sse");
+			fixture.setSessionHeader("sse-session");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: initialization }));
+			await expect(bounded(fixture.transport.request("initialize"), "correlated SSE initialize")).resolves.toEqual(
+				initialization,
+			);
+			fixture.setFormat("json");
+			fixture.setSessionHeader("hijacked-subscription");
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { accepted: true } }));
+			const subscribe = fixture.transport.streamRequest("events/subscribe", {}, () => {});
+			await expect(bounded(subscribe.done, "subscription with session header")).resolves.toBeUndefined();
+			fixture.setSessionHeader(null);
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { tools: [] } }));
+			await bounded(fixture.transport.request("tools/list"), "request after subscribe");
+			expect(fixture.seenSessionHeaders()).toEqual([null, "sse-session", "sse-session"]);
+		} finally {
+			await fixture.close();
+		}
+	}, 15_000);
 
 });
