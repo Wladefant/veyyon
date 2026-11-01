@@ -1480,6 +1480,121 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: externally clearing the handler while a former callback is blocked
+	// invalidates that callback's right to revive the old feed. Its subsequent
+	// setter call must settle without making startup wait on the old lifecycle.
+	it("does not let an obsolete callback re-enable after an external clear", async () => {
+		const serverName = "external-clear-while-callback-pending";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldCompleted = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("obsolete-handler-event", "obsolete-event-cursor")],
+					cursor: "obsolete-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const persistedCursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => persistedCursors.push(cursor));
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "obsolete-handler-event") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// The external owner has already cleared this callback's epoch.
+			// Do not create a fresh subscription or self-dependent startup.
+			manager.setOnEvent(() => {});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "obsolete callback attempted re-enrollment");
+			oldCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "initial external-clear poll server");
+			await withinHandlerChange(oldEntered.promise, "in-flight obsolete callback");
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			releaseOld.resolve();
+			await withinHandlerChange(oldCompleted.promise, "obsolete callback completion");
+			await delay(75);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(polls).toBe(1);
+			expect(persistedCursors).not.toContain("obsolete-event-cursor");
+			expect(persistedCursors).not.toContain("obsolete-page-cursor");
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "obsolete callback cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a callback belongs to the handler generation that started it. If
+	// an external owner replaces the handler while this callback is waiting,
+	// its late attempt to clear the consumer must not cancel the newer handler.
+	it("does not let an obsolete callback clear an externally replaced consumer", async () => {
+		const serverName = "external-replace-while-callback-pending";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldCompleted = Promise.withResolvers<void>();
+		const freshDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("old-handler-event", "old-cursor")],
+					cursor: "old-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				return {
+					events: [event("new-handler-event", "fresh-cursor")],
+					cursor: "fresh-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "old-handler-event") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEvent(undefined);
+			oldCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "initial external-replace poll server");
+			await withinHandlerChange(oldEntered.promise, "old callback in flight");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "new-handler-event") freshDelivered.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(oldCompleted.promise, "obsolete clear attempt");
+			await withinHandlerChange(freshDelivered.promise, "new handler delivery");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external-replace cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
