@@ -94,7 +94,10 @@ async function readNativeHandoffIdentity(
 			transferEpoch: marker.transferEpoch,
 		};
 	}
-	return undefined;
+	// An existing journal without a parseable header cannot prove that it has
+	// no transfer identity. A bounded read may have stopped inside a long header.
+	// Only ENOENT above is the legitimate lazy-session absence case.
+	throw new Error("Native session header is missing or exceeds the ownership-read limit");
 }
 
 export async function readSessionOwnershipMarker(sessionFile: string, sessionId: string): Promise<{
