@@ -373,6 +373,60 @@ describe("history exact record lookup", () => {
 	});
 
 
+	it("search never presents rejected JSONL records as accepted branch evidence", async () => {
+		const dir = TempDir.createSync("@veyyon-history-search-rejected-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = { type: "session", id: "s-evidence" };
+			const root = { type: "message", id: "root", parentId: null, message: "trusted atlas evidence" };
+			const leaf = { type: "message", id: "leaf", parentId: "root", message: "ordinary continuation" };
+			const prefix = [header, root, leaf].map(record => JSON.stringify(record)).join("\n") + "\n";
+			for (const invalid of [
+				{ type: "message", id: "root", parentId: 42, message: "forged needle from corrupt parent" },
+				{ type: "message", id: "root", parentId: [], message: "forged needle from corrupt parent" },
+			]) {
+				await fs.writeFile(file, prefix + JSON.stringify(invalid) + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "leaf", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("ok");
+				expect(exact.fragment).toBe(JSON.stringify(root));
+				const forged = await searchStoredHistoryEntries(file, {
+					query: "forged needle", leafId: "leaf", limit: 5,
+				});
+				expect(forged.status).toBe("partial");
+				expect(forged.matches).toEqual([]);
+				const trusted = await searchStoredHistoryEntries(file, {
+					query: "trusted atlas", leafId: "leaf", limit: 5,
+				});
+				expect(trusted.status).toBe("partial");
+				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
+				expect(trusted.matches[0]?.revision).toBe(exact.revision);
+			}
+
+			// The first-pass title-slot exception must also apply to matching.
+			const title = { type: "title", id: "root", title: "forged needle in metadata" };
+			await fs.writeFile(file, [title, header, root, leaf].map(record => JSON.stringify(record)).join("\n") + "\n");
+			const forgedTitle = await searchStoredHistoryEntries(file, {
+				query: "forged needle", leafId: "leaf", limit: 5,
+			});
+			expect(forgedTitle.status).toBe("ok");
+			expect(forgedTitle.matches).toEqual([]);
+			const accepted = await searchStoredHistoryEntries(file, {
+				query: "trusted atlas", leafId: "leaf", limit: 5,
+			});
+			expect(accepted.status).toBe("ok");
+			expect(accepted.matches.map(match => match.entryId)).toEqual(["root"]);
+			const exact = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "leaf", offset: 0, limit: 256,
+			});
+			expect(exact.status).toBe("ok");
+			expect(accepted.matches[0]?.revision).toBe(exact.revision);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("refuses duplicate stored entry IDs even when the requested leaf is explicit", async () => {
 		const dir = TempDir.createSync("@veyyon-history-duplicate-ids-");
 		try {
