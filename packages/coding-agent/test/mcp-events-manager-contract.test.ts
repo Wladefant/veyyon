@@ -2273,4 +2273,92 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+	// WHY: explicit /mcp reconnect replaces a server transport but must also
+	// retire that server's old event key. Otherwise the replacement sees an
+	// existing key, never subscribes, and an old callback can steal the handler.
+	// Synthetic HTTP cannot prove live provider/host reconnect behavior.
+	it("manual reconnect drains the old poll feed and fences obsolete callback setters", async () => {
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const secondDelivered = Promise.withResolvers<void>();
+		const independentDelivered = Promise.withResolvers<void>();
+		const aName = "manual-event-reconnect-A";
+		const bName = "manual-event-reconnect-B";
+		let aPolls = 0;
+		let bPolls = 0;
+		let originalA = 0;
+		let originalB = 0;
+		let stolen = 0;
+		const aServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				aPolls++;
+				return aPolls === 1
+					? { events: [event("before-manual-reconnect", "A-cursor-1")], cursor: "A-page-1", hasMore: false, nextPollMs: 30_000 }
+					: { events: [event("after-manual-reconnect", "A-cursor-2")], cursor: "A-page-2", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const bServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				bPolls++;
+				return { events: [event("independent-B", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === bName && occurrence.eventId === "independent-B") {
+				originalB++;
+				independentDelivered.resolve();
+				return;
+			}
+			if (name !== aName) return;
+			if (occurrence.eventId === "before-manual-reconnect") {
+				originalA++;
+				firstEntered.resolve();
+				await releaseFirst.promise;
+				// This callback belongs to the transport being replaced. It must
+				// not replace the handler shared by the new A and unrelated B.
+				manager.setOnEvent(() => { stolen++; });
+				return;
+			}
+			if (occurrence.eventId === "after-manual-reconnect") {
+				originalA++;
+				secondDelivered.resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(manager.connectServers({
+				[aName]: managerConfig(aServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+				[bName]: managerConfig(bServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+			}, {}), "two manual-reconnect test servers");
+			await withinHandlerChange(Promise.all([firstEntered.promise, independentDelivered.promise]), "initial A and B event delivery");
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
+
+			const reconnect = manager.reconnectServer(aName, { manual: true });
+			// Old A is fenced synchronously, before its held callback finishes.
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(0);
+			releaseFirst.resolve();
+			expect(await withinHandlerChange(reconnect, "manual A transport replacement")).not.toBeNull();
+			await withinHandlerChange(secondDelivered.promise, "A delivery after manual reconnect");
+			expect(originalA).toBe(2);
+			expect(originalB).toBe(1);
+			expect(stolen).toBe(0);
+			expect(aPolls).toBe(2);
+			expect(bPolls).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
+		} finally {
+			releaseFirst.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "manual reconnect test cleanup");
+			} finally {
+				aServer.stop();
+				bServer.stop();
+			}
+		}
+	}, 25_000);
+
 });
