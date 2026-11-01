@@ -1977,7 +1977,7 @@ export class SessionManager {
 		for (const entry of retainedEntries) {
 			// Artifact IDs are per session. An explicit foreign-session reference
 			// must not be checked or copied from this session's artifact store.
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)(?:\?([^\s"'\\<>)\],;]+))?/g)) {
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)\b(?![-.~%:@+])(?:\?([^\s"'\\<>)\],;]+))?/g)) {
 				const id = match[1];
 				if (!id) continue;
 				const query = match[2];
