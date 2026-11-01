@@ -1558,7 +1558,11 @@ async function createClientTerminalWhileActive(
 				logger.warn("ACP late terminal kill failed after command cancellation");
 			}
 			try {
-				await handle.release();
+				const release = Promise.resolve().then(() => handle.release());
+				const outcome = await settleWithin(release, 1_000, "timed-out" as const);
+				if (outcome === "timed-out") {
+					logger.warn("ACP late terminal release unconfirmed after command cancellation");
+				}
 			} catch {
 				logger.warn("ACP late terminal release failed after command cancellation");
 			}
