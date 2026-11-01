@@ -144,7 +144,11 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		let responseCount = 0;
 		const fakeProvider = createMockModel({
 			handler: async () => {
-				if (responseCount++ === 0) await releaseFirstProvider.promise;
+				if (responseCount++ === 0) {
+					// Wait until the provider handler is actually blocked, not merely the streamFn called.
+					firstProviderEntered.resolve();
+					await releaseFirstProvider.promise;
+				}
 				return { content: ["Acknowledged"], stopReason: "stop" };
 			},
 		});
@@ -162,7 +166,6 @@ describe("a pending submission lifecycle in interactive mode", () => {
 			const traceIds = starts.slice(observedStartCount).map(record => String(record.traceId));
 			observedStartCount = starts.length;
 			atProvider.push({ traceIds, messages: JSON.stringify(context.messages) });
-			if (atProvider.length === 1) firstProviderEntered.resolve();
 			return fakeProvider.stream(model, context, options);
 		};
 		const errors: string[] = [];
