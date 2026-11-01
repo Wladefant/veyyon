@@ -1523,7 +1523,13 @@ async function createClientTerminalWhileActive(
 		// asynchronous cleanup failure without withholding its cancellation.
 		void (async () => {
 			try {
-				await handle.kill();
+				// The client may stop answering RPCs after cancellation. Wait
+				// briefly for kill, then attempt release even if kill is stuck.
+				const kill = Promise.resolve().then(() => handle.kill());
+				const outcome = await settleWithin(kill, 1_000, "timed-out" as const);
+				if (outcome === "timed-out") {
+					logger.warn("ACP late terminal kill unconfirmed after cancellation");
+				}
 			} catch {
 				logger.warn("ACP late terminal kill failed after command cancellation");
 			}
