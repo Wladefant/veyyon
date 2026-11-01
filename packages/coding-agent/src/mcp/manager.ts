@@ -558,6 +558,9 @@ export class MCPManager {
 		this.#onEventCursor = handler;
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
+		const scope = this.#eventCallbackContext.getStore();
+		// Obsolete callbacks cannot replace the newer consumer's resume authority.
+		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
 		this.#eventCursorProvider = provider;
 	}
 
@@ -565,6 +568,9 @@ export class MCPManager {
 	setOnEventControl(
 		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
 	): void {
+		const scope = this.#eventCallbackContext.getStore();
+		// A stale event handler cannot capture gap/termination control for its successor.
+		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
 		this.#onEventControl = handler;
 	}
 
