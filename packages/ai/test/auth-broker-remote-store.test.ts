@@ -794,6 +794,88 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	}
 
 
+
+	test("retries failed block-upsert reconciliation when an unrelated SSE entry supersedes its GET", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const blockedUntilMs = Date.now() + 120_000;
+
+		const streamReady = Promise.withResolvers<void>();
+		const unrelatedFrame = Promise.withResolvers<SnapshotResponse>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			const next = await unrelatedFrame.promise;
+			const added = next.credentials.find(entry => entry.id !== id);
+			if (!added) throw new Error("expected unrelated broker credential");
+			yield {
+				kind: "entry" as const,
+				generation: next.generation,
+				serverNowMs: next.serverNowMs,
+				refresher: next.refresher,
+				entry: added,
+			};
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		const firstReadReady = Promise.withResolvers<void>();
+		const releaseFirstRead = Promise.withResolvers<void>();
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected long-poll during synthetic SSE");
+			fullReads += 1;
+			if (fullReads !== 1) return realFetch(opts);
+			// Materialize the earlier authoritative answer before unrelated broker
+			// changes, then hold only its delivery to the remote store.
+			const prior = await realFetch(opts);
+			firstReadReady.resolve();
+			await releaseFirstRead.promise;
+			return prior;
+		});
+		const rejectedUpsert = Promise.withResolvers<{ ok: boolean }>();
+		spyOn(client, "upsertCredentialBlock").mockImplementation(() => rejectedUpsert.promise);
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs, updatedAtMs: Date.now(),
+		});
+		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+		try {
+			rejectedUpsert.resolve({ ok: false });
+			await firstReadReady.promise;
+			// The other credential is genuinely added to the synthetic SQLite broker
+			// before we emit the corresponding SSE entry into the production consumer.
+			await peer.uploadCredential("anthropic", mintOAuthCredential("peer-b", Date.now() + 120_000));
+			const brokerAfterPeer = await peer.fetchSnapshot();
+			if (brokerAfterPeer.status !== 200) throw new Error("expected broker snapshot after peer upload");
+			const otherId = brokerAfterPeer.snapshot.credentials.find(entry => entry.id !== id)?.id;
+			if (otherId === undefined) throw new Error("expected second credential");
+			unrelatedFrame.resolve(brokerAfterPeer.snapshot);
+			await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === otherId));
+			// The old GET is now obsolete because an unrelated SSE entry changed
+			// the global revision. A fresh GET must still reconcile A's failed POST.
+			releaseFirstRead.resolve();
+			await waitUntil(() =>
+				fullReads === 2 &&
+				remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+			);
+			expect(remote.snapshot.credentials.map(entry => entry.id).sort((a, b) => a - b))
+				.toEqual([id, otherId].sort((a, b) => a - b));
+			expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
+			const authoritative = await peer.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === id)?.blocks ?? []).toEqual([]);
+		} finally {
+			rejectedUpsert.resolve({ ok: false });
+			releaseFirstRead.resolve();
+			unrelatedFrame.resolve(initial.snapshot);
+		}
+	});
+
 	test("reconciles a committed broker block DELETE whose acknowledgment was lost while SSE stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
