@@ -167,13 +167,16 @@ interface GoogleWireTraits {
 	readonly sendsPartId: boolean;
 	/**
 	 * What a tool call with no usable signature sends. Gemini 3 requires a thought signature on
-	 * the function calls it makes; for calls we cannot sign (cross-model replay, secret-redacted
-	 * args, the secondary calls of a parallel turn) the public Gemini API accepts the
-	 * `skip_thought_signature_validator` sentinel as a bypass. Cloud Code Assist / Antigravity
-	 * and Vertex AI reject that sentinel with 400 INVALID_ARGUMENT, permanently wedging any
-	 * session whose history holds one, so those transports omit the field instead. (#9638)
+	 * function calls across conversation history. For calls not produced by Gemini (e.g. cross-model
+	 * fallback/replay), Google documents `skip_thought_signature_validator` as the bypass sentinel.
+	 *
+	 * - Public Gemini API (`google-generative-ai`): sends sentinel on all unsigned calls.
+	 * - Cloud Code Assist (`google-gemini-cli`): sends sentinel on foreign (non-Gemini) calls;
+	 *   Gemini-produced parallel calls only sign the first call and omit subsequent signatures. (#9638, #844)
+	 * - Vertex AI: omits signatures on unsigned calls.
 	 */
 	readonly unsignedCallSignature: string | undefined;
+	readonly unsignedForeignCallSignature: string | undefined;
 	/**
 	 * Tool-result images nest inside `functionResponse.parts`. Gemini 3+ and the
 	 * non-Gemini models behind Cloud Code Assist / Antigravity accept that shape;
@@ -193,6 +196,10 @@ function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireT
 			model.provider !== "google-vertex" &&
 			(model.id.startsWith("claude-") || (model.api === "google-generative-ai" && gemini3)),
 		unsignedCallSignature: gemini3 && model.api === "google-generative-ai" ? SKIP_THOUGHT_SIGNATURE : undefined,
+		unsignedForeignCallSignature:
+			gemini3 && (model.api === "google-generative-ai" || model.api === "google-gemini-cli")
+				? SKIP_THOUGHT_SIGNATURE
+				: undefined,
 		multimodalFunctionResponse: geminiMajorVersion === undefined || geminiMajorVersion >= 3,
 	};
 }
@@ -326,7 +333,9 @@ class GoogleContentWriter {
 		const functionCall: FunctionCallPart = { name: block.name, args: block.arguments ?? {} };
 		if (this.traits.sendsPartId) functionCall.id = block.id;
 		const part: Part = { functionCall };
-		const effectiveSignature = thoughtSignature || this.traits.unsignedCallSignature;
+		const effectiveSignature =
+			thoughtSignature ||
+			(sameModel ? this.traits.unsignedCallSignature : this.traits.unsignedForeignCallSignature);
 		if (effectiveSignature) part.thoughtSignature = effectiveSignature;
 		return part;
 	}
