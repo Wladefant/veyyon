@@ -243,9 +243,11 @@ export function sendSessionNotice(args: {
 		const byProject = args.to.startsWith("project=");
 		const byCwd = args.to.startsWith("cwd=");
 		if (!byProject && !byCwd) return [args.to];
-		const query = args.to.slice(byProject ? "project=".length : "cwd=".length).trim();
+		// CWD is a raw filesystem identity: trimming could silently select a different session.
+		const rawQuery = args.to.slice(byProject ? "project=".length : "cwd=".length);
+		const query = byCwd ? rawQuery : rawQuery.trim();
 		const kind = byProject ? "project" : "cwd";
-		if (!query) throw new Error(`Session ${kind} selector must not be empty`);
+		if (!query.trim()) throw new Error(`Session ${kind} selector must not be empty`);
 		const normalizedCwd = byCwd ? path.normalize(query) : undefined;
 		const matches = [...owners.values()].filter(owner =>
 			byProject ? owner.project?.toLowerCase() === query.toLowerCase() : owner.cwd === normalizedCwd,

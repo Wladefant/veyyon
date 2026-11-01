@@ -245,7 +245,8 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		params: IrcParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<IrcDetails>> {
-		const requested = params.to?.trim();
+		const rawRequested = params.to ?? "";
+		const requested = rawRequested.trim();
 		const message = params.message?.trim();
 		if (!requested) {
 			return errorResult('`to` is required for op="send".', { op: "send", from: senderId });
@@ -269,7 +270,9 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 			}
 			return this.#executeSessionNotice(
 				senderId,
-				requested.slice("session:".length).trim(),
+				requested.startsWith("session:cwd=")
+					? rawRequested.trimStart().slice("session:".length)
+					: requested.slice("session:".length).trim(),
 				message,
 				params.ttlMinutes,
 			);

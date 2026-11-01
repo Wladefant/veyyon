@@ -259,6 +259,34 @@ describe("mixed-build session notices", () => {
 		expect(missingText).not.toContain("\n- session:forged");
 	});
 
+	it("routes exact trailing-space cwd selectors only to their real session owner", async () => {
+		const ordinaryCwd = path.join(root, "workspace");
+		const spacedCwd = ordinaryCwd + " ";
+		writeLiveOwner("plain-session", 1, { cwd: ordinaryCwd, capabilities: ["session-notices"] });
+		writeLiveOwner("spaced-session", 1, { cwd: spacedCwd, capabilities: ["session-notices"] });
+		const tool = makeTool();
+
+		const sent = await tool.execute("send-exact-spaced-cwd", {
+			op: "send",
+			to: "session:cwd=" + spacedCwd,
+			message: "Only the session with the trailing-space cwd should see this",
+		});
+		expect(sent.isError).not.toBe(true);
+		expect(claimSessionNotices("spaced-session", root).map(notice => notice.body)).toEqual([
+			"Only the session with the trailing-space cwd should see this",
+		]);
+		expect(claimSessionNotices("plain-session", root)).toEqual([]);
+
+		const missing = await tool.execute("send-absent-spaced-cwd", {
+			op: "send",
+			to: "session:cwd=" + ordinaryCwd + "  ",
+			message: "Must not fall back to the unspaced neighbor",
+		});
+		expect(missing.isError).toBe(true);
+		expect(claimSessionNotices("plain-session", root)).toEqual([]);
+		expect(claimSessionNotices("spaced-session", root)).toEqual([]);
+	});
+
 	it("rejects forged owner capability metadata without printing injected diagnostic lines", async () => {
 		writeLiveOwner(targetSessionId, 1, {
 			loadedVersion: "1.5.6\r\nInstalled executable: 9.9.9",
