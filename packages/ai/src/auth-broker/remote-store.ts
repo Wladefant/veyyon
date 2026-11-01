@@ -631,6 +631,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					id: credentialId,
 					error: String(error),
 				});
+				// The broker may have committed the DELETE before its reply was lost.
+				// A stalled SSE stream cannot confirm that state. Reconcile even while
+				// streaming; the existing GET revision fence preserves newer edits.
+				void this.refreshSnapshot().catch(refreshError => {
+					this.#reportStaleSnapshot("credential-block-delete-reconcile", refreshError, {
+						id: credentialId,
+					});
+				});
 			});
 	}
 
