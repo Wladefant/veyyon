@@ -40,6 +40,7 @@ interface WebhookFixture {
 	cursors: Array<string | null>;
 	controls: string[];
 	controlEntered: Promise<void>;
+	controlFinished: Promise<void>;
 	releaseControl(): void;
 	ready: Promise<void>;
 	subscribeCount(): number;
@@ -47,7 +48,7 @@ interface WebhookFixture {
 	close(): Promise<void>;
 }
 
-async function fixture(truncated: boolean): Promise<WebhookFixture> {
+async function fixture(truncated: boolean, reentrantStop: boolean): Promise<WebhookFixture> {
 	const port = await availablePort();
 	const serverErrors: unknown[] = [];
 	let count = 0;
@@ -108,6 +109,7 @@ async function fixture(truncated: boolean): Promise<WebhookFixture> {
 	const cursors: Array<string | null> = [];
 	const controls: string[] = [];
 	const accepted = Promise.withResolvers<void>();
+	const finished = Promise.withResolvers<void>();
 	const ready = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
 	manager.setOnEvent(async () => "queued" as const);
@@ -119,6 +121,8 @@ async function fixture(truncated: boolean): Promise<WebhookFixture> {
 		controls.push(control.type);
 		accepted.resolve();
 		await release.promise;
+		if (reentrantStop) await manager.stopEvents();
+		finished.resolve();
 		return "queued" as const;
 	});
 	const oldSecret = process.env[ENV_KEY];
@@ -150,6 +154,7 @@ async function fixture(truncated: boolean): Promise<WebhookFixture> {
 	return {
 		manager, cursors, controls,
 		controlEntered: accepted.promise,
+		controlFinished: finished.promise,
 		releaseControl: () => release.resolve(),
 		ready: ready.promise,
 		subscribeCount: () => count,
@@ -188,10 +193,11 @@ async function fixture(truncated: boolean): Promise<WebhookFixture> {
 	};
 }
 
-for (const scenario of ["active-gap", "stop-gap", "stop-terminated", "stop-truncated-subscribe"] as const) {
+for (const scenario of ["active-gap", "stop-gap", "stop-terminated", "stop-truncated-subscribe", "reentrant-gap", "reentrant-truncated-subscribe"] as const) {
 	it("preserves webhook control ownership for " + scenario, async () => {
-		const truncated = scenario === "stop-truncated-subscribe";
-		const session = await fixture(truncated);
+		const truncated = scenario === "stop-truncated-subscribe" || scenario === "reentrant-truncated-subscribe";
+		const reentrantStop = scenario === "reentrant-gap" || scenario === "reentrant-truncated-subscribe";
+		const session = await fixture(truncated, reentrantStop);
 		try {
 			if (!truncated) {
 				await within(session.ready, "webhook subscription initial cursor");
@@ -203,7 +209,17 @@ for (const scenario of ["active-gap", "stop-gap", "stop-terminated", "stop-trunc
 				// while an independent shutdown races it.
 				const delivery = session.send(body, "control-" + scenario).catch(() => undefined);
 				await within(session.controlEntered, "signed webhook control acceptance");
-				if (scenario !== "active-gap") {
+				if (scenario === "reentrant-gap") {
+					// The signed receiver callback itself awaits stop; this must not
+					// depend on its own stream/lifecycle completion.
+					session.releaseControl();
+					await within(session.controlFinished, "reentrant signed webhook shutdown");
+					await within(delivery, "reentrant signed webhook response");
+					await delay(40);
+					expect(session.cursors).toEqual(["initial"]);
+					expect(session.manager.getActiveEventSubscriptionCount()).toBe(0);
+					expect(session.subscribeCount()).toBe(1);
+				} else if (scenario !== "active-gap") {
 					const stopped = session.manager.stopEvents();
 					session.releaseControl();
 					await within(stopped, "stopped webhook manager");
@@ -224,9 +240,9 @@ for (const scenario of ["active-gap", "stop-gap", "stop-terminated", "stop-trunc
 				// before the initial cursor. Explicit stop must not publish that cursor.
 				await within(session.controlEntered, "truncated subscribe control");
 				expect(session.cursors).toEqual([]);
-				const stop = session.manager.stopEvents();
+				const stop = reentrantStop ? session.controlFinished : session.manager.stopEvents();
 				session.releaseControl();
-				await within(stop, "truncated subscription stop");
+				await within(stop, reentrantStop ? "reentrant truncated-subscribe shutdown" : "truncated subscription stop");
 				await delay(20);
 				expect(session.cursors).toEqual([]);
 				expect(session.subscribeCount()).toBe(1);
