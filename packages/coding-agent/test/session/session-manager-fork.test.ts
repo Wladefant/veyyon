@@ -166,6 +166,41 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("refuses a referenced artifact that became a directory without changing the original session", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-invalid-artifact-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const id = await manager.saveArtifact(originalBytes, "bash");
+      expect(id).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Recorded evidence: artifact://0", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persistent source file");
+      const oldSessionId = manager.getSessionId();
+      const sourceBefore = await fs.readFile(sourceFile, "utf8");
+      const originalPath = await manager.getArtifactPath("0");
+      if (!originalPath) throw new Error("expected original artifact");
+      const parkedFile = path.join(temp.path(), "safe-original-artifact.txt");
+      await fs.rename(originalPath, parkedFile);
+      await fs.mkdir(originalPath);
+      try {
+        await expect(manager.fork()).rejects.toThrow(/referenced artifact|not a directory/i);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(manager.getSessionId()).toBe(oldSessionId);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+        expect(await fs.readFile(parkedFile, "utf8")).toBe(originalBytes);
+      } finally {
+        await fs.rmdir(originalPath);
+        await fs.rename(parkedFile, originalPath);
+      }
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("preserves the permitted no-artifacts fork when no recovery references exist", async () => {
     using temp = TempDir.createSync("@veyyon-fork-empty-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
