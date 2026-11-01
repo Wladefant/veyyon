@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Remote auth-broker preserves pending credential blocks across incoming broker snapshots until authoritative reconciliation after write settlement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker conservatively combines broker-authoritative peer block scopes with locally pending restrictions, without losing either during incoming snapshots, then reconciles after write settlement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker reconciles failed block scopes after overlapping broker writes settle without clearing another pending scope ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker obsolete failed block mutations cannot reconcile away a newer same-credential pending block ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
