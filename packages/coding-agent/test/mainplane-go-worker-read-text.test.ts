@@ -77,4 +77,24 @@ describe("Mainplane worker read integrity", () => {
 		expect(result.bytes).toBe(Buffer.byteLength(content, "utf8"));
 		expect(result.truncated).toBe(false);
 	});
+	test("keeps a leading UTF-8 BOM in verified native text without changing the byte digest", async () => {
+		// A BOM-only file and a BOM-prefixed Windows-authored file must not
+		// silently normalize to empty text or lose the first three bytes.
+		for (const content of ["\uFEFF", "\uFEFFa😀", "a\uFEFFb", "a😀"]) {
+			const bytes = Buffer.from(content, "utf8");
+			let calls = 0;
+			const transport = Object.assign(async () => {
+				calls++;
+				return response(bytes);
+			}, { preconnect: globalThis.fetch.preconnect });
+			const result = await readRemoteText("https://fleet.example/", "fixture-key",
+				"pc2", "/owned/utf8-text.txt", undefined, transport);
+			expect(result.text).toBe(content);
+			expect(result.bytes).toBe(bytes.length);
+			expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+			expect(result.truncated).toBe(false);
+			expect(calls).toBe(1);
+		}
+	});
+
 });
