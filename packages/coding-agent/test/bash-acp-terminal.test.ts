@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/session/client-bridge";
+import { logger } from "@veyyon/utils";
 import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
@@ -474,6 +475,52 @@ describe("BashTool ACP terminal routing", () => {
 		await bounded(released.promise, "release despite rejected kill");
 		expect(releases).toBe(1);
 	}, 8_000);
+
+	// WHY: a cancelled tool must not leave detached cleanup stuck forever when
+	// an editor returns a late terminal handle but never answers release.
+	// The warning reports local uncertainty, not verified remote termination.
+	it("bounds late terminal release when the editor never acknowledges it", async () => {
+		const entered = Promise.withResolvers<void>();
+		const provideHandle = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const releaseEntered = Promise.withResolvers<void>();
+		const neverReleased = Promise.withResolvers<void>();
+		const warned = Promise.withResolvers<void>();
+		let kills = 0;
+		let releases = 0;
+		let waits = 0;
+		const warning = spyOn(logger, "warn").mockImplementation(message => {
+			if (message === "ACP late terminal release unconfirmed after command cancellation") warned.resolve();
+		});
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "late-release-unresponsive",
+			waitForExit: async () => { waits++; return { exitCode: 0 }; },
+			currentOutput: async () => ({ output: "should never be delivered", truncated: false }),
+			kill: async () => { kills++; },
+			release: () => { releases++; releaseEntered.resolve(); return neverReleased.promise; },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { entered.resolve(); return provideHandle.promise; },
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("unresponsive-release", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(entered.promise, "late terminal creation entry");
+			controller.abort();
+			await expect(bounded(running, "caller cancellation before release")).rejects.toThrow("Command aborted");
+		} finally {
+			controller.abort();
+			provideHandle.resolve(handle);
+		}
+		await bounded(releaseEntered.promise, "late release RPC entered");
+		await bounded(warned.promise, "bounded release-unconfirmed disposition");
+		expect(kills).toBe(1);
+		expect(releases).toBe(1);
+		expect(waits).toBe(0);
+		expect(warning.mock.calls.filter(([message]) => message === "ACP late terminal release unconfirmed after command cancellation")).toHaveLength(1);
+	}, 12_000);
 
 	it("attempts terminal release after a bounded wait for a hung late kill", async () => {
 		const entered = Promise.withResolvers<void>();
