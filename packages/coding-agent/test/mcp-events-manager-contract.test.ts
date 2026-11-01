@@ -2091,6 +2091,7 @@ describe("MCPManager event subscription contracts", () => {
 		const releaseOld = Promise.withResolvers<void>();
 		const oldSettled = Promise.withResolvers<void>();
 		const independentDelivered = Promise.withResolvers<void>();
+		const independentSecondDelivered = Promise.withResolvers<void>();
 		const serverAName = "draining-event-server-A";
 		const serverBName = "independent-event-server-B";
 		let aPolls = 0;
@@ -2109,16 +2110,17 @@ describe("MCPManager event subscription contracts", () => {
 			poll: () => {
 				bPolls++;
 				return bPolls === 1
-					? { events: [event("B-unrelated", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 }
-					: { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+					? { events: [event("B-unrelated", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 1_000 }
+					: bPolls === 2
+						? { events: [event("B-after-A-closed", "B-cursor-2")], cursor: "B-page-2", hasMore: false, nextPollMs: 30_000 }
+						: { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
 		const manager = new MCPManager(process.cwd());
 		manager.setOnEventCursor(() => {});
 		manager.setOnEvent(async (name, occurrence) => {
-			if (name === serverBName && occurrence.eventId === "B-unrelated") {
-				independentDelivered.resolve();
-			}
+			if (name === serverBName && occurrence.eventId === "B-unrelated") independentDelivered.resolve();
+			if (name === serverBName && occurrence.eventId === "B-after-A-closed") independentSecondDelivered.resolve();
 			if (name !== serverAName || occurrence.eventId !== "A-in-flight") return;
 			oldEntered.resolve();
 			await releaseOld.promise;
@@ -2144,11 +2146,12 @@ describe("MCPManager event subscription contracts", () => {
 			releaseOld.resolve();
 			await withinHandlerChange(oldSettled.promise, "A old callback released");
 			await withinHandlerChange(disconnectA, "A disconnect completion");
-			await delay(75);
+			// The stale A callback must not steal B's global handler after A disconnects.
+			await withinHandlerChange(independentSecondDelivered.promise, "second B event after A disconnect");
 			expect(aPolls).toBe(1);
 			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
 			expect(manager.getActiveEventSubscriptionCount(serverBName)).toBe(1);
-			expect(bPolls).toBe(1);
+			expect(bPolls).toBe(2);
 		} finally {
 			releaseOld.resolve();
 			try {
@@ -2159,5 +2162,115 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
+
+
+	// WHY: an external disconnect drains the callback that may itself await
+	// a nested same-server disconnect. Joining that pending external Promise
+	// from the callback is a circular wait, not successful teardown.
+	it("does not deadlock on nested same-server disconnect during external drain", async () => {
+		const serverName = "nested-disconnect-A";
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const nestedFinished = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				return { events: [event("A-held", "A-cursor")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name !== serverName || occurrence.eventId !== "A-held") return;
+			entered.resolve();
+			await release.promise;
+			await withinHandlerChange(manager.disconnectServer(serverName), "nested same-server disconnect");
+			nestedFinished.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A initial event connection");
+			await withinHandlerChange(entered.promise, "held A callback");
+			const outerDisconnect = manager.disconnectServer(serverName);
+			release.resolve();
+			await withinHandlerChange(nestedFinished.promise, "nested disconnect completion");
+			await withinHandlerChange(outerDisconnect, "external A disconnect completion");
+			expect(manager.getConnectedServers()).not.toContain(serverName);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(polls).toBe(1);
+		} finally {
+			release.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "nested disconnect cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: B is a separate callback. Its request to disconnect A must wait
+	// for A's real drain and cannot reuse the self-disconnect early return.
+	it("waits for A's drain when an independent B event callback disconnects A", async () => {
+		const aEntered = Promise.withResolvers<void>();
+		const releaseA = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const aName = "cross-server-drain-A";
+		const bName = "cross-server-drain-B";
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({ events: [event("A-held", "A-cursor")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 }),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({ events: [event("B-disconnects-A", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 }),
+		});
+		const manager = new MCPManager(process.cwd());
+		let aReleased = false;
+		let earlyCompletion = false;
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "A-held") {
+				aEntered.resolve();
+				await releaseA.promise;
+				return;
+			}
+			if (name === bName && occurrence.eventId === "B-disconnects-A") {
+				bEntered.resolve();
+				await withinHandlerChange(manager.disconnectServer(aName), "B awaits A teardown");
+				earlyCompletion = !aReleased;
+				bFinished.resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "held A connection");
+			await withinHandlerChange(aEntered.promise, "held A callback");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "independent B connection");
+			await withinHandlerChange(bEntered.promise, "B disconnect request");
+			await delay(50);
+			expect(earlyCompletion).toBe(false);
+			aReleased = true;
+			releaseA.resolve();
+			await withinHandlerChange(bFinished.promise, "B observes A drain");
+			expect(earlyCompletion).toBe(false);
+			expect(manager.getConnectedServers()).not.toContain(aName);
+		} finally {
+			aReleased = true;
+			releaseA.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "cross-server cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 20_000);
 
 });
