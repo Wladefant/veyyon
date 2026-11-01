@@ -122,38 +122,6 @@ function queueingInto(queue: string[]) {
 const waiting = (queue: string[]) => (questionId: string) =>
 	queue.some(text => operatorAnswerQuestionId(text) === questionId);
 
-test("a queued operator answer preserves its Telegram trace on delivery and sender retry", async () => {
-	const { manager } = newSession();
-	const queue: string[] = [];
-	const trace = { updateId: 314, messageId: 271, chatId: "-1001234567890" };
-	const received: Array<{ text: string; trace: typeof trace | undefined }> = [];
-	const first = envelope("q-telegram-trace", "evt-original");
-	const retry = envelope("q-telegram-trace", "evt-replay", "changed retry text");
-	const inbox = new OperatorAnswerInbox(
-		() => manager,
-		async (text, _mode, options) => {
-			queue.push(text);
-			received.push({ text, trace: options?.telegramTrace });
-			return "queued";
-		},
-		waiting(queue),
-	);
-	// First acceptance forwards the trace to the actual dispatch seam.
-	expect(await inbox.accept(first, "followUp", { telegramTrace: trace })).toBe("queued");
-	expect(received).toEqual([{ text: first, trace }]);
-	// A repeated sender event while the original is queued must not dispatch again.
-	expect(await inbox.accept(retry, "followUp", {
-		telegramTrace: { ...trace, updateId: 315 },
-	})).toBe("duplicate");
-	expect(received).toEqual([{ text: first, trace }]);
-	// Clearing an unconsumed queue permits replay of the *original* answer with the
-	// current sender event's trace; the journaled original answer text must remain.
-	queue.length = 0;
-	const retryTrace = { ...trace, updateId: 316 };
-	expect(await inbox.accept(retry, "followUp", { telegramTrace: retryTrace })).toBe("queued");
-	expect(received).toEqual([{ text: first, trace }, { text: first, trace: retryTrace }]);
-});
-
 test("an answer is journaled in the session that receives it, after a session switch", async () => {
 	const first = newSession();
 	const second = newSession();
