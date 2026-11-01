@@ -21,6 +21,7 @@ import {
 } from "../../launch/build-info";
 import {
 	DEFAULT_DELIVERY_TTL_MS,
+	formatSessionNoticeOwnerDisplay,
 	listLiveSessionOwners,
 	SESSION_NOTICE_CAPABILITY,
 	SessionNoticeCapabilityError,
@@ -212,7 +213,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 								`If it is not read within ${limit} min it expires: it is not injected and you get a "Not delivered" notice:`,
 							...receipts.map(receipt => {
 								const label = receipt.project
-									? ` (project ${receipt.project}, cwd ${receipt.cwd ?? "unknown"})`
+									? ` (project ${formatSessionNoticeOwnerDisplay(receipt.project)}, cwd ${formatSessionNoticeOwnerDisplay(receipt.cwd ?? "unknown")})`
 									: "";
 								return `- session:${receipt.to}${label}: queued (${receipt.route}), id ${receipt.id}`;
 							}),
@@ -581,7 +582,7 @@ function executeList(
 				? "unverified"
 				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
 			lines.push(
-				`- session:${owner.sessionId} [live; project ${owner.project ?? "unknown"}; cwd ${owner.cwd ?? "unknown"}; notices ${noticeSupport}]`,
+				`- session:${owner.sessionId} [live; project ${formatSessionNoticeOwnerDisplay(owner.project ?? "unknown")}; cwd ${formatSessionNoticeOwnerDisplay(owner.cwd ?? "unknown")}; notices ${noticeSupport}]`,
 			);
 		}
 	}

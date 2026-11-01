@@ -82,9 +82,14 @@ function queueDir(root: string, sessionId: string): string {
 export const SESSION_NOTICE_CAPABILITY = "session-notices";
 
 /** Owner-file diagnostic metadata is not trusted terminal display text. */
-const OWNER_DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g;
+const OWNER_DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u206f\ufeff]/g;
 const BUILD_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Escape owner-file controls only for human-readable text; preserve raw cwd routing identity. */
+export function formatSessionNoticeOwnerDisplay(value: string): string {
+	return value.replace(OWNER_DISPLAY_CONTROLS, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 
 export interface SessionNoticeOwner {
 	sessionId: string;
@@ -247,7 +252,7 @@ export function sendSessionNotice(args: {
 		);
 		if (matches.length !== 1) {
 			const candidates = (matches.length ? matches : [...owners.values()]).map(
-				owner => `session:${owner.sessionId} (project ${owner.project ?? "unknown"}, cwd ${owner.cwd ?? "unknown"})`,
+				owner => `session:${owner.sessionId} (project ${formatSessionNoticeOwnerDisplay(owner.project ?? "unknown")}, cwd ${formatSessionNoticeOwnerDisplay(owner.cwd ?? "unknown")})`,
 			);
 			throw new Error(
 				`${matches.length ? "Ambiguous" : "Unknown"} session ${kind} ${JSON.stringify(query)}; ` +
