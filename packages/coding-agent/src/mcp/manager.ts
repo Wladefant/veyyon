@@ -514,7 +514,7 @@ export class MCPManager {
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.streamProcessing, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
 		);
 	}
 
@@ -524,7 +524,7 @@ export class MCPManager {
 		const active = [...this.#activeEvents.entries()];
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.streamProcessing, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
 		);
 		for (const [port, host] of this.#webhookHosts) {
 			this.#webhookHosts.delete(port);
@@ -838,7 +838,7 @@ export class MCPManager {
 		cursor?: string | null,
 		commitOccurrenceCursor = true,
 	): Promise<boolean> {
-		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
+		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) return false;
 		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
 			logger.warn("Skipping invalid MCP event occurrence", {
 				path: `mcp:${serverName}`,
@@ -852,6 +852,8 @@ export class MCPManager {
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
 		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
+		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
+		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) return false;
 		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
 		subscription.seen.add(event.eventId);
 		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
