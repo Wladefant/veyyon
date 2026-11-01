@@ -853,7 +853,11 @@ export class MCPManager {
 		const deliveryEvent = { ...event, cursor: eventCursor };
 		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
 		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
-		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) return false;
+		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) {
+			// Delivery already reached the owning journal. Keep the accepted/duplicate
+			// acknowledgement honest even though the stopped cursor must not advance.
+			return outcome !== "duplicate";
+		}
 		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
 		subscription.seen.add(event.eventId);
 		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
