@@ -793,6 +793,62 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+
+	test("reconciles a committed broker block DELETE whose acknowledgment was lost while SSE stalls", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const blockedUntilMs = Date.now() + 120_000;
+		const blockAck = await peer.upsertCredentialBlock(id, {
+			providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+		});
+		expect(blockAck).toEqual({ ok: true });
+		const seeded = await peer.fetchSnapshot();
+		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
+		expect(seeded.snapshot.credentials[0]?.blocks?.[0]?.blockedUntilMs).toBe(blockedUntilMs);
+
+		// This client still believes SSE is healthy, but receives no mutation frames.
+		// A lost DELETE acknowledgment cannot be corrected by waiting for this stream.
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...seeded.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let explicitSnapshotReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected long-poll with an active synthetic SSE stream");
+			explicitSnapshotReads += 1;
+			return realFetch(opts);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: seeded.snapshot });
+		await streamReady.promise;
+		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+
+		const realDelete = client.deleteCredentialBlocks.bind(client);
+		const committed = Promise.withResolvers<void>();
+		spyOn(client, "deleteCredentialBlocks").mockImplementation(async (credentialId, signal) => {
+			const response = await realDelete(credentialId, signal);
+			expect(response).toEqual({ ok: true });
+			committed.resolve();
+			throw new Error("synthetic DELETE acknowledgment lost after broker committed");
+		});
+		remote.deleteCredentialBlocks(id);
+		await committed.promise;
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(authoritative.snapshot.credentials[0]?.blocks ?? []).toEqual([]);
+		await waitUntil(() =>
+			explicitSnapshotReads === 1 &&
+			remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+		);
+		expect(remote.listCredentialBlocks([id])).toEqual([]);
+		expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
+	});
+
 	test("keeps a credential blocked when broker block deletion fails or returns a negative acknowledgment", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
