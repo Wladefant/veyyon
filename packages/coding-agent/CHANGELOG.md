@@ -6,6 +6,12 @@
 
 - Sanitize loaded session-notice version diagnostics and reject malformed build hashes and capability metadata rather than displaying forged lines or accepting unsupported notice delivery ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 
+## [1.7.3] - 2026-11-01
+
+### Fixed
+
+- ACP preserves the first streamed reply chunk when `message_start` arrives late ([PR #830](https://github.com/Wladefant/veyyon/pull/830)).
+
 ## [1.7.2] - 2026-11-01
 
 ### Added
