@@ -1959,18 +1959,70 @@ export class SessionManager {
 
 		const oldSessionFile = this.#sessionFile;
 		const parentSessionId = this.#sessionId;
+		const timestamp = nowIso();
+		const nextSessionId = mintSessionId();
+		const nextSessionFile = path.join(
+			this.#sessionDir,
+			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
+		);
+		const oldArtifactDir = artifactsDirectoryFor(oldSessionFile);
+		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
+		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
+
+		// Preserve the original referenced bytes before mutating the active
+		// session identity, entries or file. A best-effort post-switch copy can
+		// otherwise leave inherited artifact://0 pointing at unrelated new output.
+		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		const referencedIds = new Set<string>();
+		for (const entry of retainedEntries) {
+			for (const match of JSON.stringify(entry).matchAll(/\\bartifact:\\/\\/(\\d+)\\b/g)) {
+				if (match[1]) referencedIds.add(match[1]);
+			}
+		}
+		let sourceNames: string[] | undefined;
+		try {
+			const stat = await fs.promises.stat(oldArtifactDir);
+			if (!stat.isDirectory()) throw new Error("Cannot fork session: source artifact path is not a directory");
+			sourceNames = await fs.promises.readdir(oldArtifactDir);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// An absent directory is normal only if there is nothing to recover.
+			if (referencedIds.size > 0) throw new Error("Cannot fork session: referenced artifacts unavailable");
+		}
+		if (sourceNames) {
+			for (const id of referencedIds) {
+				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
+				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
+			}
+			// A failed copy leaves the old session and its original evidence usable.
+			// Never overwrite a newly created destination with another fork's data.
+			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
+				recursive: true, force: false, errorOnExist: true,
+			});
+			const copiedNames = new Set(await fs.promises.readdir(nextArtifactDir));
+			if (sourceNames.some(name => !copiedNames.has(name))) {
+				throw new Error("Cannot fork session: artifact copy incomplete");
+			}
+			for (const id of referencedIds) {
+				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+				const [original, copied] = await Promise.all([
+					fs.promises.stat(path.join(oldArtifactDir, filename)),
+					fs.promises.stat(path.join(nextArtifactDir, filename)),
+				]);
+				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
+					throw new Error("Cannot fork session: referenced artifact copy incomplete");
+				}
+			}
+		}
+
 		this.#endLifecycle("session_switched");
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
-		this.#entries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
 
-		const timestamp = nowIso();
-		this.#setSessionId(mintSessionId());
-		this.#sessionFile = path.join(
-			this.#sessionDir,
-			sessionFileName(`${fileSafeTimestamp(timestamp)}_${this.#sessionId}`),
-		);
+		this.#setSessionId(nextSessionId);
+		this.#sessionFile = nextSessionFile;
 		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
