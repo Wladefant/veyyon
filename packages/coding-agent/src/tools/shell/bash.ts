@@ -1260,6 +1260,10 @@ export class BashTool
 		onUpdate: AgentToolUpdateCallback<BashToolDetails> | undefined,
 	): Promise<AgentToolResult<BashToolDetails>> {
 		const resultOptions = { requestedTimeoutSec: call.requestedTimeoutSec, terminalId: handle.terminalId };
+		// The successful-exit final output fetch must consume the same terminal
+		// execution budget, not restart a deadline after waitForExit resolves.
+		const executionDeadline =
+			call.timeoutMs !== undefined && call.timeoutMs > 0 ? performance.now() + call.timeoutMs : undefined;
 		try {
 			// Emit partial update so the editor can embed the live terminal card.
 			onUpdate?.({ content: [], details: { terminalId: handle.terminalId } });
@@ -1267,9 +1271,21 @@ export class BashTool
 			if (exitStatus === "timeout") {
 				let current = { output: "", truncated: false };
 				try {
-					current = await handle.currentOutput();
-				} catch (error) {
-					logger.warn("ACP terminal final output read failed", { terminalId: handle.terminalId, error });
+					// The command already timed out. Give buffered output only a
+					// short best-effort read; an unresponsive editor must not hold
+					// the timeout result or terminal cleanup indefinitely.
+					const read = Promise.resolve().then(() => handle.currentOutput()).then(
+						output => ({ kind: "output" as const, output }),
+					);
+					const finalRead = await settleWithin(
+						read,
+						250,
+						{ kind: "expired" as const },
+					);
+					if (finalRead.kind === "output") current = finalRead.output;
+					else logger.warn("ACP terminal final output read unconfirmed after timeout");
+				} catch {
+					logger.warn("ACP terminal final output read failed after timeout");
 				}
 				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(current, {
 					exitCode: undefined,
@@ -1283,8 +1299,14 @@ export class BashTool
 				});
 			}
 
-			// Fetch final output; the terminal is released in the finally.
-			const finalOutput = await handle.currentOutput();
+			// Fetch final output under the original execution deadline and
+			// caller abort. A missing final buffer must not become success.
+			const finalOutput = await readFinalClientTerminalOutput(
+				handle,
+				signal,
+				executionDeadline,
+				call.timeoutSec,
+			);
 			const { exitCode, signal: exitSignal } = clientTerminalExit(exitStatus);
 			const bridgeResult: BashResult = {
 				...summarizeBridgeOutput(finalOutput, { exitCode, cancelled: false }),
@@ -1300,9 +1322,16 @@ export class BashTool
 			});
 		} finally {
 			try {
-				await handle.release();
-			} catch (error) {
-				logger.warn("ACP terminal release failed", { terminalId: handle.terminalId, error });
+				// Release is an external client RPC; a dead editor cannot
+				// keep a completed or cancelled local tool waiting forever.
+				const released = await settleWithin(
+					Promise.resolve().then(() => handle.release()).then(() => true),
+					1_000,
+					false,
+				);
+				if (!released) logger.warn("ACP terminal release unconfirmed after deadline");
+			} catch {
+				logger.warn("ACP terminal release failed");
 			}
 		}
 	}
@@ -1482,6 +1511,46 @@ function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
 }
 
 /**
+ * A completed ACP terminal still needs one final output RPC, but the editor
+ * may stop answering after waitForExit resolved. Keep the output read within
+ * the same command deadline and honor session/cancel even after process exit.
+ * A late remote reply is observed by Promise.race but is not returned as success.
+ */
+async function readFinalClientTerminalOutput(
+	handle: ClientBridgeTerminalHandle,
+	signal: AbortSignal | undefined,
+	deadlineAt: number | undefined,
+	timeoutSec: number | undefined,
+): Promise<ClientBridgeTerminalOutput> {
+	if (signal?.aborted) throw new ToolAbortError("Command aborted");
+	const timeoutError = (): ToolError =>
+		new ToolError(timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`);
+	const remainingMs = deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - performance.now());
+	if (remainingMs !== undefined && remainingMs <= 0) throw timeoutError();
+	const aborted = Promise.withResolvers<never>();
+	const onAbort = (): void => aborted.reject(new ToolAbortError("Command aborted"));
+	signal?.addEventListener("abort", onAbort, { once: true });
+	let timer: NodeJS.Timeout | undefined;
+	let expired: Promise<never> | undefined;
+	if (remainingMs !== undefined) {
+		const pending = Promise.withResolvers<never>();
+		expired = pending.promise;
+		timer = setTimeout(() => pending.reject(timeoutError()), remainingMs);
+	}
+	try {
+		if (signal?.aborted) onAbort();
+		const output = Promise.resolve().then(() => {
+			if (signal?.aborted) throw new ToolAbortError("Command aborted");
+			return handle.currentOutput();
+		});
+		return await Promise.race([output, aborted.promise, ...(expired ? [expired] : [])]);
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
+/**
  * Poll the client's terminal until the process exits, the timeout elapses, or the caller
  * aborts, pushing its output on every tick. A timeout kills the command before returning, so
  * a slow `terminal/output` RPC cannot let it keep running past the enforced deadline; the
@@ -1499,20 +1568,32 @@ async function waitForClientTerminal(
 		| { kind: "exit"; status: ClientBridgeTerminalExitStatus }
 		| { kind: "poll" }
 		| { kind: "timeout" }
-		| { kind: "aborted" };
+		| { kind: "aborted" }
+		| { kind: "output"; output: ClientBridgeTerminalOutput };
 
 	// Set up abort listener before entering the poll loop. The listener
 	// kicks off `handle.kill()` synchronously so a `session/cancel`
 	// arriving mid-poll terminates the remote command immediately,
 	// instead of waiting for the next `currentOutput()` to return.
 	const { promise: abortedP, resolve: resolveAborted } = Promise.withResolvers<void>();
-	let killStarted = false;
+	let killInFlight: Promise<void> | undefined;
 	const fireKill = (): Promise<void> => {
-		if (killStarted) return Promise.resolve();
-		killStarted = true;
-		return handle.kill().catch((error: unknown) => {
-			logger.warn("ACP terminal kill failed", { terminalId: handle.terminalId, error });
-		});
+		if (killInFlight) return killInFlight;
+		killInFlight = (async () => {
+			try {
+				// A blocked remote kill RPC must not defeat cancellation or
+				// prevent bounded best-effort terminal release.
+				const killed = await settleWithin(
+					Promise.resolve().then(() => handle.kill()).then(() => true),
+					1_000,
+					false,
+				);
+				if (!killed) logger.warn("ACP terminal kill unconfirmed after cancellation");
+			} catch {
+				logger.warn("ACP terminal kill failed after cancellation");
+			}
+		})();
+		return killInFlight;
 	};
 	const onAbortSignal = () => {
 		resolveAborted();
@@ -1553,18 +1634,26 @@ async function waitForClientTerminal(
 			}
 			if (raced.kind === "exit") return raced.status;
 
-			// Poll tick: push current output so agent-loop transcript stays consistent.
-			// Race the read against abort so a stuck `terminal/output` RPC does not
-			// delay cancellation.
-			const pollOutput = await Promise.race([
-				handle.currentOutput(),
-				abortedP.then(() => undefined as ClientBridgeTerminalOutput | undefined),
-			]);
-			// Abort fired during the poll-tick read; the next iteration observes
-			// `signal?.aborted` and exits via the abort branch.
-			if (pollOutput === undefined) continue;
+			// A slow terminal/output RPC must race the same timeout as the
+			// exit poll. The previous read omitted timeoutPromise and could
+			// strand a command even after its kill deadline fired.
+			const pollRacers: Array<Promise<BridgeRaceResult>> = [
+				Promise.resolve().then(() => handle.currentOutput()).then(output => ({ kind: "output" as const, output })),
+				abortedP.then(() => ({ kind: "aborted" as const })),
+			];
+			if (timeoutPromise) pollRacers.push(timeoutPromise);
+			const polled = await Promise.race(pollRacers);
+			if (polled.kind === "aborted" || signal?.aborted) {
+				await fireKill();
+				throw new ToolAbortError("Command aborted");
+			}
+			if (polled.kind === "timeout") {
+				await fireKill();
+				return "timeout";
+			}
+			if (polled.kind !== "output") continue;
 			onUpdate?.({
-				content: [{ type: "text", text: pollOutput.output }],
+				content: [{ type: "text", text: polled.output.output }],
 				details: { terminalId: handle.terminalId },
 			});
 		}
