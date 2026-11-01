@@ -390,6 +390,11 @@ export class MCPManager {
 			if (!target || !subscription) throw new Error("MCP webhook subscription is not active");
 			if (isWebhookControlMessage(message)) {
 				const outcome = await this.#recordEventControl(target.serverName, target.key, message);
+				// Control acceptance may finish after this subscription is explicitly stopped.
+				// Preserve its acknowledgement, but never publish an old cursor or resubscribe.
+				if (subscription.controller.signal.aborted || this.#activeEvents.get(target.key) !== subscription) {
+					return outcome === "duplicate" ? "duplicate" : "queued";
+				}
 				if (message.type === "gap") {
 					await this.#recordEventCursor(subscription, message.cursor ?? null);
 				} else if (message.error.code === -32024) {
@@ -756,6 +761,9 @@ export class MCPManager {
 					cursor: result.cursor ?? null,
 				});
 			}
+			// A stop during durable gap acceptance must not commit the old watermark.
+			if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription ||
+				this.#connections.get(serverName) !== connection) return;
 			await this.#recordEventCursor(subscription, result.cursor ?? null);
 			if (
 				subscription.controller.signal.aborted ||
