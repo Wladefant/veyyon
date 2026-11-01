@@ -671,7 +671,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	async deleteAuthCredentialRemote(id: number, disabledCause: string): Promise<boolean> {
 		const found = this.#snapshot.credentials.some(entry => entry.id === id);
 		if (!found) return false;
+		const revisionAtDisable = this.#appliedSnapshotRevision;
 		await this.#disableCredentialConfirmed(id, disabledCause);
+		// A newer broker snapshot or local edit may have replaced this same ID while
+		// the disable response was pending. Acknowledging the earlier request does
+		// not authorize evicting the subsequently accepted credential.
+		if (revisionAtDisable !== this.#appliedSnapshotRevision) {
+			this.#maybeRefreshSnapshot("delete credential superseded");
+			throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${id}`);
+		}
 		this.#removeCredentialById(id);
 		this.#maybeRefreshSnapshot("delete credential");
 		return true;
