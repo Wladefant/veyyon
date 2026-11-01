@@ -13,6 +13,19 @@ import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { initTheme } from "../src/theme/theme";
 
+// WHY: a trace regression must fail at the stuck submission/queue boundary,
+// not wait indefinitely after the mock provider has entered. These deadlines
+// bound observation; releasing the owned provider remains explicit in finally.
+async function withinTracePhase<T>(operation: Promise<T>, phase: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${phase}`)), 10_000);
+	try {
+		return await Promise.race([operation, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 describe("a pending submission lifecycle in interactive mode", () => {
 	let tempDir: TempDir | undefined;
 	let authStorage: AuthStorage | undefined;
@@ -116,8 +129,8 @@ describe("a pending submission lifecycle in interactive mode", () => {
 			streamingBehavior: "followUp",
 			telegramTrace,
 		});
-		await submitInteractiveInput(realMode, realSession, input);
-		await realSession.waitForIdle();
+		await withinTracePhase(submitInteractiveInput(realMode, realSession, input), "traced submission");
+		await withinTracePhase(realSession.waitForIdle(), "traced session idle");
 		expect(errors).toEqual([]);
 		expect(input.started).toBe(true);
 		expect(fakeProvider.calls).toHaveLength(1);
@@ -133,7 +146,7 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		]);
 		expect(traceAtProvider[0]?.some(record => record.stage === "turn_consumption" && record.traceId === traceId)).toBe(true);
 		expect(JSON.stringify(traceRecords)).not.toContain("traced input");
-	});
+	}, 30_000);
 
 	it("attributes queued Telegram steer and follow-up to their own provider calls", async () => {
 		const realMode = mode;
@@ -177,35 +190,31 @@ describe("a pending submission lifecycle in interactive mode", () => {
 			telegramTrace: { ...base, updateId: 9101, messageId: 51 },
 		});
 		const initialDelivery = submitInteractiveInput(realMode, realSession, initial);
-		let providerTimer: ReturnType<typeof setTimeout> | undefined;
+		// Observe early rejection while startup is awaited; finally still awaits the
+		// original promise, so this handler cannot turn a failed submission into success.
+		void initialDelivery.catch(() => undefined);
 		try {
-			await Promise.race([
-				firstProviderEntered.promise,
-				new Promise<void>((_, reject) => {
-					providerTimer = setTimeout(() => reject(new Error("First mock provider call did not start")), 10_000);
-				}),
-			]);
+			await withinTracePhase(firstProviderEntered.promise, "first mock provider handler");
 			if (!realSession.isStreaming) throw new Error("Expected first turn to remain in flight");
 			const steering = realMode.startPendingSubmission({
 				text: "steering traced turn",
 				streamingBehavior: "steer",
 				telegramTrace: { ...base, updateId: 9102, messageId: 52 },
 			});
-			await submitInteractiveInput(realMode, realSession, steering);
+			await withinTracePhase(submitInteractiveInput(realMode, realSession, steering), "queued steering submission");
 			const followUp = realMode.startPendingSubmission({
 				text: "follow-up traced turn",
 				streamingBehavior: "followUp",
 				telegramTrace: { ...base, updateId: 9103, messageId: 53 },
 			});
-			await submitInteractiveInput(realMode, realSession, followUp);
+			await withinTracePhase(submitInteractiveInput(realMode, realSession, followUp), "queued follow-up submission");
 			expect(steering.started).toBe(true);
 			expect(followUp.started).toBe(true);
 		} finally {
-			if (providerTimer !== undefined) clearTimeout(providerTimer);
 			releaseFirstProvider.resolve();
+			await withinTracePhase(initialDelivery, "initial delivery after provider release");
 		}
-		await initialDelivery;
-		await realSession.waitForIdle();
+		await withinTracePhase(realSession.waitForIdle(), "queued trace session idle");
 		expect(errors).toEqual([]);
 		const expectedTraceIds = ["-1001999888:9101:51", "-1001999888:9102:52", "-1001999888:9103:53"];
 		// A queued steer is delivered before a follow-up; neither trace may leak into
@@ -225,5 +234,5 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		for (const text of ["original traced turn", "steering traced turn", "follow-up traced turn"]) {
 			expect(JSON.stringify(records)).not.toContain(text);
 		}
-	});
+	}, 60_000);
 });
