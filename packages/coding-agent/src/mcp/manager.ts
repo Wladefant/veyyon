@@ -505,6 +505,11 @@ export class MCPManager {
 			// Clearing the event consumer must also revoke live subscriptions.
 			// Otherwise their streams keep running against an absent handler.
 			const active = [...this.#activeEvents.entries()];
+			// A callback may clear and re-enable its own handler, then await the
+			// replacement startup. Do not make that startup await the old callback's
+			// lifecycle: it would depend on itself. Detached descendants have an
+			// inactive callback scope and retain the normal external drain.
+			const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
 			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 			// The setter remains synchronous; consume teardown rejections and
 			// report failures without exposing transport diagnostics or credentials.
@@ -516,8 +521,10 @@ export class MCPManager {
 				const stopBarrier = Promise.allSettled([
 					previousStop,
 					subscription.stream?.done,
-					subscription.streamProcessing,
-					subscription.lifecycle,
+					// Keep remote/webhook teardown ordered by key, but do not
+					// join the caller's in-flight callback chain on re-enrollment.
+					fromEventCallback ? undefined : subscription.streamProcessing,
+					fromEventCallback ? undefined : subscription.lifecycle,
 					subscription.unsubscribe,
 				].filter(Boolean)).then(results => {
 					const failed = results.filter(result => result.status === "rejected").length;
