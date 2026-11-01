@@ -521,13 +521,15 @@ export class MCPManager {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		this.#eventStartupControllers.delete(serverName);
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
-		const callbackOwner = this.#eventCallbackContext.getStore();
+		// Concurrent event callbacks may both request stop: skipping only the
+		// caller's own stream can still deadlock while each awaits the other.
+		const fromEventCallback = this.#eventCallbackContext.getStore() !== undefined;
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
 			matching.flatMap(([, subscription]) => [
 				subscription.stream?.done,
-				subscription === callbackOwner ? undefined : subscription.streamProcessing,
-				subscription === callbackOwner ? undefined : subscription.lifecycle,
+				fromEventCallback ? undefined : subscription.streamProcessing,
+				fromEventCallback ? undefined : subscription.lifecycle,
 				subscription.unsubscribe,
 			]).filter(Boolean),
 		);
@@ -537,13 +539,15 @@ export class MCPManager {
 		for (const controller of this.#eventStartupControllers.values()) controller.abort();
 		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
-		const callbackOwner = this.#eventCallbackContext.getStore();
+		// Concurrent event callbacks may both request stop: skipping only the
+		// caller's own stream can still deadlock while each awaits the other.
+		const fromEventCallback = this.#eventCallbackContext.getStore() !== undefined;
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
 			active.flatMap(([, subscription]) => [
 				subscription.stream?.done,
-				subscription === callbackOwner ? undefined : subscription.streamProcessing,
-				subscription === callbackOwner ? undefined : subscription.lifecycle,
+				fromEventCallback ? undefined : subscription.streamProcessing,
+				fromEventCallback ? undefined : subscription.lifecycle,
 				subscription.unsubscribe,
 			]).filter(Boolean),
 		);
