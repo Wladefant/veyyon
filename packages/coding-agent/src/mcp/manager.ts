@@ -613,6 +613,13 @@ export class MCPManager {
 		// stop must not revoke a replacement consumer installed by another owner.
 		// External stops and stops from the current handler retain their behavior.
 		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
+		// An external stop invalidates callbacks already in flight. Otherwise
+		// they may re-enable a subscription while this stop drains only the old
+		// snapshot, leaving the replacement running after stopEvents settles.
+		this.#eventConsumerRevision++;
+		// A callback deliberately stopping its own consumer may still install
+		// a successor after its own stop; only superseded callbacks lose custody.
+		if (scope?.active) scope.consumerRevision = this.#eventConsumerRevision;
 		for (const controller of this.#eventStartupControllers.values()) controller.abort();
 		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
