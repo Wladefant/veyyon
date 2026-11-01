@@ -51,9 +51,10 @@ function check(name: string, run: () => void): void {
 }
 
 /**
- * Read workflow configuration only. The expressions use boolean operations,
- * equality, and property access with typed fixtures; this is not a general
- * GitHub Actions emulator. No app module, runner, checkout, or shell is started.
+ * Check workflow configuration and expressions with typed fixtures. The cleanup
+ * contract executes the actual YAML shell body using a fake Git and reaper in
+ * an isolated temporary directory, not a runner, checkout, or production job.
+ * This remains a focused contract, not a general GitHub Actions emulator.
  */
 function evaluate(expression: string | undefined, fixture: Record<string, unknown>): unknown {
 	if (typeof expression !== "string") throw new Error("Missing workflow expression");
