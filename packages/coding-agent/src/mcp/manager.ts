@@ -496,6 +496,18 @@ export class MCPManager {
 		} else {
 			for (const controller of this.#eventStartupControllers.values()) controller.abort();
 			this.#eventStartupControllers.clear();
+			// Clearing the event consumer must also revoke live subscriptions.
+			// Otherwise their streams keep running against an absent handler.
+			const active = [...this.#activeEvents.entries()];
+			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
+			// The setter remains synchronous; observe cleanup failures so an
+			// invalidated old feed cannot raise an unhandled rejection.
+			void Promise.allSettled(active.flatMap(([, subscription]) => [
+				subscription.stream?.done,
+				subscription.streamProcessing,
+				subscription.lifecycle,
+				subscription.unsubscribe,
+			].filter(Boolean)));
 		}
 	}
 

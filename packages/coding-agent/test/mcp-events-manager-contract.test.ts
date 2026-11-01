@@ -27,6 +27,18 @@ type FakeServerOptions = {
 	) => void;
 };
 
+// A dead callback must not leave a previously active MCP feed consuming
+// events. Observe real fake-server requests with a bounded wait.
+async function withinHandlerChange<T>(work: Promise<T>, phase: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${phase}`)), 5_000);
+	try {
+		return await Promise.race([work, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 async function advanceTimers(ms: number): Promise<void> {
 	for (let i = 0; i < 20; i++) await Promise.resolve();
 	vi.advanceTimersByTime(ms);
@@ -1097,4 +1109,55 @@ describe("MCPManager event subscription contracts", () => {
 			server.stop();
 		}
 	});
+	// WHY: the old setter aborted only future discovery, leaving an existing
+	// event stream active without a consumer. Re-enrollment must create a new
+	// stream rather than keeping a zombie subscription.
+	it("clearing a live event handler cancels poll and push feeds and allows re-enrollment", async () => {
+		for (const mode of ["poll", "push"] as const) {
+			const firstStarted = Promise.withResolvers<void>();
+			const secondStarted = Promise.withResolvers<void>();
+			let starts = 0;
+			const started = () => {
+				starts++;
+				if (starts === 1) firstStarted.resolve();
+				if (starts === 2) secondStarted.resolve();
+			};
+			const server = fakeMcpServer({
+				delivery: mode,
+				poll: () => {
+					started();
+					return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+				},
+				onStream: () => started(),
+			});
+			const manager = new MCPManager(process.cwd());
+			const serverName = `clear-handler-${mode}`;
+			manager.setOnEvent(() => {});
+			manager.setOnEventCursor(() => {});
+			try {
+				await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode }],
+				})), `${mode} connection`);
+				await withinHandlerChange(firstStarted.promise, `${mode} first subscription`);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+				manager.setOnEvent(undefined);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+				if (mode === "push") {
+					const cancelled = server.streamCancellations[0];
+					if (!cancelled) throw new Error("Missing original push stream cancellation");
+					await withinHandlerChange(cancelled, "old push stream cancellation");
+				}
+
+				manager.setOnEvent(() => {});
+				await withinHandlerChange(secondStarted.promise, `${mode} renewed subscription`);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+				expect(starts).toBe(2);
+			} finally {
+				await withinHandlerChange(manager.disconnectAll(), `${mode} manager cleanup`);
+				server.stop();
+			}
+		}
+	}, 30_000);
+
 });
