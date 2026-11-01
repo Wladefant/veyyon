@@ -483,6 +483,110 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			.toEqual([REMOTE_REFRESH_SENTINEL, REMOTE_REFRESH_SENTINEL]);
 	});
 
+
+	test("keeps a credential blocked when broker block deletion fails or returns a negative acknowledgment", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const blockedUntilMs = Date.now() + 120_000;
+		await client.upsertCredentialBlock(id, {
+			providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+		});
+		const seeded = await client.fetchSnapshot();
+		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
+		expect(seeded.snapshot.credentials[0]?.blocks).toMatchObject([{
+			providerKey: "anthropic", blockScope: "credential", blockedUntilMs,
+		}]);
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: seeded.snapshot, streamSnapshots: false,
+		});
+		const deny = spyOn(client, "deleteCredentialBlocks");
+		deny.mockRejectedValueOnce(new Error("synthetic broker unavailable")).mockResolvedValueOnce({ ok: false });
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			remote.deleteCredentialBlocks(id);
+			await Bun.sleep(10);
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+		}
+		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(authoritative.snapshot.credentials[0]?.blocks).toMatchObject([{
+			providerKey: "anthropic", blockScope: "credential", blockedUntilMs,
+		}]);
+	});
+
+	for (const concurrentBlock of [false, true] as const) {
+		test(
+			concurrentBlock
+				? "does not erase a newer broker block when an older DELETE acknowledgment arrives"
+				: "keeps a block until the broker confirms deletion, then clears it",
+			async () => {
+				const client = new AuthBrokerClient({ url: handle!.url, token });
+				const peer = new AuthBrokerClient({ url: handle!.url, token });
+				const initial = await client.fetchSnapshot();
+				if (initial.status !== 200) throw new Error("expected broker snapshot");
+				const id = initial.snapshot.credentials[0]!.id;
+				const blockedUntilMs = Date.now() + 120_000;
+				const newerUntilMs = blockedUntilMs + 60_000;
+				await client.upsertCredentialBlock(id, {
+					providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+				});
+				const seeded = await client.fetchSnapshot();
+				if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
+				const actualFetch = client.fetchSnapshot.bind(client);
+				// Keep the background long-poll from racing the held DELETE reply.
+				spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+					if (opts?.waitMs !== undefined) {
+						await untilAborted(opts.signal);
+						throw new Error("synthetic background poll aborted");
+					}
+					return actualFetch(opts);
+				});
+				remote = new RemoteAuthCredentialStore({
+					client, initialSnapshot: seeded.snapshot, streamSnapshots: false,
+				});
+				const actualDelete = client.deleteCredentialBlocks.bind(client);
+				const brokerCommitted = Promise.withResolvers<void>();
+				const releaseReply = Promise.withResolvers<void>();
+				spyOn(client, "deleteCredentialBlocks").mockImplementation(async (credentialId, signal) => {
+					const response = await actualDelete(credentialId, signal);
+					brokerCommitted.resolve();
+					await releaseReply.promise;
+					return response;
+				});
+				remote.deleteCredentialBlocks(id);
+				await brokerCommitted.promise;
+				try {
+					// A broker-side committed deletion is not enough until this client
+					// receives confirmation: the earlier known block remains effective.
+					expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+					const afterDelete = await peer.fetchSnapshot();
+					if (afterDelete.status !== 200) throw new Error("expected broker snapshot after DELETE");
+					expect(afterDelete.snapshot.credentials[0]?.blocks ?? []).toEqual([]);
+					if (concurrentBlock) {
+						await peer.upsertCredentialBlock(id, {
+							providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs,
+							updatedAtMs: Date.now(),
+						});
+						await remote.refreshSnapshot();
+						expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
+					}
+				} finally {
+					releaseReply.resolve();
+				}
+				const expected = concurrentBlock ? newerUntilMs : undefined;
+				await waitUntil(() => remote!.getCredentialBlock(id, "anthropic", "credential") === expected);
+				const finalBroker = await peer.fetchSnapshot();
+				if (finalBroker.status !== 200) throw new Error("expected final broker snapshot");
+				expect(finalBroker.snapshot.credentials[0]?.blocks ?? []).toMatchObject(
+					concurrentBlock
+						? [{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs }]
+						: [],
+				);
+			},
+		);
+	}
+
 	test("calls onSnapshot for broker snapshots but not the constructor snapshot", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await client.fetchSnapshot();
