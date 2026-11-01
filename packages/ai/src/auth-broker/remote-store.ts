@@ -719,8 +719,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * any concurrent peer (refresh, generation bump) stays in sync.
 	 */
 	async upsertAuthCredentialRemote(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+		const revisionAtUpload = this.#appliedSnapshotRevision;
 		const { entries } = await this.#client.uploadCredential(provider, credential);
-		this.#applyProviderEntries(provider, entries);
+		this.#applyProviderEntries(provider, entries, revisionAtUpload);
 		this.#maybeRefreshSnapshot("upload");
 		return this.listAuthCredentials(provider);
 	}
@@ -746,8 +747,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 			// Every old grant was disabled before a replacement can be uploaded.
 			for (const credential of credentials) {
+				const revisionAtUpload = this.#appliedSnapshotRevision;
 				const { entries } = await this.#client.uploadCredential(provider, credential);
-				this.#applyProviderEntries(provider, entries);
+				this.#applyProviderEntries(provider, entries, revisionAtUpload);
 				changed = true;
 			}
 		} finally {
@@ -776,7 +778,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[]): void {
+	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[], revisionAtUpload: number): void {
 		// Upload replies are a trust boundary: validate the *whole* list before
 		// replacing any local rows, even when the broker normally redacts it.
 		for (const entry of entries) {
@@ -786,6 +788,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			if (entry.credential.type === "oauth" && entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
 				throw new AIError.AuthBrokerError(`Broker upload returned unredacted OAuth refresh for provider=${provider}`);
 			}
+		}
+		// A later GET/SSE or local write can supersede a response formed before
+		// revocation while the POST reply is in flight. Do not restore its old
+		// provider list; the normal stream/GET reconciliation remains authoritative.
+		if (revisionAtUpload !== this.#appliedSnapshotRevision) {
+			logger.debug("auth-broker stale credential upload response ignored", { provider });
+			return;
 		}
 		// `entries` is the broker's authoritative post-upsert list of rows for
 		// `provider`. Drop our existing rows for the same provider and splice in
