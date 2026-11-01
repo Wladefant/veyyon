@@ -585,7 +585,7 @@ export class AcpAgent implements Agent {
 
 	async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
 		assertAbsoluteCwd(params.cwd);
-		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers);
+		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers, true);
 		await this.#replaySessionHistory(record);
 		const response: LoadSessionResponse = {
 			configOptions: this.#buildConfigOptions(record.session),
@@ -1033,7 +1033,12 @@ export class AcpAgent implements Agent {
 		return await this.#registerPreparedSession(session, mcpServers);
 	}
 
-	async #loadManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
+	async #loadManagedSession(
+		sessionId: string,
+		cwd: string,
+		mcpServers: McpServer[],
+		searchAcrossCwds = false,
+	): Promise<ManagedSessionRecord> {
 		const existing = this.#sessions.get(sessionId) ?? this.#reclaimBackgrounded(sessionId, cwd);
 		if (existing) {
 			assertMatchingCwd(existing.session, cwd);
@@ -1044,7 +1049,9 @@ export class AcpAgent implements Agent {
 		// released and its transcript closed, then open it from disk like any stored session.
 		await this.#backgrounded.get(sessionId)?.released;
 
-		const storedSession = await this.#findStoredSessionById(sessionId);
+		const storedSession = searchAcrossCwds
+			? await this.#findStoredSessionById(sessionId)
+			: (await listStoredSessions(cwd)).find(session => session.id === sessionId);
 		if (!storedSession) {
 			throw new Error(`ACP session not found: ${sessionId}`);
 		}
