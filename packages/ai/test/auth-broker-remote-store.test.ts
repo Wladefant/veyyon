@@ -795,6 +795,90 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+
+	for (const incoming of ["SSE", "GET"] as const) {
+		test(`keeps a pending broker block across an older peer ${incoming} snapshot until reconciliation`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await peer.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected initial synthetic broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			const streamReady = Promise.withResolvers<void>();
+			const peerEntryFrame = Promise.withResolvers<SnapshotResponse>();
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				streamReady.resolve();
+				const next = await peerEntryFrame.promise;
+				const entry = next.credentials.find(candidate => candidate.id === id);
+				if (!entry) throw new Error("expected updated peer credential");
+				yield {
+					kind: "entry" as const, generation: next.generation, serverNowMs: next.serverNowMs,
+					refresher: next.refresher, entry,
+				};
+				await untilAborted(opts.signal);
+			});
+			const realFetch = client.fetchSnapshot.bind(client);
+			let fullReads = 0;
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs !== undefined) throw new Error("unexpected long-poll during synthetic SSE");
+				fullReads += 1;
+				return realFetch(opts);
+			});
+			const realUpsert = client.upsertCredentialBlock.bind(client);
+			const pendingStarted = Promise.withResolvers<void>();
+			const releasePending = Promise.withResolvers<void>();
+			spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+				pendingStarted.resolve();
+				await releasePending.promise;
+				return realUpsert(credentialId, body);
+			});
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+			await streamReady.promise;
+			const olderUntilMs = Date.now() + 60_000;
+			const newerUntilMs = olderUntilMs + 60_000;
+			remote.upsertCredentialBlock({
+				credentialId: id, providerKey: "anthropic", blockScope: "credential",
+				blockedUntilMs: newerUntilMs, updatedAtMs: Date.now(),
+			});
+			await pendingStarted.promise;
+			try {
+				// A peer commits an older block while our later, longer block is
+				// speculative. Both events are legitimate broker responses.
+				const olderAck = await peer.upsertCredentialBlock(id, {
+					providerKey: "anthropic", blockScope: "credential",
+					blockedUntilMs: olderUntilMs, updatedAtMs: Date.now(),
+				});
+				expect(olderAck).toEqual({ ok: true });
+				const olderSnapshot = await peer.fetchSnapshot();
+				if (olderSnapshot.status !== 200) throw new Error("expected older broker state");
+				if (incoming === "SSE") {
+					peerEntryFrame.resolve(olderSnapshot.snapshot);
+					await waitUntil(() => remote!.snapshot.generation === olderSnapshot.snapshot.generation);
+				} else {
+					await remote.refreshSnapshot();
+				}
+				// A broker read must not wipe a pending local safety block.
+				expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
+				releasePending.resolve();
+				await waitUntil(() =>
+					fullReads >= (incoming === "SSE" ? 1 : 2) &&
+					remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
+				);
+				const finalBroker = await peer.fetchSnapshot();
+				if (finalBroker.status !== 200) throw new Error("expected final broker snapshot");
+				expect(finalBroker.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+					{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
+				]);
+				expect(remote.listCredentialBlocks([id])).toMatchObject([
+					{ credentialId: id, providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
+				]);
+			} finally {
+				releasePending.resolve();
+				peerEntryFrame.resolve(initial.snapshot);
+			}
+		});
+	}
+
 	test("retries failed block-upsert reconciliation when an unrelated SSE entry supersedes its GET", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
