@@ -38,6 +38,18 @@ describe("ACP client bridge permission requests", () => {
 	});
 });
 
+// Bind test observation to a finite phase: a failure to enter the real
+// client boundary must fail rather than strand the entire test runner.
+async function withinPermissionPhase<T>(work: Promise<T>, phase: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error("Timed out waiting for " + phase)), 4_000);
+	try {
+		return await Promise.race([work, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 // WHY: an ACP client may answer a permission dialog after the tool call was
 // cancelled. A late selection must not regain permission. The test exercises
 // the real bridge contract, with only the external client response deferred.
@@ -57,11 +69,16 @@ it("refuses a permission selection received after request cancellation", async (
 		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
 		abort.signal,
 	);
-	await clientEntered.promise;
-	abort.abort();
-	reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
-	expect(await request).toEqual({ outcome: "cancelled" });
-});
+	try {
+		await withinPermissionPhase(clientEntered.promise, "ACP permission request entry");
+		abort.abort();
+		reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+		expect(await withinPermissionPhase(request, "cancelled permission result")).toEqual({ outcome: "cancelled" });
+	} finally {
+		abort.abort();
+		reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+	}
+}, 12_000);
 
 it("retains a selected client permission while the request remains active", async () => {
 	const connection = {
