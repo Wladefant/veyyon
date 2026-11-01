@@ -94,4 +94,39 @@ describe("native background job tools", () => {
 		expect(run.state).toBe("submitting");
 	});
 
+
+	test("native completed receipt refuses non-round-trippable JSON body despite matching UTF-8 digest", async () => {
+		// JSON escapes can carry isolated UTF-16 surrogates even though the
+		// digest function encodes both those strings and real U+FFFD identically.
+		const canonical = "\uFFFD";
+		const malformed = "\uD800";
+		expect(digest(malformed)).toBe(digest(canonical));
+		const completed = {
+			schema_version: 2, operation: "run", worker: input.worker,
+			session: remoteSessionId(input.sessionFile), idempotency_sha256: digest(id),
+			request_sha256: digest("synthetic-run-request"), state: "completed",
+			exit: 0, output_sha256: digest(canonical),
+		};
+		for (const body of [malformed, "\uDC00"]) {
+			expect(() => validateReceipt({ ...completed, body }, id, "run"))
+				.toThrow("output digest mismatch");
+		}
+		let calls = 0;
+		const transport = Object.assign((async (_url: string | URL | Request, init?: RequestInit) => {
+			calls++; expect(init?.method).toBe("GET");
+			return new Response(JSON.stringify({ ...completed, body: malformed }));
+		}), { preconnect: globalThis.fetch.preconnect });
+		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key",
+			id, input.sessionFile, undefined, transport)).rejects.toThrow("output digest mismatch");
+		expect(calls).toBe(1);
+		const good = validateReceipt({ ...completed, body: canonical }, id, "run");
+		expect(good.body).toBe(canonical);
+		expect(good.output_sha256).toBe(digest(canonical));
+		const supplementary = "a😀";
+		const goodUnicode = validateReceipt({
+			...completed, body: supplementary, output_sha256: digest(supplementary),
+		}, id, "run");
+		expect(goodUnicode.body).toBe(supplementary);
+	});
+
 });
