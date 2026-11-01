@@ -1,10 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { logger, TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { submitInteractiveInput } from "../src/main";
@@ -86,46 +87,51 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		const startedAfterCancel = mode.markPendingSubmissionStarted(submission);
 		expect(startedAfterCancel).toBe(false);
 	});
-	it("preserves Telegram trace metadata through the real interactive submission seam", async () => {
+	it("preserves Telegram trace metadata from the real interactive submit to provider invocation", async () => {
 		const realMode = mode;
-		if (!realMode) throw new Error("Expected mode");
+		const realSession = session;
+		if (!realMode || !realSession || !authStorage) throw new Error("Expected initialized interactive session");
+		// The provider is entirely in-memory; the real InteractiveMode, submission code and
+		// AgentSession are exercised, rather than copying their trace-forwarding logic into a fake.
+		const fakeProvider = createMockModel({ responses: [{ content: ["Trace delivered"], stopReason: "stop" }] });
+		authStorage.setRuntimeApiKey("mock", "test-only-token");
+		realSession.agent.setModel(fakeProvider.model);
+		const traceRecords: Array<Record<string, unknown>> = [];
+		vi.spyOn(logger, "info").mockImplementation((message, context) => {
+			if (message === "Telegram delivery trace") traceRecords.push(context ? { ...context } : {});
+		});
+		const traceAtProvider: Array<Array<Record<string, unknown>>> = [];
+		realSession.agent.streamFn = (model, context, options) => {
+			// The agent-loop emits provider_call_start immediately before invoking this callback.
+			traceAtProvider.push(traceRecords.map(record => ({ ...record })));
+			return fakeProvider.stream(model, context, options);
+		};
+		const errors: string[] = [];
+		vi.spyOn(realMode, "showError").mockImplementation(message => {
+			errors.push(message);
+		});
 		const telegramTrace = { updateId: 9001, messageId: 42, chatId: "-1001999888", topicId: 10 };
 		const input = realMode.startPendingSubmission({
 			text: "traced input",
 			streamingBehavior: "followUp",
 			telegramTrace,
 		});
-		const calls: Array<{ text: string; options: unknown }> = [];
-		const promptSession = {
-			isStreaming: false,
-			prompt: async (text: string, options: unknown) => {
-				calls.push({ text, options });
-			},
-			promptCustomMessage: async () => {
-				throw new Error("A Telegram user message must not become a custom prompt");
-			},
-		} as unknown as Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">;
-		let error: string | undefined;
-		await submitInteractiveInput(
-			{
-				markPendingSubmissionStarted: value => realMode.markPendingSubmissionStarted(value),
-				finishPendingSubmission: value => realMode.finishPendingSubmission(value),
-				showError: message => {
-					error = message;
-				},
-				checkShutdownRequested: () => false,
-			},
-			promptSession,
-			input,
-		);
-		expect(error).toBeUndefined();
+		await submitInteractiveInput(realMode, realSession, input);
+		await realSession.waitForIdle();
+		expect(errors).toEqual([]);
 		expect(input.started).toBe(true);
-		expect(calls).toEqual([
-			{
-				text: "traced input",
-				options: { images: undefined, streamingBehavior: "followUp", telegramTrace },
-			},
+		expect(fakeProvider.calls).toHaveLength(1);
+		expect(JSON.stringify(fakeProvider.calls[0]?.context.messages)).toContain("traced input");
+		expect(traceAtProvider).toHaveLength(1);
+		const traceId = "-1001999888:9001:42";
+		expect(traceAtProvider[0]?.filter(record => record.stage === "provider_call_start")).toEqual([
+			expect.objectContaining({
+				stage: "provider_call_start",
+				traceId,
+				sessionId: realSession.sessionManager.getSessionId(),
+			}),
 		]);
+		expect(traceAtProvider[0]?.some(record => record.stage === "turn_consumption" && record.traceId === traceId)).toBe(true);
+		expect(JSON.stringify(traceRecords)).not.toContain("traced input");
 	});
-
 });
