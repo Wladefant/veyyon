@@ -1951,20 +1951,16 @@ export class SessionManager {
 	}
 
 	/**
-	 * Fork the current conversation into a new file with fresh lifecycle metadata.
-	 * @returns the old and new session file paths, or undefined when not persisting.
+	 * Keep the original session's locally referenced artifact bytes available
+	 * before a fork publishes a new session. Both current-session forks and
+	 * imported historical forks must use the same identity and copy contract.
 	 */
-	async fork(): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
-		if (!this.#persist || !this.#sessionFile) return undefined;
-
-		const oldSessionFile = this.#sessionFile;
-		const parentSessionId = this.#sessionId;
-		const timestamp = nowIso();
-		const nextSessionId = mintSessionId();
-		const nextSessionFile = path.join(
-			this.#sessionDir,
-			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
-		);
+	static async #copyForkArtifactEvidence(
+		oldSessionFile: string,
+		nextSessionFile: string,
+		retainedEntries: readonly FileEntry[],
+		parentSessionId: string | undefined,
+	): Promise<void> {
 		const oldArtifactDir = artifactsDirectoryFor(oldSessionFile);
 		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
 		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
@@ -1972,7 +1968,6 @@ export class SessionManager {
 		// Preserve the original referenced bytes before mutating the active
 		// session identity, entries or file. A best-effort post-switch copy can
 		// otherwise leave inherited artifact://0 pointing at unrelated new output.
-		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
 		const referencedIds = new Set<string>();
 		for (const entry of retainedEntries) {
 			// Artifact IDs are per session. An explicit foreign-session reference
@@ -2031,6 +2026,30 @@ export class SessionManager {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Fork the current conversation into a new file with fresh lifecycle metadata.
+	 * @returns the old and new session file paths, or undefined when not persisting.
+	 */
+	async fork(): Promise<{ oldSessionFile: string; newSessionFile: string } | undefined> {
+		if (!this.#persist || !this.#sessionFile) return undefined;
+
+		const oldSessionFile = this.#sessionFile;
+		const parentSessionId = this.#sessionId;
+		const timestamp = nowIso();
+		const nextSessionId = mintSessionId();
+		const nextSessionFile = path.join(
+			this.#sessionDir,
+			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
+		);
+		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		await SessionManager.#copyForkArtifactEvidence(
+			oldSessionFile,
+			nextSessionFile,
+			retainedEntries,
+			parentSessionId,
+		);
 
 		this.#endLifecycle("session_switched");
 		await this.#drainAndCloseWriter();
@@ -3319,6 +3338,19 @@ export class SessionManager {
 				providerPromptCacheKey: sourceHeader?.providerPromptCacheKey ?? sourceHeader?.id,
 			},
 			options?.sessionFile,
+		);
+		// Copy all required local evidence before the new JSONL can be written;
+		// forkFrom retains historic artifact://N links just like fork().
+		const nextSessionFile = manager.getSessionFile();
+		if (!nextSessionFile) throw new Error("Cannot fork session: destination unavailable");
+		if (path.resolve(nextSessionFile) === path.resolve(sourcePath)) {
+			throw new Error("Cannot fork session: destination must differ from source");
+		}
+		await SessionManager.#copyForkArtifactEvidence(
+			sourcePath,
+			nextSessionFile,
+			history,
+			sourceHeader?.id,
 		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
