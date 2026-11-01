@@ -2207,6 +2207,28 @@ export class SessionManager {
 	}
 
 	/**
+	 * Verify replay authority without allocating a complete historical transcript
+	 * when a previously loaded journal has changed beneath this manager.
+	 * Identity plus length are the same guards used for the loaded/published
+	 * layout; a changed file is unsafe to replay even before scanning its lines.
+	 * For storage backends without a trustworthy loaded identity, retain the
+	 * existing strict readable/foreign-entry check rather than guessing.
+	 */
+	async assertReplayJournalCurrent(): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#foreignLines.length > 0)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (this.#fileIsExactlyAsPublished()) return;
+		const state = this.#storage.existsStateSync(this.#sessionFile);
+		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+		if (state !== "present") throw new Error("Cannot verify current session journal");
+		if (this.#publishedFileState?.identity !== undefined)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (await this.holdsForeignEntries({ requireReadable: true }))
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+	}
+
+	/**
 	 * True when the session file holds a line this manager never wrote.
 	 *
 	 * The question every full-file operation has to ask before it destroys what is

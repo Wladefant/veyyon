@@ -132,9 +132,7 @@ export class OperatorAnswerInbox {
 			// A separately opened manager can have an older in-memory journal even after our per-session
 			// operation lock has settled. Its empty queue is not proof that no durable answer exists.
 			// Refuse to append from that stale snapshot; a reopened manager can recover the original.
-			if (await journal.holdsForeignEntries({ requireReadable: true })) {
-				throw new Error("Operator-answer journal is stale; reopen session before accepting");
-			}
+			await journal.assertReplayJournalCurrent();
 			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before journaling");
 			const answer: PendingAnswer = pending.get(questionId) ?? {
 				version: 1, sessionId, questionId, inputId: `operator-answer:${questionId}`, text, mode,
@@ -157,13 +155,10 @@ export class OperatorAnswerInbox {
 			if (this.#journal() !== journal) return;
 			// Recovery must not replay an already-consumed answer from a retained stale manager.
 			try {
-				if (await journal.holdsForeignEntries({ requireReadable: true })) {
-					logger.warn("Skipping operator-answer recovery on stale session journal; reopen session");
-					return;
-				}
+				await journal.assertReplayJournalCurrent();
 			} catch {
-				// Unknown durable state cannot authorize replay; sender retries later.
-				logger.warn("Skipping operator-answer recovery because session journal verification failed");
+				// Changed or unreadable durable state cannot authorize replay; sender retries later.
+				logger.warn("Skipping operator-answer recovery because session journal is stale or cannot be verified");
 				return;
 			}
 			if (this.#journal() !== journal) return;

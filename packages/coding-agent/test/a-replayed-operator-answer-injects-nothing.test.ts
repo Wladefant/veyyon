@@ -486,6 +486,15 @@ test("retained reconnect manager cannot inject a consumed answer missing from it
 class FailOnceReadStorage extends FileSessionStorage {
 	failNextRead = false;
 
+	// Exercise the fallback backend with no stable loaded inode identity:
+	// this path must still attempt and fail a strict durable read, never guess.
+	override statSync(filePath: string) {
+		return { ...super.statSync(filePath), identity: undefined };
+	}
+	override openPinnedReaderSync(_filePath: string) {
+		return undefined;
+	}
+
 	override async readText(filePath: string): Promise<string> {
 		if (this.failNextRead) {
 			this.failNextRead = false;
@@ -578,4 +587,49 @@ test("a failed first dispatch cannot let a stale manager replace durable pending
 	const resumed = new OperatorAnswerInbox(() => authoritative, queueingInto(queue), waiting(queue));
 	expect(await resumed.accept(retry, "followUp")).toBe("queued");
 	expect(queue).toEqual([original]);
+});
+
+class CountingJournalStorage extends FileSessionStorage {
+	wholeReads = 0;
+	override async readText(filePath: string): Promise<string> {
+		this.wholeReads++;
+		return super.readText(filePath);
+	}
+}
+
+// WHY: old retained managers were made safe by reading the *entire* historical
+// journal on each delayed answer/recovery. A known changed inode/size must
+// reject without materializing even a multi-megabyte synthetic transcript.
+// This is an application-path negative control: the earlier code performs a
+// full read and fails wholeReads === 0, while the bounded guard refuses first.
+test("retained manager rejects stale answer and recovery without whole-journal reads", async () => {
+	const { manager, dir } = newSession();
+	manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+	await manager.ensureOnDisk();
+	await manager.flush();
+	const file = manager.getSessionFile() as string;
+	const firstManager = await SessionManager.open(file, dir.path());
+	const storage = new CountingJournalStorage();
+	const staleManager = await SessionManager.open(file, dir.path(), storage);
+	const queue: string[] = [];
+	const original = envelope("q-large-stale", "evt-original");
+	const first = new OperatorAnswerInbox(() => firstManager, queueingInto(queue), waiting(queue));
+	const retained = new OperatorAnswerInbox(() => staleManager, queueingInto(queue), waiting(queue));
+
+	expect(await first.accept(original, "auto")).toBe("queued");
+	firstManager.appendMessage({ role: "user", content: original, timestamp: Date.now() });
+	firstManager.appendCustomEntry("synthetic:historical-tail", { padding: "x".repeat(3 * 1024 * 1024) });
+	await firstManager.flush();
+	queue.length = 0;
+	storage.wholeReads = 0;
+
+	await expect(retained.accept(envelope("q-large-stale", "evt-retry"), "auto")).rejects.toThrow("journal is stale");
+	await retained.recover();
+	expect(storage.wholeReads).toBe(0);
+	expect(queue).toEqual([]);
+
+	const reopened = await SessionManager.open(file, dir.path());
+	const replay = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
+	expect(await replay.accept(envelope("q-large-stale", "evt-retry"), "auto")).toBe("duplicate");
+	expect(queue).toEqual([]);
 });
