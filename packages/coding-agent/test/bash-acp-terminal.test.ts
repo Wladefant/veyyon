@@ -239,4 +239,115 @@ describe("BashTool ACP terminal routing", () => {
 		expect(kills).toBe(0);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	// WHY: the ACP terminal/create RPC itself may never return. Aborting a
+	// BashTool call must not wait for a handle before settling, and a handle
+	// returned after abort must be killed/released without tool execution.
+	async function bounded<T>(operation: Promise<T>, label: string): Promise<T> {
+		const deadline = Promise.withResolvers<never>();
+		const timer = setTimeout(() => deadline.reject(new Error("Timed out waiting for " + label)), 3_500);
+		try {
+			return await Promise.race([operation, deadline.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	it("refuses a pre-aborted ACP terminal request before sending terminal/create", async () => {
+		let creates = 0;
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => {
+				creates++;
+				throw new Error("The client must not be contacted after abort");
+			},
+		};
+		const controller = new AbortController();
+		controller.abort();
+		const tool = new BashTool(makeSession(bridge));
+		await expect(bounded(tool.execute("pre-abort-terminal", { command: "echo never" }, controller.signal), "pre-aborted tool")).rejects.toThrow(
+			"Command aborted",
+		);
+		expect(creates).toBe(0);
+	}, 8_000);
+
+	it("settles cancellation during a deferred ACP terminal/create and cleans a late returned handle", async () => {
+		const creationEntered = Promise.withResolvers<void>();
+		const provideHandle = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const lateCleanupDone = Promise.withResolvers<void>();
+		let killCalls = 0;
+		let releaseCalls = 0;
+		let waitCalls = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "deferred-ACP-terminal",
+			waitForExit: async () => {
+				waitCalls++;
+				return { exitCode: 0 };
+			},
+			currentOutput: async () => ({ output: "must not be delivered", truncated: false }),
+			kill: async () => {
+				killCalls++;
+			},
+			release: async () => {
+				releaseCalls++;
+				lateCleanupDone.resolve();
+			},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => {
+				creationEntered.resolve();
+				return provideHandle.promise;
+			},
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("deferred-terminal", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(creationEntered.promise, "deferred terminal/create entry");
+			controller.abort();
+			await expect(bounded(running, "cancelled BashTool result")).rejects.toThrow("Command aborted");
+		} finally {
+			controller.abort();
+			provideHandle.resolve(handle);
+		}
+		await bounded(lateCleanupDone.promise, "late terminal cleanup");
+		expect(killCalls).toBe(1);
+		expect(releaseCalls).toBe(1);
+		expect(waitCalls).toBe(0);
+	}, 12_000);
+
+	it("applies the command deadline to the ACP terminal/create phase and disposes a late handle", async () => {
+		const creationEntered = Promise.withResolvers<void>();
+		const provideHandle = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const lateCleanupDone = Promise.withResolvers<void>();
+		let killed = 0;
+		let released = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "deadline-ACP-terminal",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => { killed++; },
+			release: async () => { released++; lateCleanupDone.resolve(); },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { creationEntered.resolve(); return provideHandle.promise; },
+		};
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("deadline-terminal", { command: "echo never", timeout: 1 });
+		void running.catch(() => undefined);
+		try {
+			await bounded(creationEntered.promise, "deadline terminal/create entry");
+			await expect(bounded(running, "terminal/create command deadline")).rejects.toThrow(
+				"Command timed out after 1 seconds",
+			);
+		} finally {
+			provideHandle.resolve(handle);
+		}
+		await bounded(lateCleanupDone.promise, "deadline terminal cleanup");
+		expect(killed).toBe(1);
+		expect(released).toBe(1);
+	}, 12_000);
 });
