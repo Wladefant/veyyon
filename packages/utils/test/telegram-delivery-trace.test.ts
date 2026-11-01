@@ -173,4 +173,50 @@ describe("telegram-delivery-trace", () => {
 			infoSpy.mockRestore();
 		}
 	});
+
+	it("records one turn consumption across copies transferred before the first consume", () => {
+		const infoSpy = spyOn(logger, "info").mockImplementation(() => {});
+		try {
+			const choices = ["original", "copy", "grandchild"] as const;
+			for (const [index, first] of choices.entries()) {
+				const trace: TelegramDeliveryTraceData = {
+					chatId: "-100505",
+					updateId: 101 + index,
+					messageId: 202 + index,
+				};
+				const original = { role: "user", content: "not logged" };
+				const copy = { ...original };
+				const sibling = { ...original };
+				const grandchild = { ...original };
+				attachTelegramTrace(original, trace, "owning-session");
+				transferTelegramTrace(original, copy);
+				transferTelegramTrace(original, sibling);
+				transferTelegramTrace(copy, grandchild);
+				const messages = { original, copy, grandchild };
+				const firstConsumed = consumeTelegramTrace(messages[first], "fallback-session");
+				expect(firstConsumed).toEqual({ trace, sessionId: "owning-session" });
+				for (const message of [original, copy, sibling, grandchild]) {
+					expect(consumeTelegramTrace(message, "fallback-session")).toBeUndefined();
+				}
+				const lateCopy = { ...original };
+				transferTelegramTrace(sibling, lateCopy);
+				expect(consumeTelegramTrace(lateCopy, "fallback-session")).toBeUndefined();
+			}
+			const consumptionRecords = infoSpy.mock.calls
+				.filter(call => (call[1] as Record<string, unknown> | undefined)?.stage === "turn_consumption")
+				.map(call => {
+					const context = call[1] as Record<string, unknown>;
+					return { traceId: context.traceId, sessionId: context.sessionId, stage: context.stage };
+				});
+			expect(consumptionRecords).toEqual(
+				choices.map((_, index) => ({
+					traceId: `-100505:${101 + index}:${202 + index}`,
+					sessionId: "owning-session",
+					stage: "turn_consumption",
+				})),
+			);
+		} finally {
+			infoSpy.mockRestore();
+		}
+	});
 });
