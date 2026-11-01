@@ -95,14 +95,15 @@ const BRIDGE_POLL_INTERVAL_MS = 250;
  * stdin control, so the client's open pipe would otherwise reach the command, and a `read`,
  * `cat` or stdin-reading child would wait forever. A pipe, a heredoc or a `< file` inside the
  * command overrides the group's stdin, so explicit input still arrives. The newline before the
- * closing brace ends a trailing `# comment`.
+ * closing brace ends a trailing `# comment`. A separating blank line prevents a final
+ * backslash continuation from swallowing that closing brace.
  */
 export function wrapShellLineForClientTerminal(
 	line: string,
 	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
 ): { command: string; args: string[] } {
 	const prefixed = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
-	const finalLine = `{\n${prefixed}\n} </dev/null`;
+	const finalLine = `{\n${prefixed}\n\n} </dev/null`;
 	return { command: shellConfig.shell, args: shellConfig.args.concat([finalLine]) };
 }
 
