@@ -461,6 +461,61 @@ test("lost admission never renews and close drains the periodic renewal before r
 
 // WHY: after successful transfer finalization, close retains the previously
 // persisted resume capability and advances its epoch on authority release.
+test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoch", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const token = "a-long-enough-resume-capability";
+	const invalid = [
+		{ name: "foreign-owner", ownerNode: "foreign-owner", epoch: 6 },
+		{ name: "stale-epoch", ownerNode: "runtime-owner", epoch: 5 },
+		{ name: "fractional-epoch", ownerNode: "runtime-owner", epoch: 6.5 },
+	];
+	try {
+		for (const scenario of invalid) {
+			const actions: string[] = [];
+			const persisted: Array<{ token: string; epoch: number }> = [];
+			const fake: CheckpointFetch = async input => {
+				const action = new URL(String(input)).pathname.split("/").pop()!;
+				actions.push(action);
+				if (action === "finalize") return Response.json({ ok: true });
+				return Response.json({
+					ownerNode: action === "release" ? scenario.ownerNode : "runtime-owner",
+					epoch: action === "release" ? scenario.epoch : 5,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+					...(action === "claim" ? { resumeToken: token } : {}),
+				});
+			};
+			const sessionId = `invalid-release-${scenario.name}`;
+			const marker = {
+				version: 1 as const,
+				sessionId,
+				targetNode: "destination-device",
+				transferId: "transfer-invalid-release",
+				transferEpoch: 4,
+				claimToken: "a-long-enough-claim-capability",
+				epoch: 4,
+			};
+			const session = new SynchronizedSession(
+				sessionId,
+				new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+				marker,
+				"runtime-owner",
+				async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+			);
+			await session.admit();
+			await expect(session.close()).rejects.toThrow(/release fence mismatch/);
+			expect(persisted).toEqual([{ token, epoch: 5 }]);
+			expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+			await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+		}
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
 test("successful transfer retains its persisted resume capability on release", async () => {
 	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
 	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";

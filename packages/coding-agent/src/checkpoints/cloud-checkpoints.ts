@@ -283,14 +283,27 @@ export class CheckpointClient {
 	async releaseLease(sessionId: string): Promise<CheckpointLease | undefined> {
 		const lease = this.#leases.get(sessionId);
 		if (!lease) return undefined;
-		const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
-		});
-		this.#leases.delete(sessionId);
-		this.#lost.add(sessionId);
-		return released;
+		try {
+			const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
+			});
+			// A successful HTTP status cannot authorize an unverified resume-marker
+			// epoch. The authority contract releases the same owner at epoch + 1.
+			if (
+				!released ||
+				released.ownerNode !== lease.ownerNode ||
+				!Number.isSafeInteger(released.epoch) ||
+				released.epoch !== lease.epoch + 1
+			)
+				throw new Error("Checkpoint authority release fence mismatch");
+			return released;
+		} finally {
+			// An ambiguous/invalid release response must not leave this client
+			// locally writable or silently reissue the external release.
+			this.loseLease(sessionId);
+		}
 	}
 	loseLease(sessionId: string): void {
 		this.#leases.delete(sessionId);
