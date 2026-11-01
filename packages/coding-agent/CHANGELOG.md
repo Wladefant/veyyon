@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP preserves the first streamed reply chunk when `message_start` arrives late ([PR #830](https://github.com/Wladefant/veyyon/pull/830)).
 ## [1.7.2] - 2026-11-01
 
 ### Added
