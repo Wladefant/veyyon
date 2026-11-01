@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fence concurrent checkpoint admission during shutdown and refuse native handoff journals with unreadable headers rather than admitting them as ordinary local sessions ([#603](https://github.com/Wladefant/veyyon/issues/603)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
