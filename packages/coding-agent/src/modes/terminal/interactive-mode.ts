@@ -30,7 +30,14 @@ import {
 	TUI,
 } from "@veyyon/tui";
 import { isInsideTerminalMultiplexer } from "@veyyon/tui/terminal-capabilities";
-import { APP_NAME, errorMessage, getProjectDir, logger, postmortem } from "@veyyon/utils";
+import {
+	APP_NAME,
+	errorMessage,
+	getProjectDir,
+	logger,
+	postmortem,
+	type TelegramDeliveryTraceData,
+} from "@veyyon/utils";
 import type { AutocompleteProvider, SlashCommand } from "@veyyon/utils/autocomplete";
 import { matchesKey } from "@veyyon/utils/keys";
 import type { MouseRoutable } from "@veyyon/utils/mouse";
@@ -1710,6 +1717,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		customType?: string;
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
+		telegramTrace?: TelegramDeliveryTraceData;
 	}): SubmittedUserInput {
 		this.takeAtRestReading();
 		const submission: SubmittedUserInput = {
@@ -1719,6 +1727,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			customType: input.customType,
 			display: input.display,
 			streamingBehavior: input.streamingBehavior,
+			telegramTrace: input.telegramTrace,
 			cancelled: false,
 			started: false,
 		};
@@ -1948,7 +1957,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#planMode.restorePaused();
 		}
 	}
-
 
 	showPlanReview(
 		planContent: string,

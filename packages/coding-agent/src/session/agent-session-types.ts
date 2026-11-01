@@ -26,7 +26,7 @@ import type { Effort } from "@veyyon/catalog/effort";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import type { SessionTitleSource } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import type { postmortem } from "@veyyon/utils";
+import type { postmortem, TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig, AdvisorContextFile } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
@@ -445,6 +445,8 @@ export interface PromptOptions {
 	attribution?: MessageAttribution;
 	/** Skip pre-send compaction checks for this prompt (internal use for maintenance flows). */
 	skipCompactionCheck?: boolean;
+	/** Optional Telegram delivery trace metadata */
+	telegramTrace?: TelegramDeliveryTraceData;
 }
 
 /** Options for AgentSession.followUp() */
@@ -455,6 +457,13 @@ export interface FollowUpOptions {
 	expandPromptTemplates?: boolean;
 	/** Explicit billing/initiator attribution. Defaults to `agent` for synthetic follow-ups. */
 	attribution?: MessageAttribution;
+	/** Optional Telegram delivery trace metadata */
+	telegramTrace?: TelegramDeliveryTraceData;
+}
+/** Options for AgentSession.steer() */
+export interface SteerOptions {
+	/** Optional Telegram delivery trace metadata */
+	telegramTrace?: TelegramDeliveryTraceData;
 }
 
 /** Result from a handoff operation. */
