@@ -452,7 +452,7 @@ function isValidCorrelatedStdioResponse(value: unknown): value is JsonRpcRespons
 	const error = frame.error;
 	if (!error || typeof error !== "object" || Array.isArray(error)) return false;
 	const fields = error as Record<string, unknown>;
-	return Number.isSafeInteger(fields.code) && typeof fields.message === "string";
+	return typeof fields.code === "number" && Number.isSafeInteger(fields.code) && typeof fields.message === "string";
 }
 
 export class StdioTransport implements MCPTransport {
