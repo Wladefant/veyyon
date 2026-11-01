@@ -1,12 +1,21 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { logTelegramDeliveryTrace } from "@veyyon/utils";
+import type { TerminalSecretRequest } from "../../launch/terminal-control";
+import {
+	serveTerminalControl,
+	type TerminalDeliveryOptions,
+	TerminalNotReadyError,
+} from "../../launch/terminal-control";
 import type { SecretIntakeResult } from "../../secrets/intake-broker";
-import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
+import {
+	getSessionSecretIntake,
+	getSessionSecretIntakeContext,
+	registerSessionSecretIntakeActor,
+} from "../../secrets/intake-session";
+import { parseSecretSubmission } from "../../secrets/intake-wire";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
-import { getSessionSecretIntake, getSessionSecretIntakeContext, registerSessionSecretIntakeActor } from "../../secrets/intake-session";
-import { parseSecretSubmission } from "../../secrets/intake-wire";
-import type { TerminalSecretRequest } from "../../launch/terminal-control";
 
 export interface TerminalTurnProvenance {
 	hasOperatorMessage: boolean;
@@ -112,14 +121,14 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 	};
 	const answers = new OperatorAnswerInbox(
 		() => mode.sessionManager,
-		async (text, behavior) => {
+		async (text, behavior, traceOptions) => {
 			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
 			if (mode.session.isStreaming && behavior === "followUp") {
-				await mode.session.followUp(text);
+				await mode.session.followUp(text, undefined, undefined, traceOptions);
 				return "queued";
 			}
 			// Steer also drains an idle session. Recovery must not depend on a REPL input callback.
-			await mode.session.steer(text);
+			await mode.session.steer(text, undefined, undefined, traceOptions);
 			return mode.session.isStreaming ? "steered" : "queued";
 		},
 		questionId => {
@@ -135,23 +144,33 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			sessionFile: mode.sessionManager.getSessionFile() ?? "",
 		}),
 		history,
-		async deliver(text, behavior) {
+		async deliver(text, behavior, options?: TerminalDeliveryOptions) {
 			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
-			const answer = await answers.accept(text, behavior);
+			if (options?.telegramTrace) {
+				logTelegramDeliveryTrace(options.telegramTrace, {
+					stage: "terminal_delivery_start",
+					sessionId: mode.sessionManager.getSessionId(),
+				});
+			}
+			const answer = await answers.accept(
+				text,
+				behavior,
+				options?.telegramTrace ? { telegramTrace: options.telegramTrace } : undefined,
+			);
 			if (answer !== undefined) return answer;
 			if (mode.session.isStreaming) {
 				if (behavior === "followUp") {
-					await mode.session.followUp(text);
+					await mode.session.followUp(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
 					return "queued";
 				}
-				await mode.session.steer(text);
+				await mode.session.steer(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
 				return "steered";
 			}
 			const submit = mode.onInputCallback;
 			if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
 			// A promise resolver accepts only one input. Reserve it synchronously before acknowledging.
 			mode.onInputCallback = undefined;
-			submit(mode.startPendingSubmission({ text }));
+			submit(mode.startPendingSubmission({ text, telegramTrace: options?.telegramTrace }));
 			return "started";
 		},
 		async abort() {

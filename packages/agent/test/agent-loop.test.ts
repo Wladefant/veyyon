@@ -241,6 +241,41 @@ describe("agentLoop with AgentMessage", () => {
 		expect(mock.calls[1].context.messages.map(m => m.role)).toEqual(["user"]);
 	});
 
+	it("escalates temperature and bounds retries when harmony leakage persists", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const leak = "Some prose. analysis to=functions.edit code 大发官网";
+		const mock = createMockModel({
+			provider: "openai-codex",
+			responses: [{ content: [leak] }, { content: [leak] }, { content: [leak] }],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			temperature: 0.7,
+		};
+
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, mock.stream);
+		let error: Error | undefined;
+		try {
+			for await (const _ of stream) {
+			}
+			await stream.result();
+		} catch (err) {
+			error = err as Error;
+		}
+
+		expect(error).toBeDefined();
+		expect(error?.message).toContain("GPT-5 Harmony leak persisted after 2 retries");
+		expect(mock.calls).toHaveLength(3);
+		expect(mock.calls[0].options?.temperature).toBe(0.7);
+		expect(mock.calls[1].options?.temperature).toBeCloseTo(0.75);
+		expect(mock.calls[2].options?.temperature).toBeCloseTo(0.75);
+	});
+
 	it("does not hard-abort a codex tool call whose argument legitimately carries the marker", async () => {
 		// A legit edit of a file (e.g. these harmony fixtures) whose content carries
 		// `to=functions.*` next to a channel word + non-Latin script. tool_arg is

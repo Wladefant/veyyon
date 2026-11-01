@@ -1,10 +1,59 @@
 #!/usr/bin/env bash
-# Run a step in a new session and reap its whole process group on every exit path.
+# Run a step in a new session and reap its process group on exit.
+# --cleanup finds groups with processes that keep OVH_PROCESS_OWNER.
+# A descendant that clears its environment after setsid is not covered.
 set -uo pipefail
 
 child_pid=
 cleaning=0
 
+make_owner() {
+  local workspace="${GITHUB_WORKSPACE:-$PWD}"
+  if [[ -n "${GITHUB_RUN_ID:-}" && -n "${GITHUB_RUN_ATTEMPT:-}" && -n "${GITHUB_JOB:-}" ]]; then
+    printf '%s|%s|%s|%s|%s' "$workspace" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" "${OVH_MATRIX_INDEX:-}"
+  else
+    printf '%s|local|%s' "$workspace" "$$"
+  fi
+}
+
+if [[ "${1:-}" == "--cleanup" ]]; then
+  if [[ -z "${GITHUB_WORKSPACE:-}" || -z "${GITHUB_RUN_ID:-}" || -z "${GITHUB_RUN_ATTEMPT:-}" || -z "${GITHUB_JOB:-}" ]]; then
+    echo '::error::Process cleanup requires GitHub workspace, run, attempt, and job identity' >&2
+    exit 2
+  fi
+  owner="$(make_owner)"
+  token="OVH_PROCESS_OWNER=$owner"
+  own_pgid="$(ps -o pgid= -p "$$" | tr -d '[:space:]')"
+  scan_matching_groups() {
+    local proc pid pgid
+    local -A seen=()
+    MATCHING_GROUPS=()
+    for proc in /proc/[0-9]*; do
+      [[ -r "$proc/environ" ]] || continue
+      grep -zFqx -- "$token" "$proc/environ" 2>/dev/null || continue
+      pid="${proc##*/}"
+      [[ "$pid" =~ ^[0-9]+$ ]] || continue
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+      [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 && "$pgid" != "$own_pgid" ]] || continue
+      [[ -n "${seen[$pgid]:-}" ]] && continue
+      seen[$pgid]=1
+      MATCHING_GROUPS+=("$pgid")
+    done
+  }
+  scan_matching_groups
+  for pgid in "${MATCHING_GROUPS[@]}"; do kill -TERM -- "-$pgid" 2>/dev/null || true; done
+  sleep 1
+  scan_matching_groups
+  for pgid in "${MATCHING_GROUPS[@]}"; do kill -KILL -- "-$pgid" 2>/dev/null || true; done
+  exit 0
+fi
+
+if (($# == 0)); then
+  echo 'usage: ovh-process-group.sh COMMAND [ARG...] | --cleanup' >&2
+  exit 2
+fi
+
+owner="$(make_owner)"
 cleanup() {
   trap '' INT TERM
   local i
@@ -47,13 +96,9 @@ trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 trap cleanup EXIT
 
-if (($# == 0)); then
-  echo 'usage: ovh-process-group.sh COMMAND [ARG...]' >&2
-  exit 2
-fi
 
 # Traps exist before the asynchronous setsid launch.
-setsid -- "$@" &
+setsid env "OVH_PROCESS_OWNER=$owner" timeout --kill-after=30s "${OVH_STEP_TIMEOUT:-12m}" "$@" &
 child_pid=$!
 wait "$child_pid"
 status=$?

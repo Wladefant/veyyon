@@ -6,6 +6,9 @@
 
 - ACP `session/load` finds a stored session by ID after a cwd change, restores its transcript cwd, and rejects a later load from a mismatched cwd ([Refs Wladefant/superboard#1999](https://github.com/Wladefant/superboard/issues/1999)).
 
+### Added
+
+- Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
