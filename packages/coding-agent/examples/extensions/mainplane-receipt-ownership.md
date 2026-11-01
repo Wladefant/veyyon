@@ -47,3 +47,20 @@ This is validation of synthetic, untrusted HTTP response objects, not
 proof of a real Go worker or multi-host authorization. The associated
 regression is in the existing `mainplane-go-background-jobs.test.ts`
 suite. Executed CI and native-host acceptance are separate gates.
+
+## Completed output UTF-8 identity
+
+For a completed receipt, matching `output_sha256` to the UTF-8 encoding
+of a projected `body` is meaningful only when that JavaScript string
+round-trips through UTF-8 **without replacement**. JSON can encode an
+unpaired UTF-16 surrogate as `"\\ud800"`; a permissive UTF-8 encoder
+replaces it with U+FFFD, potentially giving the same SHA-256 as a different,
+valid U+FFFD body. Refuse that non-round-trippable JSON text **before**
+treating the digest as evidence of the displayed output. Valid U+FFFD
+and supplementary Unicode remain accepted with their actual digest.
+
+This is an untrusted-JSON response integrity check, not proof that the
+worker executed a command or that the receipt is authorized. A digest match
+does not attest the underlying remote process, live host, native browser
+consent or deployment. Tests must exercise the exported read-only GET path
+with both non-round-trippable and canonical positive response variants.
