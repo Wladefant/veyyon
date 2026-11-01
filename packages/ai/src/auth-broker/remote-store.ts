@@ -327,7 +327,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
 		const previousCredentials = this.#snapshot.credentials;
-		const credentials = snapshot.credentials.map(entry => normalizeSnapshotEntryBlocks(entry, nowMs));
+		const previousById = new Map(previousCredentials.map(entry => [entry.id, entry]));
+		const credentials = snapshot.credentials.map(entry =>
+			this.#retainPendingCredentialBlocks(normalizeSnapshotEntryBlocks(entry, nowMs), previousById.get(entry.id)),
+		);
 		if (snapshotBlocksChanged(previousCredentials, credentials)) this.#invalidateUsageCache();
 		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
 		this.#snapshot = { ...snapshot, credentials };
@@ -347,6 +350,22 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * A broker restart may reset the numeric generation. Only the local applied-state
 	 * revision can prove whether an in-flight GET predates newer client state.
 	 */
+	/**
+	 * An incoming SSE/GET frame can describe broker state from before an in-flight
+	 * block POST completed. Keep that credential's speculative safety projection
+	 * while it is pending, but still accept its non-block fields. After all writes
+	 * settle, reconcile once against the canonical broker rather than trusting
+	 * either the old frame or a stale stream.
+	 */
+	#retainPendingCredentialBlocks(incoming: SnapshotEntry, previous: SnapshotEntry | undefined): SnapshotEntry {
+		if (!previous || !this.#pendingCredentialBlockMutations.has(incoming.id)) return incoming;
+		this.#credentialBlockReconciliationPending.add(incoming.id);
+		if (previous.blocks && previous.blocks.length > 0) return { ...incoming, blocks: previous.blocks.slice() };
+		const next: SnapshotEntry = { ...incoming };
+		delete next.blocks;
+		return next;
+	}
+
 	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, revisionAtRequest: number): boolean {
 		if (revisionAtRequest !== this.#appliedSnapshotRevision) {
 			logger.debug("auth-broker stale snapshot response ignored", {
@@ -491,8 +510,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		generation: number,
 		serverNowMs: number,
 	): void {
-		const incoming = normalizeSnapshotEntryBlocks(entry, Date.now());
-		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
+		const normalized = normalizeSnapshotEntryBlocks(entry, Date.now());
+		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === normalized.id);
+		const incoming = this.#retainPendingCredentialBlocks(
+			normalized,
+			index === -1 ? undefined : this.#snapshot.credentials[index],
+		);
 		const previousBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
 		const blocksChanged = !credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks);
 		if (blocksChanged) this.#invalidateUsageCache();
