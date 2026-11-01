@@ -24,7 +24,12 @@ import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { HistoryProtocolHandler } from "../history-protocol";
-import { resetRegisteredArtifactDirsForTests } from "../registry-helpers";
+import {
+	ambiguousSessionFileIds,
+	registerArtifactsDir,
+	resetRegisteredArtifactDirsForTests,
+	sessionFilesFromDisk,
+} from "../registry-helpers";
 
 afterEach(() => {
 	AgentRegistry.resetGlobalForTests();
@@ -44,6 +49,77 @@ function liveRoot(id: string, scope: string): void {
 }
 
 describe("history:// across conversations", () => {
+
+	/** A transcript filename is the public agent ID used for disk fallback. */
+	async function archive(root: string, folder: string, id: string, sessionId: string, message: string): Promise<string> {
+		const dir = path.join(root, folder);
+		await fs.mkdir(dir, { recursive: true });
+		const file = path.join(dir, id + ".jsonl");
+		await fs.writeFile(file, [
+			JSON.stringify({ type: "session", id: sessionId }),
+			JSON.stringify({ type: "message", id: "entry", parentId: null, message }),
+		].join("\n") + "\n");
+		return file;
+	}
+
+	it("refuses a case-insensitive disk-name collision rather than selecting either transcript", async () => {
+		const temp = TempDir.createSync("@veyyon-history-case-collision-");
+		try {
+			registerArtifactsDir(temp.path());
+			await archive(temp.path(), "a", "Reviewer", "session-a", "conversation A evidence");
+			await archive(temp.path(), "b", "reviewer", "session-b", "conversation B evidence");
+
+			const files = await sessionFilesFromDisk();
+			expect([...files.keys()].filter(id => id.toLowerCase() === "reviewer")).toEqual([]);
+			expect([...(await ambiguousSessionFileIds())].some(id => id.toLowerCase() === "reviewer")).toBe(true);
+			const handler = new HistoryProtocolHandler();
+			await expect(handler.resolve(new URL("history://Reviewer?entry=entry") as never))
+				.rejects.toThrow(/Ambiguous agent/i);
+			await expect(handler.resolve(new URL("history://reviewer?entry=entry") as never))
+				.rejects.toThrow(/Ambiguous agent/i);
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it("never readmits an ambiguous transcript after a third distinct discovery path", async () => {
+		const temp = TempDir.createSync("@veyyon-history-three-collisions-");
+		try {
+			registerArtifactsDir(temp.path());
+			await archive(temp.path(), "a", "Reviewer", "session-a", "first transcript");
+			await archive(temp.path(), "b", "Reviewer", "session-b", "second transcript");
+			await archive(temp.path(), "c", "Reviewer", "session-c", "third transcript");
+
+			expect((await sessionFilesFromDisk()).has("Reviewer")).toBe(false);
+			expect((await ambiguousSessionFileIds()).has("Reviewer")).toBe(true);
+			await expect(new HistoryProtocolHandler().resolve(new URL("history://Reviewer?entry=entry") as never))
+				.rejects.toThrow(/Ambiguous agent: Reviewer/);
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it("retains unique case-insensitive lookup despite overlapping artifact roots", async () => {
+		const temp = TempDir.createSync("@veyyon-history-unique-discovery-");
+		try {
+			const file = await archive(temp.path(), "one", "Reviewer", "session-unique", "original unique transcript");
+			registerArtifactsDir(temp.path());
+			registerArtifactsDir(path.join(temp.path(), "one"));
+			expect((await sessionFilesFromDisk()).get("Reviewer")).toBe(file);
+			expect((await ambiguousSessionFileIds()).size).toBe(0);
+
+			const resource = await new HistoryProtocolHandler().resolve(
+				new URL("history://reviewer?entry=entry&limit=1000") as never,
+			);
+			const result = JSON.parse(resource.content) as { status: string; sessionId: string; fragment: string };
+			expect(result.status).toBe("ok");
+			expect(result.sessionId).toBe("session-unique");
+			expect(result.fragment).toContain("original unique transcript");
+		} finally {
+			await temp.remove();
+		}
+	});
+
 	/** The leak: naming another conversation's agent handed over its whole transcript. */
 	it("refuses a lookup while more than one conversation is live", async () => {
 		liveRoot("acp:a", "session-a");
