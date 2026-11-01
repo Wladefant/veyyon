@@ -560,13 +560,15 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
  * file whose name ends in a colon and a line range. `splitPathAndSel` uses the
  * strict grammar, so a colon that is part of a real filename survives.
  */
-function toAcpLocationPath(value: string, cwd?: string): string {
+function toAcpLocationPath(value: string, cwd?: string): string | undefined {
 	const { path: bare } = splitPathAndSel(value);
 	if (!cwd) return bare;
 	try {
 		return resolveToCwd(bare, cwd);
 	} catch {
-		return bare;
+		// A failed filesystem-path validation must not become an editor
+		// navigation target. Raw tool arguments remain available separately.
+		return undefined;
 	}
 }
 
@@ -576,7 +578,7 @@ function extractToolLocations(args: unknown, cwd?: string): ToolCallLocation[] {
 	const pushPath = (raw: string | undefined) => {
 		if (!raw) return;
 		const path = toAcpLocationPath(raw, cwd);
-		if (seen.has(path)) return;
+		if (!path || seen.has(path)) return;
 		seen.add(path);
 		locations.push({ path });
 	};
@@ -604,7 +606,7 @@ function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCall
 		const raw = extractStringProperty<PathContainer>(entry, "path");
 		if (!raw) continue;
 		const path = toAcpLocationPath(raw, cwd);
-		if (seen.has(path)) continue;
+		if (!path || seen.has(path)) continue;
 		seen.add(path);
 		locations.push({ path });
 	}
