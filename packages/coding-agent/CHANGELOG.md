@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP client-terminal Bash commands ending in a line-continuation backslash retain the stdin-guard shell group's closing brace ([#565](https://github.com/Wladefant/veyyon/issues/565)).
+
 ## [1.7.2] - 2026-11-01
 
 ### Added
