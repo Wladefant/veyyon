@@ -514,6 +514,28 @@ export class HttpTransport implements MCPTransport {
 		) {
 			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid protocol or request identity");
 		}
+		// Response envelopes need exactly one success/error branch. Otherwise
+		// a matching-id HTTP 200 can appear to succeed with an undefined result.
+		const envelope = raw as Record<string, unknown>;
+		const hasResult = Object.hasOwn(envelope, "result");
+		const hasError = Object.hasOwn(envelope, "error");
+		if (hasResult === hasError) {
+			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid result/error shape");
+		}
+		if (hasError) {
+			const peerError = envelope.error;
+			if (
+				!peerError ||
+				typeof peerError !== "object" ||
+				Array.isArray(peerError) ||
+				!("code" in peerError) ||
+				!Number.isSafeInteger(peerError.code) ||
+				!("message" in peerError) ||
+				typeof peerError.message !== "string"
+			) {
+				throw new Error("MCP HTTP server returned a JSON-RPC response with invalid error shape");
+			}
+		}
 		const result = raw as JsonRpcResponse;
 		if (result.error) {
 			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
