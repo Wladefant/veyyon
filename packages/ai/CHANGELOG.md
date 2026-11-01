@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Remote auth-broker reconciles failed block scopes after overlapping broker writes settle without clearing another pending scope ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker obsolete failed block mutations cannot reconcile away a newer same-credential pending block ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 - Remote auth-broker snapshot readers discard delayed older generations after newer local updates so revoked credentials are not reintroduced ([#602](https://github.com/Wladefant/veyyon/issues/602)).
