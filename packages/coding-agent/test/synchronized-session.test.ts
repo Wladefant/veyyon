@@ -459,8 +459,8 @@ test("lost admission never renews and close drains the periodic renewal before r
 	}
 });
 
-// WHY: after successful transfer finalization, close retains the previously
-// persisted resume capability and advances its epoch on authority release.
+// WHY: a malformed release acknowledgment must not become a persisted resume
+// epoch even when the remote server returned HTTP 200.
 test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoch", async () => {
 	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
 	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
@@ -549,9 +549,11 @@ test("invalid periodic HTTP-200 lease renewals fence further admission and stop 
 			undefined,
 			5,
 		);
-		const deadline = setTimeout(() => secondRenew.reject(new Error("Periodic renewal was never issued")), 500);
+		let deadline: ReturnType<typeof setTimeout> | undefined;
 		try {
+			// Time only the periodic tick, not unrelated initial admission or CI setup.
 			await session.admit();
+			deadline = setTimeout(() => secondRenew.reject(new Error("Periodic renewal was never issued")), 3000);
 			await secondRenew.promise;
 			// The second fake response has entered the normal renewal callback.
 			await new Promise(resolve => setTimeout(resolve, 30));
@@ -566,6 +568,8 @@ test("invalid periodic HTTP-200 lease renewals fence further admission and stop 
 	}
 });
 
+// WHY: after successful transfer finalization, close retains the previously
+// persisted resume capability and advances its epoch on authority release.
 test("successful transfer retains its persisted resume capability on release", async () => {
 	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
 	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
