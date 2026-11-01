@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { createHmac } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { MCPManager } from "../src/mcp/manager";
 import type { MCPEventOccurrence, MCPServerConfig, MCPServerEventSubscriptionConfig } from "../src/mcp/types";
 
@@ -1217,7 +1218,7 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setOnEvent(() => {});
 			// Confirm that the original key-based delete has not yet completed.
 			// A second subscribe must only run once that delete is acknowledged.
-			await new Promise<void>(resolve => setTimeout(resolve, 30));
+			await delay(30);
 			expect(server.requests.filter(request => request.method === "events/subscribe")).toHaveLength(1);
 			releaseUnsubscribe.resolve();
 			await withinHandlerChange(secondSubscription.promise, "webhook enrollment after unsubscribe");
