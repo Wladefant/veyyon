@@ -939,6 +939,8 @@ export class MCPManager {
 			});
 			return;
 		}
+		const isCurrent = () =>
+			!subscription.controller.signal.aborted && this.#activeEvents.get(key) === subscription;
 		let streamId: string | number | undefined;
 		subscription.streamProcessing = Promise.resolve();
 		subscription.streamFailed = false;
@@ -961,7 +963,7 @@ export class MCPManager {
 				if (!notification.method.startsWith("notifications/events/")) return;
 				this.#armStreamHeartbeat(subscription);
 				subscription.streamProcessing = subscription.streamProcessing!.then(async () => {
-					if (subscription.streamFailed || subscription.controller.signal.aborted) return;
+					if (subscription.streamFailed || !isCurrent()) return;
 					if (!value) throw new Error("MCP event stream frame has no params");
 					const rawCursor = value.cursor;
 					if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
@@ -978,7 +980,7 @@ export class MCPManager {
 								path: `mcp:${serverName}`,
 								event: value.name,
 							});
-							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+							if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 							return;
 						}
 						await this.#deliverEvent(serverName, key, subscription, value, cursor);
@@ -993,14 +995,14 @@ export class MCPManager {
 								...(cursor !== undefined ? { cursor } : {}),
 							});
 						}
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 					} else if (notification.method === "notifications/events/gap") {
 						await this.#recordEventControl(serverName, key, {
 							type: "gap",
 							messageId: controlMessageId,
 							...(cursor !== undefined ? { cursor } : {}),
 						});
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 					} else if (notification.method === "notifications/events/error") {
 						const error = value.error as { code?: unknown } | undefined;
 						logger.warn("MCP event stream reported a transient error", {

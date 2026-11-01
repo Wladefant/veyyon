@@ -6,9 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { MCPManager } from "../src/mcp/manager";
 import type { MCPEventOccurrence } from "../src/mcp/types";
 
-// WHY: an in-flight push event can outlive stream cancellation. The manager
-// must drain its acceptance before returning from stop, without acknowledging
-// a cursor from a subscription that is no longer active.
+// WHY: an in-flight push event or gap can outlive stream cancellation. Neither
+// global stop nor a single-server disconnect may return before its acceptance
+// settles, or persist a cursor from the stopped subscription.
 const WAIT_LIMIT_MS = 5_000;
 async function within<T>(operation: Promise<T>, phase: string): Promise<T> {
 	const deadline = Promise.withResolvers<never>();
@@ -20,126 +20,155 @@ async function within<T>(operation: Promise<T>, phase: string): Promise<T> {
 	}
 }
 
-it("drains in-flight push acceptance on stop without committing its cursor", async () => {
-	const eventName = "orders/changed";
-	const firstStarted = Promise.withResolvers<void>();
-	const releaseFirst = Promise.withResolvers<void>();
-	const streamOpened = Promise.withResolvers<{
-		id: string | number;
-		response: ServerResponse;
-	}>();
-	const streamClosed = Promise.withResolvers<void>();
-	const delivered: string[] = [];
-	const committedCursors: Array<string | null> = [];
-	const serverErrors: unknown[] = [];
+const scenarios = [
+	{ frame: "event", stop: "all" },
+	{ frame: "event", stop: "server" },
+	{ frame: "gap", stop: "all" },
+	{ frame: "truncated-active", stop: "all" },
+] as const;
 
-	async function respond(request: IncomingMessage, response: ServerResponse): Promise<void> {
-		if (request.method !== "POST") {
-			response.writeHead(405).end();
-			return;
-		}
-		const message = JSON.parse(await text(request)) as { id?: string | number; method?: string };
-		if (message.id === undefined) {
-			response.writeHead(202).end();
-			return;
-		}
-		let result: Record<string, unknown>;
-		switch (message.method) {
-			case "initialize":
-				result = {
-					protocolVersion: "2025-03-26",
-					capabilities: { tools: {}, events: { listChanged: true } },
-					serverInfo: { name: "push-stop-drain", version: "1.0.0" },
-				};
-				break;
-			case "tools/list":
-				result = { tools: [] };
-				break;
-			case "events/list":
-				result = {
-					events: [{ name: eventName, inputSchema: { type: "object" }, delivery: ["push"] }],
-				};
-				break;
-			case "events/stream": {
-				response.writeHead(200, { "content-type": "text/event-stream" });
-				response.write(": ready\n\n");
-				response.once("close", () => { streamClosed.resolve(); });
-				streamOpened.resolve({ id: message.id, response });
+for (const scenario of scenarios) {
+	it("drains in-flight push " + scenario.frame + " on " + scenario.stop + " stop without saving cursor", async () => {
+		const eventName = "orders/changed";
+		const acceptanceStarted = Promise.withResolvers<void>();
+		const releaseAcceptance = Promise.withResolvers<void>();
+		const streamOpened = Promise.withResolvers<{
+			id: string | number;
+			response: ServerResponse;
+		}>();
+		const streamClosed = Promise.withResolvers<void>();
+		const delivered: string[] = [];
+		const acceptedControls: string[] = [];
+		const committedCursors: Array<string | null> = [];
+		const serverErrors: unknown[] = [];
+
+		async function respond(request: IncomingMessage, response: ServerResponse): Promise<void> {
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
 				return;
 			}
-			default:
-				response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
-					jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Unsupported synthetic method" },
-				}));
+			const message = JSON.parse(await text(request)) as { id?: string | number; method?: string };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
 				return;
+			}
+			let result: Record<string, unknown>;
+			switch (message.method) {
+				case "initialize":
+					result = {
+						protocolVersion: "2025-03-26",
+						capabilities: { tools: {}, events: { listChanged: true } },
+						serverInfo: { name: "push-stop-drain", version: "1.0.0" },
+					};
+					break;
+				case "tools/list":
+					result = { tools: [] };
+					break;
+				case "events/list":
+					result = {
+						events: [{ name: eventName, inputSchema: { type: "object" }, delivery: ["push"] }],
+					};
+					break;
+				case "events/stream": {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.write(": ready\n\n");
+					response.once("close", () => { streamClosed.resolve(); });
+					streamOpened.resolve({ id: message.id, response });
+					return;
+				}
+				default:
+					response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+						jsonrpc: "2.0", id: message.id,
+						error: { code: -32601, message: "Unsupported synthetic method" },
+					}));
+					return;
+			}
+			response.writeHead(200, { "content-type": "application/json" })
+				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		}
-		response.writeHead(200, { "content-type": "application/json" })
-			.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-	}
-	const server = createServer((request, response) => {
-		void respond(request, response).catch(error => {
-			serverErrors.push(error);
-			if (!response.headersSent) response.writeHead(500).end();
-			else response.destroy();
+		const server = createServer((request, response) => {
+			void respond(request, response).catch(error => {
+				serverErrors.push(error);
+				if (!response.headersSent) response.writeHead(500).end();
+				else response.destroy();
+			});
 		});
-	});
-	const manager = new MCPManager(process.cwd());
-	manager.setOnEvent(async (_server: string, occurrence: MCPEventOccurrence) => {
-		firstStarted.resolve();
-		await releaseFirst.promise;
-		delivered.push(occurrence.eventId);
-		return "queued" as const;
-	});
-	manager.setOnEventCursor((_server, _key, cursor) => {
-		committedCursors.push(cursor);
-	});
-	try {
-		const listening = once(server, "listening");
-		server.listen(0, "127.0.0.1");
-		await within(listening, "synthetic server startup");
-		const address = server.address();
-		if (!address || typeof address === "string") throw new Error("Synthetic server has no TCP address");
-		await within(manager.connectServers({
-			"push-stop-server": {
-				type: "http",
-				url: "http://127.0.0.1:" + address.port + "/mcp",
-				events: { enabled: true, subscriptions: [{ name: eventName, mode: "push" }] },
-			},
-		}, {}), "MCP connection");
-		const { id, response } = await within(streamOpened.promise, "push stream");
-		const occurrence = {
-			eventId: "first", name: eventName, timestamp: "2026-11-01T12:00:00.000Z",
-			data: { orderId: "first" }, cursor: "after-first",
+		const manager = new MCPManager(process.cwd());
+		const pauseAcceptance = async (): Promise<void> => {
+			acceptanceStarted.resolve();
+			await releaseAcceptance.promise;
 		};
-		const message = {
-			jsonrpc: "2.0", method: "notifications/events/event",
-			params: { ...occurrence, _meta: { "io.modelcontextprotocol/subscriptionId": id } },
-		};
-		response.write("data: " + JSON.stringify(message) + "\n\n");
-		await within(firstStarted.promise, "in-flight push acceptance");
-		let stopped = false;
-		const stop = manager.stopEvents().then(() => { stopped = true; });
-		await within(streamClosed.promise, "push stream cancellation");
-		await delay(30);
-		expect(stopped).toBe(false);
-		releaseFirst.resolve();
-		await within(stop, "subscription stop");
-		expect(stopped).toBe(true);
-		expect(delivered).toEqual(["first"]);
-		expect(committedCursors).toEqual([]);
-		expect(manager.getActiveEventSubscriptionCount()).toBe(0);
-		expect(serverErrors).toEqual([]);
-	} finally {
-		releaseFirst.resolve();
+		manager.setOnEvent(async (_server: string, occurrence: MCPEventOccurrence) => {
+			await pauseAcceptance();
+			delivered.push(occurrence.eventId);
+			return "queued" as const;
+		});
+		manager.setOnEventControl(async (_server, _key, control) => {
+			if (control.type !== "gap") throw new Error("Unexpected synthetic control");
+			await pauseAcceptance();
+			acceptedControls.push(control.messageId);
+			return "queued" as const;
+		});
+		manager.setOnEventCursor((_server, _key, cursor) => {
+			committedCursors.push(cursor);
+		});
 		try {
-			await within(manager.disconnectAll(), "manager cleanup");
+			const listening = once(server, "listening");
+			server.listen(0, "127.0.0.1");
+			await within(listening, "synthetic server startup");
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("Synthetic server has no TCP address");
+			await within(manager.connectServers({
+				"push-stop-server": {
+					type: "http",
+					url: "http://127.0.0.1:" + address.port + "/mcp",
+					events: { enabled: true, subscriptions: [{ name: eventName, mode: "push" }] },
+				},
+			}, {}), "MCP connection");
+			const { id, response } = await within(streamOpened.promise, "push stream");
+			const occurrence = {
+				eventId: "first", name: eventName, timestamp: "2026-11-01T12:00:00.000Z",
+				data: { orderId: "first" }, cursor: "after-first",
+			};
+			const method = scenario.frame === "event"
+				? "notifications/events/event"
+				: scenario.frame === "gap" ? "notifications/events/gap" : "notifications/events/active";
+			const payload = scenario.frame === "event"
+				? occurrence
+				: scenario.frame === "gap" ? { cursor: "after-first" } : { cursor: "after-first", truncated: true };
+			const message = {
+				jsonrpc: "2.0", method,
+				params: { ...payload, _meta: { "io.modelcontextprotocol/subscriptionId": id } },
+			};
+			response.write("data: " + JSON.stringify(message) + "\n\n");
+			await within(acceptanceStarted.promise, "in-flight push acceptance");
+			let stopped = false;
+			const stop = (
+				scenario.stop === "server" ? manager.disconnectServer("push-stop-server") : manager.stopEvents()
+			).then(() => { stopped = true; });
+			await within(streamClosed.promise, "push stream cancellation");
+			await delay(30);
+			expect(stopped).toBe(false);
+			releaseAcceptance.resolve();
+			await within(stop, "subscription stop");
+			expect(stopped).toBe(true);
+			expect(delivered).toEqual(scenario.frame === "event" ? ["first"] : []);
+			expect(acceptedControls).toHaveLength(scenario.frame === "event" ? 0 : 1);
+			expect(committedCursors).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			expect(serverErrors).toEqual([]);
 		} finally {
-			if (server.listening) {
-				const closed = once(server, "close");
-				server.close();
-				server.closeAllConnections();
-				await within(closed, "synthetic server cleanup");
+			releaseAcceptance.resolve();
+			try {
+				await within(manager.disconnectAll(), "manager cleanup");
+			} finally {
+				if (server.listening) {
+					const closed = once(server, "close");
+					server.close();
+					server.closeAllConnections();
+					await within(closed, "synthetic server cleanup");
+				}
 			}
 		}
-	}
-}, 20_000);
+	}, 20_000);
+}
