@@ -575,19 +575,30 @@ export class HttpTransport implements MCPTransport {
 				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body!, signal)) {
 					const messages = Array.isArray(raw) ? raw : [raw];
 					for (const message of messages) {
-						if (
-							!captured &&
-							"id" in message &&
+						// Server-to-client requests can have their own ids. Only a
+						// matching response-shaped frame claims this tool's result.
+						const correlated =
+							isRecord(message) &&
 							message.id === expectedId &&
-							("result" in message || "error" in message)
-						) {
+							(!("method" in message) || "result" in message || "error" in message);
+						if (!captured && correlated) {
 							captured = true;
 							operation.clear();
-							if (message.error) {
+							// SSE and JSON responses must satisfy the same JSON-RPC 2.0
+							// union/id boundary before a tool result is accepted.
+							if (!isStreamMessage(message) || "method" in message) {
+								reject(new Error("MCP HTTP SSE response has invalid JSON-RPC envelope"));
+								continue;
+							}
+							if ("error" in message) {
 								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
 							} else {
 								resolve(message.result as T);
 							}
+							continue;
+						}
+						if (!isStreamMessage(message)) {
+							logger.warn("Skipping invalid MCP HTTP SSE stream frame");
 							continue;
 						}
 						if (!this.#connected) continue;
