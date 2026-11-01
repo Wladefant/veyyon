@@ -197,7 +197,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "tool_execution_end": {
 			const resultContent = [
-				...extractDiffToolCallContent(event.result),
+				...extractDiffToolCallContent(event.result, options.cwd),
 				...extractToolCallContent(event.result, options),
 			];
 			const content = mergeToolUpdateContent(
@@ -614,7 +614,7 @@ function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCall
 }
 
 /** Emit a `diff` ToolCallContent for each per-file edit result that carries oldText/newText. */
-function extractDiffToolCallContent(result: unknown): ToolCallContent[] {
+function extractDiffToolCallContent(result: unknown, cwd?: string): ToolCallContent[] {
 	if (typeof result !== "object" || result === null) return [];
 	const details = (result as { details?: unknown }).details;
 	if (typeof details !== "object" || details === null) return [];
@@ -622,17 +622,22 @@ function extractDiffToolCallContent(result: unknown): ToolCallContent[] {
 	const perFile = (details as { perFileResults?: unknown }).perFileResults;
 	const entries: unknown[] = Array.isArray(perFile) ? perFile : [details];
 	for (const entry of entries) {
-		const block = buildDiffContent(entry);
+		const block = buildDiffContent(entry, cwd);
 		if (block) blocks.push(block);
 	}
 	return blocks;
 }
 
-function buildDiffContent(entry: unknown): ToolCallContent | undefined {
+function buildDiffContent(entry: unknown, cwd?: string): ToolCallContent | undefined {
 	if (typeof entry !== "object" || entry === null) return undefined;
 	const candidate = entry as { path?: unknown; oldText?: unknown; newText?: unknown; isError?: unknown };
 	if (candidate.isError === true) return undefined;
-	const path = typeof candidate.path === "string" && candidate.path.length > 0 ? candidate.path : undefined;
+	const rawPath = typeof candidate.path === "string" && candidate.path.length > 0 ? candidate.path : undefined;
+	if (!rawPath) return undefined;
+	// Diff.path is an editor navigation target. With a session cwd it must
+	// use the same validation and absolute-path contract as locations[].
+	// No-cwd legacy callers retain their original relative path bytes.
+	const path = cwd ? toAcpLocationPath(rawPath, cwd) : rawPath;
 	if (!path) return undefined;
 	const oldText = typeof candidate.oldText === "string" ? candidate.oldText : undefined;
 	const newText = typeof candidate.newText === "string" ? candidate.newText : undefined;
