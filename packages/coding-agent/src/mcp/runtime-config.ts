@@ -16,7 +16,10 @@ export const MAX_RUNTIME_MCP_CONFIG_BYTES = 1_048_576;
 /** Read only the operator-supplied file; no profile discovery or persistence. */
 export async function loadRuntimeMCPConfig(file: string): Promise<RuntimeMCPConfig> {
 	if (!path.isAbsolute(file)) throw new Error("--mcp-config requires an absolute path");
-	const handle = await fs.open(file, "r");
+	// A FIFO can block inside open before the descriptor check can reject it.
+	// Keep that check on the same handle, and leave Windows open flags unchanged.
+	const flags = process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+	const handle = await fs.open(file, flags);
 	let content: string;
 	try {
 		const stat = await handle.stat();
