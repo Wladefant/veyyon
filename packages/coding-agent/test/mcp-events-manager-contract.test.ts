@@ -1726,6 +1726,119 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: an obsolete event callback can still run after a newer consumer is
+	// installed. It must not overwrite the newer handler for durable gap and
+	// termination controls. A poll with truncated=true exercises that real path.
+	it("does not let an obsolete event callback replace the current gap-control handler", async () => {
+		const serverName = "stale-control-writer";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const obsoleteSetterReturned = Promise.withResolvers<void>();
+		const successorControlReceived = Promise.withResolvers<void>();
+		let staleControls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("control-original", "control-original-cursor")],
+				cursor: "control-page-cursor",
+				truncated: true,
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "control-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEventControl(() => { staleControls++; });
+			obsoleteSetterReturned.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale control loopback connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete event callback entered");
+			manager.setOnEvent(() => {});
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "control-page-cursor") {
+					successorControlReceived.resolve();
+				}
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(obsoleteSetterReturned.promise, "obsolete control setter returned");
+			await withinHandlerChange(successorControlReceived.promise, "new consumer gap control");
+			expect(staleControls).toBe(0);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale control manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a stale callback must not replace a newer consumer's resume cursor
+	// provider. A later re-enrollment must use the cursor that the new owner
+	// supplied, not restart from the obsolete callback's saved position.
+	it("does not let an obsolete event callback replace the current resume cursor provider", async () => {
+		const serverName = "stale-resume-cursor-provider";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const obsoleteSetterReturned = Promise.withResolvers<void>();
+		const successorPollStarted = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("provider-original", "provider-original-event")],
+					cursor: "provider-original-page", hasMore: false, nextPollMs: 30_000,
+				};
+				successorPollStarted.resolve();
+				return { events: [], cursor: "provider-new-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setEventCursorProvider(() => "initial-resume-cursor");
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "provider-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setEventCursorProvider(() => "obsolete-resume-cursor");
+			obsoleteSetterReturned.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale resume provider initial connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete resume provider callback entered");
+			manager.setOnEvent(() => {});
+			manager.setEventCursorProvider(() => "successor-resume-cursor");
+			releaseOld.resolve();
+			await withinHandlerChange(obsoleteSetterReturned.promise, "obsolete resume setter returned");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(successorPollStarted.promise, "new consumer poll after restart");
+			expect(requestedCursors).toEqual(["initial-resume-cursor", "successor-resume-cursor"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale resume cursor manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
