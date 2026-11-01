@@ -990,14 +990,29 @@ export class BashTool
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const wallTimeStart = performance.now();
 			const shellSpawn = wrapShellLineForClientTerminal(call.command, this.session.settings.getShellConfig());
-			const handle = await clientBridge.createTerminal({
-				command: shellSpawn.command,
-				args: shellSpawn.args,
-				cwd: call.commandCwd,
-				env: Object.entries(buildNonInteractiveEnv(call.resolvedEnv)).map(([name, value]) => ({ name, value })),
-				outputByteLimit: DEFAULT_MAX_BYTES,
-			});
-			return this.#runOnClientTerminal(call, handle, wallTimeStart, signal, onUpdate);
+			const handle = await createClientTerminalWhileActive(
+				() =>
+					clientBridge.createTerminal!({
+						command: shellSpawn.command,
+						args: shellSpawn.args,
+						cwd: call.commandCwd,
+						env: Object.entries(buildNonInteractiveEnv(call.resolvedEnv)).map(([name, value]) => ({
+							name,
+							value,
+						})),
+						outputByteLimit: DEFAULT_MAX_BYTES,
+					}),
+				signal,
+				call.timeoutMs,
+				call.timeoutSec,
+			);
+			// The command deadline spans the remote terminal/create phase as well
+			// as its execution; a slow create cannot reset the full budget.
+			const remainingMs =
+				call.timeoutMs !== undefined && call.timeoutMs > 0
+					? Math.max(1, call.timeoutMs - (performance.now() - wallTimeStart))
+					: call.timeoutMs;
+			return this.#runOnClientTerminal({ ...call, timeoutMs: remainingMs }, handle, wallTimeStart, signal, onUpdate);
 		}
 		return this.#runLocal(call, pty, signal, onUpdate, ctx);
 	}
@@ -1479,6 +1494,95 @@ async function watchStall(
  */
 function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
 	return resolveAutoBackgroundWaitMs(baseMs, timeoutMs);
+}
+
+/**
+ * Bind ACP terminal creation to the command's abort/deadline. The editor RPC
+ * has no cancellation handle, so a late result is killed and released rather
+ * than handed to an already cancelled tool. Local settlement is prompt even
+ * when the remote terminal/create reply never arrives.
+ *
+ * This does not promise to stop a remote command whose client never returns
+ * its terminal identity: only the client can make that guarantee.
+ */
+async function createClientTerminalWhileActive(
+	create: () => Promise<ClientBridgeTerminalHandle>,
+	signal: AbortSignal | undefined,
+	timeoutMs: number | undefined,
+	timeoutSec: number | undefined,
+): Promise<ClientBridgeTerminalHandle> {
+	if (signal?.aborted) throw new ToolAbortError("Command aborted");
+	let abandoned = false;
+	let handedOff = false;
+	let createdHandle: ClientBridgeTerminalHandle | undefined;
+	let cleanupStarted = false;
+	const cleanupLate = (handle: ClientBridgeTerminalHandle): void => {
+		if (cleanupStarted) return;
+		cleanupStarted = true;
+		// The caller has already settled on abort/deadline. Observe every
+		// asynchronous cleanup failure without withholding its cancellation.
+		void (async () => {
+			try {
+				await handle.kill();
+			} catch {
+				logger.warn("ACP late terminal kill failed after command cancellation");
+			}
+			try {
+				await handle.release();
+			} catch {
+				logger.warn("ACP late terminal release failed after command cancellation");
+			}
+		})();
+	};
+	const interrupted = Promise.withResolvers<never>();
+	const onAbort = (): void => {
+		if (abandoned) return;
+		abandoned = true;
+		interrupted.reject(new ToolAbortError("Command aborted"));
+		if (createdHandle && !handedOff) cleanupLate(createdHandle);
+	};
+	signal?.addEventListener("abort", onAbort, { once: true });
+	const timer =
+		timeoutMs !== undefined && timeoutMs > 0
+			? setTimeout(() => {
+					if (abandoned) return;
+					abandoned = true;
+					const message =
+						timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
+					interrupted.reject(new ToolError(message));
+					if (createdHandle && !handedOff) cleanupLate(createdHandle);
+				}, timeoutMs)
+			: undefined;
+	const pending = Promise.resolve().then(() => {
+		// If a synchronous abort occurred after adding the listener, do not
+		// start a remote command merely because creation was queued.
+		if (abandoned || signal?.aborted) throw new ToolAbortError("Command aborted");
+		return create();
+	});
+	const guarded = pending.then(handle => {
+		createdHandle = handle;
+		if (abandoned || signal?.aborted) {
+			cleanupLate(handle);
+			throw new ToolAbortError("Command aborted");
+		}
+		return handle;
+	});
+	// When abort wins the race, the remote RPC can still resolve/reject later.
+	// Its observation and cleanup must outlive the returned tool promise.
+	void guarded.catch(() => undefined);
+	try {
+		if (signal?.aborted) onAbort();
+		const handle = await Promise.race([guarded, interrupted.promise]);
+		if (abandoned || signal?.aborted) {
+			cleanupLate(handle);
+			throw new ToolAbortError("Command aborted");
+		}
+		handedOff = true;
+		return handle;
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+	}
 }
 
 /**
