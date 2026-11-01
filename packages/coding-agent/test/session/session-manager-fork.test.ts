@@ -201,6 +201,61 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("keeps an explicit foreign-session artifact reference unchanged without requiring local files", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-artifact-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const sourceId = manager.getSessionId();
+      const foreignId = "different-execution-session";
+      expect(sourceId).not.toBe(foreignId);
+      const foreignLink = `artifact://0?view=metadata&session=${foreignId}`;
+      const message = `Inspect the original evidence: ${foreignLink}`;
+      manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persistent source file");
+      const sourceText = await fs.readFile(sourceFile, "utf8");
+
+      const result = await manager.fork();
+      if (!result) throw new Error("expected persistent fork");
+      expect(result.oldSessionFile).toBe(sourceFile);
+      expect(manager.getSessionFile()).toBe(result.newSessionFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceText);
+      expect(manager.getEntries().some(entry =>
+        entry.type === "message" && entry.message.role === "user" && entry.message.content === message
+      )).toBe(true);
+      // The foreign reference is explicitly pinned to another session, even if
+      // this otherwise empty fork allocates a local artifact with the same ID.
+      expect(await manager.saveArtifact("new local evidence", "bash")).toBe("0");
+      expect(manager.getEntries().some(entry =>
+        entry.type === "message" && entry.message.role === "user" && entry.message.content === message
+      )).toBe(true);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("refuses a missing artifact explicitly scoped to the source session before switching", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-current-artifact-missing-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const sourceId = manager.getSessionId();
+      const localLink = `artifact://0?session=${sourceId}`;
+      manager.appendMessage({ role: "user", content: `Retain ${localLink}`, timestamp: Date.now() });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persistent source file");
+      const sourceText = await fs.readFile(sourceFile, "utf8");
+
+      await expect(manager.fork()).rejects.toThrow(/referenced artifacts unavailable/i);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceText);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("preserves the permitted no-artifacts fork when no recovery references exist", async () => {
     using temp = TempDir.createSync("@veyyon-fork-empty-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
