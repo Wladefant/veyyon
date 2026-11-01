@@ -259,6 +259,34 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 		}
 	});
 
+
+	it("refuses a pinned forkFrom destination equal to the source without rewriting history", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-same-path-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		try {
+			source.appendMessage({
+				role: "user", content: "Original transcript must never be replaced", timestamp: Date.now(),
+			});
+			await source.flush();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("expected persistent source");
+			const originalBytes = await fs.readFile(sourceFile, "utf8");
+			const filesBefore = (await fs.readdir(sessions)).sort();
+
+			await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+				suppressBreadcrumb: true,
+				sessionFile: sourceFile,
+			})).rejects.toThrow(/destination must differ from source/i);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(originalBytes);
+			expect((await fs.readdir(sessions)).sort()).toEqual(filesBefore);
+			expect(source.getSessionFile()).toBe(sourceFile);
+		} finally {
+			await source.close();
+		}
+	});
+
 });
 
 describe("SessionManager.fork preserves inherited artifact evidence", () => {
