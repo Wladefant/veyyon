@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `SessionManager.fork()` copies and checks inherited artifacts before publishing a new session, refusing missing or nonregular recovery evidence without switching the original session ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.6.0] - 2026-10-28
 
 ### Added
