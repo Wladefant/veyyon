@@ -419,6 +419,9 @@ export class MCPManager {
 	// Key-based webhook unsubscribe blocks only that canonical subscription,
 	// not independent poll/push feeds or unrelated webhook callbacks.
 	#eventConsumerStopBarriers = new Map<string, Promise<void>>();
+	// While disconnectServer drains an old callback, do not re-enroll on the
+	// connection still awaiting closure. Other servers may keep delivering.
+	#eventServerDisconnects = new Map<string, Promise<void>>();
 	// Callback function equality is insufficient across clear/re-enable cycles.
 	#eventConsumerRevision = 0;
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
@@ -647,7 +650,12 @@ export class MCPManager {
 		config: MCPServerConfig["events"],
 	): Promise<void> {
 		const consumerRevision = this.#eventConsumerRevision;
-		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		if (
+			this.#eventServerDisconnects.has(serverName) ||
+			!this.#onEvent ||
+			!isMCPEventsEnabled(config) ||
+			!connection.capabilities.events
+		) return;
 		const eventsConfig = config;
 		this.#eventStartupControllers.get(serverName)?.abort();
 		const controller = new AbortController();
@@ -667,6 +675,7 @@ export class MCPManager {
 			}
 			if (
 				controller.signal.aborted ||
+				this.#eventServerDisconnects.has(serverName) ||
 				consumerRevision !== this.#eventConsumerRevision ||
 				!this.#onEvent ||
 				this.#connections.get(serverName) !== connection
@@ -682,6 +691,7 @@ export class MCPManager {
 				if (stopBarrier) await stopBarrier;
 				if (
 					controller.signal.aborted ||
+					this.#eventServerDisconnects.has(serverName) ||
 					consumerRevision !== this.#eventConsumerRevision ||
 					!this.#onEvent ||
 					this.#connections.get(serverName) !== connection
@@ -1867,6 +1877,21 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
+		const existing = this.#eventServerDisconnects.get(name);
+		if (existing) {
+			await existing;
+			return;
+		}
+		const disconnect = this.#disconnectServerOnce(name);
+		this.#eventServerDisconnects.set(name, disconnect);
+		try {
+			await disconnect;
+		} finally {
+			if (this.#eventServerDisconnects.get(name) === disconnect) this.#eventServerDisconnects.delete(name);
+		}
+	}
+
+	async #disconnectServerOnce(name: string): Promise<void> {
 		await this.#stopServerEvents(name);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
