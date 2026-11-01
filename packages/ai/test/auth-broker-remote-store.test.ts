@@ -1111,6 +1111,83 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("keeps a pending scope blocked across an overlapping confirmed delete-all", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected long-poll with stalled SSE");
+			fullReads += 1;
+			return realFetch(opts);
+		});
+		const realUpsert = client.upsertCredentialBlock.bind(client);
+		const releaseUpsert = Promise.withResolvers<void>();
+		const upsertStarted = Promise.withResolvers<void>();
+		const upsertCommitted = Promise.withResolvers<void>();
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+			upsertStarted.resolve();
+			await releaseUpsert.promise;
+			const response = await realUpsert(credentialId, body);
+			upsertCommitted.resolve();
+			return response;
+		});
+		const realDelete = client.deleteCredentialBlocks.bind(client);
+		const deleteCommitted = Promise.withResolvers<void>();
+		spyOn(client, "deleteCredentialBlocks").mockImplementation(async (credentialId, signal) => {
+			const response = await realDelete(credentialId, signal);
+			expect(response).toEqual({ ok: true });
+			deleteCommitted.resolve();
+			return response;
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		const blockedUntilMs = Date.now() + 120_000;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "scope-pending",
+			blockedUntilMs, updatedAtMs: Date.now(),
+		});
+		await upsertStarted.promise;
+		expect(remote.getCredentialBlock(id, "anthropic", "scope-pending")).toBe(blockedUntilMs);
+		try {
+			// The broker sees an empty block set during DELETE; the earlier POST
+			// is still held and will commit only after its deletion acknowledgment.
+			remote.deleteCredentialBlocks(id);
+			await deleteCommitted.promise;
+			await scheduler.wait(0);
+			expect(fullReads).toBe(0);
+			expect(remote.getCredentialBlock(id, "anthropic", "scope-pending")).toBe(blockedUntilMs);
+			releaseUpsert.resolve();
+			await upsertCommitted.promise;
+			const authoritative = await peer.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected final authoritative broker snapshot");
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "scope-pending", blockedUntilMs },
+			]);
+			// The local state must converge to the post-DELETE broker truth;
+			// successful delete-all cannot evict a later-committed block.
+			await waitUntil(() =>
+				fullReads >= 1 &&
+				remote!.getCredentialBlock(id, "anthropic", "scope-pending") === blockedUntilMs,
+			);
+			expect(remote.listCredentialBlocks([id])).toMatchObject([
+				{ credentialId: id, providerKey: "anthropic", blockScope: "scope-pending", blockedUntilMs },
+			]);
+		} finally {
+			releaseUpsert.resolve();
+		}
+	});
+
 	test("reconciles a committed broker block DELETE whose acknowledgment was lost while SSE stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
