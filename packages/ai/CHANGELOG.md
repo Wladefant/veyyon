@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Remote auth-broker conservatively combines broker-authoritative peer block scopes with locally pending restrictions, without losing either during incoming snapshots, then reconciles after write settlement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker reconciles failed block scopes after overlapping broker writes settle without clearing another pending scope ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker obsolete failed block mutations cannot reconcile away a newer same-credential pending block ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
+- Remote auth-broker snapshot readers discard delayed older generations after newer local updates so revoked credentials are not reintroduced ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement stop on a failed disable and retain any grants not confirmed disabled ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker credential blocks remain enforced until their deletion is broker-confirmed, without clearing newer concurrent block state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker failed credential-block mutations retry superseded snapshot reads before reporting stale credential-block state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker speculative credential blocks reconcile after refused or failed broker upserts even during an active snapshot stream ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker synchronous credential disable waits for broker confirmation and refuses unverifiable remote compare-and-disable attempts ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker awaited individual disable refuses late acknowledgments that would evict a newer accepted credential grant ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement refuse superseded disable acknowledgments before evicting a newer accepted same-ID grant or uploading a replacement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
