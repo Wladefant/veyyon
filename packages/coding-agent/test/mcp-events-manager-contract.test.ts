@@ -2289,6 +2289,7 @@ describe("MCPManager event subscription contracts", () => {
 		let originalA = 0;
 		let originalB = 0;
 		let stolen = 0;
+		const spuriousReconnects: string[] = [];
 		const aServer = fakeMcpServer({
 			delivery: "poll",
 			poll: () => {
@@ -2307,6 +2308,11 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const manager = new MCPManager(process.cwd());
 		manager.setOnEventCursor(() => {});
+		manager.addConnectionStatusListener(status => {
+			if (status.serverName === aName && status.type === "reconnecting") {
+				spuriousReconnects.push(status.type);
+			}
+		});
 		manager.setOnEvent(async (name, occurrence) => {
 			if (name === bName && occurrence.eventId === "independent-B") {
 				originalB++;
@@ -2345,9 +2351,14 @@ describe("MCPManager event subscription contracts", () => {
 			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
 			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
 
+			const oldTransport = manager.getConnection(aName)?.transport;
 			const reconnect = manager.reconnectServer(aName, { manual: true });
 			// Old A is fenced synchronously, before its held callback finishes.
 			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(0);
+			// A late close notification from the retired transport must not
+			// re-enter the automatic reconnect path or report a fake outage.
+			oldTransport?.onClose?.();
+			expect(spuriousReconnects).toEqual([]);
 			releaseFirst.resolve();
 			expect(await withinHandlerChange(reconnect, "manual A transport replacement")).not.toBeNull();
 			await withinHandlerChange(secondDelivered.promise, "A delivery after manual reconnect");
