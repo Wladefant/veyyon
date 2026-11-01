@@ -120,6 +120,29 @@ describe("history:// across conversations", () => {
 		}
 	});
 
+	it("finds a transcript below the recursion ceiling when its parent is also a registered root", async () => {
+		const temp = TempDir.createSync("@veyyon-history-overlap-depth-");
+		try {
+			// The broad root encounters `nestedRoot` at depth 8, while its file
+			// is one level deeper. The second registered root has its own budget.
+			const nestedRoot = path.join(temp.path(), "a", "b", "c", "d", "e", "f", "g", "h");
+			const file = await archive(nestedRoot, "child", "DeepReviewer", "session-deep", "deep archived evidence");
+			registerArtifactsDir(temp.path());
+			registerArtifactsDir(nestedRoot);
+
+			expect((await sessionFilesFromDisk()).get("DeepReviewer")).toBe(file);
+			expect((await ambiguousSessionFileIds()).size).toBe(0);
+			const resource = await new HistoryProtocolHandler().resolve(
+				new URL("history://deepreviewer?entry=entry&limit=1000") as never,
+			);
+			const result = JSON.parse(resource.content) as { status: string; sessionId: string; fragment: string };
+			expect(result.status).toBe("ok");
+			expect(result.sessionId).toBe("session-deep");
+			expect(result.fragment).toContain("deep archived evidence");
+		} finally {
+			await temp.remove();
+		}
+	});
 	/** The leak: naming another conversation's agent handed over its whole transcript. */
 	it("refuses a lookup while more than one conversation is live", async () => {
 		liveRoot("acp:a", "session-a");
