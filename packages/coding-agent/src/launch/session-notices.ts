@@ -81,6 +81,16 @@ function queueDir(root: string, sessionId: string): string {
 
 export const SESSION_NOTICE_CAPABILITY = "session-notices";
 
+/** Owner-file diagnostic metadata is not trusted terminal display text. */
+const OWNER_DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u206f\ufeff]/g;
+const BUILD_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+const CAPABILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Escape owner-file controls only for human-readable text; preserve raw cwd routing identity. */
+export function formatSessionNoticeOwnerDisplay(value: string): string {
+	return value.replace(OWNER_DISPLAY_CONTROLS, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 export interface SessionNoticeOwner {
 	sessionId: string;
 	/** Project is the cwd's leaf name; it is not an asserted git repository identity. */
@@ -126,16 +136,24 @@ export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId
 		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
 		const cwd = typeof owner.cwd === "string" && path.isAbsolute(owner.cwd) ? path.normalize(owner.cwd) : undefined;
 		const capabilities =
-			Array.isArray(owner.capabilities) && owner.capabilities.every(capability => typeof capability === "string")
+			Array.isArray(owner.capabilities) &&
+			owner.capabilities.every(capability => typeof capability === "string" && CAPABILITY_PATTERN.test(capability))
 				? owner.capabilities
+				: undefined;
+		const loadedVersion =
+			typeof owner.loadedVersion === "string"
+				? owner.loadedVersion.replace(OWNER_DISPLAY_CONTROLS, " ").slice(0, 128).trim()
+				: undefined;
+		const loadedBuildSha =
+			owner.loadedBuildSha === null ||
+			(typeof owner.loadedBuildSha === "string" && BUILD_SHA_PATTERN.test(owner.loadedBuildSha))
+				? owner.loadedBuildSha
 				: undefined;
 		owners.set(owner.sessionId, {
 			sessionId: owner.sessionId,
 			...(cwd ? { cwd, project: path.basename(cwd) } : {}),
-			...(typeof owner.loadedVersion === "string" ? { loadedVersion: owner.loadedVersion } : {}),
-			...(typeof owner.loadedBuildSha === "string" || owner.loadedBuildSha === null
-				? { loadedBuildSha: owner.loadedBuildSha }
-				: {}),
+			...(loadedVersion ? { loadedVersion } : {}),
+			...(loadedBuildSha !== undefined ? { loadedBuildSha } : {}),
 			...(capabilities ? { capabilities } : {}),
 		});
 	}
@@ -225,16 +243,18 @@ export function sendSessionNotice(args: {
 		const byProject = args.to.startsWith("project=");
 		const byCwd = args.to.startsWith("cwd=");
 		if (!byProject && !byCwd) return [args.to];
-		const query = args.to.slice(byProject ? "project=".length : "cwd=".length).trim();
+		// CWD is a raw filesystem identity: trimming could silently select a different session.
+		const rawQuery = args.to.slice(byProject ? "project=".length : "cwd=".length);
+		const query = byCwd ? rawQuery : rawQuery.trim();
 		const kind = byProject ? "project" : "cwd";
-		if (!query) throw new Error(`Session ${kind} selector must not be empty`);
+		if (!query.trim()) throw new Error(`Session ${kind} selector must not be empty`);
 		const normalizedCwd = byCwd ? path.normalize(query) : undefined;
 		const matches = [...owners.values()].filter(owner =>
 			byProject ? owner.project?.toLowerCase() === query.toLowerCase() : owner.cwd === normalizedCwd,
 		);
 		if (matches.length !== 1) {
 			const candidates = (matches.length ? matches : [...owners.values()]).map(
-				owner => `session:${owner.sessionId} (project ${owner.project ?? "unknown"}, cwd ${owner.cwd ?? "unknown"})`,
+				owner => `session:${owner.sessionId} (project ${formatSessionNoticeOwnerDisplay(owner.project ?? "unknown")}, cwd ${formatSessionNoticeOwnerDisplay(owner.cwd ?? "unknown")})`,
 			);
 			throw new Error(
 				`${matches.length ? "Ambiguous" : "Unknown"} session ${kind} ${JSON.stringify(query)}; ` +
