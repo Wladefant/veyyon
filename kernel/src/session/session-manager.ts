@@ -1977,9 +1977,11 @@ export class SessionManager {
 		for (const entry of retainedEntries) {
 			// Artifact IDs are per session. An explicit foreign-session reference
 			// must not be checked or copied from this session's artifact store.
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/(\d+)\b(?![-.~%:@+])(?:\?([^\s"'\\<>)\],;]+))?/g)) {
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/g)) {
 				const id = match[1];
-				if (!id) continue;
+				// The resolver requires the complete hostname to be numeric; a
+				// numeric prefix of malformed prose is not a recoverable artifact.
+				if (!id || !/^\d+$/.test(id)) continue;
 				const query = match[2];
 				if (query !== undefined) {
 					const sessions = new URLSearchParams(query).getAll("session");
