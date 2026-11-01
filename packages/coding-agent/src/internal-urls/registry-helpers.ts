@@ -98,6 +98,11 @@ export function artifactsDirsFromRegistry(): string[] {
  * the miss; {@link ambiguousSessionFileIds} names the ids that were dropped so a
  * caller can say "ambiguous" instead of "not found".
  *
+ * This must be a case-insensitive, permanent collision decision: history://
+ * accepts names with different letter case, and a third distinct path cannot
+ * make a previously ambiguous ID unique again. Observing an identical path
+ * twice through overlapping artifact roots is not a collision.
+ *
  * The proper fix is to key transcripts by conversation as well as agent id,
  * which would make the collision impossible rather than merely detected. Not
  * done here: it changes the on-disk layout and every existing reference.
