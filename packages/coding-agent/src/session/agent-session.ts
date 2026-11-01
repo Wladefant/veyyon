@@ -6491,24 +6491,8 @@ export class AgentSession {
 			return false;
 		}
 
-		// Copy artifacts directory if it exists
-		const oldArtifactDir = forkResult.oldSessionFile.slice(0, -6);
-		const newArtifactDir = forkResult.newSessionFile.slice(0, -6);
-
-		try {
-			const oldDirStat = await fs.promises.stat(oldArtifactDir);
-			if (oldDirStat.isDirectory()) {
-				await fs.promises.cp(oldArtifactDir, newArtifactDir, { recursive: true });
-			}
-		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("Failed to copy artifacts during fork", {
-					oldArtifactDir,
-					newArtifactDir,
-					error: errorMessage(err),
-				});
-			}
-		}
+		// SessionManager.fork already copied and checked inherited artifacts before
+		// switching the session; a best-effort copy here could hide missing evidence.
 
 		// Update agent session ID
 		this.#providerSessions.freshId = undefined;
