@@ -224,10 +224,10 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		if (liveConversationScopes().length > 1) return [];
 		const completions: UrlCompletion[] = [];
 		// A disk-only case alias resolves to the registered agent, not its own file.
-		const seenFolded = new Set<string>();
+		const registeredFolded = new Set<string>();
 		for (const ref of AgentRegistry.global().list()) {
 			if (ref.kind === "advisor") continue;
-			seenFolded.add(ref.id.toLowerCase());
+			registeredFolded.add(ref.id.toLowerCase());
 			completions.push({
 				value: ref.id,
 				description: `${ref.status} · ${ref.kind}${ref.parentId ? ` · parent ${ref.parentId}` : ""}`,
@@ -236,8 +236,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		const disk = await sessionFilesFromDisk();
 		for (const id of disk.keys()) {
 			const foldedId = id.toLowerCase();
-			if (seenFolded.has(foldedId)) continue;
-			seenFolded.add(foldedId);
+			// Only a registry-owned name shadows a disk row. Preserve disk-only
+			// names according to the disk scanner (including its ambiguity policy).
+			if (registeredFolded.has(foldedId)) continue;
 			completions.push({ value: id, description: "on disk" });
 		}
 		return completions;
