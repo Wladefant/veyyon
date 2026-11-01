@@ -1326,6 +1326,73 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it.each([
+		{ name: "without deltas", secondDelta: undefined },
+		{ name: "with a second-message delta", secondDelta: "second delta" },
+	])("keeps synchronous assistant messages distinct $name", async ({ secondDelta }) => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+
+		const firstMessage = makeAssistantMessage("first reply");
+		const secondMessage = makeAssistantMessage(secondDelta ?? "second reply");
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			for (const listener of session.listeners()) {
+				listener({ type: "message_start", message: firstMessage } as AgentSessionEvent);
+				listener({ type: "message_end", message: firstMessage } as AgentSessionEvent);
+				listener({ type: "message_start", message: secondMessage } as AgentSessionEvent);
+				if (secondDelta !== undefined) {
+					listener({
+						type: "message_update",
+						message: secondMessage,
+						assistantMessageEvent: { type: "text_delta", delta: secondDelta },
+					} as AgentSessionEvent);
+				}
+				listener({ type: "message_end", message: secondMessage } as AgentSessionEvent);
+			}
+			session.sessionManager.appendMessage(firstMessage);
+			session.sessionManager.appendMessage(secondMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "agent_end", messages: [firstMessage, secondMessage] } as AgentSessionEvent);
+			}
+			session.isStreaming = false;
+			return true;
+		};
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Say two replies" }],
+		});
+
+		const chunks = harness.updates.filter(
+			(
+				update,
+			): update is SessionNotification & {
+				update: Extract<SessionNotification["update"], { sessionUpdate: "agent_message_chunk" }>;
+			} => update.sessionId === created.sessionId && update.update.sessionUpdate === "agent_message_chunk",
+		);
+		expect(chunks.map(chunk => chunk.update.content)).toEqual(
+			secondDelta === undefined
+				? [
+						{ type: "text", text: "first reply" },
+						{ type: "text", text: "second reply" },
+					]
+				: [
+						{ type: "text", text: "first reply" },
+						{ type: "text", text: "second delta" },
+					],
+		);
+		expect(chunks.map(getChunkMessageId)).toHaveLength(2);
+		expect(new Set(chunks.map(getChunkMessageId)).size).toBe(2);
+		expectAcpNotifications(harness.updates);
+
+		harness.abortController.abort();
+		await setTimeout(0);
+	});
+
 	it("keeps the full T3 text in one message when message_start arrives after its first delta", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
