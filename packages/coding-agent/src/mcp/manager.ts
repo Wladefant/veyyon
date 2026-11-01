@@ -423,12 +423,12 @@ export class MCPManager {
 	#eventConsumerRevision = 0;
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
-	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean }>();
+	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean; consumerRevision: number }>();
 
 	// AsyncLocalStorage outlives the handler in detached timers/promises. Track
 	// the *actual* callback lifetime so later external stop still drains work.
 	async #withEventCallback<T>(handler: () => T | Promise<T>): Promise<T> {
-		const scope = { active: true };
+		const scope = { active: true, consumerRevision: this.#eventConsumerRevision };
 		return this.#eventCallbackContext.run(scope, async () => {
 			try {
 				return await handler();
@@ -492,7 +492,15 @@ export class MCPManager {
 				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
 			| undefined,
 	): void {
+		const callbackScope = this.#eventCallbackContext.getStore();
+		// A callback started under a previous consumer must not undo a newer
+		// external clear/replacement. In particular, its late re-enable would
+		// wait on the previous callback's drain and deadlock that same callback.
+		if (callbackScope?.active && callbackScope.consumerRevision !== this.#eventConsumerRevision) return;
 		this.#eventConsumerRevision++;
+		// A callback intentionally clearing and re-enabling its OWN handler is
+		// still a valid synchronous configuration sequence.
+		if (callbackScope?.active) callbackScope.consumerRevision = this.#eventConsumerRevision;
 		this.#onEvent = handler;
 		if (handler) {
 			for (const [serverName, connection] of this.#connections) {
