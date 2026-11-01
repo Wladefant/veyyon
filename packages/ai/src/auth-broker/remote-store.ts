@@ -583,7 +583,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const body = toCredentialBlockSnapshot(block);
 		void this.#client
 			.upsertCredentialBlock(block.credentialId, body)
-			.then(() => {
+			.then(response => {
+				if (!response.ok) {
+					throw new AIError.AuthBrokerError(`Broker refused credential block upsert id=${block.credentialId}`);
+				}
 				this.#maybeRefreshSnapshot("credential block");
 			})
 			.catch(error => {
@@ -592,6 +595,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					providerKey: block.providerKey,
 					blockScope: block.blockScope,
 					error: String(error),
+				});
+				// A failed POST emits no SSE update. Reconcile the speculative block
+				// even when streaming is active; revision-fenced GETs protect newer edits.
+				void this.refreshSnapshot().catch(refreshError => {
+					this.#reportStaleSnapshot("credential-block-upsert-reconcile", refreshError, {
+						id: block.credentialId,
+					});
 				});
 			});
 	}
