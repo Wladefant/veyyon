@@ -119,6 +119,30 @@ describe("native recovery", () => {
 		expect(await readFile(other, "utf8")).toBe("synthetic UNAPPROVED; no private files");
 	});
 
+	// POSIX can rename an opened source. A final path stat that *follows*
+	// a symlink to the same inode would falsely accept the replacement; lstat
+	// must reject the path even though the opened bytes themselves are stable.
+	if (process.platform !== "win32") {
+		test("post-open symlink alias is rejected by the final no-follow identity check", async () => {
+			const root = await scratch();
+			const source = join(root, "approved.txt");
+			const moved = join(root, "moved.txt");
+			await writeFile(source, "unchanged approved bytes");
+			const preliminary = await lstat(source);
+			const handle = await open(source, "r");
+			try {
+				const before = await handle.stat();
+				await rename(source, moved);
+				await symlink(moved, source, "file");
+				await expect(readOpenedCheckpointFile(source, 4096, preliminary, handle, before))
+					.rejects.toThrow(/Checkpoint source changed during capture/);
+			} finally {
+				await handle.close();
+			}
+			expect(await readFile(moved, "utf8")).toBe("unchanged approved bytes");
+		});
+	}
+
 	test("unchanged opened checkpoint descriptor still reads exact bytes", async () => {
 		const root = await scratch();
 		const file = join(root, "stable.txt");
