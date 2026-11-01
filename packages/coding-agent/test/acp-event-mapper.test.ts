@@ -992,6 +992,80 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "src/current.ts" }, { path: "src/old.ts" }, { path: "src/new.ts" }]);
 	});
 
+
+	// WHY: a real ACP editor gets a session cwd, and locations it navigates
+	// must be valid absolute paths. An invalid tool argument remains visible
+	// in rawInput but must not become an invalid editor navigation target.
+	it("omits a NUL-bearing read location with cwd while preserving raw tool arguments", () => {
+		const invalidPath = "src/\u0000invalid.ts";
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "acp-invalid-nul",
+				toolName: "read",
+				args: { path: invalidPath },
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			rawInput?: unknown;
+			locations?: { path: string }[];
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.rawInput).toEqual({ path: invalidPath });
+		expect(update.locations).toBeUndefined();
+	});
+
+	it("keeps only valid absolute locations when one move argument is invalid", () => {
+		const invalid = "src/\u0000bad-destination.ts";
+		const args = {
+			path: "src/file.ts:50-60",
+			oldPath: "src/previous.ts",
+			newPath: invalid,
+		};
+		const update = buildToolCallStartUpdate({
+			toolCallId: "acp-invalid-mixed-move",
+			toolName: "move",
+			args,
+			cwd: "/repo",
+		});
+		expectAcpStructure(arkSessionNotification, { sessionId: "session-1", update });
+		expect(update.rawInput).toEqual(args);
+		expect(update.locations).toEqual([
+			{ path: path.resolve("/repo", "src/file.ts") },
+			{ path: path.resolve("/repo", "src/previous.ts") },
+		]);
+	});
+
+	it("omits rejected per-file result locations without hiding valid sibling files", () => {
+		const invalid = "src/\u0000bad-result.ts";
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "acp-result-location",
+				toolName: "edit",
+				result: {
+					content: [{ type: "text", text: "one file updated" }],
+					details: {
+						perFileResults: [{ path: invalid }, { path: "src/valid.ts" }],
+					},
+				},
+				isError: false,
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[] };
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/valid.ts") }]);
+	});
+
 	it("rejects mutated ACP notification discriminators", () => {
 		const [notification] = mapAgentSessionEventToAcpSessionUpdates(
 			{
