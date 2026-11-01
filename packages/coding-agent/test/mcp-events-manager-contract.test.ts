@@ -1353,4 +1353,60 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 30_000);
 
+
+	// WHY: a bad callback URI was logged but the manager left an active event
+	// subscription with no registration, retry or usable cursor. The consumer
+	// must see an explicit failed state rather than a phantom live feed.
+	it("refuses invalid webhook callbacks without leaving phantom active event subscriptions", async () => {
+		const cases = [
+			"not-a-webhook-url",
+			"http://callback.example.test/events/unsafe",
+			"https://user:password@callback.example.test/events/unsafe",
+			"https://callback.example.test/events/unsafe#fragment",
+		];
+		const previousSecret = process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET;
+		process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET = CALLBACK_SECRET;
+		try {
+			for (const [index, callbackUrl] of cases.entries()) {
+				const server = fakeMcpServer({ delivery: "webhook" });
+				const manager = new MCPManager(process.cwd());
+				const serverName = `invalid-webhook-${index}`;
+				const subscription = {
+					name: EVENT_NAME,
+					mode: "webhook" as const,
+					webhook: {
+						callbackUrl,
+						secretRef: "$MCP_EVENTS_INVALID_CALLBACK_SECRET",
+						listenPort: 0,
+					},
+				};
+				manager.setOnEvent(() => {});
+				manager.setOnEventCursor(() => {});
+				try {
+					await withinHandlerChange(
+						connect(manager, serverName, managerConfig(server, {
+							enabled: true, subscriptions: [subscription],
+						})),
+						`invalid callback ${index} server connection`,
+					);
+					const startup = manager.getEventStartupPromise(serverName);
+					if (startup) await withinHandlerChange(startup, `invalid callback ${index} discovery`);
+					expect(server.requests.some(request => request.method === "events/list")).toBe(true);
+					expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+					expect(manager.getEventSubscriptionStatus(serverName, subscription)).toEqual({
+						status: "failed",
+						reason: expect.stringContaining("callback"),
+					});
+					expect(server.requests.some(request => request.method === "events/subscribe")).toBe(false);
+				} finally {
+					await withinHandlerChange(manager.disconnectAll(), `invalid callback ${index} cleanup`);
+					server.stop();
+				}
+			}
+		} finally {
+			if (previousSecret === undefined) delete process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET;
+			else process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET = previousSecret;
+		}
+	}, 30_000);
+
 });
