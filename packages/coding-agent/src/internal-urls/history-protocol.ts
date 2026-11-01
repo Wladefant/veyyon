@@ -223,10 +223,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	async complete(): Promise<UrlCompletion[]> {
 		if (liveConversationScopes().length > 1) return [];
 		const completions: UrlCompletion[] = [];
-		const seen = new Set<string>();
+		// A disk-only case alias resolves to the registered agent, not its own file.
+		const seenFolded = new Set<string>();
 		for (const ref of AgentRegistry.global().list()) {
 			if (ref.kind === "advisor") continue;
-			seen.add(ref.id);
+			seenFolded.add(ref.id.toLowerCase());
 			completions.push({
 				value: ref.id,
 				description: `${ref.status} · ${ref.kind}${ref.parentId ? ` · parent ${ref.parentId}` : ""}`,
@@ -234,8 +235,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		}
 		const disk = await sessionFilesFromDisk();
 		for (const id of disk.keys()) {
-			if (seen.has(id)) continue;
-			seen.add(id);
+			const foldedId = id.toLowerCase();
+			if (seenFolded.has(foldedId)) continue;
+			seenFolded.add(foldedId);
 			completions.push({ value: id, description: "on disk" });
 		}
 		return completions;
@@ -280,10 +282,12 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 		lastActivity: formatAgo(ref.lastActivity),
 	}));
 	// Merge on-disk transcripts for agents absent from the registry.
-	const registered = new Set(refs.map(ref => ref.id));
+	// Resolve and completions compare agent IDs case-insensitively, so an
+	// on-disk alias shadowed by any registered ID must not appear selectable.
+	const registeredFolded = new Set(refs.map(ref => ref.id.toLowerCase()));
 	const disk = await sessionFilesFromDisk();
 	for (const id of disk.keys()) {
-		if (registered.has(id)) continue;
+		if (registeredFolded.has(id.toLowerCase())) continue;
 		entries.push({ id, status: "on disk", kind: "—", parent: "—", lastActivity: "—" });
 	}
 
