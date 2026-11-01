@@ -1377,6 +1377,23 @@ describe("ACP agent", () => {
 		}
 	});
 
+	it("refuses to resume a cold stored session from a foreign cwd", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		try {
+			await expect(
+				harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB }),
+			).rejects.toThrow(`ACP session not found: ${stored.sessionId}`);
+		} finally {
+			harness.abortController.abort();
+		}
+	});
+
 	it("resumes a stored session without replaying it, and refuses a missing id or a foreign cwd", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
