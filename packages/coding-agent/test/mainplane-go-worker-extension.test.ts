@@ -15,6 +15,31 @@ describe("Mainplane request-bound execution", () => {
 		expect(remoteRunId("a", "x")).not.toBe(remoteRunId("b", "x"));
 		expect(remoteRunId("a", "x")).not.toBe(remoteRunId("a", "y"));
 	});
+	test("rejects malformed UTF-16 identities before they alias native session or operation keys", () => {
+		const malformedSession = "/session/\uD800.json";
+		const replacementSession = "/session/\uFFFD.json";
+		const malformedCallId = "tool-\uDC00";
+		const replacementCallId = "tool-\uFFFD";
+		// Node's default UTF-8 encoder replaces lone surrogates: without a guard,
+		// these distinct JavaScript strings generate identical durable worker IDs.
+		expect(malformedSession).not.toBe(replacementSession);
+		expect(digest(malformedSession)).toBe(digest(replacementSession));
+		expect(digest("session\u0000" + malformedCallId)).toBe(digest("session\u0000" + replacementCallId));
+		expect(() => remoteSessionId(malformedSession)).toThrow("Persisted session");
+		expect(() => remoteRunId(malformedSession, "tool-42")).toThrow("identities");
+		expect(() => remoteRunId("/session/current", malformedCallId)).toThrow("identities");
+		expect(() => remoteSessionId("/session/\u0000file")).toThrow("Persisted session");
+		expect(remoteSessionId(replacementSession)).toBe("sb-" + digest(replacementSession).slice(0, 40));
+		expect(remoteRunId("/session/current", replacementCallId)).toBe(
+			"sb-" + digest("/session/current\u0000" + replacementCallId).slice(0, 48),
+		);
+	});
+	test("preserves deterministic native identities for exact supplementary Unicode", () => {
+		const session = "/session/é😀.json";
+		const call = "call-🐘";
+		expect(remoteSessionId(session)).toBe("sb-" + digest(session).slice(0, 40));
+		expect(remoteRunId(session, call)).toBe("sb-" + digest(session + "\u0000" + call).slice(0, 48));
+	});
 	test("byte framing matches independent Go fixtures including Unicode", () => {
 		expect(mainplaneRequestHash("run", "pc2", "sb-42", "pwsh", "30", "echo ok")).toBe("b60c7d0de5026c7e7942ad1a60e140ef69ce385569523486826116f1af90e60c");
 		expect(mainplaneRequestHash("run", "mac", "session-1", "js", "1", "é\n😀")).toBe("bc579276fca14a570425610e681fb2203fd990844e3e2bf01ae8ddbaef62e2a2");
