@@ -416,6 +416,10 @@ export class MCPManager {
 		| "duplicate"
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
+	// A new webhook registration must not race an old key-based unsubscribe.
+	// Every consumer-clear barrier covers old subscriptions, including their
+	// in-flight subscribe/compensating-unsubscribe lifecycle.
+	#eventConsumerStopBarrier: Promise<void> = Promise.resolve();
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
 	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean }>();
@@ -502,12 +506,16 @@ export class MCPManager {
 			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 			// The setter remains synchronous; consume teardown rejections and
 			// report failures without exposing transport diagnostics or credentials.
-			void Promise.allSettled(active.flatMap(([, subscription]) => [
-				subscription.stream?.done,
-				subscription.streamProcessing,
-				subscription.lifecycle,
-				subscription.unsubscribe,
-			].filter(Boolean))).then(results => {
+			const previousStop = this.#eventConsumerStopBarrier;
+			this.#eventConsumerStopBarrier = Promise.allSettled([
+				previousStop,
+				...active.flatMap(([, subscription]) => [
+					subscription.stream?.done,
+					subscription.streamProcessing,
+					subscription.lifecycle,
+					subscription.unsubscribe,
+				].filter(Boolean)),
+			]).then(results => {
 				const failed = results.filter(result => result.status === "rejected").length;
 				if (failed > 0) logger.warn("MCP event handler removal cleanup failed", { failed });
 			});
@@ -590,6 +598,12 @@ export class MCPManager {
 		connection: MCPServerConnection,
 		config: MCPServerConfig["events"],
 	): Promise<void> {
+		// A webhook unsubscribe is keyed by principal/URL/name/arguments rather
+		// than its response ID. Wait for the previous consumer's teardown before
+		// sending a new subscribe for a potentially identical key.
+		const stopBarrier = this.#eventConsumerStopBarrier;
+		await stopBarrier;
+		if (stopBarrier !== this.#eventConsumerStopBarrier) return;
 		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
 		const eventsConfig = config;
 		this.#eventStartupControllers.get(serverName)?.abort();

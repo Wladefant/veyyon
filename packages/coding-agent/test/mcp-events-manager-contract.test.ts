@@ -20,6 +20,7 @@ type FakeServerOptions = {
 	eventsList?: (params: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>;
 	poll?: (params: Record<string, unknown>) => Record<string, unknown>;
 	webhookSubscribe?: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	webhookUnsubscribe?: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
 	onStream?: (
 		controller: ReadableStreamDefaultController<Uint8Array>,
 		streamId: string | number,
@@ -114,7 +115,7 @@ function fakeMcpServer(options: FakeServerOptions): FakeServer {
 						: { id: `webhook-${nextSubscription++}`, cursor: "webhook-cursor", refreshBefore: null };
 					break;
 				case "events/unsubscribe":
-					result = { ok: true };
+					result = options.webhookUnsubscribe ? await options.webhookUnsubscribe(params) : { ok: true };
 					break;
 				default:
 					result = {};
@@ -1159,5 +1160,80 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 30_000);
+
+	// WHY: events/unsubscribe deletes by the canonical webhook tuple, not by
+	// the old response ID. If re-enable sends a new subscribe while an older
+	// unsubscribe is pending, the late removal deletes the fresh registration.
+	it("waits for old webhook unsubscribe before re-enrolling the same callback", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const unsubscribeEntered = Promise.withResolvers<void>();
+		const releaseUnsubscribe = Promise.withResolvers<void>();
+		const secondSubscription = Promise.withResolvers<void>();
+		const firstCursor = Promise.withResolvers<void>();
+		let unsubscribed = false;
+		let subscribeCount = 0;
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => {
+				subscribeCount++;
+				if (subscribeCount === 2) {
+					if (!unsubscribed) throw new Error("New webhook subscribed before prior key-based unsubscribe");
+					secondSubscription.resolve();
+				}
+				return { id: `handler-clear-${subscribeCount}`, cursor: `cursor-${subscribeCount}`, refreshBefore: null };
+			},
+			webhookUnsubscribe: async () => {
+				unsubscribeEntered.resolve();
+				await releaseUnsubscribe.promise;
+				unsubscribed = true;
+				return {};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_server, _key, cursor) => {
+			if (cursor === "cursor-1") firstCursor.resolve();
+		});
+		const previousSecret = process.env.MCP_EVENTS_CONTRACT_SECRET;
+		process.env.MCP_EVENTS_CONTRACT_SECRET = CALLBACK_SECRET;
+		try {
+			await withinHandlerChange(connect(manager, "reenroll-webhook", managerConfig(server, {
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME, mode: "webhook",
+					webhook: {
+						callbackUrl: "https://callback.example.test/events/orders",
+						secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
+						listenPort,
+					},
+				}],
+			})), "initial webhook connection");
+			await withinHandlerChange(firstCursor.promise, "initial webhook cursor");
+			expect(manager.getActiveEventSubscriptionCount("reenroll-webhook")).toBe(1);
+			manager.setOnEvent(undefined);
+			await withinHandlerChange(unsubscribeEntered.promise, "outgoing webhook unsubscribe");
+			manager.setOnEvent(() => {});
+			// Confirm that the original key-based delete has not yet completed.
+			// A second subscribe must only run once that delete is acknowledged.
+			await new Promise<void>(resolve => setTimeout(resolve, 30));
+			expect(server.requests.filter(request => request.method === "events/subscribe")).toHaveLength(1);
+			releaseUnsubscribe.resolve();
+			await withinHandlerChange(secondSubscription.promise, "webhook enrollment after unsubscribe");
+			expect(subscribeCount).toBe(2);
+			expect(unsubscribed).toBe(true);
+			expect(manager.getActiveEventSubscriptionCount("reenroll-webhook")).toBe(1);
+		} finally {
+			releaseUnsubscribe.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "webhook re-enrollment cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_CONTRACT_SECRET;
+				else process.env.MCP_EVENTS_CONTRACT_SECRET = previousSecret;
+			}
+		}
+	}, 20_000);
 
 });
