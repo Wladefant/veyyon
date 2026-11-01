@@ -95,109 +95,109 @@ describe("SessionManager.forkFrom", () => {
 
 
 describe("SessionManager.forkFrom preserves inherited artifact evidence", () => {
-  it("copies inherited local bytes before publication and allocates a distinct next artifact ID", async () => {
-    using temp = TempDir.createSync("@veyyon-forkfrom-evidence-");
-    const cwd = path.join(temp.path(), "project");
-    const sessions = path.join(temp.path(), "sessions");
-    const original = "original output Ω 😀\\r\\nwith trailing spaces  ";
-    const source = SessionManager.create(cwd, sessions);
-    let forked: SessionManager | undefined;
-    try {
-      expect(await source.saveArtifact(original, "bash")).toBe("0");
-      const message = "Recover exact original output: artifact://0";
-      source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-      await source.flush();
-      const sourceFile = source.getSessionFile();
-      if (!sourceFile) throw new Error("expected persisted source");
-      const sourceBefore = await fs.readFile(sourceFile, "utf8");
-      const sourceArtifact = await source.getArtifactPath("0");
-      if (!sourceArtifact) throw new Error("expected original local artifact");
+	it("copies inherited local bytes before publication and allocates a distinct next artifact ID", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-evidence-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const original = "original output Ω 😀\\r\\nwith trailing spaces  ";
+		const source = SessionManager.create(cwd, sessions);
+		let forked: SessionManager | undefined;
+		try {
+			expect(await source.saveArtifact(original, "bash")).toBe("0");
+			const message = "Recover exact original output: artifact://0";
+			source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+			await source.flush();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("expected persisted source");
+			const sourceBefore = await fs.readFile(sourceFile, "utf8");
+			const sourceArtifact = await source.getArtifactPath("0");
+			if (!sourceArtifact) throw new Error("expected original local artifact");
 
-      forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
-        suppressBreadcrumb: true,
-      });
-      const clonedFile = forked.getSessionFile();
-      if (!clonedFile) throw new Error("expected persisted clone");
-      expect(clonedFile).not.toBe(sourceFile);
-      const inheritedArtifact = await forked.getArtifactPath("0");
-      if (!inheritedArtifact) throw new Error("expected inherited local artifact");
-      expect(inheritedArtifact).not.toBe(sourceArtifact);
-      expect(await fs.readFile(inheritedArtifact, "utf8")).toBe(original);
-      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
-      expect(forked.getEntries().some(entry =>
-        entry.type === "message" && entry.message.role === "user" && entry.message.content === message
-      )).toBe(true);
+			forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+				suppressBreadcrumb: true,
+			});
+			const clonedFile = forked.getSessionFile();
+			if (!clonedFile) throw new Error("expected persisted clone");
+			expect(clonedFile).not.toBe(sourceFile);
+			const inheritedArtifact = await forked.getArtifactPath("0");
+			if (!inheritedArtifact) throw new Error("expected inherited local artifact");
+			expect(inheritedArtifact).not.toBe(sourceArtifact);
+			expect(await fs.readFile(inheritedArtifact, "utf8")).toBe(original);
+			expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+			expect(forked.getEntries().some(entry =>
+				entry.type === "message" && entry.message.role === "user" && entry.message.content === message
+			)).toBe(true);
 
-      expect(await forked.saveArtifact("different later output", "bash")).toBe("1");
-      expect(await fs.readFile(inheritedArtifact, "utf8")).toBe(original);
-      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
-      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
-    } finally {
-      await forked?.close();
-      await source.close();
-    }
-  });
+			expect(await forked.saveArtifact("different later output", "bash")).toBe("1");
+			expect(await fs.readFile(inheritedArtifact, "utf8")).toBe(original);
+			expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+		} finally {
+			await forked?.close();
+			await source.close();
+		}
+	});
 
-  it("refuses a missing local source artifact before publishing a new session", async () => {
-    using temp = TempDir.createSync("@veyyon-forkfrom-missing-");
-    const cwd = path.join(temp.path(), "project");
-    const sessions = path.join(temp.path(), "sessions");
-    const source = SessionManager.create(cwd, sessions);
-    try {
-      const original = "source evidence must survive";
-      expect(await source.saveArtifact(original, "bash")).toBe("0");
-      source.appendMessage({ role: "user", content: "original: artifact://0", timestamp: Date.now() });
-      await source.flush();
-      const sourceFile = source.getSessionFile();
-      if (!sourceFile) throw new Error("expected persisted source");
-      const sourceBefore = await fs.readFile(sourceFile, "utf8");
-      const originalDir = sourceFile.slice(0, -".jsonl".length);
-      const parkedDir = path.join(temp.path(), "parked-evidence");
-      await fs.rename(originalDir, parkedDir);
-      try {
-        const filesBefore = (await fs.readdir(sessions)).sort();
-        await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
-          suppressBreadcrumb: true,
-        })).rejects.toThrow(/referenced artifacts unavailable/i);
-        expect((await fs.readdir(sessions)).sort()).toEqual(filesBefore);
-        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
-        expect(await fs.readFile(path.join(parkedDir, "0.bash.log"), "utf8")).toBe(original);
-      } finally {
-        await fs.rename(parkedDir, originalDir);
-      }
-    } finally {
-      await source.close();
-    }
-  });
+	it("refuses a missing local source artifact before publishing a new session", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-missing-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		try {
+			const original = "source evidence must survive";
+			expect(await source.saveArtifact(original, "bash")).toBe("0");
+			source.appendMessage({ role: "user", content: "original: artifact://0", timestamp: Date.now() });
+			await source.flush();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("expected persisted source");
+			const sourceBefore = await fs.readFile(sourceFile, "utf8");
+			const originalDir = sourceFile.slice(0, -".jsonl".length);
+			const parkedDir = path.join(temp.path(), "parked-evidence");
+			await fs.rename(originalDir, parkedDir);
+			try {
+				const filesBefore = (await fs.readdir(sessions)).sort();
+				await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+					suppressBreadcrumb: true,
+				})).rejects.toThrow(/referenced artifacts unavailable/i);
+				expect((await fs.readdir(sessions)).sort()).toEqual(filesBefore);
+				expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+				expect(await fs.readFile(path.join(parkedDir, "0.bash.log"), "utf8")).toBe(original);
+			} finally {
+				await fs.rename(parkedDir, originalDir);
+			}
+		} finally {
+			await source.close();
+		}
+	});
 
-  it("preserves foreign-session URLs without requiring or copying their artifact IDs", async () => {
-    using temp = TempDir.createSync("@veyyon-forkfrom-foreign-");
-    const cwd = path.join(temp.path(), "project");
-    const sessions = path.join(temp.path(), "sessions");
-    const source = SessionManager.create(cwd, sessions);
-    let forked: SessionManager | undefined;
-    try {
-      const message = "External output: artifact://0?session=another-execution-session";
-      source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-      await source.flush();
-      const sourceFile = source.getSessionFile();
-      if (!sourceFile) throw new Error("expected persisted source");
-      const sourceBefore = await fs.readFile(sourceFile, "utf8");
+	it("preserves foreign-session URLs without requiring or copying their artifact IDs", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-foreign-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		let forked: SessionManager | undefined;
+		try {
+			const message = "External output: artifact://0?session=another-execution-session";
+			source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+			await source.flush();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("expected persisted source");
+			const sourceBefore = await fs.readFile(sourceFile, "utf8");
 
-      forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
-        suppressBreadcrumb: true,
-      });
-      expect(forked.getEntries().some(entry =>
-        entry.type === "message" && entry.message.role === "user" && entry.message.content === message
-      )).toBe(true);
-      expect(await forked.getArtifactPath("0")).toBeUndefined();
-      expect(await forked.saveArtifact("new local output", "bash")).toBe("0");
-      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
-    } finally {
-      await forked?.close();
-      await source.close();
-    }
-  });
+			forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+				suppressBreadcrumb: true,
+			});
+			expect(forked.getEntries().some(entry =>
+				entry.type === "message" && entry.message.role === "user" && entry.message.content === message
+			)).toBe(true);
+			expect(await forked.getArtifactPath("0")).toBeNull();
+			expect(await forked.saveArtifact("new local output", "bash")).toBe("0");
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+		} finally {
+			await forked?.close();
+			await source.close();
+		}
+	});
 });
 
 describe("SessionManager.fork preserves inherited artifact evidence", () => {
