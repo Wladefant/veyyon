@@ -9,6 +9,7 @@
 - Remote auth-broker credential blocks remain enforced until their deletion is broker-confirmed, without clearing newer concurrent block state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker synchronous credential disable waits for broker confirmation and refuses unverifiable remote compare-and-disable attempts ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker awaited individual disable refuses late acknowledgments that would evict a newer accepted credential grant ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement refuse superseded disable acknowledgments before evicting a newer accepted same-ID grant or uploading a replacement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 ## [1.7.0] - 2026-10-31
 

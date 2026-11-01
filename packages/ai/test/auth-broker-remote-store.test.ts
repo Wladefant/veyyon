@@ -494,6 +494,72 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+
+	// The initial provider-wide list may become stale while a disable is in flight.
+	// A late acknowledgment for its old grant must not evict a refreshed same-ID
+	// grant or allow an unsafe replacement upload.
+	for (const operation of ["logout", "replace"] as const) {
+		test(`provider ${operation} refuses a late disable acknowledgment after newer grant acceptance`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+			});
+			const acknowledgement = Promise.withResolvers<{ ok: boolean }>();
+			const disableStarted = Promise.withResolvers<void>();
+			spyOn(client, "disableCredential").mockImplementation(async target => {
+				expect(target).toBe(id);
+				disableStarted.resolve();
+				return acknowledgement.promise;
+			});
+			const upload = spyOn(client, "uploadCredential").mockImplementation(async () => {
+				throw new Error("unexpected replacement upload after superseded disable");
+			});
+			// Block the write-triggered GET so it cannot repair a local eviction before
+			// we inspect the actual production store.
+			const realFetch = client.fetchSnapshot.bind(client);
+			const releaseReconciliation = Promise.withResolvers<void>();
+			let holdReconciliation = false;
+			spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+				if (holdReconciliation && options?.waitMs === undefined) {
+					await releaseReconciliation.promise;
+				}
+				return realFetch(options);
+			});
+
+			const pending = operation === "logout"
+				? remote.deleteAuthCredentialsRemote("anthropic", "synthetic provider logout")
+				: remote.replaceAuthCredentialsRemote("anthropic", [
+						mintOAuthCredential("replacement", Date.now() + 120_000),
+					]);
+			await disableStarted.promise;
+			store!.updateAuthCredential(id, mintOAuthCredential("new", Date.now() + 120_000));
+			await storage!.reload();
+			await remote.refreshSnapshot();
+			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+				access: "access-new", refresh: REMOTE_REFRESH_SENTINEL,
+			});
+			holdReconciliation = true;
+			try {
+				acknowledgement.resolve({ ok: true });
+				await expect(pending).rejects.toThrow(/disable superseded by newer state/i);
+				expect(upload).not.toHaveBeenCalled();
+				expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+				expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+					access: "access-new", refresh: REMOTE_REFRESH_SENTINEL,
+				});
+				const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+				if (authoritative.status !== 200) throw new Error("expected broker snapshot");
+				expect(authoritative.snapshot.credentials[0]?.credential).toMatchObject({ access: "access-new" });
+			} finally {
+				acknowledgement.resolve({ ok: true });
+				releaseReconciliation.resolve();
+			}
+		});
+	}
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
