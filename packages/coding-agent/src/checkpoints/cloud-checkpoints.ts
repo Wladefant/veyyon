@@ -255,6 +255,11 @@ export class CheckpointClient {
 				transferId,
 			}),
 		};
+		// Once a handoff has been sent, its outcome may be uncertain even when
+		// the transport fails. Fence the old source lease before sending so no
+		// local prompt or checkpoint write can proceed under a possibly-spent
+		// epoch while the authority response (or its one retry) is outstanding.
+		this.loseLease(sessionId);
 		let next: CheckpointLease;
 		try {
 			next = await this.#request<CheckpointLease>(path, init);
@@ -265,7 +270,16 @@ export class CheckpointClient {
 				throw firstError;
 			}
 		}
-		this.loseLease(sessionId);
+		const expiresAt = next && typeof next.expiresAt === "string" ? Date.parse(next.expiresAt) : Number.NaN;
+		if (
+			!next ||
+			next.ownerNode !== targetNode ||
+			!Number.isSafeInteger(next.epoch) ||
+			next.epoch !== epoch + 1 ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= Date.now()
+		)
+			throw new Error("Checkpoint authority transfer receipt mismatch");
 		return next;
 	}
 	async head(sessionId: string): Promise<{

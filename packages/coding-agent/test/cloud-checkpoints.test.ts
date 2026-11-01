@@ -268,3 +268,87 @@ test("checkpoint renewal refuses a changed authority owner and revokes its cache
 	await expect(client.renewLease("s")).rejects.toThrow(/lease owner mismatch/);
 	await expect(client.assertWritable("s", valid.epoch)).rejects.toThrow(/lease lost/);
 });
+test("an uncertain transfer fences the old writer before the remote answer and never reacquires after two errors", async () => {
+	let signalFirst!: () => void;
+	let finishFirst!: () => void;
+	const firstStarted = new Promise<void>(resolve => { signalFirst = resolve; });
+	const firstComplete = new Promise<void>(resolve => { finishFirst = resolve; });
+	let transfers = 0;
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		if (action === "lease")
+			return Response.json({
+				ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			});
+		if (action !== "transfer") throw new Error(`Unexpected authority call: ${action}`);
+		transfers++;
+		if (transfers === 1) {
+			signalFirst();
+			await firstComplete;
+		}
+		throw new Error(`synthetic transport failure ${transfers}`);
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const grant = await client.acquireLease("ambiguous-transfer", "source");
+	await expect(client.assertWritable("ambiguous-transfer", grant.epoch)).resolves.toBeUndefined();
+	const transfer = client.transferLease(
+		"ambiguous-transfer", "destination", "a-long-enough-claim-token", "transfer-1",
+	);
+	try {
+		await firstStarted;
+		await expect(client.assertWritable("ambiguous-transfer", grant.epoch)).rejects.toThrow(/lease lost/);
+	} finally {
+		finishFirst();
+	}
+	await expect(transfer).rejects.toThrow(/synthetic transport failure 1/);
+	expect(transfers).toBe(2);
+	await expect(client.assertWritable("ambiguous-transfer", grant.epoch)).rejects.toThrow(/lease lost/);
+});
+
+test("transfer receipt must bind target owner, next epoch, and live deadline before reporting success", async () => {
+	const scenarios: Array<{ name: string; ownerNode: string; epoch: number | undefined; expiresAt: string; valid: boolean }> = [
+		{ name: "valid", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: true },
+		{ name: "wrong-owner", ownerNode: "foreign", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: false },
+		{ name: "stale-epoch", ownerNode: "destination", epoch: 4, expiresAt: "2099-01-01T00:00:00Z", valid: false },
+		{ name: "skipped-epoch", ownerNode: "destination", epoch: 6, expiresAt: "2099-01-01T00:00:00Z", valid: false },
+		{ name: "missing-epoch", ownerNode: "destination", epoch: undefined, expiresAt: "2099-01-01T00:00:00Z", valid: false },
+		{ name: "expired", ownerNode: "destination", epoch: 5, expiresAt: "2000-01-01T00:00:00Z", valid: false },
+		{ name: "malformed-expiry", ownerNode: "destination", epoch: 5, expiresAt: "not-a-date", valid: false },
+	];
+	for (const scenario of scenarios) {
+		let transfers = 0;
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop()!;
+			if (action === "lease")
+				return Response.json({
+					ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (action !== "transfer") throw new Error(`Unexpected authority call: ${action}`);
+			transfers++;
+			return Response.json({
+				ownerNode: scenario.ownerNode, epoch: scenario.epoch, expiresAt: scenario.expiresAt,
+				headSequence: 0, manifestHash: "",
+			});
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		const sessionId = `transfer-receipt-${scenario.name}`;
+		const grant = await client.acquireLease(sessionId, "source");
+		if (scenario.valid) {
+			const receipt = await client.transferLease(sessionId, "destination", "a-long-enough-claim-token", "transfer-2");
+			expect(receipt.ownerNode).toBe("destination");
+			expect(receipt.epoch).toBe(5);
+		} else {
+			await expect(client.transferLease(
+				sessionId, "destination", "a-long-enough-claim-token", "transfer-2",
+			)).rejects.toThrow(/transfer receipt mismatch/);
+		}
+		expect(transfers).toBe(1);
+		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
+	}
+});
