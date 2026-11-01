@@ -658,10 +658,12 @@ export class StdioTransport implements MCPTransport {
 		if (isUnattributableError(message)) {
 			const error = message.error as { code: number; message: string };
 			const failed = rejectAllPending(this.#pendingRequests, error);
+			// An unattributable parse/invalid-envelope error can echo private
+			// request bytes in the peer's message. Persist only a validated code
+			// and the number of requests failed, never peer-controlled text.
 			logger.warn("MCP server reported an error it could not attribute to a request", {
 				server: this.config.command,
-				code: error.code,
-				message: error.message,
+				code: typeof error.code === "number" && Number.isSafeInteger(error.code) ? error.code : null,
 				failedRequests: failed,
 			});
 			this.onError?.(new Error(describeJsonRpcError(error)));
