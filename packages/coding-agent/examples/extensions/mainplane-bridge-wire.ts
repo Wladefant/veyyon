@@ -110,7 +110,8 @@ export function validateReceipt(value: Record<string, unknown>, runId: string, o
 		if (typeof value.exit !== "number" || !Number.isSafeInteger(value.exit) || typeof value.output_sha256 !== "string" || !SHA256.test(value.output_sha256)) throw new MainplaneError("Mainplane completed receipt has no valid exit or output digest");
 		result.exit = value.exit; result.output_sha256 = value.output_sha256;
 		if (value.body !== undefined) {
-			if (typeof value.body !== "string" || digest(value.body) !== value.output_sha256) throw new MainplaneError("Mainplane output digest mismatch");
+			if (typeof value.body !== "string" || Buffer.from(value.body, "utf8").toString("utf8") !== value.body ||
+				digest(value.body) !== value.output_sha256) throw new MainplaneError("Mainplane output digest mismatch");
 			result.body = value.body;
 		}
 	} else if (value.exit !== undefined || value.output_sha256 !== undefined || value.body !== undefined) throw new MainplaneError("Unconfirmed Mainplane receipt cannot claim output");
