@@ -30,3 +30,20 @@ receipt and an owned pending Job receipt remain inspectable. The registered
 tool is exercised, not just the helper. Production receipt confidentiality
 and real multi-host behavior still require an explicitly authorized host
 acceptance and independent review; fixtures alone do not establish them.
+
+## Exact JSON discriminator types
+
+The native receipt boundary also requires `operation` and `state` to be
+**primitive JSON strings**, not values that happen to stringify to a known
+enum member. In particular, `["run"]`, `["job"]` and `["submitting"]`
+are not native receipt discriminators. Validate their runtime types before
+operation-specific field checks or presenting a typed result to a tool.
+The ordinary exact string values preserve their existing state and
+ownership semantics; type-coerced responses fail closed before any
+output or job metadata is projected. A failed GET never triggers Run,
+Write, Kill or another side effect.
+
+This is validation of synthetic, untrusted HTTP response objects, not
+proof of a real Go worker or multi-host authorization. The associated
+regression is in the existing `mainplane-go-background-jobs.test.ts`
+suite. Executed CI and native-host acceptance are separate gates.
