@@ -536,4 +536,52 @@ describe("BashTool ACP terminal routing", () => {
 		await bounded(settled.promise, "late create rejection observation");
 		expect(createCalls).toBe(1);
 	}, 8_000);
+
+	// WHY: timer callbacks are scheduled work, not the authority for a
+	// command's original monotonic deadline. A terminal/create reply can
+	// settle after the original budget without the timer callback running yet.
+	// The real BashTool must not start execution with a new positive 1ms budget.
+	// The controlled clock and fake client do not prove installed editor cleanup.
+	it("does not execute a terminal whose successful creation crosses the original deadline", async () => {
+		let monotonicMs = 0;
+		// Advance the monotonic clock only when the fake client creates its
+		// handle; leave the actual timer unadvanced to exercise the race.
+		vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+		let waitCalls = 0;
+		let outputCalls = 0;
+		let kills = 0;
+		let releases = 0;
+		let creates = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "created-after-deadline",
+			waitForExit: async () => {
+				waitCalls++;
+				return { exitCode: 0, signal: null };
+			},
+			currentOutput: async () => {
+				outputCalls++;
+				return { output: "should never reach model", truncated: false };
+			},
+			kill: async () => { kills++; },
+			release: async () => { releases++; },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => {
+				creates++;
+				monotonicMs = 1_001;
+				return handle;
+			},
+		};
+		const tool = new BashTool(makeSession(bridge));
+		await expect(tool.execute("late-successful-create", { command: "echo should-not-run", timeout: 1 })).rejects.toThrow(
+			"Command timed out after 1 seconds",
+		);
+		expect(creates).toBe(1);
+		expect(waitCalls).toBe(0);
+		expect(outputCalls).toBe(0);
+		expect(kills).toBe(1);
+		expect(releases).toBe(1);
+	}, 12_000);
+
 });
