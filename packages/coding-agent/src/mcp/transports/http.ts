@@ -315,8 +315,13 @@ export class HttpTransport implements MCPTransport {
 				const sessionId = response.headers.get("Mcp-Session-Id");
 				if (sessionId) this.#sessionId = sessionId;
 				if (response.ok && response.headers.get("Content-Type")?.includes("application/json")) {
-					const frame = (await untilAborted(signal, response.json())) as JsonRpcResponse;
-					if (frame.id !== id) throw new Error("MCP event stream response id does not match its request");
+					const raw: unknown = await untilAborted(signal, response.json());
+					// A matching id alone does not establish a valid JSON-RPC 2.0
+					// acknowledgement; reject malformed envelopes before accepting.
+					if (!isStreamMessage(raw) || "method" in raw || raw.id !== id) {
+						throw new Error("MCP event stream response has invalid JSON-RPC protocol or request identity");
+					}
+					const frame = raw as JsonRpcResponse;
 					if (frame.error) {
 						throw Object.assign(new Error(`MCP error ${frame.error.code}: ${frame.error.message}`), {
 							code: frame.error.code,
