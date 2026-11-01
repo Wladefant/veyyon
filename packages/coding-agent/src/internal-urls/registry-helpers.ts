@@ -129,10 +129,15 @@ async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>;
 	// Preserve public display casing, but compare the same folded IDs as history://.
 	const seenByFoldedId = new Map<string, { id: string; full: string }>();
 	const rejectedFoldedIds = new Set<string>();
-	const seenDirs = new Set<string>();
+	// Each registered root has its own depth budget. A wider root may first
+	// visit a nested root near depth 8; revisit it when a nearer root can
+	// reach descendants that the initial traversal could not inspect.
+	const minVisitedDepth = new Map<string, number>();
 	const scan = async (dir: string, depth: number): Promise<void> => {
-		if (depth > 8 || seenDirs.has(dir)) return;
-		seenDirs.add(dir);
+		if (depth > 8) return;
+		const priorDepth = minVisitedDepth.get(dir);
+		if (priorDepth !== undefined && priorDepth <= depth) return;
+		minVisitedDepth.set(dir, depth);
 		let entries: Dirent[];
 		try {
 			entries = await fs.readdir(dir, { withFileTypes: true });
