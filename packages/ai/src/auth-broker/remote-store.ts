@@ -285,10 +285,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
-	/** A failed older block mutation must not reconcile a newer same-ID speculative write. */
-	#latestCredentialBlockMutation = new Map<number, symbol>();
-	/** Preserve the most recent block key until every earlier same-ID request settles. */
-	#latestCredentialBlockMutationKey = new Map<number, string>();
 	#pendingCredentialBlockMutations = new Map<number, Set<symbol>>();
 	#credentialBlockReconciliationPending = new Set<number>();
 	#credentialBlockReconciliationInFlight = false;
@@ -626,31 +622,25 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * while any block POST/DELETE remains unsettled, even for another scope or
 	 * credential: an uncommitted speculative block would disappear from the view.
 	 */
-	#startCredentialBlockMutation(id: number, key: string, mutation: symbol): void {
+	#startCredentialBlockMutation(id: number, mutation: symbol): void {
 		let pending = this.#pendingCredentialBlockMutations.get(id);
 		if (!pending) {
 			pending = new Set<symbol>();
 			this.#pendingCredentialBlockMutations.set(id, pending);
 		}
 		pending.add(mutation);
-		this.#latestCredentialBlockMutation.set(id, mutation);
-		this.#latestCredentialBlockMutationKey.set(id, key);
 		this.#credentialBlockMutationEpoch += 1;
 	}
 
-	#settleCredentialBlockMutation(id: number, key: string, mutation: symbol, failed: boolean): void {
-		const isLatest = this.#latestCredentialBlockMutation.get(id) === mutation;
-		// A newer write to the SAME block key supersedes an older failure.
-		// A write to a DIFFERENT scope cannot retire that failed scope's phantom.
-		if (failed && (isLatest || this.#latestCredentialBlockMutationKey.get(id) !== key)) {
-			this.#credentialBlockReconciliationPending.add(id);
-		}
+	#settleCredentialBlockMutation(id: number, mutation: symbol, failed: boolean): void {
+		// Even if a newer same-key block succeeds, an older failed speculative
+		// deadline may be longer. Do not retire its failure until a canonical
+		// broker snapshot has replaced every settled local projection.
+		if (failed) this.#credentialBlockReconciliationPending.add(id);
 		const pending = this.#pendingCredentialBlockMutations.get(id);
 		pending?.delete(mutation);
-		if (isLatest) this.#latestCredentialBlockMutation.delete(id);
 		if (pending?.size === 0) {
 			this.#pendingCredentialBlockMutations.delete(id);
-			this.#latestCredentialBlockMutationKey.delete(id);
 		}
 		if (this.#pendingCredentialBlockMutations.size > 0) return;
 		if (this.#credentialBlockReconciliationPending.size > 0) {
@@ -704,7 +694,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		const mutation = Symbol("block-upsert");
 		const key = credentialBlockKey(block.credentialId, block.providerKey, block.blockScope);
-		this.#startCredentialBlockMutation(block.credentialId, key, mutation);
+		this.#startCredentialBlockMutation(block.credentialId, mutation);
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
 		this.#credentialBlockReconcileAfter.set(
@@ -720,7 +710,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				}
 				// Never fetch an older broker view while any speculative block is
 				// still awaiting its own server acknowledgment.
-				this.#settleCredentialBlockMutation(block.credentialId, key, mutation, false);
+				this.#settleCredentialBlockMutation(block.credentialId, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential block propagation failed", {
@@ -729,7 +719,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					error: String(error),
 				});
-				this.#settleCredentialBlockMutation(block.credentialId, key, mutation, true);
+				this.#settleCredentialBlockMutation(block.credentialId, mutation, true);
 			});
 	}
 
@@ -739,8 +729,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// unblock a still-pending upsert or a newer accepted local block.
 		const revisionAtDelete = this.#appliedSnapshotRevision;
 		const mutation = Symbol("block-delete");
-		const key = "\0all-scopes";
-		this.#startCredentialBlockMutation(credentialId, key, mutation);
+		this.#startCredentialBlockMutation(credentialId, mutation);
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(response => {
@@ -759,7 +748,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// defer a full authoritative read until both have settled.
 					this.#credentialBlockReconciliationPending.add(credentialId);
 				}
-				this.#settleCredentialBlockMutation(credentialId, key, mutation, false);
+				this.#settleCredentialBlockMutation(credentialId, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential blocks delete propagation failed", {
@@ -767,7 +756,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					error: String(error),
 				});
 				// The broker may have committed before its reply was lost.
-				this.#settleCredentialBlockMutation(credentialId, key, mutation, true);
+				this.#settleCredentialBlockMutation(credentialId, mutation, true);
 			});
 	}
 
