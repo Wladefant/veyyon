@@ -81,6 +81,11 @@ function queueDir(root: string, sessionId: string): string {
 
 export const SESSION_NOTICE_CAPABILITY = "session-notices";
 
+/** Owner-file diagnostic metadata is not trusted terminal display text. */
+const OWNER_DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028-\u202e\u2066-\u2069]/g;
+const BUILD_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+const CAPABILITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 export interface SessionNoticeOwner {
 	sessionId: string;
 	/** Project is the cwd's leaf name; it is not an asserted git repository identity. */
@@ -126,16 +131,24 @@ export function listLiveSessionOwners(root = getConfigRootDir(), exceptSessionId
 		if (owner.sessionId === exceptSessionId || !isProcessAlive(owner.pid)) continue;
 		const cwd = typeof owner.cwd === "string" && path.isAbsolute(owner.cwd) ? path.normalize(owner.cwd) : undefined;
 		const capabilities =
-			Array.isArray(owner.capabilities) && owner.capabilities.every(capability => typeof capability === "string")
+			Array.isArray(owner.capabilities) &&
+			owner.capabilities.every(capability => typeof capability === "string" && CAPABILITY_PATTERN.test(capability))
 				? owner.capabilities
+				: undefined;
+		const loadedVersion =
+			typeof owner.loadedVersion === "string"
+				? owner.loadedVersion.replace(OWNER_DISPLAY_CONTROLS, " ").slice(0, 128).trim()
+				: undefined;
+		const loadedBuildSha =
+			owner.loadedBuildSha === null ||
+			(typeof owner.loadedBuildSha === "string" && BUILD_SHA_PATTERN.test(owner.loadedBuildSha))
+				? owner.loadedBuildSha
 				: undefined;
 		owners.set(owner.sessionId, {
 			sessionId: owner.sessionId,
 			...(cwd ? { cwd, project: path.basename(cwd) } : {}),
-			...(typeof owner.loadedVersion === "string" ? { loadedVersion: owner.loadedVersion } : {}),
-			...(typeof owner.loadedBuildSha === "string" || owner.loadedBuildSha === null
-				? { loadedBuildSha: owner.loadedBuildSha }
-				: {}),
+			...(loadedVersion ? { loadedVersion } : {}),
+			...(loadedBuildSha !== undefined ? { loadedBuildSha } : {}),
 			...(capabilities ? { capabilities } : {}),
 		});
 	}

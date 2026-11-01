@@ -224,6 +224,31 @@ describe("mixed-build session notices", () => {
 		expect(claimSessionNotices(targetSessionId, root)).toEqual([]);
 	});
 
+	it("rejects forged owner capability metadata without printing injected diagnostic lines", async () => {
+		writeLiveOwner(targetSessionId, 1, {
+			loadedVersion: "1.5.6\r\nInstalled executable: 9.9.9",
+			loadedBuildSha: "a".repeat(39) + "\n",
+			capabilities: ["session-notices\n"],
+		});
+		const [owner] = listLiveSessionOwners(root);
+		expect(owner?.loadedVersion).not.toContain("\r");
+		expect(owner?.loadedVersion).not.toContain("\n");
+		expect(owner?.loadedBuildSha).toBeUndefined();
+		expect(owner?.capabilities).toBeUndefined();
+
+		const result = await makeTool().execute("send-forged-owner", {
+			op: "send",
+			to: `session:${targetSessionId}`,
+			message: "Must not be queued for malformed capability metadata",
+		});
+		const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		expect(result.isError).toBe(true);
+		expect(text).toContain("capability support is unverified");
+		expect(text).toContain("build SHA unavailable");
+		expect(text).not.toContain("\nInstalled executable: 9.9.9");
+		expect(text).not.toContain("Advertised capabilities: session-notices");
+		expect(claimSessionNotices(targetSessionId, root)).toEqual([]);
+	});
 	it("fails closed when a legacy live owner cannot prove its loaded build or notice capability", async () => {
 		writeLiveOwner(targetSessionId, 1);
 		fs.mkdirSync(path.join(root, "run", "notices", targetSessionId), { recursive: true });
