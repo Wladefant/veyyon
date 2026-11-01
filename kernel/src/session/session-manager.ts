@@ -1981,7 +1981,7 @@ export class SessionManager {
 		}
 		let sourceNames: string[] | undefined;
 		try {
-			const stat = await fs.promises.stat(oldArtifactDir);
+			const stat = await fs.promises.lstat(oldArtifactDir);
 			if (!stat.isDirectory()) throw new Error("Cannot fork session: source artifact path is not a directory");
 			sourceNames = await fs.promises.readdir(oldArtifactDir);
 		} catch (error) {
@@ -1993,6 +1993,8 @@ export class SessionManager {
 			for (const id of referencedIds) {
 				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
 				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
+				const original = await fs.promises.lstat(path.join(oldArtifactDir, matches[0]!));
+				if (!original.isFile()) throw new Error("Cannot fork session: referenced artifact is not a regular file");
 			}
 			// A failed copy leaves the old session and its original evidence usable.
 			// Never overwrite a newly created destination with another fork's data.
@@ -2006,8 +2008,8 @@ export class SessionManager {
 			for (const id of referencedIds) {
 				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
 				const [original, copied] = await Promise.all([
-					fs.promises.stat(path.join(oldArtifactDir, filename)),
-					fs.promises.stat(path.join(nextArtifactDir, filename)),
+					fs.promises.lstat(path.join(oldArtifactDir, filename)),
+					fs.promises.lstat(path.join(nextArtifactDir, filename)),
 				]);
 				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
 					throw new Error("Cannot fork session: referenced artifact copy incomplete");
