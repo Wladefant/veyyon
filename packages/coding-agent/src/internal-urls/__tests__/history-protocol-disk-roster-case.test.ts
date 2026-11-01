@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
+import type { AgentSession } from "../../session/agent-session";
 import { HistoryProtocolHandler } from "../history-protocol";
 import { registerArtifactsDir, resetRegisteredArtifactDirsForTests } from "../registry-helpers";
 
@@ -16,14 +17,16 @@ afterEach(() => {
 	resetRegisteredArtifactDirsForTests();
 });
 
-function register(id: string): void {
+function register(id: string, live = false): void {
 	AgentRegistry.global().register({
 		id,
 		displayName: id,
 		kind: "sub",
-		session: null,
+		session: live
+			? ({ messages: [], sessionManager: { getArtifactsDir: () => null } } as unknown as AgentSession)
+			: null,
 		sessionFile: null,
-		status: "parked",
+		status: live ? "running" : "parked",
 	});
 }
 
@@ -46,7 +49,7 @@ describe("history:// case-folded disk roster", () => {
 		try {
 			registerArtifactsDir(temp.path());
 			await createDiskArchive(temp.path(), "reviewer");
-			register("Reviewer");
+			register("Reviewer", true);
 
 			const handler = new HistoryProtocolHandler();
 			const index = await handler.resolve(new URL("history://") as never);
@@ -56,6 +59,10 @@ describe("history:// case-folded disk roster", () => {
 			const ids = (await handler.complete()).map(item => item.value)
 				.filter(id => id.toLowerCase() === "reviewer");
 			expect(ids).toEqual(["Reviewer"]);
+			// A lower-cased URL resolves the live registered agent, not the hidden
+			// on-disk spelling. This must agree with what the roster advertises.
+			const selected = await handler.resolve(new URL("history://reviewer") as never);
+			expect(selected.notes).toContain("Source: live session");
 		} finally {
 			await temp.remove();
 		}
