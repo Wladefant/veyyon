@@ -3316,7 +3316,10 @@ export class SessionManager {
 			options?.operatorNotices,
 			options?.instrumentation,
 		);
-		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		// Do not point the terminal at a future fork while evidence validation or
+		// JSONL publication can still fail. Keep the caller's last valid breadcrumb.
+		const suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		manager.#suppressBreadcrumb = true;
 
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
@@ -3363,6 +3366,8 @@ export class SessionManager {
 		manager.#startLifecycle("created");
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
+		manager.#suppressBreadcrumb = suppressBreadcrumb;
+		manager.#rememberBreadcrumb(manager.#cwd, nextSessionFile);
 		return manager;
 	}
 
