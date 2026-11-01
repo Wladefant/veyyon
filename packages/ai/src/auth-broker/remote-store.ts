@@ -662,6 +662,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			this.#credentialBlockReconciliationPending.size === 0
 		) return;
 		this.#credentialBlockReconciliationInFlight = true;
+		// A newer write can settle while an earlier reconciliation GET is still
+		// in flight, preventing its settlement from starting a fresh read.
+		const epochAtStart = this.#credentialBlockMutationEpoch;
 		const cause = "credential-block-mutation-reconcile";
 		try {
 			for (let attempt = 0; attempt < MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS; attempt += 1) {
@@ -687,6 +690,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			this.#reportStaleSnapshot(cause, error, { credentialIds: [...this.#credentialBlockReconciliationPending] });
 		} finally {
 			this.#credentialBlockReconciliationInFlight = false;
+			// An overlapping write may have settled while the previous GET was
+			// awaiting a response. If that GET failed, its caller cannot schedule
+			// a replacement while the in-flight flag was set. Retry once for the
+			// newer mutation epoch, but never spin on an unchanged broker outage.
+			if (
+				this.#credentialBlockMutationEpoch !== epochAtStart &&
+				this.#pendingCredentialBlockMutations.size === 0 &&
+				this.#credentialBlockReconciliationPending.size > 0
+			) {
+				void this.#reconcileFailedCredentialBlockMutations();
+			}
 		}
 	}
 
