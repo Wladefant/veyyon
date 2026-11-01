@@ -2013,7 +2013,15 @@ export class MCPManager {
 		}
 
 		const pending = this.#pendingReconnections.get(name);
-		if (pending) return pending;
+		if (pending) {
+			const scope = this.#eventCallbackContext.getStore();
+			// An external reconnect may be draining this exact callback. It cannot
+			// await a promise that is in turn waiting for the callback to return.
+			if (scope?.active && scope.serverName === name) {
+				throw new Error("An MCP event callback cannot await its server's in-flight reconnect");
+			}
+			return pending;
+		}
 
 		if (this.#tripReconnectBreaker(name)) {
 			return null;
@@ -2126,10 +2134,17 @@ export class MCPManager {
 		// reconnect loop by that amount on every server restart.
 		const reconnectEpoch = this.#epoch;
 		if (oldConnection) {
-			// Detach onClose to prevent re-entrant reconnect from the close itself
+			// Explicit /mcp reconnect must retire this server's old feed, just as
+			// an unexpected transport close does. Remove the stale connection before
+			// awaiting its callback drain so an external handler change cannot start
+			// new events against a transport being replaced.
+			this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+			this.#connections.delete(name);
+			await this.#stopServerEvents(name);
+			// Keep transport close detached: the HTTP DELETE may take its full
+			// request timeout and does not belong on the reconnect critical path.
 			oldConnection.transport.onClose = undefined;
 			closeTransportDetached(oldConnection.transport, name, "reconnect-replaced");
-			this.#connections.delete(name);
 		}
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);

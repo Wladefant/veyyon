@@ -2318,6 +2318,14 @@ describe("MCPManager event subscription contracts", () => {
 				originalA++;
 				firstEntered.resolve();
 				await releaseFirst.promise;
+				// A callback may not join an external reconnect that is waiting for
+				// this very callback to finish its old-stream drain.
+				await withinHandlerChange(
+					expect(manager.reconnectServer(aName)).rejects.toThrow(
+						"An MCP event callback cannot await its server's in-flight reconnect",
+					),
+					"same-server reentrant reconnect refusal",
+				);
 				// This callback belongs to the transport being replaced. It must
 				// not replace the handler shared by the new A and unrelated B.
 				manager.setOnEvent(() => { stolen++; });
