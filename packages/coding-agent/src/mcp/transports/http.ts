@@ -500,9 +500,21 @@ export class HttpTransport implements MCPTransport {
 			return this.#parseSSEResponse<T>(response, id, operation, timeout);
 		}
 
-		// Handle JSON response
-		const result = (await untilAborted(operation.signal, response.json())) as JsonRpcResponse;
-
+		// Handle JSON response. HTTP 200 does not establish JSON-RPC request identity:
+		// a stale reply cannot become the current tool call's result.
+		const raw: unknown = await untilAborted(operation.signal, response.json());
+		if (
+			!raw ||
+			typeof raw !== "object" ||
+			Array.isArray(raw) ||
+			!("jsonrpc" in raw) ||
+			raw.jsonrpc !== "2.0" ||
+			!("id" in raw) ||
+			raw.id !== id
+		) {
+			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid protocol or request identity");
+		}
+		const result = raw as JsonRpcResponse;
 		if (result.error) {
 			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
 		}
