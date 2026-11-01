@@ -1112,6 +1112,90 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+	test("does not reconcile a failed credential across another credential's pending block", async () => {
+		storage!.upsertCredential("anthropic", mintOAuthCredential("peer", Date.now() + 120_000));
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const first = initial.snapshot.credentials.find(entry =>
+			entry.credential.type === "oauth" && entry.credential.access === "access-a",
+		);
+		const second = initial.snapshot.credentials.find(entry =>
+			entry.credential.type === "oauth" && entry.credential.access === "access-peer",
+		);
+		if (!first || !second) throw new Error("expected two independent synthetic credentials");
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected background poll with stalled SSE");
+			fullReads += 1;
+			return realFetch(opts);
+		});
+		const releasePeerPost = Promise.withResolvers<void>();
+		const peerPostStarted = Promise.withResolvers<void>();
+		const peerPostCommitted = Promise.withResolvers<void>();
+		const realUpsert = client.upsertCredentialBlock.bind(client);
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (id, body) => {
+			if (id === first.id) return { ok: false };
+			if (id !== second.id) throw new Error("unexpected credential block POST");
+			peerPostStarted.resolve();
+			await releasePeerPost.promise;
+			const response = await realUpsert(id, body);
+			peerPostCommitted.resolve();
+			return response;
+		});
+		let failureHandled = false;
+		spyOn(logger, "warn").mockImplementation((message, context) => {
+			if (message === "auth-broker credential block propagation failed" && context?.id === first.id) {
+				failureHandled = true;
+			}
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		const firstUntilMs = Date.now() + 90_000;
+		const secondUntilMs = firstUntilMs + 60_000;
+		remote.upsertCredentialBlock({
+			credentialId: second.id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+		});
+		await peerPostStarted.promise;
+		remote.upsertCredentialBlock({
+			credentialId: first.id, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+		});
+		try {
+			await waitUntil(() => failureHandled);
+			expect(fullReads).toBe(0);
+			expect(remote.getCredentialBlock(second.id, "anthropic", "credential")).toBe(secondUntilMs);
+			releasePeerPost.resolve();
+			await peerPostCommitted.promise;
+			await waitUntil(() =>
+				fullReads >= 1 &&
+				remote!.getCredentialBlock(first.id, "anthropic", "credential") === undefined &&
+				remote!.getCredentialBlock(second.id, "anthropic", "credential") === secondUntilMs,
+			);
+			const authoritative = await peer.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected final broker snapshot");
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === first.id)?.blocks ?? []).toEqual([]);
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === second.id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: secondUntilMs },
+			]);
+			expect(remote.listCredentialBlocks([first.id, second.id])).toMatchObject([
+				{ credentialId: second.id, providerKey: "anthropic", blockScope: "credential", blockedUntilMs: secondUntilMs },
+			]);
+		} finally {
+			releasePeerPost.resolve();
+		}
+	});
+
 	test("keeps a pending scope blocked across an overlapping confirmed delete-all", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
