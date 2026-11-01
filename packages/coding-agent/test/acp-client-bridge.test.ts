@@ -149,3 +149,70 @@ it("starts a live ACP permission RPC synchronously, before its caller can abort 
 		selected.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
 	}
 }, 10_000);
+
+
+// WHY: the ACP editor may synchronously abort a request while returning an
+// already rejected promise. Cancellation must beat its transport failure in
+// the bridge result; ordinary non-aborted transport errors stay observable.
+// A fake editor cannot prove the real client dismissed its permission modal.
+it("returns cancelled when synchronous client abort races an already-rejected editor reply", async () => {
+	const controller = new AbortController();
+	let calls = 0;
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			calls++;
+			controller.abort();
+			return Promise.reject(new Error("synthetic ACP editor disconnect"));
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-immediate-abort-reject", {});
+	const request = bridge.requestPermission!(
+		{ toolCallId: "aborted-rejected-permission", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	expect(await withinPermissionAbortPhase(request, "synchronous abort and rejection")).toEqual({ outcome: "cancelled" });
+	expect(calls).toBe(1);
+}, 8_000);
+
+it("returns cancelled when the editor synchronously aborts and throws before returning a promise", async () => {
+	const controller = new AbortController();
+	let calls = 0;
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			calls++;
+			controller.abort();
+			throw new Error("synthetic ACP permission call threw");
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-sync-abort-throw", {});
+	const request = bridge.requestPermission!(
+		{ toolCallId: "aborted-throw-permission", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	expect(await withinPermissionAbortPhase(request, "synchronous abort and throw")).toEqual({ outcome: "cancelled" });
+	expect(calls).toBe(1);
+}, 8_000);
+
+it("still reports a client transport rejection while the caller remains active", async () => {
+	const controller = new AbortController();
+	let calls = 0;
+	const connection = {
+		requestPermission(_params: RequestPermissionRequest) {
+			calls++;
+			return Promise.reject(new Error("synthetic active editor failure"));
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-unaborted-reject", {});
+	const request = bridge.requestPermission!(
+		{ toolCallId: "active-rejection-permission", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	await expect(withinPermissionAbortPhase(request, "active editor rejection")).rejects.toThrow(
+		"synthetic active editor failure",
+	);
+	expect(controller.signal.aborted).toBe(false);
+	expect(calls).toBe(1);
+}, 8_000);
