@@ -239,7 +239,18 @@ jobs:
         if: always()
         timeout-minutes: 1
         shell: bash
-        run: bash scripts/ovh-process-group.sh --cleanup
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload selection plan artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -442,7 +453,18 @@ jobs:
         if: always()
         timeout-minutes: 1
         shell: bash
-        run: bash scripts/ovh-process-group.sh --cleanup
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload test logs and receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -517,7 +539,18 @@ jobs:
         if: always()
         timeout-minutes: 1
         shell: bash
-        run: bash scripts/ovh-process-group.sh --cleanup
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload typecheck artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
