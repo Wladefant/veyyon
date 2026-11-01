@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Track Telegram turn consumption on shared trace metadata so pre-consumption message copies cannot emit duplicate lifecycle records (Refs #505).
+
 ### Added
 
 - Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
