@@ -76,6 +76,13 @@ function isFileReadError(error: unknown): boolean {
 	return error instanceof Error && "code" in error;
 }
 
+/** Both search passes and exact reads must agree on what is a stored entry. */
+type StoredEntryShape = { type?: unknown; id?: unknown; parentId?: unknown };
+function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: string; parentId?: string | null } {
+	return typeof entry.id === "string" && typeof entry.type === "string"
+		&& (entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string");
+}
+
 export interface ExactHistoryRequest {
 	entryId: string;
 	leafId?: string | null;
@@ -248,8 +255,7 @@ export async function readStoredHistoryEntry(
 				else incomplete = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string"
-				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
+			if (!isStoredEntry(entry)) {
 				incomplete = true;
 				continue;
 			}
@@ -433,8 +439,7 @@ export async function searchStoredHistoryEntries(
 				else unreadable = true;
 				continue;
 			}
-			if (typeof entry.id !== "string" || typeof entry.type !== "string"
-				|| (entry.parentId !== undefined && entry.parentId !== null && typeof entry.parentId !== "string")) {
+			if (!isStoredEntry(entry)) {
 				unreadable = true;
 				continue;
 			}
@@ -487,6 +492,8 @@ export async function searchStoredHistoryEntries(
 	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	let truncated = false;
 	const matchesHash = createHash("sha256");
+	let replaySessionId: string | undefined;
+	let replayLastId: string | undefined;
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
@@ -501,10 +508,18 @@ export async function searchStoredHistoryEntries(
 			} catch {
 				continue;
 			}
-			if (!record || typeof record !== "object") continue;
-			const entry = record as { type?: unknown; id?: unknown };
-			if (entry.type === "session" || typeof entry.id !== "string" || typeof entry.type !== "string"
-				|| !selectedIds.has(entry.id) || !line.toLowerCase().includes(query)) continue;
+			if (!record || typeof record !== "object" || Array.isArray(record)) continue;
+			const entry = record as StoredEntryShape;
+			// Metadata and malformed records rejected by the lineage scan cannot
+			// masquerade as an indexed entry just because they reuse its ID.
+			if (entry.type === "title" && !replaySessionId && !replayLastId) continue;
+			if (entry.type === "session") {
+				if (typeof entry.id === "string") replaySessionId = entry.id;
+				continue;
+			}
+			if (!isStoredEntry(entry)) continue;
+			replayLastId = entry.id;
+			if (!selectedIds.has(entry.id) || !line.toLowerCase().includes(query)) continue;
 			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
 				candidates.shift();
 				truncated = true;
