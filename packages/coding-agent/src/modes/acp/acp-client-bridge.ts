@@ -149,7 +149,10 @@ async function requestPermission(
 	try {
 		// Guard the tiny window between the preflight and listener setup.
 		if (signal?.aborted) return { outcome: "cancelled" };
-		const clientReply = Promise.resolve().then(() => connection.requestPermission(request));
+		// Preserve the existing immediate RPC dispatch. Deferring this call
+		// to a microtask could send a fresh permission prompt after an abort
+		// fired synchronously just after requestPermission was invoked.
+		const clientReply = connection.requestPermission(request);
 		const received = await Promise.race([
 			clientReply.then(response => ({ type: "reply" as const, response })),
 			cancelled.promise.then(() => ({ type: "aborted" as const })),
