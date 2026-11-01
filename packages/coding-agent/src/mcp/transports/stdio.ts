@@ -437,6 +437,24 @@ const STDERR_TAIL_LINE_CHARS = 400;
 const STDIO_CLOSED_FIX =
 	"Fix: run `/mcp list` to find this server's name, then `/mcp reconnect <name>`. If the output above names a missing command or environment variable, fix that in the server's MCP config entry first.";
 
+// A correlated JSON-RPC error/result reply is authoritative only when the
+// envelope is valid. Do not let a matching id turn an invalid JSONL object
+// into an undefined success or an event subscription acknowledgement.
+function isValidCorrelatedStdioResponse(value: unknown): value is JsonRpcResponse {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const frame = value as Record<string, unknown>;
+	if (frame.jsonrpc !== "2.0") return false;
+	if ("method" in frame) return false;
+	const hasResult = Object.hasOwn(frame, "result");
+	const hasError = Object.hasOwn(frame, "error");
+	if (hasResult === hasError) return false;
+	if (!hasError) return true;
+	const error = frame.error;
+	if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+	const fields = error as Record<string, unknown>;
+	return Number.isSafeInteger(fields.code) && typeof fields.message === "string";
+}
+
 export class StdioTransport implements MCPTransport {
 	#process: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	/**
@@ -680,6 +698,10 @@ export class StdioTransport implements MCPTransport {
 			const pending = this.#pendingRequests.get(responseId);
 			if (pending) {
 				this.#pendingRequests.delete(responseId);
+				if (!isValidCorrelatedStdioResponse(message)) {
+					pending.reject(new Error("MCP stdio server returned an invalid JSON-RPC response envelope"));
+					return;
+				}
 				if (response.error) {
 					pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
 				} else {
@@ -689,6 +711,10 @@ export class StdioTransport implements MCPTransport {
 			}
 			const stream = this.#streamRequests.get(responseId);
 			if (stream) {
+				if (!isValidCorrelatedStdioResponse(message)) {
+					stream.reject(new Error("MCP stdio server returned an invalid JSON-RPC response envelope"));
+					return;
+				}
 				if (response.error) {
 					stream.reject(Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
 						code: response.error.code,
