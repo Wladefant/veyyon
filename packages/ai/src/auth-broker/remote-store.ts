@@ -597,14 +597,23 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	deleteCredentialBlocks(credentialId: number): void {
-		this.#deleteSnapshotBlocks(credentialId);
-		for (const key of this.#credentialBlockReconcileAfter.keys()) {
-			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
-		}
-		this.#invalidateUsageCache();
+		// A rejected DELETE must not optimistically release a still-active broker
+		// block. If a newer snapshot/block mutation lands while it is pending,
+		// reconcile rather than deleting that newer state on late acknowledgment.
+		const revisionAtDelete = this.#appliedSnapshotRevision;
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
-			.then(() => {
+			.then(response => {
+				if (!response.ok) {
+					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
+				}
+				if (revisionAtDelete === this.#appliedSnapshotRevision) {
+					this.#deleteSnapshotBlocks(credentialId);
+					for (const key of this.#credentialBlockReconcileAfter.keys()) {
+						if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+					}
+					this.#invalidateUsageCache();
+				}
 				this.#maybeRefreshSnapshot("credential blocks delete");
 			})
 			.catch(error => {
