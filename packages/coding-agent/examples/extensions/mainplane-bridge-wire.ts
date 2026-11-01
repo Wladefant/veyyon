@@ -81,11 +81,13 @@ export interface BridgeReceipt {
 	job?: string; pid?: number; log?: string; owner_instance?: string;
 }
 export function validateReceipt(value: Record<string, unknown>, runId: string, operation?: BridgeReceipt["operation"]): BridgeReceipt {
-	if (value.schema_version !== 2 || !["run", "write", "kill", "job"].includes(String(value.operation)) ||
+	if (value.schema_version !== 2 || typeof value.operation !== "string" ||
+		!["run", "write", "kill", "job"].includes(value.operation) ||
 		(operation !== undefined && value.operation !== operation) || value.idempotency_sha256 !== digest(runId) ||
 		typeof value.request_sha256 !== "string" || !SHA256.test(value.request_sha256) ||
 		typeof value.worker !== "string" || !WORKER_ID.test(value.worker) || typeof value.session !== "string" || !WORKER_ID.test(value.session) ||
-		!["submitting", "uncertain", "accepted", "cancelled", "completed"].includes(String(value.state))) throw new MainplaneError("Mainplane receipt identity or schema mismatch");
+		typeof value.state !== "string" ||
+		!["submitting", "uncertain", "accepted", "cancelled", "completed"].includes(value.state)) throw new MainplaneError("Mainplane receipt identity or schema mismatch");
 	const result: BridgeReceipt = { schema_version: 2, operation: value.operation as BridgeReceipt["operation"],
 		idempotency_sha256: digest(runId), request_sha256: value.request_sha256, worker: value.worker,
 		session: value.session, state: value.state as BridgeReceipt["state"] };
@@ -108,7 +110,8 @@ export function validateReceipt(value: Record<string, unknown>, runId: string, o
 		if (typeof value.exit !== "number" || !Number.isSafeInteger(value.exit) || typeof value.output_sha256 !== "string" || !SHA256.test(value.output_sha256)) throw new MainplaneError("Mainplane completed receipt has no valid exit or output digest");
 		result.exit = value.exit; result.output_sha256 = value.output_sha256;
 		if (value.body !== undefined) {
-			if (typeof value.body !== "string" || digest(value.body) !== value.output_sha256) throw new MainplaneError("Mainplane output digest mismatch");
+			if (typeof value.body !== "string" || Buffer.from(value.body, "utf8").toString("utf8") !== value.body ||
+				digest(value.body) !== value.output_sha256) throw new MainplaneError("Mainplane output digest mismatch");
 			result.body = value.body;
 		}
 	} else if (value.exit !== undefined || value.output_sha256 !== undefined || value.body !== undefined) throw new MainplaneError("Unconfirmed Mainplane receipt cannot claim output");

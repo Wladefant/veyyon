@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { digest, mainplaneRequestHash, receiptIsError, remoteJobId, remoteRunId, remoteSessionId, validateReceipt } from "../examples/extensions/mainplane-bridge-wire";
+import { readRemoteReceipt } from "../examples/extensions/mainplane-worker-bridge";
 import { inspectRemoteJob, startRemoteJob } from "../examples/extensions/mainplane-bridge-jobs";
 
 const input = { worker: "pc2", interpreter: "bash", code: "echo background", sessionFile: "/session/current", toolCallId: "job-one" };
@@ -47,4 +48,85 @@ describe("native background job tools", () => {
 		expect(receiptIsError(validateReceipt(receipt("cancelled"), id, "job"))).toBe(true);
 		expect(receiptIsError(validateReceipt({ ...receipt("completed"), exit: 7 }, id, "job"))).toBe(true);
 	});
+
+	test("generic receipt reader rejects coercible JSON-array operation discriminators", async () => {
+		const run = {
+			schema_version: 2, operation: "run", worker: input.worker, session: remoteSessionId(input.sessionFile),
+			idempotency_sha256: digest(id), request_sha256: digest("synthetic-run-request"), state: "submitting",
+		};
+		for (const operation of [["run"], ["write"], ["kill"], ["job"]]) {
+			expect(() => validateReceipt({ ...run, operation }, id)).toThrow("receipt identity or schema");
+		}
+		let calls = 0;
+		const transport = Object.assign((async (_url: string | URL | Request, init?: RequestInit) => {
+			calls++; expect(init?.method).toBe("GET");
+			return new Response(JSON.stringify({ ...run, operation: ["run"] }));
+		}), { preconnect: globalThis.fetch.preconnect });
+		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key", id, input.sessionFile, undefined, transport))
+			.rejects.toThrow("receipt identity or schema");
+		expect(calls).toBe(1);
+	});
+
+	test("native job status rejects coercible JSON-array lifecycle states", async () => {
+		const malformed = { ...receipt(), state: ["accepted"] };
+		expect(() => validateReceipt(malformed, id, "job")).toThrow("receipt identity or schema");
+		let calls = 0;
+		const transport = Object.assign((async (_url: string | URL | Request, init?: RequestInit) => {
+			calls++; expect(init?.method).toBe("GET");
+			return new Response(JSON.stringify(malformed));
+		}), { preconnect: globalThis.fetch.preconnect });
+		await expect(inspectRemoteJob("https://fleet.example/", "fixture-key",
+			{ runId: id, sessionFile: input.sessionFile }, undefined, transport))
+			.rejects.toThrow("receipt identity or schema");
+		expect(calls).toBe(1);
+	});
+
+	test("primitive operation and state discriminators preserve pending semantics", () => {
+		const normalJob = validateReceipt(receipt(), id, "job");
+		expect(normalJob.operation).toBe("job");
+		expect(normalJob.state).toBe("accepted");
+		expect(normalJob.job).toBe(remoteJobId(id));
+		const run = validateReceipt({
+			schema_version: 2, operation: "run", worker: input.worker, session: remoteSessionId(input.sessionFile),
+			idempotency_sha256: digest(id), request_sha256: digest("synthetic-run-request"), state: "submitting",
+		}, id);
+		expect(run.operation).toBe("run");
+		expect(run.state).toBe("submitting");
+	});
+
+
+	test("native completed receipt refuses non-round-trippable JSON body despite matching UTF-8 digest", async () => {
+		// JSON escapes can carry isolated UTF-16 surrogates even though the
+		// digest function encodes both those strings and real U+FFFD identically.
+		const canonical = "\uFFFD";
+		const malformed = "\uD800";
+		expect(digest(malformed)).toBe(digest(canonical));
+		const completed = {
+			schema_version: 2, operation: "run", worker: input.worker,
+			session: remoteSessionId(input.sessionFile), idempotency_sha256: digest(id),
+			request_sha256: digest("synthetic-run-request"), state: "completed",
+			exit: 0, output_sha256: digest(canonical),
+		};
+		for (const body of [malformed, "\uDC00"]) {
+			expect(() => validateReceipt({ ...completed, body }, id, "run"))
+				.toThrow("output digest mismatch");
+		}
+		let calls = 0;
+		const transport = Object.assign((async (_url: string | URL | Request, init?: RequestInit) => {
+			calls++; expect(init?.method).toBe("GET");
+			return new Response(JSON.stringify({ ...completed, body: malformed }));
+		}), { preconnect: globalThis.fetch.preconnect });
+		await expect(readRemoteReceipt("https://fleet.example/", "fixture-key",
+			id, input.sessionFile, undefined, transport)).rejects.toThrow("output digest mismatch");
+		expect(calls).toBe(1);
+		const good = validateReceipt({ ...completed, body: canonical }, id, "run");
+		expect(good.body).toBe(canonical);
+		expect(good.output_sha256).toBe(digest(canonical));
+		const supplementary = "a😀";
+		const goodUnicode = validateReceipt({
+			...completed, body: supplementary, output_sha256: digest(supplementary),
+		}, id, "run");
+		expect(goodUnicode.body).toBe(supplementary);
+	});
+
 });
