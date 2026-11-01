@@ -129,6 +129,10 @@ export class CheckpointClient {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ ownerNode }),
 		});
+		if (!lease || lease.ownerNode !== ownerNode) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease owner mismatch");
+		}
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
 		return lease;
@@ -157,6 +161,10 @@ export class CheckpointClient {
 				}),
 			},
 		);
+		if (!result || result.ownerNode !== runtimeOwner) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease owner mismatch");
+		}
 		if (typeof result.resumeToken !== "string" || result.resumeToken.length < 16)
 			throw new Error("Checkpoint authority did not issue a valid resume capability");
 		const { resumeToken, ...lease } = result;
@@ -263,6 +271,8 @@ export class CheckpointClient {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
 			});
+			if (!next || next.ownerNode !== lease.ownerNode)
+				throw new Error("Checkpoint authority lease owner mismatch");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {

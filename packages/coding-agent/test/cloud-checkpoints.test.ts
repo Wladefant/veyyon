@@ -229,3 +229,42 @@ test("restoration aborts a stalled object body before its eventual bytes", async
 	await expect(client.restore("s")).rejects.toThrow();
 	expect(aborted).toBe(true);
 });
+
+test("checkpoint transfer grants reject an authority response for a different runtime owner", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		actions.push(new URL(String(input)).pathname.split("/").pop()!);
+		return Response.json({
+			ownerNode: "owner-b", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "", resumeToken: "a-long-enough-resume-capability",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	await expect(
+		client.claimTransfer("s1", "destination", "transfer-1", "a-long-enough-claim-token", 4, "owner-a"),
+	).rejects.toThrow(/lease owner mismatch/);
+	await expect(
+		client.resumeTransfer("s2", "destination", "transfer-2", "a-long-enough-resume-capability", 4, "owner-a"),
+	).rejects.toThrow(/lease owner mismatch/);
+	await expect(client.assertWritable("s1", 5)).rejects.toThrow(/lease lost/);
+	await expect(client.assertWritable("s2", 5)).rejects.toThrow(/lease lost/);
+	expect(actions).toEqual(["claim", "claim"]);
+});
+
+test("checkpoint renewal refuses a changed authority owner and revokes its cached lease", async () => {
+	let wrongOwner = false;
+	const fake: CheckpointFetch = async () => Response.json({
+		ownerNode: wrongOwner ? "owner-b" : "owner-a",
+		epoch: 1, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+	});
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const valid = await client.acquireLease("s", "owner-a");
+	await expect(client.assertWritable("s", valid.epoch)).resolves.toBeUndefined();
+	wrongOwner = true;
+	await expect(client.renewLease("s")).rejects.toThrow(/lease owner mismatch/);
+	await expect(client.assertWritable("s", valid.epoch)).rejects.toThrow(/lease lost/);
+});

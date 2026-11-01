@@ -34,7 +34,7 @@ test("server epoch loss blocks admission and does not reacquire silently", async
 		key: new Uint8Array(32),
 		fetch: fake,
 	});
-	const session = new SynchronizedSession("s", client);
+	const session = new SynchronizedSession("s", client, undefined, "node");
 	await session.admit();
 	owns = false;
 	await expect(session.admit()).rejects.toThrow(/409/);
@@ -215,6 +215,8 @@ test("concurrent admission shares one in-flight checkpoint lease acquisition", a
 	const session = new SynchronizedSession(
 		"concurrent-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
 	);
 	const first = session.admit();
 	const second = session.admit();
@@ -252,6 +254,8 @@ test("close during checkpoint lease acquisition releases the late grant and refu
 	const session = new SynchronizedSession(
 		"late-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
 	);
 	const admission = session.admit();
 	await entered.promise;
@@ -282,6 +286,8 @@ test("an expired checkpoint lease permanently fences subsequent admissions", asy
 	const session = new SynchronizedSession(
 		"expired-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
 	);
 	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
@@ -329,7 +335,7 @@ test("close during transfer claim releases the late grant without persisting a r
 			"closing-transfer",
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 			marker,
-			undefined,
+			"runtime-owner",
 			async () => { persisted++; },
 		);
 		const admission = session.admit();
@@ -367,6 +373,8 @@ test("an expired renewal response fences the current admission", async () => {
 	const session = new SynchronizedSession(
 		"expired-renewal-response",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
 	);
 	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
@@ -394,7 +402,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		"expired-periodic",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: expiredFetch }),
 		undefined,
-		undefined,
+		"expired-owner",
 		undefined,
 		8,
 	);
@@ -424,7 +432,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		"valid-periodic",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: controlFetch }),
 		undefined,
-		undefined,
+		"valid-owner",
 		undefined,
 		8,
 	);
@@ -485,7 +493,7 @@ test("successful transfer retains its persisted resume capability on release", a
 		"successful-transfer",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		claim,
-		undefined,
+		"runtime-owner",
 		async (resumeToken, epoch) => {
 			persisted.push({ token: resumeToken, epoch });
 		},
@@ -499,4 +507,25 @@ test("successful transfer retains its persisted resume capability on release", a
 		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
 		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
+});
+
+test("foreign-owner lease response cannot admit a synchronized session or renew under another owner", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "owner-b", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const session = new SynchronizedSession("foreign-owner", client, undefined, "owner-a");
+	await expect(session.admit()).rejects.toThrow(/lease owner mismatch/);
+	expect(actions).toEqual(["lease"]);
+	await expect(client.assertWritable("foreign-owner", 1)).rejects.toThrow(/lease lost/);
+	await session.close();
+	expect(actions).toEqual(["lease"]);
 });
