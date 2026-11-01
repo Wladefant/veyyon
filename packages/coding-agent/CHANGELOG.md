@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Confine retained native task continuation artifact filenames to the session artifact directory, including traversal and Windows-reserved task identifiers ([Refs #766](https://github.com/Wladefant/veyyon/issues/766)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
