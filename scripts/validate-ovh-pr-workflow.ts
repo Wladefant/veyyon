@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
 interface Step {
+	run?: string;
+	shell?: string;
 	name?: string;
 	if?: string;
 	uses?: string;
@@ -60,6 +62,7 @@ const repository = "Wladefant/veyyon";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const mergeCommit = "c".repeat(40);
+const workflowCommit = "d".repeat(40);
 
 function context({
 	event = "pull_request",
@@ -91,6 +94,7 @@ function context({
 			repository,
 			event_name: event,
 			sha: mergeCommit,
+			workflow_sha: workflowCommit,
 			event:
 				event === "pull_request"
 					? {
@@ -191,6 +195,25 @@ function validate(workflow: Workflow): void {
 			}
 		});
 	}
+
+	check("all cleanup jobs use the workflow commit, not a checked-out older target", () => {
+		for (const job of Object.values(workflow.jobs)) {
+			const cleanup = job.steps.find(step => step.name === "Clean orphaned processes");
+			equal(cleanup?.shell, "bash");
+			equal(cleanup?.if, "always()");
+			for (const fixture of [
+				context(),
+				context({ event: "workflow_dispatch", target: head }),
+			]) {
+				equal(evaluate(cleanup?.env?.WORKFLOW_SHA, fixture), workflowCommit);
+			}
+			const run = cleanup?.run ?? "";
+			equal(run.includes('git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh"'), true);
+			equal(run.includes('bash "$cleanup_script" --cleanup'), true);
+			equal(run.includes('bash scripts/ovh-process-group.sh --cleanup'), false);
+			equal(run.includes('set -euo pipefail'), true);
+		}
+	});
 
 	check("selection uses the PR event base or explicitly pinned manual base", () => {
 		const selection = workflow.jobs.prepare!.steps.find(step => step.name === "Detect changed paths");
