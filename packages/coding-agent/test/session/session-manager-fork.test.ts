@@ -265,6 +265,10 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       "artifact://0-bad",
       "artifact://0.example",
       "artifact://0:80",
+      "artifact://0!x",
+      "artifact://0$x",
+      "artifact://0,foo",
+      "artifact://0;foo",
     ]) {
       using temp = TempDir.createSync("@veyyon-fork-malformed-artifact-");
       const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
