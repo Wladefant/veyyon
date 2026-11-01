@@ -638,3 +638,65 @@ test("foreign-owner lease response cannot admit a synchronized session or renew 
 	await session.close();
 	expect(actions).toEqual(["lease"]);
 });
+// WHY: claim-transfer writes the returned resume capability to the persistent
+// marker before ordinary admission verifies writability. A malformed HTTP-200
+// authority grant must not replace the one-time claim with a dead resume token.
+test("invalid transfer grant cannot persist a resume capability before admission", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const scenarios: Array<{ name: string; epoch: number | undefined; expiresAt: string }> = [
+		{ name: "expired", epoch: 5, expiresAt: "2000-01-01T00:00:00Z" },
+		{ name: "malformed-expiry", epoch: 5, expiresAt: "not-a-date" },
+		{ name: "missing-epoch", epoch: undefined, expiresAt: "2099-01-01T00:00:00Z" },
+		{ name: "fractional-epoch", epoch: 5.5, expiresAt: "2099-01-01T00:00:00Z" },
+		{ name: "stale-epoch", epoch: 3, expiresAt: "2099-01-01T00:00:00Z" },
+	];
+	try {
+		for (const scenario of scenarios) {
+			const actions: string[] = [];
+			const persisted: Array<{ token: string; epoch: number }> = [];
+			const fake: CheckpointFetch = async input => {
+				const action = new URL(String(input)).pathname.split("/").pop()!;
+				actions.push(action);
+				if (action !== "claim") return Response.json({ ok: true });
+				return Response.json({
+					ownerNode: "runtime-owner",
+					epoch: scenario.epoch,
+					expiresAt: scenario.expiresAt,
+					headSequence: 0,
+					manifestHash: "",
+					resumeToken: "a-long-enough-resume-capability",
+				});
+			};
+			const sessionId = `invalid-grant-${scenario.name}`;
+			const client = new CheckpointClient({
+				baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake,
+			});
+			const session = new SynchronizedSession(
+				sessionId,
+				client,
+				{
+					version: 1,
+					sessionId,
+					targetNode: "destination-device",
+					transferId: "transfer-invalid-grant",
+					transferEpoch: 4,
+					claimToken: "a-long-enough-claim-capability",
+					epoch: 4,
+				},
+				"runtime-owner",
+				async (token, epoch) => { persisted.push({ token, epoch }); },
+			);
+			await expect(session.admit()).rejects.toThrow(/transfer grant has invalid lease fence/);
+			expect(persisted).toEqual([]);
+			expect(actions).toEqual(["claim"]);
+			await expect(client.assertWritable(sessionId, 5)).rejects.toThrow(/lease lost/);
+			await session.close();
+			expect(actions).toEqual(["claim"]);
+		}
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+

@@ -167,6 +167,19 @@ export class CheckpointClient {
 		}
 		if (typeof result.resumeToken !== "string" || result.resumeToken.length < 16)
 			throw new Error("Checkpoint authority did not issue a valid resume capability");
+		// A transfer grant is written to durable ownership metadata before the
+		// first ordinary admission check. Refuse an expired/invalid authority
+		// fence here, before a one-time claim is replaced by a resume marker.
+		const expiresAt = typeof result.expiresAt === "string" ? Date.parse(result.expiresAt) : Number.NaN;
+		if (
+			!Number.isSafeInteger(result.epoch) ||
+			result.epoch < transferEpoch ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= Date.now()
+		) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority transfer grant has invalid lease fence");
+		}
 		const { resumeToken, ...lease } = result;
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
