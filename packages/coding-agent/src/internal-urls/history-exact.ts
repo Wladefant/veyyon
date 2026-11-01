@@ -16,6 +16,9 @@ const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+// Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
+const SCAN_BOUND_EXCEEDED = Symbol("stored-history-scan-bound");
+const HARD_BOUND_DETAIL = "Stored history exceeded the 128 MiB or 100,000-entry scan bound; branch identity and unique record IDs cannot be verified";
 const DUPLICATE_ID_DETAIL = "Duplicate stored entry ID makes branch identity and exact evidence ambiguous";
 
 function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
@@ -27,7 +30,7 @@ function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
 }
 
 /** Discard an oversized line while streaming, before allocating its full text. */
-async function* storedLines(filePath: string): AsyncGenerator<string | undefined> {
+async function* storedLines(filePath: string): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
 	const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
 	let parts: Buffer[] = [];
 	let bytes = 0;
@@ -38,7 +41,7 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 			const buffer = chunk as Buffer;
 			scannedBytes += buffer.length;
 			if (scannedBytes > MAX_SCANNED_BYTES) {
-				yield undefined;
+				yield SCAN_BOUND_EXCEEDED;
 				return;
 			}
 			let start = 0;
@@ -213,6 +216,10 @@ export async function readStoredHistoryEntry(
 	let startedJsonl = false;
 	try {
 		for await (const line of storedLines(filePath)) {
+			if (line === SCAN_BOUND_EXCEEDED) {
+				return { status: "unavailable", entryId: request.entryId, sessionId,
+					source: "stored-jsonl", detail: HARD_BOUND_DETAIL };
+			}
 			if (line === undefined) {
 				incomplete = true;
 				continue;
@@ -253,8 +260,8 @@ export async function readStoredHistoryEntry(
 				};
 			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
-				incomplete = true;
-				break;
+				return { status: "unavailable", entryId: request.entryId, sessionId,
+					source: "stored-jsonl", detail: HARD_BOUND_DETAIL };
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
@@ -393,6 +400,10 @@ export async function searchStoredHistoryEntries(
 	const topologyHash = createHash("sha256");
 	try {
 		for await (const line of storedLines(filePath)) {
+			if (line === SCAN_BOUND_EXCEEDED) {
+				return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
+					matches: [], detail: HARD_BOUND_DETAIL };
+			}
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
@@ -434,8 +445,8 @@ export async function searchStoredHistoryEntries(
 				};
 			}
 			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
-				unreadable = true;
-				break;
+				return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
+					matches: [], detail: HARD_BOUND_DETAIL };
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
@@ -478,6 +489,10 @@ export async function searchStoredHistoryEntries(
 	const matchesHash = createHash("sha256");
 	try {
 		for await (const line of storedLines(filePath)) {
+			if (line === SCAN_BOUND_EXCEEDED) {
+				return { status: "unavailable", sessionId, leafId, query: request.query, source: "stored-jsonl",
+					matches: [], detail: HARD_BOUND_DETAIL };
+			}
 			matchesHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined || !line.trimStart().startsWith("{")) continue;
 			let record: unknown;

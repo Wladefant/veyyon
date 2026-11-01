@@ -522,6 +522,89 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("does not certify explicit archived evidence when the 100,000-entry index is exhausted", async () => {
+		const dir = TempDir.createSync("@veyyon-history-index-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const lines = [
+				JSON.stringify({ type: "session", id: "s-index-cap" }),
+				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle original evidence" }),
+			];
+			for (let i = 1; i < 100_000; i++) {
+				lines.push(JSON.stringify({ type: "message", id: `entry-${i}`, parentId: "root", message: "other" }));
+			}
+			await fs.writeFile(file, lines.join("\n") + "\n");
+			const valid = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(valid.status).toBe("ok");
+			expect(valid.fragment).toContain("needle original evidence");
+
+			// A 100,001st distinct entry is beyond the bounded ancestry index.
+			// Accepting an explicit leaf would permit an unseen duplicate later.
+			await fs.appendFile(file, JSON.stringify({
+				type: "message", id: "out-of-index", parentId: "root", message: "needle extra",
+			}) + "\n");
+			for (const leafId of [undefined, "root"]) {
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId, offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId, limit: 5 });
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+			await fs.appendFile(file, JSON.stringify({
+				type: "message", id: "root", parentId: null, message: "needle forged duplicate",
+			}) + "\n");
+			const hiddenDuplicate = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(hiddenDuplicate.status).toBe("unavailable");
+			expect(hiddenDuplicate.fragment).toBeUndefined();
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("does not return explicit archived content from a 128 MiB truncated scan", async () => {
+		const dir = TempDir.createSync("@veyyon-history-byte-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s-byte-cap" }),
+				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle saved" }),
+			].join("\n") + "\n");
+			const valid = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(valid.status).toBe("ok");
+			expect(valid.fragment).toContain("needle saved");
+
+			// Extend only this disposable test file with a sparse, unterminated
+			// tail beyond the real production byte cap (no session files touched).
+			const handle = await fs.open(file, "r+");
+			try {
+				await handle.truncate(128 * 1024 * 1024 + 1);
+			} finally {
+				await handle.close();
+			}
+			const exact = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(exact.status).toBe("unavailable");
+			expect(exact.fragment).toBeUndefined();
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 5,
+			});
+			expect(search.status).toBe("unavailable");
+			expect(search.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
