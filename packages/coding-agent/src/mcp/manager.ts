@@ -500,14 +500,17 @@ export class MCPManager {
 			// Otherwise their streams keep running against an absent handler.
 			const active = [...this.#activeEvents.entries()];
 			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
-			// The setter remains synchronous; observe cleanup failures so an
-			// invalidated old feed cannot raise an unhandled rejection.
+			// The setter remains synchronous; consume teardown rejections and
+			// report failures without exposing transport diagnostics or credentials.
 			void Promise.allSettled(active.flatMap(([, subscription]) => [
 				subscription.stream?.done,
 				subscription.streamProcessing,
 				subscription.lifecycle,
 				subscription.unsubscribe,
-			].filter(Boolean)));
+			].filter(Boolean))).then(results => {
+				const failed = results.filter(result => result.status === "rejected").length;
+				if (failed > 0) logger.warn("MCP event handler removal cleanup failed", { failed });
+			});
 		}
 	}
 
