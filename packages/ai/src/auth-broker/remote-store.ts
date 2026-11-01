@@ -646,11 +646,18 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		this.#removeCredentialById(id);
-		// Fire-and-forget: tell the broker to persist the disable.
-		this.#client.disableCredential(id, disabledCause).catch(error => {
-			logger.warn("auth-broker disable propagation failed", { id, error: String(error) });
-		});
+		if (!this.#snapshot.credentials.some(entry => entry.id === id)) return;
+		const revisionAtDisable = this.#appliedSnapshotRevision;
+		// The legacy synchronous API cannot confirm a remote disable. Retain the grant
+		// until the broker acknowledges it; stale replies must not erase newer state.
+		void this.#disableCredentialConfirmed(id, disabledCause)
+			.then(() => {
+				if (revisionAtDisable === this.#appliedSnapshotRevision) this.#removeCredentialById(id);
+				this.#maybeRefreshSnapshot("delete credential");
+			})
+			.catch(error => {
+				logger.warn("auth-broker disable propagation failed", { id, error: String(error) });
+			});
 	}
 
 	/** A 2xx response is not revocation confirmation unless the broker reports ok:true. */
@@ -670,11 +677,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return true;
 	}
 
-	tryDisableAuthCredentialIfMatches(id: number, _expectedData: string, disabledCause: string): boolean {
-		const found = this.#snapshot.credentials.find(entry => entry.id === id);
-		if (!found) return false;
-		this.deleteAuthCredential(id, disabledCause);
-		return true;
+	tryDisableAuthCredentialIfMatches(_id: number, _expectedData: string, _disabledCause: string): boolean {
+		// A redacted local snapshot cannot compare the broker's serialized grant.
+		// Never turn a synchronous CAS into an unconditional remote disable or claim
+		// success before the broker has checked the current refresh-token owner.
+		return false;
 	}
 
 	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
