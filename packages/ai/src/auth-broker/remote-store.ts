@@ -43,6 +43,7 @@ import type {
  */
 const USAGE_CACHE_TTL_MS = 15_000;
 const CREDENTIAL_BLOCK_RECONCILE_DELAY_MS = 5 * 60_000;
+const MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS = 3;
 const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
@@ -337,15 +338,16 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * A broker restart may reset the numeric generation. Only the local applied-state
 	 * revision can prove whether an in-flight GET predates newer client state.
 	 */
-	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, revisionAtRequest: number): void {
+	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, revisionAtRequest: number): boolean {
 		if (revisionAtRequest !== this.#appliedSnapshotRevision) {
 			logger.debug("auth-broker stale snapshot response ignored", {
 				currentGeneration: this.#generation,
 				responseGeneration: generation,
 			});
-			return;
+			return false;
 		}
 		this.#applySnapshot(snapshot, generation);
+		return true;
 	}
 
 	/**
@@ -573,6 +575,32 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return blocks;
 	}
 
+	/**
+	 * A failed block mutation cannot rely on SSE (which may have no frame) to
+	 * reconcile its speculative/local state. An unrelated SSE event can supersede
+	 * a full GET without resolving this credential; make a few fresh attempts.
+	 * Never apply an obsolete GET over a newer same-credential edit.
+	 */
+	async #reconcileFailedCredentialBlockMutation(kind: "upsert" | "delete", id: number): Promise<void> {
+		const cause = `credential-block-${kind}-reconcile`;
+		try {
+			for (let attempt = 0; attempt < MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS; attempt += 1) {
+				const revisionAtRequest = this.#appliedSnapshotRevision;
+				const result = await this.#client.fetchSnapshot();
+				if (result.status === 200 && this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) {
+					return;
+				}
+			}
+			this.#reportStaleSnapshot(
+				cause,
+				new AIError.AuthBrokerError("Broker credential block reconciliation superseded repeatedly"),
+				{ id, attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
+			);
+		} catch (error) {
+			this.#reportStaleSnapshot(cause, error, { id });
+		}
+	}
+
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
@@ -596,13 +624,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					error: String(error),
 				});
-				// A failed POST emits no SSE update. Reconcile the speculative block
-				// even when streaming is active; revision-fenced GETs protect newer edits.
-				void this.refreshSnapshot().catch(refreshError => {
-					this.#reportStaleSnapshot("credential-block-upsert-reconcile", refreshError, {
-						id: block.credentialId,
-					});
-				});
+				// No SSE event follows a failed POST; independently reconcile
+				// its speculative block, even when the stream appears healthy.
+				void this.#reconcileFailedCredentialBlockMutation("upsert", block.credentialId);
 			});
 	}
 
@@ -631,14 +655,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					id: credentialId,
 					error: String(error),
 				});
-				// The broker may have committed the DELETE before its reply was lost.
-				// A stalled SSE stream cannot confirm that state. Reconcile even while
-				// streaming; the existing GET revision fence preserves newer edits.
-				void this.refreshSnapshot().catch(refreshError => {
-					this.#reportStaleSnapshot("credential-block-delete-reconcile", refreshError, {
-						id: credentialId,
-					});
-				});
+				// The broker may have committed before its reply was lost.
+				// Reconcile even when SSE appears healthy but emits no new frames.
+				void this.#reconcileFailedCredentialBlockMutation("delete", credentialId);
 			});
 	}
 
