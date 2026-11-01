@@ -742,15 +742,22 @@ export class MCPManager {
 			return;
 		}
 		this.#eventSubscriptionFailures.delete(key);
+		// A rejected callback has no remote registration. Leave a failed
+		// diagnostic, never a phantom active feed that cannot receive events.
+		const refuseCallback = (reason: string): void => {
+			logger.error(reason, { path: `mcp:${serverName}` });
+			this.#eventSubscriptionFailures.set(key, reason);
+			this.#stopEvent(key, subscription, false);
+		};
 		let callback: URL;
 		try {
 			callback = new URL(webhook.callbackUrl);
 		} catch {
-			logger.error("MCP webhook callback URL is invalid", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback URL is invalid");
 			return;
 		}
 		if (callback.protocol !== "https:" || callback.username !== "" || callback.password !== "" || callback.hash !== "") {
-			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback must use HTTPS without embedded credentials or a fragment");
 			return;
 		}
 		const path = callback.pathname;
@@ -760,7 +767,7 @@ export class MCPManager {
 			) ||
 			this.#webhookVerificationRoutes.has(path)
 		) {
-			logger.error("MCP webhook callback path must be unique within this session", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback path must be unique within this session");
 			return;
 		}
 		const port = webhook.listenPort;
