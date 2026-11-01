@@ -864,7 +864,9 @@ export class MCPManager {
 		key: string,
 		subscription: ActiveMCPEventSubscription,
 	): Promise<void> {
-		while (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+		const isCurrent = () =>
+			!subscription.controller.signal.aborted && this.#activeEvents.get(key) === subscription;
+		while (isCurrent()) {
 			const previousCursor = subscription.cursor;
 			try {
 				const result = await pollEvents(
@@ -875,8 +877,12 @@ export class MCPManager {
 					{ signal: subscription.controller.signal },
 				);
 				for (const event of result.events) {
+					if (!isCurrent()) return;
 					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
 				}
+				// Stopping while an occurrence is being persisted must not acknowledge the
+				// rest of its page: those undelivered events must remain replayable.
+				if (!isCurrent()) return;
 				if (result.truncated) {
 					await this.#recordEventControl(serverName, key, {
 						type: "gap",
@@ -884,6 +890,7 @@ export class MCPManager {
 						cursor: result.cursor ?? null,
 					});
 				}
+				if (!isCurrent()) return;
 				await this.#recordEventCursor(subscription, result.cursor ?? null);
 				if (result.hasMore) continue;
 				const delay = Math.max(1_000, Number.isFinite(result.nextPollMs) ? result.nextPollMs! : 30_000);
