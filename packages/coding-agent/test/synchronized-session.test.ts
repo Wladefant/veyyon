@@ -189,3 +189,77 @@ test("a transfer claim is single-use across runtimes sharing the destination dev
 		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
 });
+// WHY: prompt/tool admissions can overlap before the initial remote lease is granted.
+// Without coalescing, the same process sends duplicate /lease (or one-time /claim)
+// requests and can race the authority's ownership handshake.
+test("concurrent admission shares one in-flight checkpoint lease acquisition", async () => {
+	const entered = Promise.withResolvers<void>();
+	const allowLease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const lease = {
+		ownerNode: "test-owner",
+		epoch: 1,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "lease") {
+			entered.resolve();
+			await allowLease.promise;
+		}
+		return Response.json(lease);
+	};
+	const session = new SynchronizedSession(
+		"concurrent-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+	);
+	const first = session.admit();
+	const second = session.admit();
+	await entered.promise;
+	expect(actions).toEqual(["lease"]);
+	allowLease.resolve();
+	await Promise.all([first, second]);
+	expect(actions).toEqual(["lease", "renew"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+// WHY: a shutdown while /lease is unresolved used to release nothing and return,
+// then the late admission installed a timer and admitted work after close.
+test("close during checkpoint lease acquisition releases the late grant and refuses admission", async () => {
+	const entered = Promise.withResolvers<void>();
+	const allowLease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const lease = {
+		ownerNode: "test-owner",
+		epoch: 1,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "lease") {
+			entered.resolve();
+			await allowLease.promise;
+		}
+		return Response.json(lease);
+	};
+	const session = new SynchronizedSession(
+		"late-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+	);
+	const admission = session.admit();
+	await entered.promise;
+	const closing = session.close();
+	allowLease.resolve();
+	await expect(admission).rejects.toThrow(/Synchronized ownership lost/);
+	await closing;
+	expect(actions).toEqual(["lease", "release"]);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "release"]);
+});
