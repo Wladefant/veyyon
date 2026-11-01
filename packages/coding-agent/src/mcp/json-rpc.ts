@@ -12,22 +12,24 @@ import type { JsonRpcResponse } from "./types";
 /** Hard ceiling on a single MCP HTTP request when the caller provides no signal. */
 const MCP_DEFAULT_TIMEOUT_MS = 60_000;
 
-const SENSITIVE_QUERY_PARAM = /key|token|secret|auth/i;
-
 /**
- * Redact credential-bearing query params (e.g. `exaApiKey`) so failed
- * requests never write secrets to the persistent log file.
+ * Diagnostics may name an endpoint, never URL credentials or unclassified
+ * query values. A query parameter can carry private data regardless of its
+ * key, and even an invalid URL must not be echoed into a persistent log.
  */
 export function redactUrlForLog(url: string): string {
 	try {
 		const parsed = new URL(url);
-		for (const name of parsed.searchParams.keys()) {
-			if (SENSITIVE_QUERY_PARAM.test(name)) parsed.searchParams.set(name, "[redacted]");
-		}
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "(invalid MCP URL)";
+		parsed.username = "";
+		parsed.password = "";
+		// Query names and values can both be caller-controlled. The path remains
+		// for actionable endpoint diagnostics; only the wire uses the full URL.
+		parsed.search = "";
+		parsed.hash = "";
 		return parsed.toString();
 	} catch {
-		// Unparseable URL — drop the query string entirely rather than risk leaking it.
-		return url.split("?")[0];
+		return "(invalid MCP URL)";
 	}
 }
 
@@ -105,8 +107,11 @@ export async function callMCP<T = unknown>(
 			// The same builder the HTTP transport uses, so a direct `callMCP` and a
 			// transport request report the same failure the same way, with the same
 			// bound on the echoed body and the same per-status remedy.
-			const errorMsg = mcpHttpFailureMessage(redactUrlForLog(url), response.status, response.statusText);
-			logger.error(errorMsg, { url: redactUrlForLog(url), method, params });
+			// Status reasons are peer-controlled text, just like body content.
+			// Preserve the numeric status and remedy but never echo request args.
+			const safeUrl = redactUrlForLog(url);
+			const errorMsg = mcpHttpFailureMessage(safeUrl, response.status, "");
+			logger.error(errorMsg, { url: safeUrl, method });
 			throw new Error(errorMsg);
 		}
 
@@ -120,7 +125,6 @@ export async function callMCP<T = unknown>(
 		logger.error("Failed to parse MCP response", {
 			url: redactUrlForLog(url),
 			method,
-			responseText: text.slice(0, 500),
 		});
 		throw new Error(
 			`MCP server at ${redactUrlForLog(url)} answered "${method}" with something that is neither JSON nor a JSON-RPC SSE frame, so there is nothing to read. Fix: this is a bug in the server, or a proxy rewriting its response. Check the server's own logs, and run \`/mcp test <name>\` to reproduce it.`,
