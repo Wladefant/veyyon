@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject encoded path separators in `agent://` result identifiers before artifact lookup ([#852](https://github.com/Wladefant/veyyon/issues/852)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
