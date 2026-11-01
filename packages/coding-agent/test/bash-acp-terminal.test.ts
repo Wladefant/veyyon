@@ -239,4 +239,144 @@ describe("BashTool ACP terminal routing", () => {
 		expect(kills).toBe(0);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	// WHY: the original poll race included the deadline only outside the
+	// terminal/output await, so a permanently pending client output RPC could
+	// hide the expiry. The early observer prevents an old source test hang.
+	it("enforces a command timeout while an ACP terminal/output poll is pending", async () => {
+		const exit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		const outputStarted = Promise.withResolvers<void>();
+		const outputStuck = Promise.withResolvers<{ output: string; truncated: boolean }>();
+		let kills = 0;
+		let releases = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "output-poll-stalled",
+			waitForExit: () => exit.promise,
+			currentOutput: () => { outputStarted.resolve(); return outputStuck.promise; },
+			kill: async () => { kills++; },
+			release: async () => { releases++; },
+		};
+		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
+		installFakeTime();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("poll-stalled", { command: "echo never", timeout: 1 });
+		const outcome = running.then(
+			() => ({ kind: "success" as const }),
+			(error: unknown) => ({ kind: "failure" as const, error }),
+		);
+		const observer = Promise.withResolvers<{ kind: "no-settlement" }>();
+		// Allow the bounded 250ms post-kill output grace after the 1000ms
+		// command deadline, but never let a stuck poll wait indefinitely.
+		const observerTimer = setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_600);
+		try {
+			const observed = await driveFakeTime(Promise.race([outcome, observer.promise]));
+			expect(observed.kind).toBe("failure");
+			if (observed.kind !== "failure") throw new Error("The polling output call ignored its command deadline");
+			expect(observed.error).toBeInstanceOf(Error);
+			expect((observed.error as Error).message).toContain("Command timed out after 1 seconds");
+			expect(kills).toBe(1);
+			expect(releases).toBe(1);
+		} finally {
+			clearTimeout(observerTimer);
+			exit.resolve({ exitCode: null, signal: "TERM" });
+			outputStuck.resolve({ output: "", truncated: false });
+		}
+	}, 12_000);
+
+	it("cancels a BashTool call whose final ACP terminal output never resolves", async () => {
+		const entered = Promise.withResolvers<void>();
+		const pendingOutput = Promise.withResolvers<{ output: string; truncated: boolean }>();
+		let releases = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "final-read-stalled",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: () => { entered.resolve(); return pendingOutput.promise; },
+			kill: async () => {},
+			release: async () => { releases++; },
+		};
+		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("final-read-stalled", { command: "echo done" }, controller.signal);
+		void running.catch(() => undefined);
+		const timeout = Promise.withResolvers<never>();
+		const timer = setTimeout(() => timeout.reject(new Error("Final output read did not start")), 3_000);
+		try {
+			await Promise.race([entered.promise, timeout.promise]);
+			controller.abort();
+			const finished = Promise.withResolvers<never>();
+			const waiter = setTimeout(() => finished.reject(new Error("Cancelled final output read did not settle")), 3_000);
+			try {
+				await expect(Promise.race([running, finished.promise])).rejects.toThrow("Command aborted");
+			} finally {
+				clearTimeout(waiter);
+			}
+			expect(releases).toBe(1);
+		} finally {
+			clearTimeout(timer);
+			controller.abort();
+			pendingOutput.resolve({ output: "late output must not become success", truncated: false });
+		}
+	}, 9_000);
+
+	it("keeps the finite command deadline while reading final ACP terminal output", async () => {
+		const pendingOutput = Promise.withResolvers<{ output: string; truncated: boolean }>();
+		let releases = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "final-read-deadline",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: () => pendingOutput.promise,
+			kill: async () => {},
+			release: async () => { releases++; },
+		};
+		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
+		installFakeTime();
+		vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("final-read-deadline", { command: "echo done", timeout: 1 });
+		const outcome = running.then(
+			() => ({ kind: "success" as const }),
+			(error: unknown) => ({ kind: "failure" as const, error }),
+		);
+		const observer = Promise.withResolvers<{ kind: "no-settlement" }>();
+		const timer = setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_200);
+		try {
+			const observed = await driveFakeTime(Promise.race([outcome, observer.promise]));
+			expect(observed.kind).toBe("failure");
+			if (observed.kind !== "failure") throw new Error("Final output ignored its command deadline");
+			expect(observed.error).toBeInstanceOf(Error);
+			expect((observed.error as Error).message).toContain("Command timed out after 1 seconds");
+			expect(releases).toBe(1);
+		} finally {
+			clearTimeout(timer);
+			pendingOutput.resolve({ output: "", truncated: false });
+		}
+	}, 12_000);
+
+	it("does not hang a completed command on an unresponsive ACP terminal release RPC", async () => {
+		const pendingRelease = Promise.withResolvers<void>();
+		let releaseCalls = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "release-stalled",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: async () => ({ output: "completed\n", truncated: false }),
+			kill: async () => {},
+			release: () => { releaseCalls++; return pendingRelease.promise; },
+		};
+		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
+		const tool = new BashTool(makeSession(bridge));
+		const finished = Promise.withResolvers<never>();
+		const timer = setTimeout(() => finished.reject(new Error("Completed command stalled in terminal release")), 3_000);
+		try {
+			const result = await Promise.race([
+				tool.execute("release-stalled", { command: "echo completed", timeout: 0 }),
+				finished.promise,
+			]);
+			expect(result.content.find(item => item.type === "text")?.text).toContain("completed");
+			expect(releaseCalls).toBe(1);
+		} finally {
+			clearTimeout(timer);
+			pendingRelease.resolve();
+		}
+	}, 9_000);
 });
