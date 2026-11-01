@@ -1,8 +1,13 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 interface Step {
+	run?: string;
+	shell?: string;
 	name?: string;
 	if?: string;
 	uses?: string;
@@ -46,9 +51,10 @@ function check(name: string, run: () => void): void {
 }
 
 /**
- * Read workflow configuration only. The expressions use boolean operations,
- * equality, and property access with typed fixtures; this is not a general
- * GitHub Actions emulator. No app module, runner, checkout, or shell is started.
+ * Check workflow configuration and expressions with typed fixtures. The cleanup
+ * contract executes the actual YAML shell body using a fake Git and reaper in
+ * an isolated temporary directory, not a runner, checkout, or production job.
+ * This remains a focused contract, not a general GitHub Actions emulator.
  */
 function evaluate(expression: string | undefined, fixture: Record<string, unknown>): unknown {
 	if (typeof expression !== "string") throw new Error("Missing workflow expression");
@@ -60,6 +66,7 @@ const repository = "Wladefant/veyyon";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const mergeCommit = "c".repeat(40);
+const workflowCommit = "d".repeat(40);
 
 function context({
 	event = "pull_request",
@@ -91,6 +98,7 @@ function context({
 			repository,
 			event_name: event,
 			sha: mergeCommit,
+			workflow_sha: workflowCommit,
 			event:
 				event === "pull_request"
 					? {
@@ -171,10 +179,16 @@ function validate(workflow: Workflow): void {
 		equal(eligibleJobs(context({ event: "workflow_dispatch", admission: "", typecheck: true })), ["typecheck"]);
 	});
 
-	check("every job keeps the fixed Veyyon runner boundary", () => {
+	check("every job keeps the Veyyon runner labels and manual label default", () => {
 		for (const job of Object.values(workflow.jobs)) {
-			equal(job["runs-on"], ["self-hosted", "Linux", "X64", "veyyon"]);
+			const runnerLabels = job["runs-on"];
+			equal(runnerLabels.slice(0, 3), ["self-hosted", "Linux", "X64"]);
+			equal(runnerLabels[3], "${{ inputs.runner_label || 'veyyon' }}");
 		}
+		const runnerLabel = workflow.on.workflow_dispatch?.inputs.runner_label as
+			| Record<string, unknown>
+			| undefined;
+		equal(runnerLabel?.default, "veyyon");
 	});
 
 	for (const [name, fixture, expected] of [
@@ -191,6 +205,63 @@ function validate(workflow: Workflow): void {
 			}
 		});
 	}
+
+	check("all cleanup jobs execute the workflow-pinned reaper for an older checked-out SHA", () => {
+		for (const job of Object.values(workflow.jobs)) {
+			const cleanup = job.steps.find(step => step.name === "Clean orphaned processes");
+			equal(cleanup?.shell, "bash");
+			equal(cleanup?.if, "always()");
+			equal(evaluate(cleanup?.env?.WORKFLOW_SHA,
+				context({ event: "workflow_dispatch", target: head })), workflowCommit);
+			if (typeof cleanup?.run !== "string") throw new Error("Cleanup command missing");
+			const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-reaper-"));
+			try {
+				const bin = join(sandbox, "bin");
+				mkdirSync(bin);
+				const git = join(bin, "git");
+				writeFileSync(git, [
+					"#!/bin/sh",
+					'if [ "$1" = "cat-file" ] && [ "$2" = "-e" ]; then',
+					'  printf "cat:%s\\n" "$3" >> "$RUNNER_TEMP/trace"',
+					'  [ "$TEST_MISSING_WORKFLOW_COMMIT" != "1" ] || exit 88',
+					"  exit 0",
+					"fi",
+					'if [ "$1" = "show" ]; then',
+					'  printf "show:%s\\n" "$2" >> "$RUNNER_TEMP/trace"',
+					'  printf \'echo "executed:$1" >> "$RUNNER_TEMP/trace"\\n\'',
+					"  exit 0",
+					"fi",
+					"exit 89",
+				].join("\n") + "\n");
+				chmodSync(git, 0o755);
+				const env = {
+					...process.env,
+					PATH: bin + ":" + process.env.PATH,
+					RUNNER_TEMP: sandbox,
+					WORKFLOW_SHA: workflowCommit,
+				};
+				const run = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env, encoding: "utf8", timeout: 10_000,
+				});
+				equal(run.status, 0);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim().split("\n"), [
+					"cat:" + workflowCommit + "^{commit}",
+					"show:" + workflowCommit + ":scripts/ovh-process-group.sh",
+					"executed:--cleanup",
+				]);
+				writeFileSync(join(sandbox, "trace"), "");
+				const missing = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env: { ...env, TEST_MISSING_WORKFLOW_COMMIT: "1" },
+					encoding: "utf8", timeout: 10_000,
+				});
+				equal(missing.status === 0, false);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim(),
+					"cat:" + workflowCommit + "^{commit}");
+			} finally {
+				rmSync(sandbox, { recursive: true, force: true });
+			}
+		}
+	});
 
 	check("selection uses the PR event base or explicitly pinned manual base", () => {
 		const selection = workflow.jobs.prepare!.steps.find(step => step.name === "Detect changed paths");

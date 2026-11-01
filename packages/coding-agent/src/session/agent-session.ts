@@ -120,6 +120,7 @@ import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import {
+	attachTelegramTrace,
 	errorMessage,
 	getActiveAuthDbPath,
 	isEnoent,
@@ -127,6 +128,7 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
+	type TelegramDeliveryTraceData,
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
@@ -228,14 +230,18 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
+import type { YieldItem } from "../task/types";
+import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import type { TodoPhase } from "../tools/agent/todo";
+import type { YieldDetails } from "../tools/agent/yield";
 import { validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta } from "../tools/core/output-meta";
+import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
 import { shortenPath } from "../tools/core/render-utils";
 import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
@@ -293,6 +299,7 @@ import {
 	type SessionSpend,
 	type SessionStats,
 	type SetSessionNameWithTrigger,
+	type SteerOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
@@ -353,12 +360,7 @@ import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
-import { YieldTracker } from "./runtime/yield-tracker";
-import { isTerminalYieldToolResult } from "./runtime/yield-tracker";
-import type { YieldDetails } from "../tools/agent/yield";
-import type { YieldItem } from "../task/types";
-import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
-import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
+import { isTerminalYieldToolResult, YieldTracker } from "./runtime/yield-tracker";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
@@ -1167,7 +1169,9 @@ export class AgentSession {
 			}
 			return;
 		}
-		void this.#wakeForIrc(records).catch(error => logger.warn("Persisting an IRC wake failed", { error: errorMessage(error) }));
+		void this.#wakeForIrc(records).catch(error =>
+			logger.warn("Persisting an IRC wake failed", { error: errorMessage(error) }),
+		);
 	}
 
 	/** Fire-and-forget wake turn for incoming IRC — idle delivery and stranded-aside resume both
@@ -1179,19 +1183,35 @@ export class AgentSession {
 	 *  in effect, even though the wake left a provider-valid tail. */
 	#wakeForIrc(records: CustomMessage[], recovering = false): Promise<void> {
 		const selfId = this.#config.agentId;
-		const parentRecord = records.find(record => record.customType === "task:continuation" ||
-			(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"));
-		const completionId = parentRecord?.customType === "task:continuation"
-			? Reflect.get(parentRecord.details ?? {}, "completionId") : undefined;
-		const phaseId = typeof completionId === "string" ? `completion:${completionId}`
-			: parentRecord ? Reflect.get(parentRecord.details ?? {}, "id") : undefined;
-		const parentId = parentRecord?.customType === "task:continuation" && selfId
-			? AgentRegistry.global().actorContext(selfId).parentId
-			: parentRecord ? Reflect.get(parentRecord.details ?? {}, "from") : undefined;
-		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+		const parentRecord = records.find(
+			record =>
+				record.customType === "task:continuation" ||
+				(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"),
+		);
+		const completionId =
+			parentRecord?.customType === "task:continuation"
+				? Reflect.get(parentRecord.details ?? {}, "completionId")
+				: undefined;
+		const phaseId =
+			typeof completionId === "string"
+				? `completion:${completionId}`
+				: parentRecord
+					? Reflect.get(parentRecord.details ?? {}, "id")
+					: undefined;
+		const parentId =
+			parentRecord?.customType === "task:continuation" && selfId
+				? AgentRegistry.global().actorContext(selfId).parentId
+				: parentRecord
+					? Reflect.get(parentRecord.details ?? {}, "from")
+					: undefined;
+		if (!this.#ircContinuations) {
+			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		const outbox = this.#ircContinuations;
 		if (typeof phaseId === "string" && selfId) {
 			if (this.#ircActivePhase === phaseId) return Promise.resolve();
-			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord)) return Promise.resolve();
+			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord))
+				return Promise.resolve();
 			this.#ircActivePhase = phaseId;
 		}
 		const yields: YieldItem[] = [];
@@ -1209,36 +1229,74 @@ export class AgentSession {
 			if (!selfId || typeof parentId !== "string" || typeof phaseId !== "string") return;
 			const last = yields.at(-1);
 			let lastAssistantText: string | undefined;
-			for (let index = Math.min(this.agent.state.messages.length, phaseEnd ?? this.agent.state.messages.length) - 1; index >= phaseStart; index--) {
+			for (
+				let index = Math.min(this.agent.state.messages.length, phaseEnd ?? this.agent.state.messages.length) - 1;
+				index >= phaseStart;
+				index--
+			) {
 				const message = this.agent.state.messages[index];
 				if (message?.role !== "assistant") continue;
 				const text = contentText(message.content, { separator: "" });
-				if (text.trim()) { lastAssistantText = text; break; }
-			}
-			const init = this.sessionManager.getEntries().findLast(entry => entry.type === "session_init");
-			const assembled = terminal && last?.status !== "aborted" ? assembleYieldResult(yields, lastAssistantText,
-				init?.outputSchema === undefined ? undefined : arrayValuedLabels(init.outputSchema)) : undefined;
-			let resultSource: "agent" | "harness" = failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
-				? "harness" : "agent";
-			let output = failure !== undefined || !terminal
-				? JSON.stringify({ error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure), source: "harness" })
-				: last?.status === "aborted"
-					? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
-					: !assembled || assembled.missingData
-						? JSON.stringify({ error: "Phase yielded no result data", source: "harness" })
-						: assembled.rawText ? String(assembled.data) : JSON.stringify(assembled.data);
-			if (terminal && failure === undefined && last?.status !== "aborted" && assembled && !assembled.missingData &&
-				init?.outputSchema !== undefined) {
-				const { validator, error } = buildOutputValidator(init.outputSchema);
-				const validation = validator?.validate(assembled.data);
-				if (error) { output = JSON.stringify({ error, source: "harness" }); resultSource = "harness"; }
-				else if (validator && validation && !validation.success) {
-					resultSource = "harness";
-					output = JSON.stringify({ error: "schema_violation", source: "harness",
-						...summarizeValidationFailure(validation, assembled.data, validator.requiredFields) });
+				if (text.trim()) {
+					lastAssistantText = text;
+					break;
 				}
 			}
-			await outbox.complete(selfId, parentId, phaseId, expandAgentReturn(this.getArgotSession(), output), resultSource);
+			const init = this.sessionManager.getEntries().findLast(entry => entry.type === "session_init");
+			const assembled =
+				terminal && last?.status !== "aborted"
+					? assembleYieldResult(
+							yields,
+							lastAssistantText,
+							init?.outputSchema === undefined ? undefined : arrayValuedLabels(init.outputSchema),
+						)
+					: undefined;
+			let resultSource: "agent" | "harness" =
+				failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
+					? "harness"
+					: "agent";
+			let output =
+				failure !== undefined || !terminal
+					? JSON.stringify({
+							error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
+							source: "harness",
+						})
+					: last?.status === "aborted"
+						? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
+						: !assembled || assembled.missingData
+							? JSON.stringify({ error: "Phase yielded no result data", source: "harness" })
+							: assembled.rawText
+								? String(assembled.data)
+								: JSON.stringify(assembled.data);
+			if (
+				terminal &&
+				failure === undefined &&
+				last?.status !== "aborted" &&
+				assembled &&
+				!assembled.missingData &&
+				init?.outputSchema !== undefined
+			) {
+				const { validator, error } = buildOutputValidator(init.outputSchema);
+				const validation = validator?.validate(assembled.data);
+				if (error) {
+					output = JSON.stringify({ error, source: "harness" });
+					resultSource = "harness";
+				} else if (validator && validation && !validation.success) {
+					resultSource = "harness";
+					output = JSON.stringify({
+						error: "schema_violation",
+						source: "harness",
+						...summarizeValidationFailure(validation, assembled.data, validator.requiredFields),
+					});
+				}
+			}
+			await outbox.complete(
+				selfId,
+				parentId,
+				phaseId,
+				expandAgentReturn(this.getArgotSession(), output),
+				resultSource,
+			);
 			await this.replayIrcContinuations();
 		};
 		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
@@ -1254,16 +1312,25 @@ export class AgentSession {
 		}
 		this.#resetPromptMaintenanceState();
 		this.#inFlight.begin();
-		const retainedIndex = parentRecord ? this.agent.state.messages.findIndex(message => message.role === "custom" &&
-			message.customType === parentRecord.customType &&
-			Reflect.get(message.details ?? {}, "id") === Reflect.get(parentRecord.details ?? {}, "id")) : -1;
+		const retainedIndex = parentRecord
+			? this.agent.state.messages.findIndex(
+					message =>
+						message.role === "custom" &&
+						message.customType === parentRecord.customType &&
+						Reflect.get(message.details ?? {}, "id") === Reflect.get(parentRecord.details ?? {}, "id"),
+				)
+			: -1;
 		const phaseStart = retainedIndex >= 0 ? retainedIndex + 1 : this.agent.state.messages.length;
 		if (retainedIndex >= 0) {
 			// A crash after native yield persistence must publish B, not execute the phase again.
 			for (let index = retainedIndex + 1; index < this.agent.state.messages.length; index++) {
 				const message = this.agent.state.messages[index]!;
-				if (message.role === "custom" && (message.customType === "task:continuation" ||
-					(message.customType === "irc:incoming" && Reflect.get(message.details ?? {}, "relation") === "parent"))) {
+				if (
+					message.role === "custom" &&
+					(message.customType === "task:continuation" ||
+						(message.customType === "irc:incoming" &&
+							Reflect.get(message.details ?? {}, "relation") === "parent"))
+				) {
 					phaseEnd = index;
 					break;
 				}
@@ -1272,14 +1339,28 @@ export class AgentSession {
 				if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
 				yields.push(details);
 				terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
-				if (terminal) { phaseEnd = index + 1; break; }
+				if (terminal) {
+					phaseEnd = index + 1;
+					break;
+				}
 			}
 		}
-		const ready = this.#ircActivePhase === phaseId && typeof phaseId === "string"
-			? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
-			: Promise.resolve();
-		const settled = ready.then(() => terminal ? undefined : records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue())
-			.then(() => publish(), error => publish(error))
+		const ready =
+			this.#ircActivePhase === phaseId && typeof phaseId === "string"
+				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
+				: Promise.resolve();
+		const settled = ready
+			.then(() =>
+				terminal
+					? undefined
+					: records.length > 0 && retainedIndex < 0
+						? this.agent.prompt(records)
+						: this.agent.continue(),
+			)
+			.then(
+				() => publish(),
+				error => publish(error),
+			)
 			.then(async () => {
 				if (typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
@@ -1289,7 +1370,9 @@ export class AgentSession {
 				published = true;
 			})
 			.catch(error => {
-				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", { error: errorMessage(error) });
+				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
+					error: errorMessage(error),
+				});
 			})
 			.finally(async () => {
 				unsubscribe();
@@ -1303,7 +1386,8 @@ export class AgentSession {
 				// Claim the next retained phase before dropping this turn's idle accounting.
 				if (published) {
 					await this.replayIrcContinuations(true).catch(error =>
-						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }));
+						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
+					);
 				}
 				this.#endInFlight();
 			});
@@ -5233,9 +5317,9 @@ export class AgentSession {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp", options);
 			} else {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer", options);
 			}
 			return true;
 		}
@@ -5259,6 +5343,9 @@ export class AgentSession {
 		const message = options?.synthetic
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
+		if (options?.telegramTrace) {
+			attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
+		}
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -5622,16 +5709,47 @@ export class AgentSession {
 	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
-	async steer(text: string, images?: ImageContent[], videos?: VideoContent[]): Promise<void> {
+	async steer(
+		text: string,
+		imagesOrOptions?: ImageContent[] | SteerOptions,
+		videosOrOptions?: VideoContent[] | SteerOptions,
+		options?: SteerOptions,
+	): Promise<void> {
 		if (text.startsWith("/")) {
 			throwIfExtensionCommand(this.#config.extensionRunner, text);
 		}
+
+		let images: ImageContent[] | undefined;
+		let videos: VideoContent[] | undefined;
+		let opts: SteerOptions | undefined;
+
+		if (Array.isArray(imagesOrOptions)) {
+			images = imagesOrOptions;
+			if (Array.isArray(videosOrOptions)) {
+				videos = videosOrOptions;
+				opts = options;
+			} else if (videosOrOptions && typeof videosOrOptions === "object") {
+				opts = videosOrOptions;
+			} else {
+				opts = options;
+			}
+		} else if (imagesOrOptions && typeof imagesOrOptions === "object") {
+			opts = imagesOrOptions;
+		} else if (Array.isArray(videosOrOptions)) {
+			videos = videosOrOptions;
+			opts = options;
+		} else if (videosOrOptions && typeof videosOrOptions === "object") {
+			opts = videosOrOptions;
+		} else {
+			opts = options;
+		}
+
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, videos, "steer");
+		await this.#queueUserMessage(expandedText, images, videos, "steer", opts);
 	}
 
 	/**
@@ -5669,7 +5787,7 @@ export class AgentSession {
 		const expandedText =
 			opts?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
 		if (!opts?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, videos, "followUp");
+			await this.#queueUserMessage(expandedText, images, videos, "followUp", opts);
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
@@ -5695,6 +5813,7 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		videos: VideoContent[] | undefined,
 		mode: "steer" | "followUp",
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
 	): Promise<void> {
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
@@ -5709,21 +5828,29 @@ export class AgentSession {
 		}
 		if (mode === "followUp") {
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			this.agent.followUp({
+			const message: AgentMessage = {
 				role: "user",
 				content,
 				attribution: "user",
 				timestamp: Date.now(),
-			});
+			};
+			if (options?.telegramTrace) {
+				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
+			}
+			this.agent.followUp(message);
 		} else {
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			this.agent.steer({
+			const message: AgentMessage = {
 				role: "user",
 				content,
 				steering: true,
 				attribution: "user",
 				timestamp: Date.now(),
-			});
+			};
+			if (options?.telegramTrace) {
+				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
+			}
+			this.agent.steer(message);
 		}
 		this.#scheduleIdleQueueDrain();
 	}
@@ -7512,15 +7639,25 @@ export class AgentSession {
 		}
 		if (msg.completion) {
 			const completionId = msg.completion.id;
-			if (this.sessionManager.getEntries().some(entry =>
-				entry.type === "custom_message" && entry.customType === "task:continuation" &&
-				Reflect.get(entry.details ?? {}, "completionId") === completionId)) {
+			if (
+				this.sessionManager
+					.getEntries()
+					.some(
+						entry =>
+							entry.type === "custom_message" &&
+							entry.customType === "task:continuation" &&
+							Reflect.get(entry.details ?? {}, "completionId") === completionId,
+					)
+			) {
 				await this.sessionManager.ensureOnDisk();
 				await this.sessionManager.sync();
 				return "injected";
 			}
 		}
-		if (!msg.completion && (this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager)).hasPhase(msg.id)) {
+		if (!this.#ircContinuations) {
+			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		if (!msg.completion && this.#ircContinuations.hasPhase(msg.id)) {
 			await this.sessionManager.ensureOnDisk();
 			await this.sessionManager.sync();
 			return "injected";
@@ -7555,10 +7692,24 @@ export class AgentSession {
 				completionSource: msg.completion?.resultSource,
 			}),
 			display: true,
-			details: { id: msg.id, from: msg.from, message: msg.body, source: "agent", relation, ...identity,
+			details: {
+				id: msg.id,
+				from: msg.from,
+				message: msg.body,
+				source: "agent",
+				relation,
+				...identity,
 				actor: { source: "agent", relation, ...identity },
-				...(msg.completion ? { completionId: msg.completion.id, phaseId: msg.completion.phaseId, handle: msg.completion.handle, resultSource: msg.completion.resultSource } : {}),
-				...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
+				...(msg.completion
+					? {
+							completionId: msg.completion.id,
+							phaseId: msg.completion.phaseId,
+							handle: msg.completion.handle,
+							resultSource: msg.completion.resultSource,
+						}
+					: {}),
+				...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+			},
 			attribution: "agent",
 			timestamp: msg.ts,
 		};
@@ -7580,7 +7731,10 @@ export class AgentSession {
 		}
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
 		if (relation === "parent") {
-			const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+			if (!this.#ircContinuations) {
+				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+			}
+			const outbox = this.#ircContinuations;
 			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
 				// Preserve both phase boundaries and the order of input retained across a restart.
 				outbox.begin(msg.id, record);
@@ -7622,7 +7776,10 @@ export class AgentSession {
 
 	/** Replay durable result deliveries on a retained agent's next native activation. */
 	async replayIrcContinuations(settling = false): Promise<void> {
-		const outbox = this.#ircContinuations ??= new IrcContinuationOutbox(this.sessionManager);
+		if (!this.#ircContinuations) {
+			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		const outbox = this.#ircContinuations;
 		await outbox.flush(async completion => {
 			const registry = AgentRegistry.global();
 			const context = registry.actorContext(completion.agentId);
@@ -7632,25 +7789,53 @@ export class AgentSession {
 				if (!parent || parent.status === "aborted") continue;
 				const receipt = await IrcBus.global().send(
 					{ from: completion.agentId, to: parentId, body: completion.output },
-					{ completion: { version: 1, id: completion.id, handle: completion.handle, phaseId: completion.phaseId, resultSource: completion.resultSource } },
+					{
+						completion: {
+							version: 1,
+							id: completion.id,
+							handle: completion.handle,
+							phaseId: completion.phaseId,
+							resultSource: completion.resultSource,
+						},
+					},
 				);
 				if (receipt.outcome !== "failed") return true;
 			}
 			return false;
 		});
-		if (this.agent.state.isStreaming || (!settling && this.isStreaming) || this.#planMode.enabled || this.#ircActivePhase) return;
-		const consumed = new Set(this.sessionManager.getEntries().flatMap(entry =>
-			entry.type === "custom" && entry.customType === "irc:completion-consumed" &&
-			typeof entry.data === "string" ? [entry.data] : []));
-		const pendingCompletion = this.agent.state.messages.find(message =>
-			message.role === "custom" && message.customType === "task:continuation" &&
-			typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
-			!consumed.has(Reflect.get(message.details ?? {}, "completionId")));
+		if (
+			this.agent.state.isStreaming ||
+			(!settling && this.isStreaming) ||
+			this.#planMode.enabled ||
+			this.#ircActivePhase
+		)
+			return;
+		const consumed = new Set(
+			this.sessionManager
+				.getEntries()
+				.flatMap(entry =>
+					entry.type === "custom" &&
+					entry.customType === "irc:completion-consumed" &&
+					typeof entry.data === "string"
+						? [entry.data]
+						: [],
+				),
+		);
+		const pendingCompletion = this.agent.state.messages.find(
+			message =>
+				message.role === "custom" &&
+				message.customType === "task:continuation" &&
+				typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
+				!consumed.has(Reflect.get(message.details ?? {}, "completionId")),
+		);
 		if (pendingCompletion?.role === "custom") {
 			const from = Reflect.get(pendingCompletion.details ?? {}, "from");
 			const selfId = this.#config.agentId;
-			if (selfId && typeof from === "string" &&
-				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)) {
+			if (
+				selfId &&
+				typeof from === "string" &&
+				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)
+			) {
 				await this.#wakeForIrc([pendingCompletion], true);
 				return;
 			}
@@ -7861,11 +8046,15 @@ export class AgentSession {
 				role: "custom",
 				customType: "session:notice",
 				content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
-					from: notice.from, message: formatNoticeMessage(notice, Date.now()),
+					from: notice.from,
+					message: formatNoticeMessage(notice, Date.now()),
 					source: "external-session notice",
-					selfId: this.#config.agentId ?? sessionId, relation: "external-session notice",
+					selfId: this.#config.agentId ?? sessionId,
+					relation: "external-session notice",
 					parentId: "not agent lineage",
-					ancestorIds: "not agent lineage", parentUpdate: false, phaseId: notice.id,
+					ancestorIds: "not agent lineage",
+					parentUpdate: false,
+					phaseId: notice.id,
 				}),
 				display: true,
 				details: { id: notice.id, from: notice.from, message: notice.body, source: "external-session-notice" },

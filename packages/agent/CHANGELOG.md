@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Telegram delivery traces propagate through message queues, compaction, and agent turns to emit consumption and provider-call lifecycle events ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
