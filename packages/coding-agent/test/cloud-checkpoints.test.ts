@@ -137,3 +137,95 @@ describe("cloud checkpoints", () => {
 	});
 
 });
+
+test("lease response body remains inside the checkpoint timeout", async () => {
+	let aborted = false;
+	const fake: CheckpointFetch = async (_input, init) => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				const timer = setTimeout(() => {
+					controller.enqueue(new TextEncoder().encode(JSON.stringify({
+						ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+						headSequence: 0, manifestHash: "",
+					})));
+					controller.close();
+				}, 200);
+				init?.signal?.addEventListener("abort", () => {
+					aborted = true;
+					clearTimeout(timer);
+					controller.error(new DOMException("synthetic response-body abort", "AbortError"));
+				}, { once: true });
+			},
+		});
+		return new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 40,
+	});
+	await expect(client.acquireLease("s", "node-a")).rejects.toThrow();
+	expect(aborted).toBe(true);
+	await expect(client.assertWritable("s", 1)).rejects.toThrow(/lease/i);
+});
+
+test("restoration rejects an oversized streaming object without consuming a second chunk", async () => {
+	const object = { hash: "a".repeat(64), size: 1 };
+	const manifest = { objects: [object] };
+	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
+	let pulls = 0;
+	const fake: CheckpointFetch = async input => {
+		const path = new URL(String(input)).pathname;
+		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
+		if (path.includes("/objects/")) {
+			const stream = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					pulls++;
+					if (pulls === 1) controller.enqueue(new Uint8Array([1, 2]));
+					else controller.error(new Error("an unbounded reader consumed a second object chunk"));
+				},
+			}, { highWaterMark: 0 });
+			return new Response(stream, { status: 200 });
+		}
+		return new Response(null, { status: 404 });
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 1000,
+	});
+	await expect(client.restore("s")).rejects.toThrow(/Checkpoint object integrity check failed/);
+	expect(pulls).toBe(1);
+});
+
+test("restoration aborts a stalled object body before its eventual bytes", async () => {
+	const object = { hash: "a".repeat(64), size: 1 };
+	const manifest = { objects: [object] };
+	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
+	let aborted = false;
+	const fake: CheckpointFetch = async (input, init) => {
+		const path = new URL(String(input)).pathname;
+		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
+		if (path.includes("/objects/")) {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					const timer = setTimeout(() => {
+						controller.enqueue(new Uint8Array([1]));
+						controller.close();
+					}, 200);
+					init?.signal?.addEventListener("abort", () => {
+						aborted = true;
+						clearTimeout(timer);
+						controller.error(new DOMException("synthetic object-body abort", "AbortError"));
+					}, { once: true });
+				},
+			});
+			return new Response(stream, { status: 200 });
+		}
+		return new Response(null, { status: 404 });
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 40,
+	});
+	await expect(client.restore("s")).rejects.toThrow();
+	expect(aborted).toBe(true);
+});

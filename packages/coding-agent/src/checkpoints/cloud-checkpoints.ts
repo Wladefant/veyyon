@@ -110,16 +110,17 @@ export class CheckpointClient {
 	}
 	async #request<T>(path: string, init: RequestInit = {}): Promise<T> {
 		if (!this.enabled) throw new Error("Cloud checkpoints are disabled or not configured");
-		const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
-			this.#fetch(new URL(path, this.options.baseUrl), {
+		return withScopedTimeoutSignal(this.#timeout, async signal => {
+			const response = await this.#fetch(new URL(path, this.options.baseUrl), {
 				...init,
 				signal,
 				headers: { authorization: `Bearer ${this.options.token}`, ...init.headers },
-			}),
-		);
-		if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
-		if (response.status === 204) return undefined as T;
-		return (await response.json()) as T;
+			});
+			if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
+			if (response.status === 204) return undefined as T;
+			// The response body is part of the same bounded authority request.
+			return (await response.json()) as T;
+		});
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
@@ -364,17 +365,39 @@ export class CheckpointClient {
 		const ciphertext = new Uint8Array(size);
 		let offset = 0;
 		for (const object of head.manifest.objects) {
-			const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
-				this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
+			const bytes = await withScopedTimeoutSignal(this.#timeout, async signal => {
+				const response = await this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
 					signal,
 					headers: { authorization: `Bearer ${this.options.token}` },
-				}),
-			);
-			if (!response.ok) throw new Error(`Checkpoint object unavailable: HTTP ${response.status}`);
-			const bytes = new Uint8Array(await response.arrayBuffer());
+				});
+				if (!response.ok) throw new Error(`Checkpoint object unavailable: HTTP ${response.status}`);
+				if (!response.body) throw new Error("Checkpoint object integrity check failed");
+				const result = new Uint8Array(object.size);
+				const reader = response.body.getReader();
+				let received = 0;
+				let complete = false;
+				try {
+					while (true) {
+						const part = await reader.read();
+						if (part.done) {
+							complete = true;
+							break;
+						}
+						// Refuse an oversized body before buffering another chunk into the result.
+						if (part.value.byteLength > object.size - received)
+							throw new Error("Checkpoint object integrity check failed");
+						result.set(part.value, received);
+						received += part.value.byteLength;
+					}
+				} finally {
+					if (!complete) void reader.cancel().catch(() => {});
+					reader.releaseLock();
+				}
+				if (received !== object.size) throw new Error("Checkpoint object integrity check failed");
+				return result;
+			});
 			const hash = createHash("sha256").update(bytes).digest("hex");
-			if (hash !== object.hash || bytes.byteLength !== object.size)
-				throw new Error("Checkpoint object integrity check failed");
+			if (hash !== object.hash) throw new Error("Checkpoint object integrity check failed");
 			ciphertext.set(bytes, offset);
 			offset += bytes.byteLength;
 		}
