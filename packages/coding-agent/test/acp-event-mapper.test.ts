@@ -992,6 +992,165 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "src/current.ts" }, { path: "src/old.ts" }, { path: "src/new.ts" }]);
 	});
 
+
+	// WHY: a real ACP editor gets a session cwd, and locations it navigates
+	// must be valid absolute paths. An invalid tool argument remains visible
+	// in rawInput but must not become an invalid editor navigation target.
+	it("omits a NUL-bearing read location with cwd while preserving raw tool arguments", () => {
+		const invalidPath = "src/\u0000invalid.ts";
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_start",
+				toolCallId: "acp-invalid-nul",
+				toolName: "read",
+				args: { path: invalidPath },
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			rawInput?: unknown;
+			locations?: { path: string }[];
+		};
+		expect(update.sessionUpdate).toBe("tool_call");
+		expect(update.rawInput).toEqual({ path: invalidPath });
+		expect(update.locations).toBeUndefined();
+	});
+
+	it("keeps only valid absolute locations when one move argument is invalid", () => {
+		const invalid = "src/\u0000bad-destination.ts";
+		const args = {
+			path: "src/file.ts:50-60",
+			oldPath: "src/previous.ts",
+			newPath: invalid,
+		};
+		const update = buildToolCallStartUpdate({
+			toolCallId: "acp-invalid-mixed-move",
+			toolName: "move",
+			args,
+			cwd: "/repo",
+		});
+		expectAcpStructure(arkSessionNotification, { sessionId: "session-1", update });
+		expect(update.rawInput).toEqual(args);
+		expect(update.locations).toEqual([
+			{ path: path.resolve("/repo", "src/file.ts") },
+			{ path: path.resolve("/repo", "src/previous.ts") },
+		]);
+	});
+
+	it("omits rejected per-file result locations without hiding valid sibling files", () => {
+		const invalid = "src/\u0000bad-result.ts";
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "acp-result-location",
+				toolName: "edit",
+				result: {
+					content: [{ type: "text", text: "one file updated" }],
+					details: {
+						perFileResults: [{ path: invalid }, { path: "src/valid.ts" }],
+					},
+				},
+				isError: false,
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[] };
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/valid.ts") }]);
+	});
+
+
+	// WHY: ACP v1 Diff.path is an editor navigation target, not unchecked tool
+	// output. A rejected result path must not leak into diff content even when
+	// the separate locations[] path correctly omits it. Raw tool output remains
+	// available; these fake results do not exercise an installed editor.
+	it("omits invalid diff paths but keeps valid absolute diffs and original output", () => {
+		const invalid = "src/\u0000broken.ts";
+		const result = {
+			content: [{ type: "text", text: "two edit results received" }],
+			details: {
+				perFileResults: [
+					{ path: invalid, oldText: "invalid before", newText: "invalid after" },
+					{ path: "src/good.ts", oldText: "good before", newText: "good after" },
+				],
+			},
+		};
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "acp-mixed-diff-paths",
+				toolName: "edit",
+				result,
+				isError: false,
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as {
+			sessionUpdate: string;
+			content?: Array<{ type: string; path?: string; oldText?: string | null; newText?: string; content?: unknown }>;
+			locations?: { path: string }[];
+			rawOutput?: unknown;
+		};
+		expect(update.sessionUpdate).toBe("tool_call_update");
+		expect(update.content?.filter(block => block.type === "diff")).toEqual([
+			{ type: "diff", path: path.resolve("/repo", "src/good.ts"), oldText: "good before", newText: "good after" },
+		]);
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/good.ts") }]);
+		expect(update.rawOutput).toEqual(result);
+		expect(JSON.stringify(update.content)).toContain("two edit results received");
+		expect(JSON.stringify(update.content)).not.toContain("invalid before");
+	});
+
+	it("normalizes the direct single-file edit diff with a supplied session cwd", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "acp-single-cwd-diff",
+				toolName: "edit",
+				result: { details: { path: "src/single.ts", oldText: "old", newText: "new" } },
+				isError: false,
+			} as AgentSessionEvent,
+			"session-1",
+			{ cwd: "/repo" },
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string }>; locations?: { path: string }[] };
+		expect(update.content?.filter(block => block.type === "diff")).toEqual([
+			{ type: "diff", path: path.resolve("/repo", "src/single.ts"), oldText: "old", newText: "new" },
+		]);
+		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/single.ts") }]);
+	});
+
+	it("preserves original relative diff paths for legacy ACP events without cwd", () => {
+		const updates = mapAgentSessionEventToAcpSessionUpdates(
+			{
+				type: "tool_execution_end",
+				toolCallId: "acp-legacy-diff",
+				toolName: "edit",
+				result: { details: { path: "src/legacy.ts", oldText: "old", newText: "new" } },
+				isError: false,
+			} as AgentSessionEvent,
+			"session-1",
+		);
+		expect(updates).toHaveLength(1);
+		expectAcpNotifications(updates);
+		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string }> };
+		expect(update.content?.filter(block => block.type === "diff")).toEqual([
+			{ type: "diff", path: "src/legacy.ts", oldText: "old", newText: "new" },
+		]);
+	});
+
 	it("rejects mutated ACP notification discriminators", () => {
 		const [notification] = mapAgentSessionEventToAcpSessionUpdates(
 			{
