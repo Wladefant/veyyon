@@ -422,16 +422,38 @@ export class MCPManager {
 	// While disconnectServer drains an old callback, do not re-enroll on the
 	// connection still awaiting closure. Other servers may keep delivering.
 	#eventServerDisconnects = new Map<string, Promise<void>>();
+	// A callback's server can be disconnected independently of the global
+	// event consumer. A new connection reuses the name but never its authority.
+	#eventServerDisconnectEpochs = new Map<string, number>();
 	// Callback function equality is insufficient across clear/re-enable cycles.
 	#eventConsumerRevision = 0;
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
-	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean; consumerRevision: number }>();
+	#eventCallbackContext = new AsyncLocalStorage<{
+		active: boolean;
+		consumerRevision: number;
+		serverName: string;
+		disconnectEpoch: number;
+	}>();
+
+	#eventCallbackIsObsolete(): boolean {
+		const scope = this.#eventCallbackContext.getStore();
+		return Boolean(
+			scope?.active &&
+				(scope.consumerRevision !== this.#eventConsumerRevision ||
+					scope.disconnectEpoch !== (this.#eventServerDisconnectEpochs.get(scope.serverName) ?? 0)),
+		);
+	}
 
 	// AsyncLocalStorage outlives the handler in detached timers/promises. Track
 	// the *actual* callback lifetime so later external stop still drains work.
-	async #withEventCallback<T>(handler: () => T | Promise<T>): Promise<T> {
-		const scope = { active: true, consumerRevision: this.#eventConsumerRevision };
+	async #withEventCallback<T>(serverName: string, handler: () => T | Promise<T>): Promise<T> {
+		const scope = {
+			active: true,
+			consumerRevision: this.#eventConsumerRevision,
+			serverName,
+			disconnectEpoch: this.#eventServerDisconnectEpochs.get(serverName) ?? 0,
+		};
 		return this.#eventCallbackContext.run(scope, async () => {
 			try {
 				return await handler();
@@ -499,7 +521,7 @@ export class MCPManager {
 		// A callback started under a previous consumer must not undo a newer
 		// external clear/replacement. In particular, its late re-enable would
 		// wait on the previous callback's drain and deadlock that same callback.
-		if (callbackScope?.active && callbackScope.consumerRevision !== this.#eventConsumerRevision) return;
+		if (this.#eventCallbackIsObsolete()) return;
 		this.#eventConsumerRevision++;
 		// A callback intentionally clearing and re-enabling its OWN handler is
 		// still a valid synchronous configuration sequence.
@@ -554,16 +576,14 @@ export class MCPManager {
 	setOnEventCursor(
 		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
 	): void {
-		const scope = this.#eventCallbackContext.getStore();
-		// An obsolete event handler cannot replace the successor's cursor writer
-		// after an external consumer replacement. Current and external setters remain valid.
-		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
+		// An obsolete or disconnected server's callback cannot replace the
+		// successor's cursor writer. External and current setters remain valid.
+		if (this.#eventCallbackIsObsolete()) return;
 		this.#onEventCursor = handler;
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
-		const scope = this.#eventCallbackContext.getStore();
-		// Obsolete callbacks cannot replace the newer consumer's resume authority.
-		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
+		// Obsolete and disconnected callbacks cannot change the resume authority.
+		if (this.#eventCallbackIsObsolete()) return;
 		this.#eventCursorProvider = provider;
 	}
 
@@ -571,9 +591,8 @@ export class MCPManager {
 	setOnEventControl(
 		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
 	): void {
-		const scope = this.#eventCallbackContext.getStore();
-		// A stale event handler cannot capture gap/termination control for its successor.
-		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
+		// A stale or disconnected event callback cannot capture a successor's control.
+		if (this.#eventCallbackIsObsolete()) return;
 		this.#onEventControl = handler;
 	}
 
@@ -598,7 +617,9 @@ export class MCPManager {
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
 		// Concurrent event callbacks may both request stop: skipping only the
 		// caller's own stream can still deadlock while each awaits the other.
-		const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
+		const scope = this.#eventCallbackContext.getStore();
+		// A callback of B is independent of A's drain, even while B requests it.
+		const fromEventCallback = scope?.active === true && scope.serverName === serverName;
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
 			matching.flatMap(([, subscription]) => [
@@ -615,7 +636,7 @@ export class MCPManager {
 		// An obsolete handler may still be awaiting an earlier event. Its late
 		// stop must not revoke a replacement consumer installed by another owner.
 		// External stops and stops from the current handler retain their behavior.
-		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
+		if (this.#eventCallbackIsObsolete()) return;
 		// An external stop invalidates callbacks already in flight. Otherwise
 		// they may re-enable a subscription while this stop drains only the old
 		// snapshot, leaving the replacement running after stopEvents settles.
@@ -948,7 +969,7 @@ export class MCPManager {
 	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
 		const handler = this.#onEventCursor;
 		if (!handler) throw new Error("MCP event cursor callback is not configured");
-		await this.#withEventCallback(() => handler(subscription.serverName, subscription.key, cursor));
+		await this.#withEventCallback(subscription.serverName, () => handler(subscription.serverName, subscription.key, cursor));
 		subscription.cursor = cursor;
 	}
 
@@ -961,7 +982,7 @@ export class MCPManager {
 		if (!handler) throw new Error("MCP event control callback is not configured");
 		const subscription = this.#activeEvents.get(key);
 		return await (subscription
-			? this.#withEventCallback(() => handler(serverName, key, control))
+			? this.#withEventCallback(serverName, () => handler(serverName, key, control))
 			: handler(serverName, key, control));
 	}
 
@@ -989,7 +1010,7 @@ export class MCPManager {
 		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
-		const outcome = await this.#withEventCallback(() => this.#onEvent!(serverName, deliveryEvent, key));
+		const outcome = await this.#withEventCallback(serverName, () => this.#onEvent!(serverName, deliveryEvent, key));
 		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
 		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) {
 			// Delivery already reached the owning journal. Keep the accepted/duplicate
@@ -1879,9 +1900,17 @@ export class MCPManager {
 	async disconnectServer(name: string): Promise<void> {
 		const existing = this.#eventServerDisconnects.get(name);
 		if (existing) {
+			const scope = this.#eventCallbackContext.getStore();
+			// An A callback cannot await the external A teardown that is awaiting
+			// that callback. Only this exact server-origin path returns early;
+			// unrelated B callbacks still await the real A disconnect outcome.
+			if (scope?.active && scope.serverName === name) return;
 			await existing;
 			return;
 		}
+		// Revoke A's callback authority before the first async drain yields,
+		// without revoking unrelated B's shared event consumer.
+		this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
 		const disconnect = this.#disconnectServerOnce(name);
 		this.#eventServerDisconnects.set(name, disconnect);
 		try {
