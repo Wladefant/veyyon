@@ -46,7 +46,7 @@ export async function readRemoteText(origin: string, token: string, worker: stri
 	const bytes = Buffer.from(data.data_base64, "base64");
 	if (bytes.toString("base64") !== data.data_base64 || bytes.byteLength !== data.bytes || digest(bytes) !== data.sha256) throw new MainplaneError("Mainplane read digest or length mismatch");
 	let value: string;
-	try { value = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+	try { value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
 	catch { throw new MainplaneError("Mainplane returned binary; use a binary-aware artifact tool"); }
 	// Reject NUL anywhere in the verified payload, including beyond the preview.
 	if (value.includes("\0")) {
