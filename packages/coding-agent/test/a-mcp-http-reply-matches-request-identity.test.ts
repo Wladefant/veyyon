@@ -6,6 +6,7 @@ type JsonRpcReply = Record<string, unknown> | readonly unknown[];
 interface Fixture {
 	transport: HttpTransport;
 	setReply(reply: (id: string | number) => JsonRpcReply): void;
+	setFormat(format: "json" | "sse"): void;
 	close(): Promise<void>;
 }
 
@@ -32,6 +33,7 @@ async function startFixture(): Promise<Fixture> {
 		id,
 		result: { content: [{ type: "text", text: "accepted" }] },
 	});
+	let format: "json" | "sse" = "json";
 	const server = createServer((request, response) => {
 		void (async () => {
 			if (request.method !== "POST" || request.url !== "/mcp") {
@@ -51,8 +53,13 @@ async function startFixture(): Promise<Fixture> {
 				(typeof call.id !== "number" && typeof call.id !== "string")
 			) throw new Error("Fixture expected a JSON-RPC request id");
 			const reply = respond(call.id);
-			response.writeHead(200, { "Content-Type": "application/json" });
-			response.end(JSON.stringify(reply));
+			if (format === "sse") {
+				response.writeHead(200, { "Content-Type": "text/event-stream" });
+				response.end("data: " + JSON.stringify(reply) + "\n\n");
+			} else {
+				response.writeHead(200, { "Content-Type": "application/json" });
+				response.end(JSON.stringify(reply));
+			}
 		})().catch(() => {
 			if (!response.headersSent) response.writeHead(400).end();
 			else response.end();
@@ -76,6 +83,7 @@ async function startFixture(): Promise<Fixture> {
 	return {
 		transport,
 		setReply(next) { respond = next; },
+		setFormat(next) { format = next; },
 		async close() {
 			try {
 				await bounded(transport.close(), "HTTP transport close");
@@ -243,4 +251,76 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 			await fixture.close();
 		}
 	}, 12_000);
+
+
+	// WHY: MCP HTTP POST can return JSON-RPC results in text/event-stream.
+	// A correct id alone must never validate the wrong JSON-RPC version,
+	// multiple union arms or a malformed error, even when HTTP is 200.
+	// This local fixture tests the real transport without remote MCP access.
+	it("rejects malformed correlated SSE response envelopes without accepting tool results", async () => {
+		const fixture = await startFixture();
+		fixture.setFormat("sse");
+		try {
+			const invalid: Array<[string, (id: string | number) => JsonRpcReply]> = [
+				["wrong version", id => ({ jsonrpc: "1.0", id, result: { untrusted: true } })],
+				["both arms", id => ({ jsonrpc: "2.0", id, result: {}, error: { code: -32603, message: "fake" } })],
+				["neither arm", id => ({ jsonrpc: "2.0", id })],
+				["malformed error", id => ({ jsonrpc: "2.0", id, error: { code: "bad", message: "untrusted" } })],
+				["null error", id => ({ jsonrpc: "2.0", id, error: null })],
+			];
+			for (const [label, response] of invalid) {
+				fixture.setReply(response);
+				const failure = await bounded(
+					fixture.transport.request("tools/list", { selector: label }),
+					"malformed SSE reply " + label,
+				).then(() => undefined, (error: unknown) => error);
+				expect(failure).toBeInstanceOf(Error);
+				if (!(failure instanceof Error)) throw new Error(label + " was accepted");
+				expect(failure.message).toContain("MCP HTTP SSE response");
+				expect(failure.message).not.toContain("untrusted");
+			}
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { accepted: true } }));
+			await expect(bounded(fixture.transport.request("tools/list"), "valid SSE recovery")).resolves.toEqual({
+				accepted: true,
+			});
+		} finally {
+			await fixture.close();
+		}
+	}, 25_000);
+
+	it("skips uncorrelated invalid SSE frames and still handles notifications and a valid reply", async () => {
+		const fixture = await startFixture();
+		fixture.setFormat("sse");
+		const received: Array<{ method: string; params: unknown }> = [];
+		fixture.transport.onNotification = (method, params) => received.push({ method, params });
+		try {
+			fixture.setReply(id => [
+				null,
+				{ jsonrpc: "2.0", method: "notifications/test", params: { message: "synthetic" } },
+				{ jsonrpc: "2.0", id, result: { content: ["ok"] } },
+			]);
+			await expect(bounded(fixture.transport.request("tools/list"), "SSE notification with reply")).resolves.toEqual({
+				content: ["ok"],
+			});
+			expect(received).toEqual([{ method: "notifications/test", params: { message: "synthetic" } }]);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
+
+	it("preserves the correlated SSE server-error rejection path", async () => {
+		const fixture = await startFixture();
+		fixture.setFormat("sse");
+		try {
+			fixture.setReply(id => ({
+				jsonrpc: "2.0", id, error: { code: -32601, message: "Synthetic SSE method unavailable" },
+			}));
+			await expect(bounded(fixture.transport.request("tools/list"), "valid SSE error")).rejects.toThrow(
+				"MCP error -32601: Synthetic SSE method unavailable",
+			);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
+
 });
