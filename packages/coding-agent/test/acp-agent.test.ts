@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1396,7 +1396,7 @@ describe("ACP agent", () => {
 		expectAcpNotifications(harness.updates);
 
 		harness.abortController.abort();
-		await Bun.sleep(0);
+		await setTimeout(0);
 	});
 
 	it("delivers the final visible answer when agent_end overtakes the assistant message_end (#4902)", async () => {
