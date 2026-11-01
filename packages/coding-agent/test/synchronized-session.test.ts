@@ -263,3 +263,29 @@ test("close during checkpoint lease acquisition releases the late grant and refu
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
 	expect(actions).toEqual(["lease", "release"]);
 });
+
+// WHY: an expired authority grant is already a lost fence even if the remote
+// renew endpoint might succeed later. An unadmitted prompt cannot reacquire.
+test("an expired checkpoint lease permanently fences subsequent admissions", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: 1,
+			expiresAt: "2000-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"expired-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+	);
+	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "release"]);
+});
