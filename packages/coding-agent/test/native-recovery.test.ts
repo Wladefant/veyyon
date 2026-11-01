@@ -201,6 +201,14 @@ describe("native recovery", () => {
 		await writeFile(code, "dirty");
 		const bundle = await captureNativeCheckpoint(session, [code]);
 		expect(bundle.workspace.dirty).toEqual(["src/dirty.ts"]);
+		const excludedDir = join(root, "node_modules");
+		await mkdir(excludedDir);
+		const excluded = join(excludedDir, "large.bin");
+		await writeFile(excluded, "");
+		// Sparse excluded path: the old order read the file and hit the byte
+		// budget before validating its forbidden ancestor.
+		await truncate(excluded, 48 * 1024 * 1024 + 1);
+		await expect(captureNativeCheckpoint(session, [excluded])).rejects.toThrow(/Unsafe checkpoint path/);
 		const secret = join(root, ".env");
 		await writeFile(secret, "secret");
 		await expect(captureNativeCheckpoint(session, [secret])).rejects.toThrow(/unsafe|excluded/i);

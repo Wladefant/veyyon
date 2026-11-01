@@ -300,8 +300,10 @@ export async function captureNativeCheckpoint(
 		const data = info.isDirectory() ? await walkFiles(path) : [safeRelative(basename(path))];
 		for (const rel of data) {
 			const full = info.isDirectory() ? join(path, ...rel.split("/")) : path;
-			const content = await readIncluded(full);
+			// Validate the complete workspace-relative path before reading any bytes:
+			// a safe basename inside node_modules/auth must not be opened first.
 			const relativePath = safeRelative(relative(workspaceRoot, full).split(sep).join("/"));
+			const content = await readIncluded(full);
 			dirty.push(relativePath);
 			files.push({ path: relativePath, content });
 		}
