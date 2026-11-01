@@ -37,6 +37,21 @@ export class AgentProtocolHandler implements ProtocolHandler {
 			throw new Error("agent:// URL requires an output ID: agent://<id>");
 		}
 
+		// parseInternalUrl decodes percent escapes even when URL() rejects an encoded
+		// host separator. An agent output ID must remain one portable path component:
+		// otherwise ../../notes inside the host escapes the registered artifacts dir.
+		// Preserve Unicode/legacy names, but reject filesystem separators, Windows
+		// device names and characters forbidden in portable filenames.
+		if (
+			outputId.length > 240 ||
+			/[<>:"|?*\u0000-\u001f\u007f]/u.test(outputId) ||
+			outputId.includes("/") || outputId.includes("\\") ||
+			outputId === "." || outputId === ".." ||
+			/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(outputId)
+		) {
+			throw new Error("Invalid agent output ID: expected one portable filename component");
+		}
+
 		const urlPath = url.pathname;
 		const queryParam = url.searchParams.get("q");
 		const hasPathExtraction = urlPath && urlPath !== "/" && urlPath !== "";
