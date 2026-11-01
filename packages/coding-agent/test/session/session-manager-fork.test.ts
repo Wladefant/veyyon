@@ -256,6 +256,42 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("does not mistake malformed artifact hosts for missing local evidence", async () => {
+    // The protocol only accepts complete numeric hosts. A numeric prefix in
+    // ordinary text must not make an artifact-free session impossible to fork.
+    for (const malformed of [
+      "artifact://0abc",
+      "artifact://123abc?session=another-execution",
+      "artifact://0-bad",
+      "artifact://0.example",
+      "artifact://0:80",
+    ]) {
+      using temp = TempDir.createSync("@veyyon-fork-malformed-artifact-");
+      const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      try {
+        const message = `Example of an invalid URL: ${malformed}`;
+        manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+        await manager.flush();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected source session file");
+        const sourceId = manager.getSessionId();
+        const original = await fs.readFile(sourceFile, "utf8");
+
+        const fork = await manager.fork();
+        if (!fork) throw new Error("expected fork for artifact-free session");
+        expect(fork.oldSessionFile).toBe(sourceFile);
+        expect(fork.newSessionFile).not.toBe(sourceFile);
+        expect(manager.getSessionId()).not.toBe(sourceId);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(original);
+        expect(manager.getEntries().some(entry =>
+          entry.type === "message" && entry.message.role === "user" && entry.message.content === message
+        )).toBe(true);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
   it("preserves the permitted no-artifacts fork when no recovery references exist", async () => {
     using temp = TempDir.createSync("@veyyon-fork-empty-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
