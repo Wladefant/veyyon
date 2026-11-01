@@ -289,3 +289,60 @@ test("an expired checkpoint lease permanently fences subsequent admissions", asy
 	await session.close();
 	expect(actions).toEqual(["lease", "release"]);
 });
+
+// WHY: a single-use transfer claim is also asynchronous. Closing while it is
+// pending must not finalize a resume token or admit the transferred session.
+test("close during transfer claim releases the late grant without persisting a resume marker", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const entered = Promise.withResolvers<void>();
+	const allowClaim = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	let persisted = 0;
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "claim") {
+			entered.resolve();
+			await allowClaim.promise;
+		}
+		return Response.json({
+			ownerNode: "runtime-owner",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			resumeToken: "a-long-enough-pending-resume-capability",
+		});
+	};
+	const marker = {
+		version: 1 as const,
+		sessionId: "closing-transfer",
+		targetNode: "destination-device",
+		transferId: "transfer-closing",
+		transferEpoch: 4,
+		claimToken: "a-long-enough-claim-capability",
+		epoch: 4,
+	};
+	try {
+		const session = new SynchronizedSession(
+			"closing-transfer",
+			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+			marker,
+			undefined,
+			async () => { persisted++; },
+		);
+		const admission = session.admit();
+		await entered.promise;
+		const closing = session.close();
+		allowClaim.resolve();
+		await expect(admission).rejects.toThrow(/Synchronized ownership lost/);
+		await closing;
+		expect(persisted).toBe(0);
+		expect(actions).toEqual(["claim", "release"]);
+	} finally {
+		allowClaim.resolve();
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
