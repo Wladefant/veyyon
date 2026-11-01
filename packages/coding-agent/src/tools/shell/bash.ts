@@ -1006,11 +1006,35 @@ export class BashTool
 				call.timeoutMs,
 				call.timeoutSec,
 			);
+			// The timer for terminal/create is not the authority on whether its
+			// deadline elapsed: a response may win the Promise race after the
+			// monotonic deadline but before the timer callback runs. Never give an
+			// already expired handle a fresh one-millisecond execution budget.
+			const elapsedMs = performance.now() - wallTimeStart;
+			if (call.timeoutMs !== undefined && call.timeoutMs > 0 && elapsedMs >= call.timeoutMs) {
+				// The helper handed off this handle, so this path is its sole owner.
+				// Bound both best-effort cleanup RPCs and retain the timeout outcome.
+				try {
+					const kill = await settleWithin(Promise.resolve().then(() => handle.kill()), 1_000, "timed-out" as const);
+					if (kill === "timed-out") logger.warn("ACP terminal kill unconfirmed after creation deadline");
+				} catch {
+					logger.warn("ACP terminal kill failed after creation deadline");
+				}
+				try {
+					const release = await settleWithin(Promise.resolve().then(() => handle.release()), 1_000, "timed-out" as const);
+					if (release === "timed-out") logger.warn("ACP terminal release unconfirmed after creation deadline");
+				} catch {
+					logger.warn("ACP terminal release failed after creation deadline");
+				}
+				throw new ToolError(
+					call.timeoutSec === undefined ? "Command timed out" : `Command timed out after ${call.timeoutSec} seconds`,
+				);
+			}
 			// The command deadline spans the remote terminal/create phase as well
 			// as its execution; a slow create cannot reset the full budget.
 			const remainingMs =
 				call.timeoutMs !== undefined && call.timeoutMs > 0
-					? Math.max(1, call.timeoutMs - (performance.now() - wallTimeStart))
+					? Math.max(1, call.timeoutMs - elapsedMs)
 					: call.timeoutMs;
 			return this.#runOnClientTerminal({ ...call, timeoutMs: remainingMs }, handle, wallTimeStart, signal, onUpdate);
 		}
