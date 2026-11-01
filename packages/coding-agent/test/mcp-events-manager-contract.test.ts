@@ -2380,4 +2380,84 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
+
+	// WHY: after the crash-burst breaker detaches a server transport, its
+	// retired poll key must not prevent an operator's later manual reconnect
+	// from enrolling a new feed. This exercises actual MCPManager transitions
+	// and a disposable HTTP JSON-RPC server, not just a call count stub.
+	// It does not establish installed T3/provider or disk cursor durability.
+	it("retires event feeds at reconnect suspension so manual recovery can re-enroll", async () => {
+		const name = "breaker-event-recovery";
+		let polls = 0;
+		let nextDelivery = Promise.withResolvers<void>();
+		const received: string[] = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				const ordinal = ++polls;
+				return {
+					events: [event(`breaker-event-${ordinal}`, `cursor-${ordinal}`)],
+					cursor: `page-${ordinal}`,
+					hasMore: false,
+					nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const suspensions: string[] = [];
+		manager.addConnectionStatusListener(status => {
+			if (status.serverName === name && status.type === "failed" && status.error.includes("suspended after")) {
+				suspensions.push(status.error);
+			}
+		});
+		manager.setOnEvent((serverName, occurrence) => {
+			if (serverName !== name) return;
+			received.push(occurrence.eventId);
+			nextDelivery.resolve();
+		});
+		manager.setOnEventCursor(() => {});
+		try {
+			await withinHandlerChange(
+				connect(manager, name, managerConfig(server, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				})),
+				"initial breaker server connection",
+			);
+			await withinHandlerChange(nextDelivery.promise, "initial breaker event delivery");
+			let tripped = false;
+			// The breaker is deliberately reached through normal reconnect calls;
+			// this bounded fixture is not coupled to its private threshold.
+			for (let attempt = 0; attempt < 12; attempt++) {
+				nextDelivery = Promise.withResolvers<void>();
+				const connection = await withinHandlerChange(manager.reconnectServer(name), "breaker reconnect attempt");
+				if (!connection) {
+					tripped = true;
+					break;
+				}
+				await withinHandlerChange(nextDelivery.promise, "event from active reconnect");
+			}
+			expect(tripped).toBe(true);
+			expect(suspensions).toHaveLength(1);
+			expect(manager.getConnectedServers()).not.toContain(name);
+			// Previously the breaker only closed the transport. It left this
+			// subscription key active, so the later manual start saw a duplicate.
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(0);
+			const pollsBeforeRecovery = polls;
+			nextDelivery = Promise.withResolvers<void>();
+			expect(
+				await withinHandlerChange(manager.reconnectServer(name, { manual: true }), "manual recovery after breaker"),
+			).not.toBeNull();
+			await withinHandlerChange(nextDelivery.promise, "new event after manual breaker recovery");
+			expect(polls).toBe(pollsBeforeRecovery + 1);
+			expect(received.at(-1)).toBe(`breaker-event-${polls}`);
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(1);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "breaker recovery test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 60_000);
+
 });
