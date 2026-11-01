@@ -114,7 +114,6 @@ test("an existing malformed native journal never acquires ordinary ownership", a
 	);
 });
 
-
 // WHY: the first physical JSONL line alone defines the session's identity;
 // a corrupt transfer header cannot be replaced by a later normal header.
 test("a corrupt first native header cannot be replaced by a later ordinary header", async () => {

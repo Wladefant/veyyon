@@ -99,6 +99,8 @@ export class SynchronizedSession {
 			await this.client.assertWritable(this.sessionId, this.#lease.epoch);
 			this.#assertOpen();
 			const renewed = await this.client.renewLease(this.sessionId);
+			// A successful HTTP renewal can still return an already-expired fence.
+			await this.client.assertWritable(this.sessionId, renewed.epoch);
 			this.#assertOpen();
 			this.#lease = renewed;
 		} catch (error) {

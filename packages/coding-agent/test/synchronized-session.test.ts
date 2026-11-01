@@ -348,6 +348,33 @@ test("close during transfer claim releases the late grant without persisting a r
 });
 
 
+
+// WHY: an authority may return HTTP 200 but a lease with an expired deadline;
+// future work must not be admitted on that successful-but-unusable response.
+test("an expired renewal response fences the current admission", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: 1,
+			expiresAt: action === "renew" ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"expired-renewal-response",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+	);
+	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "renew"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
 // WHY: rejected ownership must not keep renewing. A successful lease renews,
 // but an in-flight timer renewal must finish before close sends /release.
 test("lost admission never renews and close drains the periodic renewal before release", async () => {
@@ -459,7 +486,9 @@ test("successful transfer retains its persisted resume capability on release", a
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		claim,
 		undefined,
-		async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+		async (resumeToken, epoch) => {
+			persisted.push({ token: resumeToken, epoch });
+		},
 	);
 	try {
 		await session.admit();
