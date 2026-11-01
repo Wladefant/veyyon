@@ -322,6 +322,39 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+	// HTTP 200 with ok:false is a failed disable, not permission to remove a
+	// cached grant or upload its replacement. Drive the real remote store while
+	// the synthetic broker transport denies the mutation.
+	for (const operation of ["single", "logout", "replace"] as const) {
+		test(`does not treat negative broker disable acknowledgment as successful ${operation}`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+			});
+			spyOn(client, "disableCredential").mockResolvedValue({ ok: false });
+
+			const attempt = operation === "single"
+				? remote.deleteAuthCredentialRemote(id, "synthetic disable")
+				: operation === "logout"
+					? remote.deleteAuthCredentialsRemote("anthropic", "synthetic logout")
+					: remote.replaceAuthCredentialsRemote("anthropic", [
+							mintOAuthCredential("replacement", Date.now() + 120_000),
+						]);
+			await expect(attempt).rejects.toThrow(/broker refused credential disable/i);
+
+			// Check both local and authoritative state: a replacement must not be
+			// uploaded after a rejected disable, and the original grant remains.
+			expect(remote.listAuthCredentials("anthropic").map(entry => entry.id)).toEqual([id]);
+			const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected broker snapshot after negative acknowledgment");
+			expect(authoritative.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+			expect(authoritative.snapshot.credentials[0]!.credential).toMatchObject({ access: "access-a" });
+		});
+	}
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();

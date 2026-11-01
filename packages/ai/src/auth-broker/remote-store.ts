@@ -653,10 +653,18 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		});
 	}
 
+	/** A 2xx response is not revocation confirmation unless the broker reports ok:true. */
+	async #disableCredentialConfirmed(id: number, disabledCause: string): Promise<void> {
+		const response = await this.#client.disableCredential(id, disabledCause);
+		if (!response.ok) {
+			throw new AIError.AuthBrokerError(`Broker refused credential disable id=${id}`);
+		}
+	}
+
 	async deleteAuthCredentialRemote(id: number, disabledCause: string): Promise<boolean> {
 		const found = this.#snapshot.credentials.some(entry => entry.id === id);
 		if (!found) return false;
-		await this.#client.disableCredential(id, disabledCause);
+		await this.#disableCredentialConfirmed(id, disabledCause);
 		this.#removeCredentialById(id);
 		this.#maybeRefreshSnapshot("delete credential");
 		return true;
@@ -750,7 +758,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			for (const entry of existing) {
 				// Abort replacement if the broker cannot disable an old grant.
 				// Only broker-confirmed removes may disappear from the local view.
-				await this.#client.disableCredential(entry.id, "replaced by newer credential");
+				await this.#disableCredentialConfirmed(entry.id, "replaced by newer credential");
 				this.#removeCredentialById(entry.id);
 				changed = true;
 			}
@@ -777,7 +785,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		let disabledAny = false;
 		try {
 			for (const entry of existing) {
-				await this.#client.disableCredential(entry.id, disabledCause);
+				await this.#disableCredentialConfirmed(entry.id, disabledCause);
 				this.#removeCredentialById(entry.id);
 				disabledAny = true;
 			}
