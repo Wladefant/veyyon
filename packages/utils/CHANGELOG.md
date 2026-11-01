@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-01
+
 ### Added
 
 - Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+- Telegram delivery traces propagate through message queues, compaction, and agent turns to emit consumption and provider-call lifecycle events ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+- Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
+### Fixed
+
+- Record Telegram turn consumption once across the original message and all transferred copies ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed

@@ -5,10 +5,12 @@
 ### Fixed
 
 - ACP preserves the first streamed reply chunk when `message_start` arrives late ([PR #830](https://github.com/Wladefant/veyyon/pull/830)).
+## [1.7.2] - 2026-11-01
 
 ### Added
 
 - Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
