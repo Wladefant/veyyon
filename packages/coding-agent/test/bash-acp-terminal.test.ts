@@ -506,4 +506,34 @@ describe("BashTool ACP terminal routing", () => {
 		await bounded(released.promise, "bounded late kill then release");
 		expect(releases).toBe(1);
 	}, 8_000);
+
+	it("observes a late rejected terminal/create after the cancelled BashTool has settled", async () => {
+		const entered = Promise.withResolvers<void>();
+		const provide = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		let createCalls = 0;
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { createCalls++; entered.resolve(); return provide.promise; },
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("late-create-rejection", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(entered.promise, "late rejected terminal/create start");
+			controller.abort();
+			await expect(bounded(running, "caller settlement before late rejection")).rejects.toThrow(
+				"Command aborted",
+			);
+		} finally {
+			controller.abort();
+			provide.reject(new Error("synthetic client create failed after cancellation"));
+		}
+		// The test runner treats an unobserved rejection as a failure. Give the
+		// abandoned RPC a real event loop turn to reject after local settlement.
+		const settled = Promise.withResolvers<void>();
+		setImmediate(settled.resolve);
+		await bounded(settled.promise, "late create rejection observation");
+		expect(createCalls).toBe(1);
+	}, 8_000);
 });
