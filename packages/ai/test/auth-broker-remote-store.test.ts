@@ -374,6 +374,52 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+
+	test("rejects broker upload replies for another provider or with unredacted OAuth refresh", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const original = structuredClone(remote.snapshot.credentials);
+		const upload = spyOn(client, "uploadCredential");
+		const malformed = [
+			{ label: "foreign provider", entries: [{ ...entry, provider: "openai-codex" }] },
+			{
+				label: "unredacted refresh",
+				entries: [{ ...entry, credential: { ...entry.credential, refresh: "synthetic-unredacted-refresh" } }],
+			},
+			{
+				label: "valid entry followed by foreign provider",
+				entries: [entry, { ...entry, id: entry.id + 1, provider: "openai-codex" }],
+			},
+		];
+		for (const candidate of malformed) {
+			upload.mockResolvedValue({ entries: candidate.entries });
+			await expect(
+				remote.upsertAuthCredentialRemote("anthropic", mintOAuthCredential("replacement", Date.now() + 120_000)),
+			).rejects.toThrow(/broker upload.*(identity|redact)/i);
+			expect(remote.snapshot.credentials).toEqual(original);
+		}
+	});
+
+	test("accepts a real broker upload with the requested provider and redacted OAuth grants", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		const delivered = await remote.upsertAuthCredentialRemote(
+			"anthropic",
+			mintOAuthCredential("b", Date.now() + 120_000),
+		);
+		expect(delivered.map(row => row.provider)).toEqual(["anthropic", "anthropic"]);
+		expect(delivered.map(row => row.credential.type === "oauth" ? row.credential.access : null).sort())
+			.toEqual(["access-a", "access-b"]);
+		expect(delivered.map(row => row.credential.type === "oauth" ? row.credential.refresh : null))
+			.toEqual([REMOTE_REFRESH_SENTINEL, REMOTE_REFRESH_SENTINEL]);
+	});
+
 	test("calls onSnapshot for broker snapshots but not the constructor snapshot", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await client.fetchSnapshot();
