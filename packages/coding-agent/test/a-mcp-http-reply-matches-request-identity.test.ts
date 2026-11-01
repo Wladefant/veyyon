@@ -153,4 +153,46 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 			await fixture.close();
 		}
 	}, 12_000);
+
+	// WHY: a matching request id alone does not make an envelope a result.
+	// Missing or malformed result/error branches used to return undefined success.
+	it("rejects matching-id responses without exactly one valid result or error", async () => {
+		const fixture = await startFixture();
+		try {
+			const malformed: Array<[string, (id: string | number) => JsonRpcReply]> = [
+				["neither", id => ({ jsonrpc: "2.0", id })],
+				["both", id => ({ jsonrpc: "2.0", id, result: { accepted: false }, error: { code: -32603, message: "failed" } })],
+				["null error", id => ({ jsonrpc: "2.0", id, error: null })],
+				["string error", id => ({ jsonrpc: "2.0", id, error: "not an error object" })],
+				["invalid error code", id => ({ jsonrpc: "2.0", id, error: { code: "-32603", message: "failed" } })],
+				["missing error message", id => ({ jsonrpc: "2.0", id, error: { code: -32603 } })],
+			];
+			for (const [name, reply] of malformed) {
+				fixture.setReply(reply);
+				await expect(bounded(fixture.transport.request("tools/list"), "malformed " + name)).rejects.toThrow(
+					"JSON-RPC response",
+				);
+			}
+		} finally {
+			await fixture.close();
+		}
+	}, 25_000);
+
+	it("preserves null success and a valid server error on the same HTTP transport", async () => {
+		const fixture = await startFixture();
+		try {
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: null }));
+			await expect(bounded(fixture.transport.request("tools/list"), "null success")).resolves.toBeNull();
+			fixture.setReply(id => ({
+				jsonrpc: "2.0",
+				id,
+				error: { code: -32601, message: "Synthetic method unavailable" },
+			}));
+			await expect(bounded(fixture.transport.request("tools/list"), "valid server error")).rejects.toThrow(
+					"MCP error -32601: Synthetic method unavailable",
+			);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
 });
