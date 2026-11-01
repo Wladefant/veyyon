@@ -418,7 +418,20 @@ export class MCPManager {
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
-	#eventCallbackContext = new AsyncLocalStorage<ActiveMCPEventSubscription>();
+	#eventCallbackContext = new AsyncLocalStorage<{ active: boolean }>();
+
+	// AsyncLocalStorage outlives the handler in detached timers/promises. Track
+	// the *actual* callback lifetime so later external stop still drains work.
+	async #withEventCallback<T>(handler: () => T | Promise<T>): Promise<T> {
+		const scope = { active: true };
+		return this.#eventCallbackContext.run(scope, async () => {
+			try {
+				return await handler();
+			} finally {
+				scope.active = false;
+			}
+		});
+	}
 	#eventStartupControllers = new Map<string, AbortController>();
 	#eventStartupPromises = new Map<string, Promise<void>>();
 
@@ -523,7 +536,7 @@ export class MCPManager {
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
 		// Concurrent event callbacks may both request stop: skipping only the
 		// caller's own stream can still deadlock while each awaits the other.
-		const fromEventCallback = this.#eventCallbackContext.getStore() !== undefined;
+		const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
 			matching.flatMap(([, subscription]) => [
@@ -541,7 +554,7 @@ export class MCPManager {
 		const active = [...this.#activeEvents.entries()];
 		// Concurrent event callbacks may both request stop: skipping only the
 		// caller's own stream can still deadlock while each awaits the other.
-		const fromEventCallback = this.#eventCallbackContext.getStore() !== undefined;
+		const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
 			active.flatMap(([, subscription]) => [
@@ -841,7 +854,7 @@ export class MCPManager {
 	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
 		const handler = this.#onEventCursor;
 		if (!handler) throw new Error("MCP event cursor callback is not configured");
-		await this.#eventCallbackContext.run(subscription, () => handler(subscription.serverName, subscription.key, cursor));
+		await this.#withEventCallback(() => handler(subscription.serverName, subscription.key, cursor));
 		subscription.cursor = cursor;
 	}
 
@@ -854,7 +867,7 @@ export class MCPManager {
 		if (!handler) throw new Error("MCP event control callback is not configured");
 		const subscription = this.#activeEvents.get(key);
 		return await (subscription
-			? this.#eventCallbackContext.run(subscription, () => handler(serverName, key, control))
+			? this.#withEventCallback(() => handler(serverName, key, control))
 			: handler(serverName, key, control));
 	}
 
@@ -882,7 +895,7 @@ export class MCPManager {
 		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
-		const outcome = await this.#eventCallbackContext.run(subscription, () => this.#onEvent!(serverName, deliveryEvent, key));
+		const outcome = await this.#withEventCallback(() => this.#onEvent!(serverName, deliveryEvent, key));
 		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
 		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) {
 			// Delivery already reached the owning journal. Keep the accepted/duplicate

@@ -29,10 +29,12 @@ const scenarios = [
 	{ frame: "terminated", stop: "inside-callback" },
 	{ frame: "event", stop: "inside-callback" },
 	{ frame: "gap", stop: "inside-callback" },
+	{ frame: "event", stop: "detached-stop" },
 ] as const;
 
 for (const scenario of scenarios) {
-	it("drains in-flight push " + scenario.frame + " on " + scenario.stop + " stop without saving cursor", async () => {
+	it("drains in-flight push " + scenario.frame + " on " + scenario.stop +
+		(scenario.stop === "detached-stop" ? " while retaining prior cursor" : " without saving cursor"), async () => {
 		const eventName = "orders/changed";
 		const acceptanceStarted = Promise.withResolvers<void>();
 		const releaseAcceptance = Promise.withResolvers<void>();
@@ -43,6 +45,14 @@ for (const scenario of scenarios) {
 		const streamClosed = Promise.withResolvers<void>();
 		const callbackStopped = Promise.withResolvers<void>();
 		const callbackSettled = Promise.withResolvers<void>();
+		const firstCommitted = Promise.withResolvers<void>();
+		const secondEntered = Promise.withResolvers<void>();
+		const releaseSecond = Promise.withResolvers<void>();
+		const triggerDetachedStop = Promise.withResolvers<void>();
+		const detachedStarted = Promise.withResolvers<void>();
+		const detachedSettled = Promise.withResolvers<void>();
+		const detachedErrors: unknown[] = [];
+		let detachedFinished = false;
 		const delivered: string[] = [];
 		const acceptedControls: string[] = [];
 		const committedCursors: Array<string | null> = [];
@@ -105,6 +115,25 @@ for (const scenario of scenarios) {
 			await releaseAcceptance.promise;
 		};
 		manager.setOnEvent(async (_server: string, occurrence: MCPEventOccurrence) => {
+			if (scenario.stop === "detached-stop") {
+				if (occurrence.eventId === "first") {
+					// This async descendant inherits the FIRST callback's ALS store even
+					// after that callback has returned. Its later stop is external.
+					void (async () => {
+						await triggerDetachedStop.promise;
+						detachedStarted.resolve();
+						try { await manager.stopEvents(); }
+						catch (error) { detachedErrors.push(error); }
+						finally { detachedFinished = true; detachedSettled.resolve(); }
+					})();
+					delivered.push("first");
+					return "queued" as const;
+				}
+				secondEntered.resolve();
+				await releaseSecond.promise;
+				delivered.push("second");
+				return "queued" as const;
+			}
 			await pauseAcceptance();
 			if (scenario.stop === "inside-callback") {
 				await manager.stopEvents();
@@ -127,6 +156,7 @@ for (const scenario of scenarios) {
 		});
 		manager.setOnEventCursor((_server, _key, cursor) => {
 			committedCursors.push(cursor);
+			if (cursor === "after-first") firstCommitted.resolve();
 		});
 		try {
 			const listening = once(server, "listening");
@@ -160,34 +190,57 @@ for (const scenario of scenarios) {
 				params: { ...payload, _meta: { "io.modelcontextprotocol/subscriptionId": id } },
 			};
 			response.write("data: " + JSON.stringify(message) + "\n\n");
-			await within(acceptanceStarted.promise, "in-flight push acceptance");
-			let stopped = false;
-			if (scenario.stop === "inside-callback") {
-				// A callback asking for its own cancellation must not await its own
-				// streamProcessing chain. The old unqualified drain hangs here.
-				releaseAcceptance.resolve();
-				await within(streamClosed.promise, "reentrant push stream cancellation");
-				await within(callbackStopped.promise, "reentrant stop completion");
-				await within(callbackSettled.promise, "reentrant callback continuation");
-				stopped = true;
-			} else {
-				const stop = (
-					scenario.stop === "server" ? manager.disconnectServer("push-stop-server") : manager.stopEvents()
-				).then(() => { stopped = true; });
-				await within(streamClosed.promise, "push stream cancellation");
+			if (scenario.stop === "detached-stop") {
+				// A has completely committed its cursor before B starts. The timer
+				// created in A is now detached, and its stop must drain B.
+				await within(firstCommitted.promise, "first occurrence cursor");
+				response.write("data: " + JSON.stringify({
+					...message,
+					params: { ...occurrence, eventId: "second", cursor: "after-second",
+						_meta: { "io.modelcontextprotocol/subscriptionId": id } },
+				}) + "\n\n");
+				await within(secondEntered.promise, "second in-flight acceptance");
+				triggerDetachedStop.resolve();
+				await within(detachedStarted.promise, "detached stop started");
+				await within(streamClosed.promise, "detached stream cancellation");
 				await delay(30);
-				expect(stopped).toBe(false);
-				releaseAcceptance.resolve();
-				await within(stop, "subscription stop");
-			}
-			expect(stopped).toBe(true);
-			expect(delivered).toEqual(scenario.frame === "event" ? ["first"] : []);
+				expect(detachedFinished).toBe(false);
+				releaseSecond.resolve();
+				await within(detachedSettled.promise, "detached stop drain");
+				expect(detachedErrors).toEqual([]);
+			} else {
+				await within(acceptanceStarted.promise, "in-flight push acceptance");
+				let stopped = false;
+				if (scenario.stop === "inside-callback") {
+					// A callback asking for its own cancellation must not await its own
+					// streamProcessing chain. The old unqualified drain hangs here.
+					releaseAcceptance.resolve();
+					await within(streamClosed.promise, "reentrant push stream cancellation");
+					await within(callbackStopped.promise, "reentrant stop completion");
+					await within(callbackSettled.promise, "reentrant callback continuation");
+					stopped = true;
+				} else {
+					const stop = (
+						scenario.stop === "server" ? manager.disconnectServer("push-stop-server") : manager.stopEvents()
+					).then(() => { stopped = true; });
+					await within(streamClosed.promise, "push stream cancellation");
+					await delay(30);
+					expect(stopped).toBe(false);
+					releaseAcceptance.resolve();
+					await within(stop, "subscription stop");
+				}
+				expect(stopped).toBe(true);
+			} // End ordinary / direct callback stop.
+			expect(delivered).toEqual(scenario.stop === "detached-stop" ? ["first", "second"] :
+				scenario.frame === "event" ? ["first"] : []);
 			expect(acceptedControls).toHaveLength(scenario.frame === "event" ? 0 : 1);
-			expect(committedCursors).toEqual([]);
+			expect(committedCursors).toEqual(scenario.stop === "detached-stop" ? ["after-first"] : []);
 			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
 			expect(serverErrors).toEqual([]);
 		} finally {
 			releaseAcceptance.resolve();
+			triggerDetachedStop.resolve();
+			releaseSecond.resolve();
 			try {
 				await within(manager.disconnectAll(), "manager cleanup");
 			} finally {
