@@ -884,6 +884,104 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+
+	// Both source paths must combine locally pending safety with a distinct
+	// broker-authoritative peer scope, rather than replacing either list.
+	for (const incoming of ["SSE", "GET"] as const) {
+		for (const outcome of ["accepted", "rejected"] as const) {
+			test(`retains a peer block during held ${outcome} cross-scope ${incoming} upsert`, async () => {
+				const client = new AuthBrokerClient({ url: handle!.url, token });
+				const peer = new AuthBrokerClient({ url: handle!.url, token });
+				const initial = await peer.fetchSnapshot();
+				if (initial.status !== 200) throw new Error("expected initial synthetic broker snapshot");
+				const id = initial.snapshot.credentials[0]!.id;
+				const streamReady = Promise.withResolvers<void>();
+				const peerFrame = Promise.withResolvers<SnapshotResponse>();
+				spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+					yield { kind: "snapshot" as const, ...initial.snapshot };
+					streamReady.resolve();
+					if (incoming === "SSE") {
+						const next = await peerFrame.promise;
+						const entry = next.credentials.find(candidate => candidate.id === id);
+						if (!entry) throw new Error("missing synthetic peer entry");
+						yield {
+							kind: "entry" as const, generation: next.generation, serverNowMs: next.serverNowMs,
+							refresher: next.refresher, entry,
+						};
+					}
+					await untilAborted(opts.signal);
+				});
+				const realFetch = client.fetchSnapshot.bind(client);
+				let fullReads = 0;
+				spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+					if (opts?.waitMs !== undefined) throw new Error("unexpected long-poll with active synthetic SSE");
+					fullReads += 1;
+					return realFetch(opts);
+				});
+				const realUpsert = client.upsertCredentialBlock.bind(client);
+				const pendingStarted = Promise.withResolvers<void>();
+				const releasePending = Promise.withResolvers<void>();
+				const pendingSettled = Promise.withResolvers<void>();
+				spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+					expect(body.blockScope).toBe("scope-A");
+					pendingStarted.resolve();
+					await releasePending.promise;
+					const response = outcome === "accepted"
+						? await realUpsert(credentialId, body)
+						: { ok: false };
+					pendingSettled.resolve();
+					return response;
+				});
+				remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+				await streamReady.promise;
+				const localUntilMs = Date.now() + 90_000;
+				const peerUntilMs = localUntilMs + 60_000;
+				remote.upsertCredentialBlock({
+					credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
+					blockedUntilMs: localUntilMs, updatedAtMs: Date.now(),
+				});
+				await pendingStarted.promise;
+				try {
+					const peerAck = await peer.upsertCredentialBlock(id, {
+						providerKey: "anthropic", blockScope: "scope-B",
+						blockedUntilMs: peerUntilMs, updatedAtMs: Date.now(),
+					});
+					expect(peerAck).toEqual({ ok: true });
+					const peerSnapshot = await peer.fetchSnapshot();
+					if (peerSnapshot.status !== 200) throw new Error("expected committed peer block");
+					if (incoming === "SSE") {
+						peerFrame.resolve(peerSnapshot.snapshot);
+						await waitUntil(() => remote!.snapshot.generation === peerSnapshot.snapshot.generation);
+					} else {
+						await remote.refreshSnapshot();
+					}
+					// The peer's independent restriction is broker-authoritative even
+					// though our scope-A POST has not received an acknowledgment.
+					expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(localUntilMs);
+					expect(remote.getCredentialBlock(id, "anthropic", "scope-B")).toBe(peerUntilMs);
+					expect(remote.listCredentialBlocks([id])).toHaveLength(2);
+					releasePending.resolve();
+					await pendingSettled.promise;
+					await waitUntil(() =>
+						fullReads >= (incoming === "SSE" ? 1 : 2) &&
+						remote!.getCredentialBlock(id, "anthropic", "scope-B") === peerUntilMs &&
+						remote!.getCredentialBlock(id, "anthropic", "scope-A") ===
+							(outcome === "accepted" ? localUntilMs : undefined),
+					);
+					const authoritative = await peer.fetchSnapshot();
+					if (authoritative.status !== 200) throw new Error("expected authoritative broker state");
+					const scopes = authoritative.snapshot.credentials
+						.find(entry => entry.id === id)?.blocks?.map(block => block.blockScope).sort() ?? [];
+					expect(scopes).toEqual(outcome === "accepted" ? ["scope-A", "scope-B"] : ["scope-B"]);
+					expect(remote.listCredentialBlocks([id]).map(block => block.blockScope).sort()).toEqual(scopes);
+				} finally {
+					releasePending.resolve();
+					peerFrame.resolve(initial.snapshot);
+				}
+			});
+		}
+	}
+
 	test("retries failed block-upsert reconciliation when an unrelated SSE entry supersedes its GET", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
