@@ -285,6 +285,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
+	/** A failed older block mutation must not reconcile a newer same-ID speculative write. */
+	#latestCredentialBlockMutation = new Map<number, symbol>();
 	#usageCacheEpoch = 0;
 	#closed = false;
 	/**
@@ -581,12 +583,22 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * a full GET without resolving this credential; make a few fresh attempts.
 	 * Never apply an obsolete GET over a newer same-credential edit.
 	 */
-	async #reconcileFailedCredentialBlockMutation(kind: "upsert" | "delete", id: number): Promise<void> {
+	#clearCredentialBlockMutation(id: number, mutation: symbol): void {
+		if (this.#latestCredentialBlockMutation.get(id) === mutation) {
+			this.#latestCredentialBlockMutation.delete(id);
+		}
+	}
+
+	async #reconcileFailedCredentialBlockMutation(kind: "upsert" | "delete", id: number, mutation: symbol): Promise<void> {
 		const cause = `credential-block-${kind}-reconcile`;
 		try {
 			for (let attempt = 0; attempt < MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS; attempt += 1) {
+				// The revision fence on this GET cannot detect a newer pending same-ID
+				// upsert that happened BEFORE the older failed mutation's GET began.
+				if (this.#latestCredentialBlockMutation.get(id) !== mutation) return;
 				const revisionAtRequest = this.#appliedSnapshotRevision;
 				const result = await this.#client.fetchSnapshot();
+				if (this.#latestCredentialBlockMutation.get(id) !== mutation) return;
 				if (result.status === 200 && this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) {
 					return;
 				}
@@ -597,11 +609,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				{ id, attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
 			);
 		} catch (error) {
-			this.#reportStaleSnapshot(cause, error, { id });
+			if (this.#latestCredentialBlockMutation.get(id) === mutation) {
+				this.#reportStaleSnapshot(cause, error, { id });
+			}
+		} finally {
+			this.#clearCredentialBlockMutation(id, mutation);
 		}
 	}
 
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
+		const mutation = Symbol("block-upsert");
+		this.#latestCredentialBlockMutation.set(block.credentialId, mutation);
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
 		this.#credentialBlockReconcileAfter.set(
@@ -615,6 +633,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (!response.ok) {
 					throw new AIError.AuthBrokerError(`Broker refused credential block upsert id=${block.credentialId}`);
 				}
+				this.#clearCredentialBlockMutation(block.credentialId, mutation);
 				this.#maybeRefreshSnapshot("credential block");
 			})
 			.catch(error => {
@@ -626,7 +645,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				});
 				// No SSE event follows a failed POST; independently reconcile
 				// its speculative block, even when the stream appears healthy.
-				void this.#reconcileFailedCredentialBlockMutation("upsert", block.credentialId);
+				void this.#reconcileFailedCredentialBlockMutation("upsert", block.credentialId, mutation);
 			});
 	}
 
@@ -635,6 +654,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// block. If a newer snapshot/block mutation lands while it is pending,
 		// reconcile rather than deleting that newer state on late acknowledgment.
 		const revisionAtDelete = this.#appliedSnapshotRevision;
+		const mutation = Symbol("block-delete");
+		this.#latestCredentialBlockMutation.set(credentialId, mutation);
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(response => {
@@ -648,6 +669,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					}
 					this.#invalidateUsageCache();
 				}
+				this.#clearCredentialBlockMutation(credentialId, mutation);
 				this.#maybeRefreshSnapshot("credential blocks delete");
 			})
 			.catch(error => {
@@ -657,7 +679,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				});
 				// The broker may have committed before its reply was lost.
 				// Reconcile even when SSE appears healthy but emits no new frames.
-				void this.#reconcileFailedCredentialBlockMutation("delete", credentialId);
+				void this.#reconcileFailedCredentialBlockMutation("delete", credentialId, mutation);
 			});
 	}
 
