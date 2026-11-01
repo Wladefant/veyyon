@@ -493,6 +493,118 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("preserves decoded numeric artifact hosts before switching a live session fork", async () => {
+    for (const variant of ["artifact://%30", "ArTiFaCt://%30", "local-session"]) {
+      using temp = TempDir.createSync("@veyyon-fork-encoded-host-");
+      const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      try {
+        const link = variant === "local-session"
+          ? `artifact://%30?session=${manager.getSessionId()}`
+          : variant;
+        expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
+        manager.appendMessage({ role: "user", content: `Original evidence: ${link}`, timestamp: Date.now() });
+        await manager.flush();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected persisted source session");
+        const sourceId = manager.getSessionId();
+        const sourceBefore = await fs.readFile(sourceFile, "utf8");
+        const oldDir = sourceFile.slice(0, -".jsonl".length);
+        const parked = path.join(temp.path(), "parked-original-artifacts");
+        await fs.rename(oldDir, parked);
+        try {
+          await expect(manager.fork()).rejects.toThrow(/referenced artifacts unavailable/i);
+          expect(manager.getSessionFile()).toBe(sourceFile);
+          expect(manager.getSessionId()).toBe(sourceId);
+          expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+          expect(await fs.readFile(path.join(parked, "0.bash.log"), "utf8")).toBe(originalBytes);
+        } finally {
+          await fs.rename(parked, oldDir);
+        }
+
+        const fork = await manager.fork();
+        if (!fork) throw new Error("expected an evidence-preserving fork");
+        expect(fork.oldSessionFile).toBe(sourceFile);
+        expect(fork.newSessionFile).not.toBe(sourceFile);
+        expect(await readSaved(manager, "0")).toBe(originalBytes);
+        expect(await manager.saveArtifact("new unrelated output", "bash")).toBe("1");
+        expect(await readSaved(manager, "0")).toBe(originalBytes);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
+  it("forkFrom preserves decoded-host source artifacts and refuses missing originals", async () => {
+    using temp = TempDir.createSync("@veyyon-forkfrom-encoded-host-");
+    const cwd = path.join(temp.path(), "project");
+    const sessions = path.join(temp.path(), "sessions");
+    const source = SessionManager.create(cwd, sessions);
+    let forked: SessionManager | undefined;
+    try {
+      expect(await source.saveArtifact(originalBytes, "bash")).toBe("0");
+      const link = `artifact://%30?session=${source.getSessionId()}`;
+      source.appendMessage({ role: "user", content: `Original evidence: ${link}`, timestamp: Date.now() });
+      await source.flush();
+      const sourceFile = source.getSessionFile();
+      if (!sourceFile) throw new Error("expected persisted source session");
+      const sourceBefore = await fs.readFile(sourceFile, "utf8");
+      const oldDir = sourceFile.slice(0, -".jsonl".length);
+      const parked = path.join(temp.path(), "parked-original-artifacts");
+      await fs.rename(oldDir, parked);
+      try {
+        await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+          suppressBreadcrumb: true,
+        })).rejects.toThrow(/referenced artifacts unavailable/i);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+        expect(await fs.readFile(path.join(parked, "0.bash.log"), "utf8")).toBe(originalBytes);
+      } finally {
+        await fs.rename(parked, oldDir);
+      }
+
+      forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+        suppressBreadcrumb: true,
+      });
+      const inherited = await forked.getArtifactPath("0");
+      if (!inherited) throw new Error("expected copied source artifact");
+      expect(await fs.readFile(inherited, "utf8")).toBe(originalBytes);
+      expect(await forked.saveArtifact("new unrelated output", "bash")).toBe("1");
+      expect(await fs.readFile(inherited, "utf8")).toBe(originalBytes);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+    } finally {
+      await forked?.close();
+      await source.close();
+    }
+  });
+
+  it("does not reinterpret encoded foreign or invalid artifact hosts as local evidence", async () => {
+    for (const link of [
+      "artifact://%30?session=another-execution-session",
+      "artifact://%30bad",
+    ]) {
+      using temp = TempDir.createSync("@veyyon-fork-encoded-foreign-");
+      const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      try {
+        manager.appendMessage({ role: "user", content: `Keep source URL: ${link}`, timestamp: Date.now() });
+        await manager.flush();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected persisted source session");
+        const sourceBefore = await fs.readFile(sourceFile, "utf8");
+        const fork = await manager.fork();
+        if (!fork) throw new Error("expected fork without local source artifacts");
+        expect(fork.oldSessionFile).toBe(sourceFile);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+        expect(await manager.saveArtifact("new unrelated local evidence", "bash")).toBe("0");
+        expect(manager.getEntries().some(entry =>
+          entry.type === "message" && entry.message.role === "user" &&
+          entry.message.content === `Keep source URL: ${link}`
+        )).toBe(true);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
   it("fails closed for missing local evidence with case-insensitive artifact schemes", async () => {
     for (const scheme of ["ARTIFACT", "ArTiFaCt"]) {
       using temp = TempDir.createSync("@veyyon-fork-artifact-scheme-");
