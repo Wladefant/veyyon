@@ -42,6 +42,57 @@ describe("native recovery", () => {
 		const bundle = await captureNativeCheckpoint(file, []);
 		expect(Buffer.from(bundle.blobs[hash] ?? "", "base64")).toEqual(bytes);
 	});
+	test("rejects a symlinked artifact root before capturing unrelated sibling bytes", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const journal = join(root, "session.jsonl");
+		await writeFile(journal, JSON.stringify({ type: "session", id: "s", cwd: root }) + "\n");
+		await writeFile(join(outside, "child.jsonl"), "SYNTHETIC OUTSIDE; no private content");
+		await symlink(outside, join(root, "session"), process.platform === "win32" ? "junction" : "dir");
+		await expect(captureNativeCheckpoint(journal, [])).rejects.toThrow(/Symbolic links are not allowed in checkpoints/);
+		// The synthetic outside data is never an approved capture artifact.
+		expect(await readFile(join(outside, "child.jsonl"), "utf8")).toBe("SYNTHETIC OUTSIDE; no private content");
+	});
+
+	test("artifact reader refuses a redirected nested directory even when the leaf descriptor matches", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const artifactRoot = join(root, "session");
+		const nested = join(artifactRoot, "child");
+		const renamed = join(artifactRoot, "child.original");
+		await mkdir(nested, { recursive: true });
+		await writeFile(join(nested, "evidence.txt"), "APPROVED");
+		await writeFile(join(outside, "evidence.txt"), "SYNTHETIC OUTSIDE");
+		expect((await lstat(nested)).isDirectory()).toBe(true);
+		await rename(nested, renamed);
+		await symlink(outside, nested, process.platform === "win32" ? "junction" : "dir");
+		const redirected = join(nested, "evidence.txt");
+		const preliminary = await lstat(redirected);
+		const handle = await open(redirected, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(redirected, 4096, preliminary, handle, before, artifactRoot, "artifact"))
+				.rejects.toThrow(/Checkpoint artifact source changed or escaped approved root/);
+		} finally {
+			await handle.close();
+		}
+	});
+
+	test("rejects a linked blob store root even when a journal references a valid hash", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const sessions = join(root, "sessions");
+		await mkdir(sessions);
+		const bytes = Buffer.from("SYNTHETIC OUTSIDE BLOB");
+		const hash = new Bun.SHA256().update(bytes).digest("hex");
+		await writeFile(join(outside, hash), bytes);
+		await symlink(outside, join(root, "blobs"), process.platform === "win32" ? "junction" : "dir");
+		const journal = join(sessions, "session.jsonl");
+		await writeFile(journal, JSON.stringify({ type: "session", id: "s", cwd: root }) + "\n" +
+			JSON.stringify({ type: "message", data: `blobtext:sha256:${hash}` }) + "\n");
+		await expect(captureNativeCheckpoint(journal, [])).rejects.toThrow(/Checkpoint blob source changed or escaped approved root/);
+	});
+
 	test("rejects an oversized journal before decoding or allocating its body", async () => {
 		const root = await scratch();
 		const file = join(root, "oversized.jsonl");

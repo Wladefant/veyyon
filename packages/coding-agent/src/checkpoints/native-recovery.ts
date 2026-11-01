@@ -46,6 +46,9 @@ async function assertNoSymlink(path: string): Promise<void> {
 	if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in checkpoints: ${path}`);
 }
 async function walkFiles(root: string, base = root): Promise<string[]> {
+	// The initial traversal root is user-derived, too: a linked sibling of the
+	// session journal must not be treated as approved capture data.
+	await assertNoSymlink(root);
 	const names = await readdir(root);
 	const found: string[] = [];
 	for (const name of names) {
@@ -74,28 +77,37 @@ function captureFileSignature(value: Stats): string {
 }
 
 /**
- * Recheck a workspace leaf's complete ancestry at the actual descriptor-read
- * boundary. Leaf-only O_NOFOLLOW cannot detect an ancestor replaced with a
- * symlink after the initial workspace approval. This is a path-level race
- * guard, not an atomic directory-handle confinement primitive.
+ * Recheck the complete ancestry and canonical containment of a capture leaf
+ * against its explicitly approved root. This rejects stable symlink/junction
+ * substitution, including the root itself, but cannot atomically defeat an
+ * adversary swapping a directory away and back between these path checks.
  */
-async function assertWorkspaceSourceConfined(path: string, workspaceRoot: string, opened: Stats): Promise<void> {
-	const relativePath = relative(workspaceRoot, path);
+type CheckpointSourceScope = "workspace" | "artifact" | "blob";
+async function assertCheckpointSourceConfined(
+	path: string,
+	approvedRoot: string,
+	opened: Stats,
+	scope: CheckpointSourceScope,
+): Promise<void> {
+	const relativePath = relative(approvedRoot, path);
 	const escaped = (value: string): boolean =>
 		!value || value === ".." || value.startsWith(`..${sep}`) || isAbsolute(value);
 	const deny = (): never => {
-		throw new Error(`Checkpoint workspace source changed or escaped approved root: ${path}`);
+		throw new Error(`Checkpoint ${scope} source changed or escaped approved root: ${path}`);
 	};
 	if (escaped(relativePath)) deny();
+	const rootInfo = await lstat(approvedRoot);
+	if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) deny();
 	const components = relativePath.split(sep);
-	let ancestor = workspaceRoot;
+	let ancestor = approvedRoot;
 	for (const [index, component] of components.entries()) {
 		ancestor = join(ancestor, component);
 		const info = await lstat(ancestor);
 		if (info.isSymbolicLink() || (index === components.length - 1 ? !info.isFile() : !info.isDirectory())) deny();
 	}
+	const canonicalRoot = await realpath(approvedRoot);
 	const canonicalPath = await realpath(path);
-	if (escaped(relative(workspaceRoot, canonicalPath))) deny();
+	if (escaped(relative(canonicalRoot, canonicalPath))) deny();
 	const current = await lstat(path);
 	if (!current.isFile() || captureFileSignature(current) !== captureFileSignature(opened)) deny();
 }
@@ -111,7 +123,8 @@ export async function readOpenedCheckpointFile(
 	preliminary: Stats,
 	handle: FileHandle,
 	before: Stats,
-	workspaceRoot?: string,
+	approvedRoot?: string,
+	scope: CheckpointSourceScope = "workspace",
 ): Promise<Uint8Array> {
 	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
 	// A symlink replacing an approved regular file between lstat and open must
@@ -124,7 +137,7 @@ export async function readOpenedCheckpointFile(
 	if (before.size > maxBytes) exceedsBudget();
 	// An approved ancestor may have been replaced while the caller assembled the
 	// workspace list. Refuse any redirected source before reading its bytes.
-	if (workspaceRoot) await assertWorkspaceSourceConfined(path, workspaceRoot, before);
+	if (approvedRoot) await assertCheckpointSourceConfined(path, approvedRoot, before, scope);
 
 	const chunks: Buffer[] = [];
 	let length = 0;
@@ -167,11 +180,16 @@ export async function readOpenedCheckpointFile(
 		captureFileSignature(afterSecond) !== captureFileSignature(afterPath)
 	)
 		throw new Error(`Checkpoint source changed during capture: ${path}`);
-	if (workspaceRoot) await assertWorkspaceSourceConfined(path, workspaceRoot, afterSecond);
+	if (approvedRoot) await assertCheckpointSourceConfined(path, approvedRoot, afterSecond, scope);
 	return first;
 }
 
-async function readStable(path: string, maxBytes: number, workspaceRoot?: string): Promise<Uint8Array> {
+async function readStable(
+	path: string,
+	maxBytes: number,
+	approvedRoot?: string,
+	scope: CheckpointSourceScope = "workspace",
+): Promise<Uint8Array> {
 	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid checkpoint capture byte budget");
 	const preliminary = await lstat(path);
 	// Reject FIFO/device inputs before open: their read can wait forever for a writer.
@@ -182,7 +200,7 @@ async function readStable(path: string, maxBytes: number, workspaceRoot?: string
 	const handle = await open(path, flags);
 	try {
 		const before = await handle.stat();
-		return await readOpenedCheckpointFile(path, maxBytes, preliminary, handle, before, workspaceRoot);
+		return await readOpenedCheckpointFile(path, maxBytes, preliminary, handle, before, approvedRoot, scope);
 	} finally {
 		await handle.close();
 	}
@@ -277,8 +295,12 @@ export async function captureNativeCheckpoint(
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
 	let remainingBytes = nativeCaptureByteBudget(mode);
-	const readIncluded = async (filePath: string, approvedWorkspaceRoot?: string): Promise<Uint8Array> => {
-		const content = await readStable(filePath, remainingBytes, approvedWorkspaceRoot);
+	const readIncluded = async (
+		filePath: string,
+		approvedRoot?: string,
+		scope: CheckpointSourceScope = "workspace",
+	): Promise<Uint8Array> => {
+		const content = await readStable(filePath, remainingBytes, approvedRoot, scope);
 		remainingBytes -= content.byteLength;
 		return content;
 	};
@@ -289,7 +311,7 @@ export async function captureNativeCheckpoint(
 	const artifacts: Record<string, string> = {};
 	try {
 		for (const rel of await walkFiles(artifactRoot))
-			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/"))));
+			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
@@ -300,11 +322,12 @@ export async function captureNativeCheckpoint(
 			.filter(([name]) => name.endsWith(".jsonl"))
 			.map(([, content]) => Buffer.from(content, "base64").toString("utf8")),
 	];
+	const blobRoot = blobsDirForSessionDir(dirname(journalPath));
 	for (const journal of journals) {
 		for (const match of journal.matchAll(/blob(?:text)?:sha256:([a-f0-9]{64})/g)) {
 			const hash = match[1]!;
 			if (!blobs[hash])
-				blobs[hash] = encode(await readIncluded(join(blobsDirForSessionDir(dirname(journalPath)), hash)));
+				blobs[hash] = encode(await readIncluded(join(blobRoot, hash), blobRoot, "blob"));
 		}
 	}
 	const workspaceRoot = await realpath(header.cwd as string);
