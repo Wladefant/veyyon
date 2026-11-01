@@ -738,6 +738,61 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+	for (const failedUpsert of ["negative acknowledgment", "rejected transport"] as const) {
+		test(`reconciles a speculative credential block after ${failedUpsert} even while streaming`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			const streamReady = Promise.withResolvers<void>();
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				streamReady.resolve();
+				await untilAborted(opts.signal);
+			});
+			const realFetch = client.fetchSnapshot.bind(client);
+			let fullSnapshotReads = 0;
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs !== undefined) throw new Error("unexpected background poll in stream mode");
+				fullSnapshotReads += 1;
+				return realFetch(opts);
+			});
+			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+			await streamReady.promise;
+			const pendingResponse = Promise.withResolvers<{ ok: boolean }>();
+			let postAttempts = 0;
+			spyOn(client, "upsertCredentialBlock").mockImplementation(async () => {
+				postAttempts += 1;
+				return pendingResponse.promise;
+			});
+			const blockedUntilMs = Date.now() + 120_000;
+			remote.upsertCredentialBlock({
+				credentialId: id, providerKey: "anthropic", blockScope: "credential",
+				blockedUntilMs, updatedAtMs: Date.now(),
+			});
+			await waitUntil(() => postAttempts === 1);
+			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
+			try {
+				if (failedUpsert === "negative acknowledgment") pendingResponse.resolve({ ok: false });
+				else pendingResponse.reject(new Error("synthetic broker POST unavailable"));
+				// A failed write emits no stream event; a full broker read must retire
+				// the speculative block instead of keeping a phantom restriction.
+				await waitUntil(() =>
+					fullSnapshotReads === 1 &&
+					remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+				);
+				expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
+				expect(remote.listCredentialBlocks([id])).toEqual([]);
+				const authoritative = await peer.fetchSnapshot();
+				if (authoritative.status !== 200) throw new Error("expected final broker snapshot");
+				expect(authoritative.snapshot.credentials[0]?.blocks ?? []).toEqual([]);
+			} finally {
+				pendingResponse.resolve({ ok: false });
+			}
+		});
+	}
+
 	test("keeps a credential blocked when broker block deletion fails or returns a negative acknowledgment", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
