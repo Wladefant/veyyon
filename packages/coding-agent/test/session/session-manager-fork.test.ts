@@ -246,9 +246,10 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			forked = await SessionManager.forkFrom(sourceFile, cwd, sessions);
 			const forkFile = forked.getSessionFile();
 			if (!forkFile) throw new Error("expected persisted fork");
-			expect(await fs.stat(forkFile)).toBeDefined();
+			expect((await fs.stat(forkFile)).isFile()).toBe(true);
 			const afterBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
 			expect(afterBreadcrumb.split(/\r?\n/)[1]).toBe(forkFile);
+			expect(afterBreadcrumb.split(/\r?\n/)).not.toContain("fresh");
 			expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
 		} finally {
 			await forked?.close();
