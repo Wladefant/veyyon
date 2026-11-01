@@ -137,3 +137,25 @@ test("a corrupt first native header cannot be replaced by a later ordinary heade
 	);
 	await expect(readSessionOwnershipMarker(validFile, "ordinary")).resolves.toBeNull();
 });
+
+
+
+// WHY: a syntactically complete 64-KiB prefix is not proof the same physical
+// journal header ends there; a trailing unchecked suffix must fail closed.
+test("a native header whose valid prefix hides a longer physical line is rejected", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-header-boundary-"));
+	roots.push(root);
+	const file = join(root, "oversized-trailing-header.jsonl");
+	const prefix = JSON.stringify({ type: "session", id: "transfer", cwd: root });
+	const malformed = prefix.padEnd(64 * 1024, " ") + ', "checkpointHandoff": ' + JSON.stringify(identity) + "\n";
+	await writeFile(file, malformed);
+	// The old 64-KiB read parsed a complete JSON prefix and ignored the suffix.
+	await expect(readSessionOwnershipMarker(file, "transfer")).rejects.toThrow(
+		/Native session header is missing or exceeds the ownership-read limit/,
+	);
+
+	const allowed = join(root, "max-size-ordinary.jsonl");
+	const normal = JSON.stringify({ type: "session", id: "ordinary", cwd: root });
+	await writeFile(allowed, normal.padEnd(64 * 1024, " ") + "\n");
+	await expect(readSessionOwnershipMarker(allowed, "ordinary")).resolves.toBeNull();
+});

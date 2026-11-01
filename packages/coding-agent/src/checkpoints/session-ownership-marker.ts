@@ -51,17 +51,28 @@ async function readNativeHandoffIdentity(
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
-	const bytes = Buffer.alloc(64 * 1024);
+	const headerLimit = 64 * 1024;
+	const bytes = Buffer.alloc(headerLimit + 1);
 	let text: string;
 	try {
-		const { bytesRead } = await file.read(bytes, 0, bytes.byteLength, 0);
-		text = bytes.subarray(0, bytesRead).toString("utf8");
+		let bytesRead = 0;
+		let newline = -1;
+		while (bytesRead < bytes.byteLength && newline < 0) {
+			const next = await file.read(bytes, bytesRead, bytes.byteLength - bytesRead, bytesRead);
+			if (next.bytesRead === 0) break;
+			const lineEnd = bytes.subarray(bytesRead, bytesRead + next.bytesRead).indexOf(10);
+			if (lineEnd >= 0) newline = bytesRead + lineEnd;
+			bytesRead += next.bytesRead;
+		}
+		if (newline > headerLimit || (newline < 0 && bytesRead > headerLimit))
+			throw new Error("Native session header is missing or exceeds the ownership-read limit");
+		text = bytes.subarray(0, newline >= 0 ? newline : bytesRead).toString("utf8");
 	} finally {
 		await file.close();
 	}
 	// The first physical line alone establishes native session identity.
 	// Never skip a corrupt transfer header for a later forged ordinary header.
-	const line = text.split(/\r?\n/, 2)[0];
+	const line = text;
 	let value: unknown;
 	try {
 		value = JSON.parse(line);
