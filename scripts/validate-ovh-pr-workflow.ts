@@ -179,10 +179,16 @@ function validate(workflow: Workflow): void {
 		equal(eligibleJobs(context({ event: "workflow_dispatch", admission: "", typecheck: true })), ["typecheck"]);
 	});
 
-	check("every job keeps the fixed Veyyon runner boundary", () => {
+	check("every job keeps the Veyyon runner labels and manual label default", () => {
 		for (const job of Object.values(workflow.jobs)) {
-			equal(job["runs-on"], ["self-hosted", "Linux", "X64", "veyyon"]);
+			const runnerLabels = job["runs-on"];
+			equal(runnerLabels.slice(0, 3), ["self-hosted", "Linux", "X64"]);
+			equal(runnerLabels[3], "${{ inputs.runner_label || 'veyyon' }}");
 		}
+		const runnerLabel = workflow.on.workflow_dispatch?.inputs.runner_label as
+			| Record<string, unknown>
+			| undefined;
+		equal(runnerLabel?.default, "veyyon");
 	});
 
 	for (const [name, fixture, expected] of [
