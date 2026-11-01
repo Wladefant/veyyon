@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Authoritative journal checks refuse unreadable disk state without changing ordinary best-effort session persistence ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+
 ## [1.6.0] - 2026-10-28
 
 ### Added
