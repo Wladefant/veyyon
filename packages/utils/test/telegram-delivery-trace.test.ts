@@ -94,7 +94,7 @@ describe("telegram-delivery-trace", () => {
 				sessionId: "sess-abc",
 			});
 
-			expect(infoSpy).toHaveBeenCalledTimes(1);
+			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual(["session_acceptance"]);
 			const call = infoSpy.mock.calls[0];
 			expect(call).toBeDefined();
 			if (!call) throw new Error("Expected logger call");
@@ -145,7 +145,7 @@ describe("telegram-delivery-trace", () => {
 			// First consume logs turn_consumption with the retained owning sessionId
 			const consumed = consumeTelegramTrace(msgCopy, "session-fallback");
 			expect(consumed).toEqual({ trace, sessionId: "session-owning-123" });
-			expect(infoSpy).toHaveBeenCalledTimes(1);
+			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual(["turn_consumption"]);
 			expect(infoSpy.mock.calls[0][0]).toBe("Telegram delivery trace");
 			expect(infoSpy.mock.calls[0][1]).toMatchObject({
 				stage: "turn_consumption",
@@ -156,14 +156,14 @@ describe("telegram-delivery-trace", () => {
 			// Second consume on same or copied message does not log again
 			const second = consumeTelegramTrace(msgCopy, "session-owning-123");
 			expect(second).toBeUndefined();
-			expect(infoSpy).toHaveBeenCalledTimes(1);
+			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual(["turn_consumption"]);
 
 			// Fallback sessionId used when attach omitted sessionId
 			const msgFallback = { role: "user", content: "fallback" };
 			attachTelegramTrace(msgFallback, trace);
 			const consumedFallback = consumeTelegramTrace(msgFallback, "session-fallback");
 			expect(consumedFallback).toEqual({ trace, sessionId: "session-fallback" });
-			expect(infoSpy).toHaveBeenCalledTimes(2);
+			expect(infoSpy.mock.calls.map(call => (call[1] as Record<string, unknown>).stage)).toEqual(["turn_consumption", "turn_consumption"]);
 			expect(infoSpy.mock.calls[1][1]).toMatchObject({
 				stage: "turn_consumption",
 				traceId: "c1:1:2",
