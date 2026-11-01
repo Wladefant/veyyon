@@ -415,7 +415,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected broker snapshot");
 		const entry = initial.snapshot.credentials[0]!;
 		if (entry.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
-		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
+		// Simulate another provider with a globally distinct ID in the local snapshot.
+		// A response for "anthropic" must never shadow that retained provider ID.
+		const otherProvider = { ...entry, id: entry.id + 100, provider: "openai-codex" };
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: { ...initial.snapshot, credentials: [entry, otherProvider] },
+			streamSnapshots: false,
+		});
 		const original = structuredClone(remote.snapshot.credentials);
 		const upload = spyOn(client, "uploadCredential");
 		const malformed = [
@@ -427,6 +434,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			{
 				label: "valid entry followed by foreign provider",
 				entries: [entry, { ...entry, id: entry.id + 1, provider: "openai-codex" }],
+			},
+			{
+				label: "duplicate returned credential ID",
+				entries: [entry, { ...entry, credential: { ...entry.credential, access: "synthetic-other-access" } }],
+			},
+			{
+				label: "returned credential shadows retained other-provider ID",
+				entries: [{ ...entry, id: otherProvider.id }],
 			},
 		];
 		for (const candidate of malformed) {

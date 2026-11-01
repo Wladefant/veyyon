@@ -798,10 +798,20 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[], revisionAtUpload: number): void {
 		// Upload replies are a trust boundary: validate the *whole* list before
 		// replacing any local rows, even when the broker normally redacts it.
+		// IDs are global across providers: refresh, disable, and block use the ID.
+		// Refuse duplicates and IDs belonging to retained other-provider rows.
+		const retainedIds = new Set(
+			this.#snapshot.credentials.filter(entry => entry.provider !== provider).map(entry => entry.id),
+		);
+		const returnedIds = new Set<number>();
 		for (const entry of entries) {
 			if (entry.provider !== provider) {
 				throw new AIError.AuthBrokerError(`Broker upload identity mismatch for provider=${provider}`);
 			}
+			if (returnedIds.has(entry.id) || retainedIds.has(entry.id)) {
+				throw new AIError.AuthBrokerError(`Broker upload identity collision for credential id=${entry.id} provider=${provider}`);
+			}
+			returnedIds.add(entry.id);
 			if (entry.credential.type === "oauth" && entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
 				throw new AIError.AuthBrokerError(`Broker upload returned unredacted OAuth refresh for provider=${provider}`);
 			}
