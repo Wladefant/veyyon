@@ -598,6 +598,11 @@ export class MCPManager {
 	}
 
 	async stopEvents(): Promise<void> {
+		const scope = this.#eventCallbackContext.getStore();
+		// An obsolete handler may still be awaiting an earlier event. Its late
+		// stop must not revoke a replacement consumer installed by another owner.
+		// External stops and stops from the current handler retain their behavior.
+		if (scope?.active && scope.consumerRevision !== this.#eventConsumerRevision) return;
 		for (const controller of this.#eventStartupControllers.values()) controller.abort();
 		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
