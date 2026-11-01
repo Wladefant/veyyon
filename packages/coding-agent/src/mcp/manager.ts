@@ -2139,11 +2139,13 @@ export class MCPManager {
 			// awaiting its callback drain so an external handler change cannot start
 			// new events against a transport being replaced.
 			this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+			// Detach first: stream cancellation during the drain may itself close
+			// this transport. Its stale onClose must never start another reconnect.
+			oldConnection.transport.onClose = undefined;
 			this.#connections.delete(name);
 			await this.#stopServerEvents(name);
 			// Keep transport close detached: the HTTP DELETE may take its full
 			// request timeout and does not belong on the reconnect critical path.
-			oldConnection.transport.onClose = undefined;
 			closeTransportDetached(oldConnection.transport, name, "reconnect-replaced");
 		}
 		this.#pendingConnections.delete(name);
