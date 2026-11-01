@@ -7,6 +7,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { submitInteractiveInput } from "../src/main";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { initTheme } from "../src/theme/theme";
@@ -85,4 +86,46 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		const startedAfterCancel = mode.markPendingSubmissionStarted(submission);
 		expect(startedAfterCancel).toBe(false);
 	});
+	it("preserves Telegram trace metadata through the real interactive submission seam", async () => {
+		const realMode = mode;
+		if (!realMode) throw new Error("Expected mode");
+		const telegramTrace = { updateId: 9001, messageId: 42, chatId: "-1001999888", topicId: 10 };
+		const input = realMode.startPendingSubmission({
+			text: "traced input",
+			streamingBehavior: "followUp",
+			telegramTrace,
+		});
+		const calls: Array<{ text: string; options: unknown }> = [];
+		const promptSession = {
+			isStreaming: false,
+			prompt: async (text: string, options: unknown) => {
+				calls.push({ text, options });
+			},
+			promptCustomMessage: async () => {
+				throw new Error("A Telegram user message must not become a custom prompt");
+			},
+		} as unknown as Pick<AgentSession, "prompt" | "promptCustomMessage" | "isStreaming">;
+		let error: string | undefined;
+		await submitInteractiveInput(
+			{
+				markPendingSubmissionStarted: value => realMode.markPendingSubmissionStarted(value),
+				finishPendingSubmission: value => realMode.finishPendingSubmission(value),
+				showError: message => {
+					error = message;
+				},
+				checkShutdownRequested: () => false,
+			},
+			promptSession,
+			input,
+		);
+		expect(error).toBeUndefined();
+		expect(input.started).toBe(true);
+		expect(calls).toEqual([
+			{
+				text: "traced input",
+				options: { images: undefined, streamingBehavior: "followUp", telegramTrace },
+			},
+		]);
+	});
+
 });
