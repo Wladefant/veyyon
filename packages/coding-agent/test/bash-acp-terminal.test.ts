@@ -350,4 +350,160 @@ describe("BashTool ACP terminal routing", () => {
 		expect(killed).toBe(1);
 		expect(released).toBe(1);
 	}, 12_000);
+
+	// A successful terminal/create uses part of the SAME configured deadline.
+	// Without subtracting its elapsed time, this fake-time test would finish
+	// near 1600ms instead of the original 1000ms budget.
+	it("shares one deadline between successful terminal creation and pending execution", async () => {
+		const exit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		let killed = 0;
+		let released = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "combined-budget",
+			waitForExit: async () => exit.promise,
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => { killed++; },
+			release: async () => { released++; },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => {
+				const ready = Promise.withResolvers<ClientBridgeTerminalHandle>();
+				setTimeout(() => ready.resolve(handle), 600);
+				return ready.promise;
+			},
+		};
+		installFakeTime();
+		// Fake time advances setTimeout/Date. The production clock stays
+		// monotonic; this narrowly makes it advance in lockstep for the test.
+		vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+		const began = Date.now();
+		const tool = new BashTool(makeSession(bridge));
+		const failure = await driveFakeTime(
+			tool.execute("combined-budget", { command: "echo never", timeout: 1 }),
+		).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toContain("Command timed out after 1 seconds");
+		expect(Date.now() - began).toBeGreaterThanOrEqual(1_000);
+		expect(Date.now() - began).toBeLessThan(1_150);
+		expect(killed).toBe(1);
+		expect(released).toBe(1);
+		exit.resolve({ exitCode: null, signal: "TERM" });
+	}, 12_000);
+
+	it("settles a cancelled tool even when terminal/create never resolves", async () => {
+		const entered = Promise.withResolvers<void>();
+		const unavailable = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { entered.resolve(); return unavailable.promise; },
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("no-create-response", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(entered.promise, "unresponsive client terminal/create");
+			controller.abort();
+			await expect(bounded(running, "unresponsive client cancellation")).rejects.toThrow("Command aborted");
+		} finally {
+			controller.abort();
+		}
+	}, 8_000);
+
+	it("cleans exactly one handle when abort races a successful terminal/create handoff", async () => {
+		const controller = new AbortController();
+		const released = Promise.withResolvers<void>();
+		let kills = 0;
+		let releases = 0;
+		let waits = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "handoff-race",
+			waitForExit: async () => { waits++; return { exitCode: 0 }; },
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => { kills++; },
+			release: async () => { releases++; released.resolve(); },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => {
+				queueMicrotask(() => controller.abort());
+				return handle;
+			},
+		};
+		const tool = new BashTool(makeSession(bridge));
+		await expect(
+			bounded(tool.execute("handoff-race", { command: "echo never" }, controller.signal), "handoff abort"),
+		).rejects.toThrow("Command aborted");
+		await bounded(released.promise, "handoff abort terminal cleanup");
+		expect(kills).toBe(1);
+		expect(releases).toBe(1);
+		expect(waits).toBe(0);
+	}, 8_000);
+
+	it("releases a terminal returned after abort even if its kill RPC refuses", async () => {
+		const entered = Promise.withResolvers<void>();
+		const provide = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const released = Promise.withResolvers<void>();
+		let releases = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "kill-error",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: async () => { throw new Error("synthetic editor kill refusal"); },
+			release: async () => { releases++; released.resolve(); },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { entered.resolve(); return provide.promise; },
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("kill-error", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(entered.promise, "kill-error terminal create");
+			controller.abort();
+			await expect(bounded(running, "kill-error cancellation")).rejects.toThrow("Command aborted");
+		} finally {
+			provide.resolve(handle);
+		}
+		await bounded(released.promise, "release despite rejected kill");
+		expect(releases).toBe(1);
+	}, 8_000);
+
+	it("attempts terminal release after a bounded wait for a hung late kill", async () => {
+		const entered = Promise.withResolvers<void>();
+		const provide = Promise.withResolvers<ClientBridgeTerminalHandle>();
+		const released = Promise.withResolvers<void>();
+		const neverKilled = Promise.withResolvers<void>();
+		let releases = 0;
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "kill-unresponsive",
+			waitForExit: async () => ({ exitCode: 0 }),
+			currentOutput: async () => ({ output: "", truncated: false }),
+			kill: () => neverKilled.promise,
+			release: async () => { releases++; released.resolve(); },
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: () => { entered.resolve(); return provide.promise; },
+		};
+		const controller = new AbortController();
+		const tool = new BashTool(makeSession(bridge));
+		const running = tool.execute("kill-unresponsive", { command: "echo never" }, controller.signal);
+		void running.catch(() => undefined);
+		try {
+			await bounded(entered.promise, "unresponsive-kill terminal creation");
+			controller.abort();
+			await expect(bounded(running, "unresponsive-kill cancellation")).rejects.toThrow("Command aborted");
+		} finally {
+			provide.resolve(handle);
+		}
+		await bounded(released.promise, "bounded late kill then release");
+		expect(releases).toBe(1);
+	}, 8_000);
 });
