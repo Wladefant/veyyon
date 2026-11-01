@@ -7,6 +7,7 @@ export class SynchronizedSession {
 	#lost = false;
 	#timer?: NodeJS.Timeout;
 	#lease?: CheckpointLease;
+	#admission?: Promise<void>;
 	#resumeToken?: string;
 	constructor(
 		readonly sessionId: string,
@@ -15,8 +16,25 @@ export class SynchronizedSession {
 		readonly ownerNode = runtimeOwner,
 		readonly persistOwnership?: (resumeToken: string, epoch: number) => Promise<void>,
 	) {}
-	async admit(): Promise<void> {
+	admit(): Promise<void> {
+		if (this.#lost) return Promise.reject(new Error("Synchronized ownership lost. Start an explicit local fork."));
+		// Shared ownership acquisition must not race another prompt/tool admission.
+		if (this.#admission) return this.#admission;
+		const admission = this.#admitOnce();
+		this.#admission = admission;
+		const clear = () => {
+			if (this.#admission === admission) this.#admission = undefined;
+		};
+		void admission.then(clear, clear);
+		return admission;
+	}
+
+	#assertOpen(): void {
 		if (this.#lost) throw new Error("Synchronized ownership lost. Start an explicit local fork.");
+	}
+
+	async #admitOnce(): Promise<void> {
+		this.#assertOpen();
 		if (!this.#lease) {
 			if (this.claim) {
 				const node = process.env.VEYYON_CHECKPOINT_NODE;
@@ -45,8 +63,10 @@ export class SynchronizedSession {
 				if (!grant) throw new Error("Transferred session is missing an authority resume capability");
 				this.#lease = grant.lease;
 				this.#resumeToken = grant.resumeToken;
+				this.#assertOpen();
 				try {
 					await this.persistOwnership(grant.resumeToken, grant.lease.epoch);
+					this.#assertOpen();
 					await this.client.finalizeTransfer(
 						this.sessionId,
 						node,
@@ -55,6 +75,7 @@ export class SynchronizedSession {
 						grant.lease.epoch,
 						grant.resumeToken,
 					);
+					this.#assertOpen();
 				} catch (error) {
 					this.#lost = true;
 					throw error;
@@ -62,10 +83,12 @@ export class SynchronizedSession {
 			} else {
 				this.#lease = await this.client.acquireLease(this.sessionId, this.ownerNode);
 			}
+			// close() can run while acquisition/finalization is awaiting the authority.
+			this.#assertOpen();
 			this.#timer = setInterval(() => {
 				void this.client.renewLease(this.sessionId).then(
 					lease => {
-						this.#lease = lease;
+						if (!this.#lost) this.#lease = lease;
 					},
 					() => {
 						this.#lost = true;
@@ -75,15 +98,22 @@ export class SynchronizedSession {
 			}, 15000);
 			this.#timer.unref();
 		}
-		await this.client.assertWritable(this.sessionId, this.#lease.epoch);
 		try {
-			this.#lease = await this.client.renewLease(this.sessionId);
+			await this.client.assertWritable(this.sessionId, this.#lease.epoch);
+			this.#assertOpen();
+			const renewed = await this.client.renewLease(this.sessionId);
+			this.#assertOpen();
+			this.#lease = renewed;
 		} catch (error) {
 			this.#lost = true;
 			throw error;
 		}
 	}
 	async close(): Promise<void> {
+		// Fence admission immediately. A delayed /lease or /claim must finish before
+		// we release, otherwise close could return while a new owner is still granted.
+		this.#lost = true;
+		await this.#admission?.catch(() => {});
 		clearInterval(this.#timer);
 		try {
 			const released = await this.client.releaseLease(this.sessionId);
