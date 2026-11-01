@@ -140,15 +140,39 @@ async function requestPermission(
 	if (signal?.aborted) {
 		return { outcome: "cancelled" };
 	}
-	const response = await connection.requestPermission(request);
-	const outcome = response.outcome;
-	if (outcome.outcome === "cancelled") {
-		return { outcome: "cancelled" };
+	// The editor may keep a permission dialog open after session/cancel.
+	// Do not make local cancellation await a remote response that may never
+	// arrive. Promise.race observes a later rejected client RPC as well.
+	const cancelled = Promise.withResolvers<void>();
+	const onAbort = (): void => cancelled.resolve();
+	signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		// Guard the tiny window between the preflight and listener setup.
+		if (signal?.aborted) return { outcome: "cancelled" };
+		// Preserve the existing immediate RPC dispatch. Deferring this call
+		// to a microtask could send a fresh permission prompt after an abort
+		// fired synchronously just after requestPermission was invoked.
+		const clientReply = connection.requestPermission(request);
+		const received = await Promise.race([
+			clientReply.then(response => ({ type: "reply" as const, response })),
+			cancelled.promise.then(() => ({ type: "aborted" as const })),
+		]);
+		if (received.type === "aborted" || signal?.aborted) return { outcome: "cancelled" };
+		const outcome = received.response.outcome;
+		if (outcome.outcome === "cancelled") return { outcome: "cancelled" };
+		const matched = options.find(option => option.optionId === outcome.optionId);
+		return {
+			outcome: "selected",
+			optionId: outcome.optionId,
+			...(matched ? { kind: matched.kind } : {}),
+		};
+	} catch (error) {
+		// An editor can synchronously signal cancellation and reject (or throw)
+		// before Promise.race chooses its winner. Never promote that transport
+		// failure to an active permission error once the caller has aborted.
+		if (signal?.aborted) return { outcome: "cancelled" };
+		throw error;
+	} finally {
+		signal?.removeEventListener("abort", onAbort);
 	}
-	const matched = options.find(option => option.optionId === outcome.optionId);
-	return {
-		outcome: "selected",
-		optionId: outcome.optionId,
-		...(matched ? { kind: matched.kind } : {}),
-	};
 }
