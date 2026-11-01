@@ -1063,6 +1063,87 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+	test("resumes failed block reconciliation after a newer write settles during a failed GET", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		const firstReadReady = Promise.withResolvers<void>();
+		const releaseFirstRead = Promise.withResolvers<void>();
+		let fullReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected background poll with stalled SSE");
+			fullReads += 1;
+			if (fullReads === 1) {
+				firstReadReady.resolve();
+				await releaseFirstRead.promise;
+				throw new Error("synthetic transient broker snapshot failure");
+			}
+			return realFetch(opts);
+		});
+		const realUpsert = client.upsertCredentialBlock.bind(client);
+		const newerCommitted = Promise.withResolvers<void>();
+		let posts = 0;
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
+			posts += 1;
+			if (posts === 1) {
+				expect(body.blockScope).toBe("scope-A");
+				return { ok: false };
+			}
+			if (posts !== 2) throw new Error("unexpected third synthetic broker POST");
+			expect(body.blockScope).toBe("scope-B");
+			const result = await realUpsert(credentialId, body);
+			newerCommitted.resolve();
+			return result;
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await streamReady.promise;
+		const firstUntilMs = Date.now() + 90_000;
+		const secondUntilMs = firstUntilMs + 60_000;
+		remote.upsertCredentialBlock({
+			credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
+			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+		});
+		try {
+			await firstReadReady.promise;
+			// The failed A POST left its reconciliation GET unresolved. B now
+			// commits to the real SQLite broker while A's GET is still in flight.
+			remote.upsertCredentialBlock({
+				credentialId: id, providerKey: "anthropic", blockScope: "scope-B",
+				blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+			});
+			await newerCommitted.promise;
+			await Bun.sleep(1); // let the store settle B's returned acknowledgment
+			expect(fullReads).toBe(1);
+			const brokerNow = await peer.fetchSnapshot();
+			if (brokerNow.status !== 200) throw new Error("expected authoritative synthetic broker snapshot");
+			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: secondUntilMs },
+			]);
+			// A's GET now fails. Its in-flight flag must not discard the retry
+			// requested by B's settlement while the previous read was pending.
+			releaseFirstRead.resolve();
+			await waitUntil(() =>
+				fullReads === 2 &&
+				remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
+				remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
+			);
+			expect(remote.listCredentialBlocks([id])).toMatchObject([
+				{ credentialId: id, providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: secondUntilMs },
+			]);
+		} finally {
+			releaseFirstRead.resolve();
+		}
+	});
+
 	test("does not refresh away a newer pending same-ID block after an older successful POST", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
