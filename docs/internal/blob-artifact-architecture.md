@@ -195,8 +195,9 @@ Read tool integration:
 
 `AgentSession.fork()` flushes the original session first. `SessionManager.fork()` then preflights the inherited `artifact://N` references and copies the original session's artifact directory into a fresh, non-overwriting destination **before** changing the active session ID, writing the new file or emitting a successful session switch.
 
-- Every inherited referenced artifact must exist unambiguously in the source directory, and the copied directory must contain the original names and matching file sizes before the switch. A successful copy preserves the original output bytes; the source artifacts are not removed.
-- Missing old artifact directories are tolerated **only when no inherited references exist**. A missing referenced artifact, an inaccessible or non-directory source, an incomplete copy or a non-ENOENT copy error rejects the fork without switching the original session.
+- Every inherited **local** referenced artifact (`artifact://N` or an explicit `?session=` equal to the source execution session ID) must exist unambiguously in the source directory; the copied directory must contain the original filenames and matching file sizes before switching. Original bytes remain in place.
+- A valid explicit `?session=<other-execution-session-id>` reference is retained verbatim without looking up or copying its numeric ID from the current session. Its future availability depends on the foreign owner; a fork does not promise that another execution session is online.
+- Missing old artifact directories are tolerated **only when no inherited local references exist**. A missing local referenced artifact, an inaccessible or non-directory source, an incomplete copy or a non-ENOENT copy error rejects the fork without switching the original session.
 - A failed preflight can leave an orphaned *new* destination directory; it never deletes the original and never reports an exact-evidence fork as successful. Cleanup of orphaned data needs separate owned verification, not an automatic destructive fallback.
 - On success, the new session's `ArtifactManager` rescans the copied `{id}.*.log` files and starts new output IDs after the highest inherited ID, preventing old `artifact://N` links from resolving to unrelated new output.
 
