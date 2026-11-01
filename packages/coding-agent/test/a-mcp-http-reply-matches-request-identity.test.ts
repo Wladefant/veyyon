@@ -195,4 +195,52 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 			await fixture.close();
 		}
 	}, 12_000);
+
+	// WHY: HTTP event-stream request ACKs also use JSON-RPC 2.0 envelopes.
+	// Verifying the id without the version/result-error shape can accept a
+	// stale or malformed envelope as successful subscription establishment.
+	it("refuses invalid JSON event-stream acknowledgements despite HTTP 200 and a matching id", async () => {
+		const fixture = await startFixture();
+		try {
+			const invalid: Array<[string, (id: string | number) => JsonRpcReply]> = [
+				["wrong version", id => ({ jsonrpc: "1.0", id, result: {} })],
+				["no result", id => ({ jsonrpc: "2.0", id })],
+				["both result and error", id => ({
+					jsonrpc: "2.0", id, result: {}, error: { code: -32603, message: "failed" },
+				})],
+				["null error", id => ({ jsonrpc: "2.0", id, error: null })],
+				["wrong id", id => ({ jsonrpc: "2.0", id: String(id) + "-stale", result: {} })],
+				["nonobject array", () => [1, 2, 3]],
+			];
+			for (const [name, response] of invalid) {
+				fixture.setReply(response);
+				const stream = fixture.transport.streamRequest("events/subscribe", { name }, () => {});
+				await expect(bounded(stream.done, "invalid stream ACK " + name)).rejects.toThrow(
+					"MCP event stream response",
+				);
+			}
+		} finally {
+			await fixture.close();
+		}
+	}, 25_000);
+
+	it("accepts a correlated JSON event-stream result and preserves a valid server error", async () => {
+		const fixture = await startFixture();
+		let notifications = 0;
+		try {
+			fixture.setReply(id => ({ jsonrpc: "2.0", id, result: { accepted: true } }));
+			const good = fixture.transport.streamRequest("events/subscribe", {}, () => { notifications++; });
+			await expect(bounded(good.done, "valid JSON stream ACK")).resolves.toBeUndefined();
+			expect(notifications).toBe(0);
+			fixture.setReply(id => ({
+				jsonrpc: "2.0", id, error: { code: -32601, message: "Synthetic stream method unavailable" },
+			}));
+			const failed = fixture.transport.streamRequest("events/subscribe", {}, () => { notifications++; });
+			await expect(bounded(failed.done, "JSON stream error")).rejects.toThrow(
+					"MCP error -32601: Synthetic stream method unavailable",
+			);
+		} finally {
+			await fixture.close();
+		}
+	}, 12_000);
 });
