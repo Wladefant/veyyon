@@ -120,6 +120,30 @@ export async function verifyOwnerOnlyWindowsAcl(filePath: string, options: Windo
 	await runOwnerOnlyAcl(VERIFY_SCRIPT, filePath, options);
 }
 
+/** Verify several paths in one bounded PowerShell process, preserving every file's ACL check. */
+export async function verifyOwnerOnlyWindowsAcls(
+	filePaths: readonly string[],
+	options: WindowsAclOptions = {},
+): Promise<void> {
+	if (filePaths.length === 0 || (options.platform ?? process.platform) !== "win32") return;
+	for (const filePath of filePaths) assertOwnerOnlyPath(filePath);
+	const script = `
+$ErrorActionPreference = 'Stop'
+$targets = ConvertFrom-Json -InputObject ([Environment]::GetEnvironmentVariable('VEYYON_OWNER_ONLY_ACL_PATH', 'Process'))
+foreach ($target in $targets) {
+  try {
+  $item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL target is a reparse point' }
+  ${VERIFY_ACL}
+  } catch {
+    throw ('ACL verification failed for ' + $target + ': ' + $_.Exception.Message)
+  }
+}
+[Console]::Out.Write('OK')
+`;
+	await runOwnerOnlyAcl(script, JSON.stringify(filePaths), options);
+}
+
 /**
  * Synchronous {@link verifyOwnerOnlyWindowsAcl} for a reader that cannot await. It runs the same
  * VERIFY_SCRIPT with the same environment, deadline and output bound, and rejects the same way.
