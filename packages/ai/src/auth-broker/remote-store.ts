@@ -287,6 +287,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	/** A failed older block mutation must not reconcile a newer same-ID speculative write. */
 	#latestCredentialBlockMutation = new Map<number, symbol>();
+	/** Preserve the most recent block key until every earlier same-ID request settles. */
+	#latestCredentialBlockMutationKey = new Map<number, string>();
+	#pendingCredentialBlockMutations = new Map<number, Set<symbol>>();
+	#credentialBlockReconciliationPending = new Set<number>();
+	#credentialBlockReconciliationInFlight = false;
+	/** Also fences GETs against non-speculative DELETE requests begun during the read. */
+	#credentialBlockMutationEpoch = 0;
 	#usageCacheEpoch = 0;
 	#closed = false;
 	/**
@@ -578,52 +585,93 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * A failed block mutation cannot rely on SSE (which may have no frame) to
-	 * reconcile its speculative/local state. An unrelated SSE event can supersede
-	 * a full GET without resolving this credential; make a few fresh attempts.
-	 * Never apply an obsolete GET over a newer same-credential edit.
+	 * A broker GET represents the entire credential snapshot. Never apply it
+	 * while any block POST/DELETE remains unsettled, even for another scope or
+	 * credential: an uncommitted speculative block would disappear from the view.
 	 */
-	#clearCredentialBlockMutation(id: number, mutation: symbol): boolean {
-		if (this.#latestCredentialBlockMutation.get(id) !== mutation) return false;
-		this.#latestCredentialBlockMutation.delete(id);
-		return true;
+	#startCredentialBlockMutation(id: number, key: string, mutation: symbol): void {
+		let pending = this.#pendingCredentialBlockMutations.get(id);
+		if (!pending) {
+			pending = new Set<symbol>();
+			this.#pendingCredentialBlockMutations.set(id, pending);
+		}
+		pending.add(mutation);
+		this.#latestCredentialBlockMutation.set(id, mutation);
+		this.#latestCredentialBlockMutationKey.set(id, key);
+		this.#credentialBlockMutationEpoch += 1;
 	}
 
-	async #reconcileFailedCredentialBlockMutation(kind: "upsert" | "delete", id: number, mutation: symbol): Promise<void> {
-		const cause = `credential-block-${kind}-reconcile`;
+	#settleCredentialBlockMutation(id: number, key: string, mutation: symbol, failed: boolean): void {
+		const isLatest = this.#latestCredentialBlockMutation.get(id) === mutation;
+		// A newer write to the SAME block key supersedes an older failure.
+		// A write to a DIFFERENT scope cannot retire that failed scope's phantom.
+		if (failed && (isLatest || this.#latestCredentialBlockMutationKey.get(id) !== key)) {
+			this.#credentialBlockReconciliationPending.add(id);
+		}
+		const pending = this.#pendingCredentialBlockMutations.get(id);
+		pending?.delete(mutation);
+		if (isLatest) this.#latestCredentialBlockMutation.delete(id);
+		if (pending?.size === 0) {
+			this.#pendingCredentialBlockMutations.delete(id);
+			this.#latestCredentialBlockMutationKey.delete(id);
+		}
+		if (this.#pendingCredentialBlockMutations.size > 0) return;
+		if (this.#credentialBlockReconciliationPending.size > 0) {
+			void this.#reconcileFailedCredentialBlockMutations();
+		} else if (!failed) {
+			this.#maybeRefreshSnapshot("credential block");
+		}
+	}
+
+	/**
+	 * A failed write emits no SSE frame. Once ALL speculative writes settle,
+	 * reconcile their scopes from one authoritative broker snapshot. Retry if
+	 * unrelated SSE, local edits or newer write starts supersede the GET.
+	 */
+	async #reconcileFailedCredentialBlockMutations(): Promise<void> {
+		if (
+			this.#credentialBlockReconciliationInFlight ||
+			this.#pendingCredentialBlockMutations.size > 0 ||
+			this.#credentialBlockReconciliationPending.size === 0
+		) return;
+		this.#credentialBlockReconciliationInFlight = true;
+		const cause = "credential-block-mutation-reconcile";
 		try {
 			for (let attempt = 0; attempt < MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS; attempt += 1) {
-				// The revision fence on this GET cannot detect a newer pending same-ID
-				// upsert that happened BEFORE the older failed mutation's GET began.
-				if (this.#latestCredentialBlockMutation.get(id) !== mutation) return;
+				if (this.#pendingCredentialBlockMutations.size > 0) return;
 				const revisionAtRequest = this.#appliedSnapshotRevision;
+				const mutationEpochAtRequest = this.#credentialBlockMutationEpoch;
 				const result = await this.#client.fetchSnapshot();
-				if (this.#latestCredentialBlockMutation.get(id) !== mutation) return;
+				// Even a DELETE that makes no speculative edit must supersede
+				// a GET started before that write was sent.
+				if (this.#pendingCredentialBlockMutations.size > 0) return;
+				if (mutationEpochAtRequest !== this.#credentialBlockMutationEpoch) continue;
 				if (result.status === 200 && this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) {
+					this.#credentialBlockReconciliationPending.clear();
 					return;
 				}
 			}
 			this.#reportStaleSnapshot(
 				cause,
 				new AIError.AuthBrokerError("Broker credential block reconciliation superseded repeatedly"),
-				{ id, attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
+				{ credentialIds: [...this.#credentialBlockReconciliationPending], attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
 			);
 		} catch (error) {
-			if (this.#latestCredentialBlockMutation.get(id) === mutation) {
-				this.#reportStaleSnapshot(cause, error, { id });
-			}
+			this.#reportStaleSnapshot(cause, error, { credentialIds: [...this.#credentialBlockReconciliationPending] });
 		} finally {
-			this.#clearCredentialBlockMutation(id, mutation);
+			this.#credentialBlockReconciliationInFlight = false;
 		}
 	}
 
+
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		const mutation = Symbol("block-upsert");
-		this.#latestCredentialBlockMutation.set(block.credentialId, mutation);
+		const key = credentialBlockKey(block.credentialId, block.providerKey, block.blockScope);
+		this.#startCredentialBlockMutation(block.credentialId, key, mutation);
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
 		this.#credentialBlockReconcileAfter.set(
-			credentialBlockKey(block.credentialId, block.providerKey, block.blockScope),
+			key,
 			Math.min(block.blockedUntilMs, Date.now() + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
 		);
 		const body = toCredentialBlockSnapshot(block);
@@ -633,11 +681,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (!response.ok) {
 					throw new AIError.AuthBrokerError(`Broker refused credential block upsert id=${block.credentialId}`);
 				}
-				// Even a successful older POST must not start a GET that clears a
-				// newer same-ID block still waiting on its broker acknowledgment.
-				if (this.#clearCredentialBlockMutation(block.credentialId, mutation)) {
-					this.#maybeRefreshSnapshot("credential block");
-				}
+				// Never fetch an older broker view while any speculative block is
+				// still awaiting its own server acknowledgment.
+				this.#settleCredentialBlockMutation(block.credentialId, key, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential block propagation failed", {
@@ -646,35 +692,37 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					error: String(error),
 				});
-				// No SSE event follows a failed POST; independently reconcile
-				// its speculative block, even when the stream appears healthy.
-				void this.#reconcileFailedCredentialBlockMutation("upsert", block.credentialId, mutation);
+				this.#settleCredentialBlockMutation(block.credentialId, key, mutation, true);
 			});
 	}
 
+
 	deleteCredentialBlocks(credentialId: number): void {
-		// A rejected DELETE must not optimistically release a still-active broker
-		// block. If a newer snapshot/block mutation lands while it is pending,
-		// reconcile rather than deleting that newer state on late acknowledgment.
+		// A DELETE covers every block scope for this ID. Its success cannot
+		// unblock a still-pending upsert or a newer accepted local block.
 		const revisionAtDelete = this.#appliedSnapshotRevision;
 		const mutation = Symbol("block-delete");
-		this.#latestCredentialBlockMutation.set(credentialId, mutation);
+		const key = "\0all-scopes";
+		this.#startCredentialBlockMutation(credentialId, key, mutation);
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(response => {
 				if (!response.ok) {
 					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
 				}
-				if (revisionAtDelete === this.#appliedSnapshotRevision) {
+				const otherPending = (this.#pendingCredentialBlockMutations.get(credentialId)?.size ?? 0) > 1;
+				if (revisionAtDelete === this.#appliedSnapshotRevision && !otherPending) {
 					this.#deleteSnapshotBlocks(credentialId);
-					for (const key of this.#credentialBlockReconcileAfter.keys()) {
-						if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+					for (const blockKey of this.#credentialBlockReconcileAfter.keys()) {
+						if (blockKey.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(blockKey);
 					}
 					this.#invalidateUsageCache();
+				} else {
+					// Broker-side deletion may have raced another scope's write;
+					// defer a full authoritative read until both have settled.
+					this.#credentialBlockReconciliationPending.add(credentialId);
 				}
-				if (this.#clearCredentialBlockMutation(credentialId, mutation)) {
-					this.#maybeRefreshSnapshot("credential blocks delete");
-				}
+				this.#settleCredentialBlockMutation(credentialId, key, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential blocks delete propagation failed", {
@@ -682,8 +730,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					error: String(error),
 				});
 				// The broker may have committed before its reply was lost.
-				// Reconcile even when SSE appears healthy but emits no new frames.
-				void this.#reconcileFailedCredentialBlockMutation("delete", credentialId, mutation);
+				this.#settleCredentialBlockMutation(credentialId, key, mutation, true);
 			});
 	}
 
