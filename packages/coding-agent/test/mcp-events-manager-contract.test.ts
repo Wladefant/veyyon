@@ -1237,4 +1237,120 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: a single global handler-clear teardown barrier can block unrelated
+	// event feeds behind a slow webhook unsubscribe. Distinct canonical keys
+	// must re-enroll independently while the affected key waits for its old
+	// unsubscribe. Synthetic loopback servers do not prove hosted MCP delivery.
+	it("re-enrolls independent poll and webhook keys while a different unsubscribe is held", async () => {
+		const slowName = EVENT_NAME;
+		const independentName = "inventory/changed";
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const initialSlow = Promise.withResolvers<void>();
+		const initialIndependent = Promise.withResolvers<void>();
+		const renewedSlow = Promise.withResolvers<void>();
+		const renewedIndependent = Promise.withResolvers<void>();
+		const initialPoll = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		const unsubscribeEntered = Promise.withResolvers<void>();
+		const releaseUnsubscribe = Promise.withResolvers<void>();
+		const subscriptions = new Map<string, number>();
+		let polls = 0;
+		const webhookServer = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: async () => ({
+				events: [slowName, independentName].map(name => ({
+					name, description: "fake event", inputSchema: { type: "object" }, delivery: ["webhook"],
+				})),
+			}),
+			webhookSubscribe: async params => {
+				const name = String(params.name);
+				const count = (subscriptions.get(name) ?? 0) + 1;
+				subscriptions.set(name, count);
+				return { id: "keyed-" + name + "-" + count, cursor: name + ":" + count, refreshBefore: null };
+			},
+			webhookUnsubscribe: async params => {
+				if (params.name === slowName) {
+					unsubscribeEntered.resolve();
+					await releaseUnsubscribe.promise;
+				}
+				return {};
+			},
+		});
+		const pollServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) initialPoll.resolve();
+				if (polls === 2) renewedPoll.resolve();
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_KEYED_SECRET;
+		process.env.MCP_EVENTS_KEYED_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_server, _key, cursor) => {
+			if (cursor === slowName + ":1") initialSlow.resolve();
+			if (cursor === slowName + ":2") renewedSlow.resolve();
+			if (cursor === independentName + ":1") initialIndependent.resolve();
+			if (cursor === independentName + ":2") renewedIndependent.resolve();
+		});
+		try {
+			await withinHandlerChange(manager.connectServers({
+				"slow-webhooks": managerConfig(webhookServer, {
+					enabled: true,
+					subscriptions: [
+						{ name: slowName, mode: "webhook", webhook: {
+							callbackUrl: "https://callback.example.test/events/slow",
+							secretRef: "$MCP_EVENTS_KEYED_SECRET",
+							listenPort,
+						} },
+						{ name: independentName, mode: "webhook", webhook: {
+							callbackUrl: "https://callback.example.test/events/independent",
+							secretRef: "$MCP_EVENTS_KEYED_SECRET",
+							listenPort,
+						} },
+					],
+				}),
+				"unrelated-poll": managerConfig(pollServer, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				}),
+			}, {}), "initial independent event connections");
+			await withinHandlerChange(Promise.all([
+				initialSlow.promise, initialIndependent.promise, initialPoll.promise,
+			]), "initial three event subscriptions");
+			expect(manager.getActiveEventSubscriptionCount()).toBe(3);
+
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			await withinHandlerChange(unsubscribeEntered.promise, "old slow-key unsubscribe");
+			manager.setOnEvent(() => {});
+			// Neither the unrelated poll server nor the second webhook key
+			// depends on the still-unacknowledged old slow-key unsubscribe.
+			await withinHandlerChange(Promise.all([
+				renewedIndependent.promise, renewedPoll.promise,
+			]), "independent re-enrollment while old unsubscribe is unresolved");
+			expect(subscriptions.get(slowName)).toBe(1);
+			expect(subscriptions.get(independentName)).toBe(2);
+			expect(polls).toBe(2);
+			releaseUnsubscribe.resolve();
+			await withinHandlerChange(renewedSlow.promise, "affected webhook after unsubscribe");
+			expect(subscriptions.get(slowName)).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(3);
+		} finally {
+			releaseUnsubscribe.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "keyed event cleanup");
+			} finally {
+				webhookServer.stop();
+				pollServer.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_KEYED_SECRET;
+				else process.env.MCP_EVENTS_KEYED_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
 });
