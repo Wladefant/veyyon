@@ -303,6 +303,11 @@ export async function captureNativeCheckpoint(
 			// Validate the complete workspace-relative path before reading any bytes:
 			// a safe basename inside node_modules/auth must not be opened first.
 			const relativePath = safeRelative(relative(workspaceRoot, full).split(sep).join("/"));
+			// The shared cloud filter also excludes names not covered by the
+			// local path grammar (e.g. shared-auth, credentials, __pycache__).
+			// Apply it to path-only metadata BEFORE reading potential secrets.
+			if (filterCheckpointFiles([{ path: relativePath, content: new Uint8Array(0) }]).length !== 1)
+				throw new Error("Workspace paths include excluded checkpoint files");
 			const content = await readIncluded(full);
 			dirty.push(relativePath);
 			files.push({ path: relativePath, content });

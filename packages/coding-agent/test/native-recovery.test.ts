@@ -209,6 +209,15 @@ describe("native recovery", () => {
 		// budget before validating its forbidden ancestor.
 		await truncate(excluded, 48 * 1024 * 1024 + 1);
 		await expect(captureNativeCheckpoint(session, [excluded])).rejects.toThrow(/Unsafe checkpoint path/);
+		const policyDir = join(root, "shared-auth");
+		await mkdir(policyDir);
+		const policyExcluded = join(policyDir, "private.bin");
+		await writeFile(policyExcluded, "");
+		await truncate(policyExcluded, 48 * 1024 * 1024 + 1);
+		// Local safeRelative permits shared-auth but the cloud policy rejects it.
+		// Capture must reject policy metadata *before* reading the large file.
+		await expect(captureNativeCheckpoint(session, [policyExcluded]))
+			.rejects.toThrow(/Workspace paths include excluded checkpoint files/);
 		const secret = join(root, ".env");
 		await writeFile(secret, "secret");
 		await expect(captureNativeCheckpoint(session, [secret])).rejects.toThrow(/unsafe|excluded/i);
