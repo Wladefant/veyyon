@@ -69,3 +69,53 @@ it("drops a non-object JSON-RPC frame without logging its bytes or losing a foll
 		await withinStdioPhase(transport.close(), "MCP test child cleanup");
 	}
 }, 20_000);
+
+
+// WHY: a syntactically valid JSON-RPC error with id:null describes a malformed
+// request whose ID cannot be recovered. Its peer-controlled message may echo
+// private request data; it must not bypass the same persistent stdout-log fence.
+// This only tests warnings, not the separate documented caller-error contract.
+it("does not persist an unattributable server parse-error message", async () => {
+  const program = [
+    "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:null,error:{code:-32700,message:" + JSON.stringify(FAKE_PRIVATE_FRAME) + "}}) + '\\n');",
+    "let buffered = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', chunk => {",
+    "  buffered += chunk;",
+    "  while (buffered.includes('\\n')) {",
+    "    const split = buffered.indexOf('\\n');",
+    "    const line = buffered.slice(0, split);",
+    "    buffered = buffered.slice(split + 1);",
+    "    const request = JSON.parse(line);",
+    "    process.stdout.write(JSON.stringify({jsonrpc:'2.0', id:request.id, result:{tools:[]}}) + '\\n');",
+    "  }",
+    "});",
+  ].join("\n");
+  const transport = new StdioTransport({
+    command: process.execPath,
+    args: ["--eval", program],
+  });
+  const warning = Promise.withResolvers<void>();
+  const diagnostics: string[] = [];
+  vi.spyOn(logger, "warn").mockImplementation((message, context) => {
+    if (message !== "MCP server reported an error it could not attribute to a request") return;
+    diagnostics.push(JSON.stringify({ message, context }));
+    warning.resolve();
+  });
+
+  try {
+    await withinStdioPhase(transport.connect(), "unattributable-error child startup");
+    await withinStdioPhase(warning.promise, "unattributable-error diagnostic");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toContain('"code":-32700');
+    expect(diagnostics[0]).toContain('"failedRequests":0');
+    expect(diagnostics[0]).not.toContain(FAKE_PRIVATE_FRAME);
+    const response = await withinStdioPhase(
+      transport.request<{ tools: unknown[] }>("tools/list", {}, { timeoutMs: 3_000 }),
+      "valid response after unattributable error",
+    );
+    expect(response).toEqual({ tools: [] });
+  } finally {
+    await withinStdioPhase(transport.close(), "unattributable-error child cleanup");
+  }
+}, 20_000);
