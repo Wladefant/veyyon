@@ -827,10 +827,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const realUpsert = client.upsertCredentialBlock.bind(client);
 			const pendingStarted = Promise.withResolvers<void>();
 			const releasePending = Promise.withResolvers<void>();
+			const pendingCommitted = Promise.withResolvers<void>();
 			spyOn(client, "upsertCredentialBlock").mockImplementation(async (credentialId, body) => {
 				pendingStarted.resolve();
 				await releasePending.promise;
-				return realUpsert(credentialId, body);
+				const reply = await realUpsert(credentialId, body);
+				pendingCommitted.resolve();
+				return reply;
 			});
 			remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
 			await streamReady.promise;
@@ -860,12 +863,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				// A broker read must not wipe a pending local safety block.
 				expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
 				releasePending.resolve();
-				await waitUntil(() =>
-					fullReads >= (incoming === "SSE" ? 1 : 2) &&
-					remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
-				);
+				await pendingCommitted.promise;
 				const finalBroker = await peer.fetchSnapshot();
 				if (finalBroker.status !== 200) throw new Error("expected final broker snapshot");
+				await waitUntil(() =>
+					fullReads >= (incoming === "SSE" ? 1 : 2) &&
+					remote!.snapshot.generation === finalBroker.snapshot.generation &&
+					remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
+				);
 				expect(finalBroker.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
 					{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
 				]);
