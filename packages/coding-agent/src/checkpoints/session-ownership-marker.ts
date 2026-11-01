@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { SESSION_TITLE_SLOT_BYTES } from "@veyyon/kernel/session/session-entries";
+import { parseTitleSlotLine } from "@veyyon/kernel/session/session-title-slot";
 import { type FileHandle, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
@@ -56,22 +58,40 @@ async function readNativeHandoffIdentity(
 	let text: string;
 	try {
 		let bytesRead = 0;
+		let headerStart = 0;
 		let newline = -1;
+		let reachedEof = false;
 		while (bytesRead < bytes.byteLength && newline < 0) {
 			const next = await file.read(bytes, bytesRead, bytes.byteLength - bytesRead, bytesRead);
-			if (next.bytesRead === 0) break;
-			const lineEnd = bytes.subarray(bytesRead, bytesRead + next.bytesRead).indexOf(10);
-			if (lineEnd >= 0) newline = bytesRead + lineEnd;
+			if (next.bytesRead === 0) {
+				reachedEof = true;
+				break;
+			}
 			bytesRead += next.bytesRead;
+			const lineEnd = bytes.subarray(headerStart, bytesRead).indexOf(10);
+			if (lineEnd < 0) continue;
+			newline = headerStart + lineEnd;
+			// Native SessionManager writes one canonical fixed-width title slot before
+			// the identity header. Do not skip arbitrary invalid or repeated lines.
+			if (
+				headerStart === 0 &&
+				newline + 1 === SESSION_TITLE_SLOT_BYTES &&
+				parseTitleSlotLine(bytes.subarray(0, newline).toString("utf8"))
+			) {
+				headerStart = newline + 1;
+				const nextLineEnd = bytes.subarray(headerStart, bytesRead).indexOf(10);
+				newline = nextLineEnd < 0 ? -1 : headerStart + nextLineEnd;
+			}
 		}
-		if (newline > headerLimit || (newline < 0 && bytesRead > headerLimit))
+		// A newline after the cap or an unterminated partial read must fail closed.
+		if (newline > headerLimit || (newline < 0 && (!reachedEof || bytesRead > headerLimit)))
 			throw new Error("Native session header is missing or exceeds the ownership-read limit");
-		text = bytes.subarray(0, newline >= 0 ? newline : bytesRead).toString("utf8");
+		text = bytes.subarray(headerStart, newline >= 0 ? newline : bytesRead).toString("utf8");
 	} finally {
 		await file.close();
 	}
-	// The first physical line alone establishes native session identity.
-	// Never skip a corrupt transfer header for a later forged ordinary header.
+	// Only the immediate header (or the header after the canonical title slot)
+	// establishes identity. A later forged ordinary header is never considered.
 	const line = text;
 	let value: unknown;
 	try {

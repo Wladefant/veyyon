@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,4 +159,50 @@ test("a native header whose valid prefix hides a longer physical line is rejecte
 	const normal = JSON.stringify({ type: "session", id: "ordinary", cwd: root });
 	await writeFile(allowed, normal.padEnd(64 * 1024, " ") + "\n");
 	await expect(readSessionOwnershipMarker(allowed, "ordinary")).resolves.toBeNull();
+});
+
+test("canonical native title slots precede ordinary and transferred session identity headers", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-title-slot-"));
+	roots.push(root);
+	const sessions = join(root, "sessions");
+	await mkdir(sessions);
+	const titleSlot = serializeTitleSlot({ title: "Scoped scratch session", updatedAt: "2026-11-01T00:00:00.000Z" });
+
+	const ordinary = join(sessions, "ordinary.jsonl");
+	await writeFile(ordinary, titleSlot + JSON.stringify({ type: "session", id: "ordinary", cwd: root }) + "\n");
+	await expect(readSessionOwnershipMarker(ordinary, "ordinary")).resolves.toBeNull();
+
+	const transferred = join(sessions, "transfer.jsonl");
+	await writeFile(
+		transferred,
+		titleSlot + JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity }) + "\n",
+	);
+	await writeFile(join(root, "recovery.json"), JSON.stringify({ sessionId: "transfer", checkpointTransfer: true }));
+	const markerPath = join(sessions, "checkpoint-ownership.json");
+	await writeFile(markerPath, JSON.stringify(marker));
+	await expect(readSessionOwnershipMarker(transferred, "transfer")).resolves.toEqual({ path: markerPath, marker });
+});
+
+test("title-prefixed native journals reject malformed slots and forged later headers", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-title-invalid-"));
+	roots.push(root);
+	const titleSlot = serializeTitleSlot({ title: "Scratch", updatedAt: "2026-11-01T00:00:00.000Z" });
+	const header = JSON.stringify({ type: "session", id: "ordinary", cwd: root }) + "\n";
+
+	const malformed = join(root, "malformed-title.jsonl");
+	const invalidSlot = JSON.stringify({ type: "title", v: 1, title: "Bad", updatedAt: "now", pad: 123 });
+	await writeFile(malformed, invalidSlot.padEnd(255, " ") + "\n" + header);
+	await expect(readSessionOwnershipMarker(malformed, "ordinary")).rejects.toThrow(/Native session header/);
+
+	const repeated = join(root, "repeated-title.jsonl");
+	await writeFile(repeated, titleSlot + titleSlot + header);
+	await expect(readSessionOwnershipMarker(repeated, "ordinary")).rejects.toThrow(/Native session header/);
+
+	const forged = join(root, "forged-title-follow-up.jsonl");
+	await writeFile(forged, titleSlot + JSON.stringify({ type: "message", id: "fake" }) + "\n" + header);
+	await expect(readSessionOwnershipMarker(forged, "ordinary")).rejects.toThrow(/Native session header/);
+
+	const truncated = join(root, "truncated-title-header.jsonl");
+	await writeFile(truncated, titleSlot + '{"type":"session","id":"ordinary","cwd":');
+	await expect(readSessionOwnershipMarker(truncated, "ordinary")).rejects.toThrow(/Native session header/);
 });
