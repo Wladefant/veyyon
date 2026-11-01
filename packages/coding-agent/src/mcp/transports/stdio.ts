@@ -581,12 +581,15 @@ export class StdioTransport implements MCPTransport {
 					// explanation, and the operator sees an MCP tool that hangs. The
 					// loop still continues, because one bad line should not kill a
 					// working server, but the line no longer disappears (Law 10).
+					// A malformed frame can be a JSON string containing private user or
+					// tool data. TypeErrors may echo that string; serializing the frame
+					// itself would persist the same data to rotating logs. Keep a
+					// static classification and actionable next step, never payload.
+					const failureType =
+						error instanceof SyntaxError ? "syntax" : error instanceof TypeError ? "type" : "handler";
 					logger.warn("Ignored an unreadable message from an MCP server", {
 						server: this.config.command,
-						error: errorMessage(error),
-						// Truncated: a server can emit an arbitrarily large line, and the log
-						// is for identifying WHICH message was lost, not for reproducing it.
-						line: truncate(String(JSON.stringify(line) ?? line), 500),
+						failureType,
 						fix: "If a tool call from this server hangs, this is likely why. Check the server's own logs.",
 					});
 				}
