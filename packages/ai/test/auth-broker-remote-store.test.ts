@@ -404,6 +404,69 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+	// A broker write may complete while its HTTP reply is delayed. A newer
+	// authoritative revocation must win over the older returned provider list.
+	for (const operation of ["upsert", "replace"] as const) {
+		test(`does not restore a revoked grant from a delayed ${operation} upload reply`, async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected broker snapshot");
+			const actualFetch = client.fetchSnapshot.bind(client);
+			// Prevent background long-poll from racing the explicitly controlled
+			// authoritative read, while retaining real HTTP for all direct reads.
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs === 30_000) {
+					await untilAborted(opts.signal);
+					throw new Error("background poll aborted");
+				}
+				return actualFetch(opts);
+			});
+			remote = new RemoteAuthCredentialStore({
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
+			});
+			const actualUpload = client.uploadCredential.bind(client);
+			const uploadCommitted = Promise.withResolvers<void>();
+			const releaseReply = Promise.withResolvers<void>();
+			spyOn(client, "uploadCredential").mockImplementation(async (provider, credential, signal) => {
+				const response = await actualUpload(provider, credential, signal);
+				uploadCommitted.resolve();
+				await releaseReply.promise;
+				return response;
+			});
+			const replacement = mintOAuthCredential("delayed-upload", Date.now() + 120_000);
+			const pending = operation === "upsert"
+				? remote.upsertAuthCredentialRemote("anthropic", replacement)
+				: remote.replaceAuthCredentialsRemote("anthropic", [replacement]);
+			await uploadCommitted.promise;
+			try {
+				const afterWrite = await peer.fetchSnapshot();
+				if (afterWrite.status !== 200) throw new Error("expected post-upload broker snapshot");
+				const uploaded = afterWrite.snapshot.credentials.find(entry =>
+					entry.credential.type === "oauth" && entry.credential.access === "access-delayed-upload",
+				);
+				expect(uploaded).toBeDefined();
+				await peer.disableCredential(uploaded!.id, "synthetic revocation before delayed reply");
+				await remote.refreshSnapshot();
+				expect(remote.snapshot.credentials.some(entry => entry.id === uploaded!.id)).toBe(false);
+
+				// Without an upload-reply fence, the delayed pre-revocation
+				// provider list would reinsert this grant after the newer GET.
+				releaseReply.resolve();
+				const delivered = await pending;
+				expect(delivered.some(entry => entry.id === uploaded!.id)).toBe(false);
+				expect(remote.snapshot.credentials.some(entry => entry.id === uploaded!.id)).toBe(false);
+				const brokerNow = await peer.fetchSnapshot();
+				if (brokerNow.status !== 200) throw new Error("expected final broker snapshot");
+				expect(brokerNow.snapshot.credentials.some(entry => entry.id === uploaded!.id)).toBe(false);
+			} finally {
+				releaseReply.resolve();
+			}
+		});
+	}
+
 	test("accepts a real broker upload with the requested provider and redacted OAuth grants", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
