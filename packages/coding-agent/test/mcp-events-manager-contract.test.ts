@@ -2744,9 +2744,9 @@ describe("MCPManager event subscription contracts", () => {
 		const manager = new MCPManager(process.cwd());
 		const deliveredToB: string[] = [];
 		manager.setOnEventCursor((_name, _key, cursor) => {
-			if (cursor === "A-occurrence") firstCursor.resolve();
-			if (cursor === "B-occurrence") successorCursor.resolve();
-			if (cursor === "B-later") laterCursor.resolve();
+			if (cursor === "A-page") firstCursor.resolve();
+			if (cursor === "B-page") successorCursor.resolve();
+			if (cursor === "B-later-page") laterCursor.resolve();
 		});
 		manager.setOnEvent((_name, occurrence) => {
 			if (occurrence.eventId !== "from-A") return;
