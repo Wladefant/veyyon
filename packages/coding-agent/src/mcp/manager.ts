@@ -2145,6 +2145,9 @@ export class MCPManager {
 						this.#connections.get(name) !== connection ||
 						this.#epoch !== epoch
 					) break;
+					// A newer notification arrived while this response was pending:
+					// do not publish an already-superseded catalog even briefly.
+					if (state.again) continue;
 					const reconnect = () => this.reconnectServer(name);
 					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 					void this.toolCache?.set(name, connection.config, serverTools);
