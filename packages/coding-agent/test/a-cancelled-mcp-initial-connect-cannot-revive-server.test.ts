@@ -687,10 +687,10 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 }, 35_000);
 
 
-// WHY: a global disconnect must join a single-server shutdown already
-// retiring the same transport. Sending DELETE twice can overrun a session
-// protocol, and bulk completion must include the earlier pending close.
-it("bulk MCP teardown joins a concurrent per-server close without duplicate transport DELETE", async () => {
+// WHY: a global disconnect must join an in-flight single-server close.
+// Even when an HTTP transport suppresses duplicate DELETE requests, a second
+// close invocation is not an actual join of the first pending teardown.
+it("bulk MCP teardown joins a concurrent per-server close without a duplicate close attempt", async () => {
 	const names = { a: "joined-close-a", b: "joined-close-b" };
 	const aCloseEntered = Promise.withResolvers<void>();
 	const bDeleteEntered = Promise.withResolvers<void>();

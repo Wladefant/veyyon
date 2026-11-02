@@ -1866,8 +1866,8 @@ export class MCPManager {
 			for (const conn of this.#connections.values()) {
 				conn.transport.onClose = undefined;
 			}
-			// Join already-started single-server teardowns rather than sending a
-			// duplicate transport DELETE. Include a retiring server even if its
+			// Join already-started single-server teardowns rather than invoking
+			// close twice. Include a retiring server even if its
 			// connection was already removed before this snapshot.
 			const retiring = new Set(this.#activeDisconnects.keys());
 			const promises = [
