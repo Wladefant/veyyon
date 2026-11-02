@@ -48,6 +48,10 @@ async function advanceTimersAndFlush(durationMs: number): Promise<void> {
 	await Promise.resolve();
 }
 
+async function flushAsync(): Promise<void> {
+	for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
 describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 	afterEach(() => {
 		vi.useRealTimers();
