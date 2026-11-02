@@ -1544,9 +1544,15 @@ export class MCPManager {
 					const value = task.tracked.value;
 					if (!value) continue;
 					const { connection, serverTools } = value;
+					// A completed initial tool list can become stale while a slower
+					// peer keeps this startup aggregator pending. A later notification
+					// refresh may already own the current connection catalog, even
+					// though the original toolsPromise was never marked superseded.
+					// Use the live identity/catalog and never re-enroll retired peers.
+					if (this.#connections.get(name) !== connection || this.#retiredToolConnections.has(connection)) continue;
 					connectedServers.add(name);
 					const reconnect = () => this.reconnectServer(name);
-					const mcpTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					const mcpTools = MCPTool.fromTools(connection, connection.tools ?? serverTools, reconnect);
 					for (let ti = 0; ti < mcpTools.length; ti++) allTools.push(mcpTools[ti]!);
 				} else if (task.tracked.status === "rejected") {
 					const message = errorMessage(task.tracked.reason);
