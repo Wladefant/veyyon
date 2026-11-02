@@ -249,6 +249,8 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			await abortHasStarted;
 			await flushAsync();
 			await advanceTimersAndFlush(5_001);
+			await flushAsync();
+			await advanceTimersAndFlush(5_001);
 			const result = await resultPromise;
 
 			expect(abortCalls).toBe(1);
@@ -295,6 +297,8 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			await started;
 			await flushAsync();
 			await advanceTimersAndFlush(180_001);
+			await flushAsync();
+			expect(handle.abortCalls()).toBe(1);
 			const result = await resultPromise;
 			expect(result.terminalOutcome).toBe("stalled");
 			expect(handle.prompts).toHaveLength(1);
