@@ -44,14 +44,24 @@ async function writeExternalTurn(file: string, directory: string, marker: string
 function contextText(manager: SessionManager): string {
 	return manager
 		.buildSessionContext()
-		.messages.map(message =>
-			typeof message.content === "string"
-				? message.content
-				: message.content
-						.filter(block => block.type === "text")
-						.map(block => block.text)
-						.join(""),
-		)
+		.messages.map(message => {
+			if (typeof message.content === "string") return message.content;
+			return message.content
+				.map((block: unknown) => {
+					if (
+						typeof block !== "object" ||
+						block === null ||
+						!("type" in block) ||
+						block.type !== "text" ||
+						!("text" in block) ||
+						typeof block.text !== "string"
+					) {
+						return "";
+					}
+					return block.text;
+				})
+				.join("");
+		})
 		.join("\n");
 }
 

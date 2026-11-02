@@ -1333,14 +1333,11 @@ describe("ACP agent", () => {
 		const visibleText = (): string[] => {
 			const text: string[] = [];
 			for (const update of harness.updates) {
-				if (
-					update.sessionId !== created.sessionId ||
-					(update.update.sessionUpdate !== "user_message_chunk" &&
-						update.update.sessionUpdate !== "agent_message_chunk")
-				) {
+				if (update.sessionId !== created.sessionId || !("content" in update.update)) {
 					continue;
 				}
-				text.push(update.update.content.type === "text" ? update.update.content.text : "");
+				const content = update.update.content;
+				text.push(content.type === "text" ? content.text : "");
 			}
 			return text;
 		};
