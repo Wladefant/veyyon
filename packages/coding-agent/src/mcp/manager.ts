@@ -1270,6 +1270,9 @@ export class MCPManager {
 		sources: Record<string, SourceMeta>,
 		onStatus?: (event: McpConnectionStatusEvent) => void,
 	): Promise<MCPLoadResult> {
+		// A startup batch captures the teardown epoch before asynchronous
+		// initialization and optional cached-tool reads may yield.
+		const startupEpoch = this.#epoch;
 		type ConnectionTask = {
 			name: string;
 			config: MCPServerConfig;
@@ -1513,6 +1516,13 @@ export class MCPManager {
 					}
 				}
 			}
+		}
+
+		// A pending cached-tool lookup can finish after disconnectAll has
+		// already cleared all live tools. Never republish the old fulfilled list
+		// or report an already-closed startup server as still connected.
+		if (this.#epoch !== startupEpoch) {
+			return { tools: [], errors, connectedServers: [], exaApiKeys: [] };
 		}
 
 		// Stable sort by name so the order is independent of connection completion.
