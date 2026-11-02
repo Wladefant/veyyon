@@ -42,11 +42,15 @@ async function writeExternalTurn(file: string, directory: string, marker: string
 }
 
 function contextText(manager: SessionManager): string {
-	return manager.buildSessionContext().messages
-		.map(message =>
+	return manager
+		.buildSessionContext()
+		.messages.map(message =>
 			typeof message.content === "string"
 				? message.content
-				: message.content.filter(block => block.type === "text").map(block => block.text).join(""),
+				: message.content
+						.filter(block => block.type === "text")
+						.map(block => block.text)
+						.join(""),
 		)
 		.join("\n");
 }

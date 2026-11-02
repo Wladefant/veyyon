@@ -1763,7 +1763,6 @@ export class AcpAgent implements Agent {
 		});
 	}
 
-
 	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await listStoredSessions();
 		return sessions.find(session => session.id === sessionId);

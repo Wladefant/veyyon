@@ -2281,7 +2281,6 @@ export class SessionManager {
 		return true;
 	}
 
-
 	/**
 	 * Drop only session files that this manager saw materialized for a draft and
 	 * that still contain no durable conversation or extension state. Explicit

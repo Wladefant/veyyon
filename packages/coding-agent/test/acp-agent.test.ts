@@ -232,7 +232,6 @@ class FakeAgentSession {
 		// no-op for tests
 	}
 
-
 	async refreshExternalTurn(): Promise<boolean> {
 		return await this.sessionManager.refreshExternalTurn();
 	}
@@ -690,19 +689,21 @@ describe("ACP agent", () => {
 					? [tool.name]
 					: [],
 			);
-		const refreshTools = spyOn(FakeAgentSession.prototype, "refreshMCPTools").mockImplementation(
-			async function (this: FakeAgentSession, tools: unknown[]) {
-				toolNamesBySession.set(this, namesFrom(tools));
-			},
-		);
+		const refreshTools = spyOn(FakeAgentSession.prototype, "refreshMCPTools").mockImplementation(async function (
+			this: FakeAgentSession,
+			tools: unknown[],
+		) {
+			toolNamesBySession.set(this, namesFrom(tools));
+		});
 		const firstTurnTools: string[][] = [];
 		const originalPrompt = FakeAgentSession.prototype.prompt;
-		const prompt = spyOn(FakeAgentSession.prototype, "prompt").mockImplementation(
-			async function (this: FakeAgentSession, text: string) {
-				firstTurnTools.push(toolNamesBySession.get(this) ?? []);
-				return await originalPrompt.call(this, text);
-			},
-		);
+		const prompt = spyOn(FakeAgentSession.prototype, "prompt").mockImplementation(async function (
+			this: FakeAgentSession,
+			text: string,
+		) {
+			firstTurnTools.push(toolNamesBySession.get(this) ?? []);
+			return await originalPrompt.call(this, text);
+		});
 		const sessionIds: string[] = [];
 		const withInitializationBarrier = async <T>(
 			operation: () => Promise<T>,
@@ -1305,90 +1306,90 @@ describe("ACP agent", () => {
 	});
 
 	/**
-		 * WHY: an active ACP client has already seen its local branch, but a
-		 * sequential CLI writer can append a completed turn to the same file.
-		 * The next prompt must show only that new turn, once. This test does not
-		 * cover concurrent writers or partially written foreign turns.
-		 */
-		it("replays each completed external turn once before the next prompt", async () => {
-			const harness = await createHarness();
-			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-			const session = harness.findSession(created.sessionId);
-			if (!session) throw new Error("ACP session was not registered");
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "Start the conversation." }],
-			});
-			const file = session.sessionManager.getSessionFile();
-			if (!file) throw new Error("ACP session has no transcript file");
-
-			const appendExternalTurn = async (marker: string): Promise<void> => {
-				const external = await SessionManager.open(file, harness.cwdA);
-				external.appendMessage({ role: "user", content: `Store ${marker}.`, timestamp: Date.now() });
-				external.appendMessage(makeAssistantMessage(`Stored ${marker}.`));
-				await external.flush();
-				await external.close();
-			};
-			const visibleText = (): string[] =>
-				harness.updates
-					.filter(
-						update =>
-							update.sessionId === created.sessionId &&
-							(update.update.sessionUpdate === "user_message_chunk" ||
-								update.update.sessionUpdate === "agent_message_chunk"),
-					)
-					.map(update => (update.update.content.type === "text" ? update.update.content.text : ""));
-			const clearUpdates = (): void => {
-				harness.updates.length = 0;
-			};
-
-			const firstMarker = "EXTERNAL-FIRST";
-			await session.sessionManager.flush();
-			await appendExternalTurn(firstMarker);
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "What did the CLI store?" }],
-			});
-			const firstVisible = visibleText();
-			expect(firstVisible.join("\\n")).toContain(firstMarker);
-			expect(firstVisible.filter(text => text.includes(firstMarker))).toHaveLength(2);
-
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "Continue without another external write." }],
-			});
-			expect(visibleText().some(text => text.includes(firstMarker))).toBe(false);
-
-			const secondMarker = "EXTERNAL-SECOND";
-			await session.sessionManager.flush();
-			await appendExternalTurn(secondMarker);
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "What was stored next?" }],
-			});
-			const secondVisible = visibleText();
-			expect(secondVisible.join("\\n")).toContain(secondMarker);
-			expect(secondVisible.filter(text => text.includes(secondMarker))).toHaveLength(2);
-			expect(secondVisible.some(text => text.includes(firstMarker))).toBe(false);
-
-			await harness.agent.closeSession({ sessionId: created.sessionId });
-			const cold = await SessionManager.open(file, harness.cwdA);
-			const coldText = cold
-				.buildSessionContext()
-				.messages.map(message => (typeof message.content === "string" ? message.content : ""))
-				.join("\\n");
-			expect(cold.getSessionId()).toBe(created.sessionId);
-			expect(coldText).toContain("What did the CLI store?");
-			expect(coldText).toContain(firstMarker);
-			expect(coldText).toContain(secondMarker);
-			expect(cold.getSessionFile()).toBe(file);
-			await cold.close();
-			harness.abortController.abort();
-			await Bun.sleep(0);
+	 * WHY: an active ACP client has already seen its local branch, but a
+	 * sequential CLI writer can append a completed turn to the same file.
+	 * The next prompt must show only that new turn, once. This test does not
+	 * cover concurrent writers or partially written foreign turns.
+	 */
+	it("replays each completed external turn once before the next prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("ACP session was not registered");
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Start the conversation." }],
 		});
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+
+		const appendExternalTurn = async (marker: string): Promise<void> => {
+			const external = await SessionManager.open(file, harness.cwdA);
+			external.appendMessage({ role: "user", content: `Store ${marker}.`, timestamp: Date.now() });
+			external.appendMessage(makeAssistantMessage(`Stored ${marker}.`));
+			await external.flush();
+			await external.close();
+		};
+		const visibleText = (): string[] =>
+			harness.updates
+				.filter(
+					update =>
+						update.sessionId === created.sessionId &&
+						(update.update.sessionUpdate === "user_message_chunk" ||
+							update.update.sessionUpdate === "agent_message_chunk"),
+				)
+				.map(update => (update.update.content.type === "text" ? update.update.content.text : ""));
+		const clearUpdates = (): void => {
+			harness.updates.length = 0;
+		};
+
+		const firstMarker = "EXTERNAL-FIRST";
+		await session.sessionManager.flush();
+		await appendExternalTurn(firstMarker);
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "What did the CLI store?" }],
+		});
+		const firstVisible = visibleText();
+		expect(firstVisible.join("\\n")).toContain(firstMarker);
+		expect(firstVisible.filter(text => text.includes(firstMarker))).toHaveLength(2);
+
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Continue without another external write." }],
+		});
+		expect(visibleText().some(text => text.includes(firstMarker))).toBe(false);
+
+		const secondMarker = "EXTERNAL-SECOND";
+		await session.sessionManager.flush();
+		await appendExternalTurn(secondMarker);
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "What was stored next?" }],
+		});
+		const secondVisible = visibleText();
+		expect(secondVisible.join("\\n")).toContain(secondMarker);
+		expect(secondVisible.filter(text => text.includes(secondMarker))).toHaveLength(2);
+		expect(secondVisible.some(text => text.includes(firstMarker))).toBe(false);
+
+		await harness.agent.closeSession({ sessionId: created.sessionId });
+		const cold = await SessionManager.open(file, harness.cwdA);
+		const coldText = cold
+			.buildSessionContext()
+			.messages.map(message => (typeof message.content === "string" ? message.content : ""))
+			.join("\\n");
+		expect(cold.getSessionId()).toBe(created.sessionId);
+		expect(coldText).toContain("What did the CLI store?");
+		expect(coldText).toContain(firstMarker);
+		expect(coldText).toContain(secondMarker);
+		expect(cold.getSessionFile()).toBe(file);
+		await cold.close();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
 	it("loads a stored session by ID when the client cwd has changed", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
@@ -1477,9 +1478,9 @@ describe("ACP agent", () => {
 		await stored.sessionManager.flush();
 
 		try {
-			await expect(
-				harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB }),
-			).rejects.toThrow(`ACP session not found: ${stored.sessionId}`);
+			await expect(harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB })).rejects.toThrow(
+				`ACP session not found: ${stored.sessionId}`,
+			);
 		} finally {
 			harness.abortController.abort();
 		}
