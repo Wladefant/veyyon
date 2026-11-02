@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CheckpointClient, CheckpointLease } from "./cloud-checkpoints";
 import type { SessionOwnershipMarker } from "./session-ownership-marker";
-const runtimeOwner = randomUUID();
 /** One local runtime owns this guard. Losing its lease requires an explicit fork or transfer. */
 export class SynchronizedSession {
 	#lost = false;
@@ -15,7 +14,9 @@ export class SynchronizedSession {
 		readonly sessionId: string,
 		readonly client: CheckpointClient,
 		readonly claim?: SessionOwnershipMarker,
-		readonly ownerNode = runtimeOwner,
+		// Distinct guards within a single agent process must not share a
+		// checkpoint lease owner identity for the same persisted session.
+		readonly ownerNode = randomUUID(),
 		readonly persistOwnership?: (resumeToken: string, epoch: number) => Promise<void>,
 		private readonly renewalIntervalMs = 15_000,
 	) {}
