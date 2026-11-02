@@ -625,10 +625,14 @@ export class HttpTransport implements MCPTransport {
 						signal: operation.signal,
 					});
 					await retry.body?.cancel();
+					// A completed POST is not an acknowledged JSON-RPC reply if the
+					// server rejected it. Do not retry: delivery may be uncertain.
+					if (!retry.ok) throw new Error("MCP response POST was rejected with HTTP " + retry.status);
 					return;
 				}
 			}
 			await resp.body?.cancel();
+			if (!resp.ok) throw new Error("MCP response POST was rejected with HTTP " + resp.status);
 		} catch (sendError) {
 			reportUndeliveredServerResponse({
 				url: this.config.url,
