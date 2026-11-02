@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Session forks refuse detected parent-directory identity substitutions during artifact verification, including same-content symlinked nested evidence, before publishing a fork ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks pin a verified file descriptor for artifact hashing, using no-follow/nonblocking opens where supported and refusing substituted or nonregular evidence before publishing a fork ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks verify every copied artifact's bytes and complete nested tree structure before publication, refusing corruption of unreferenced recovery evidence ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks refuse multiply-linked artifact files in the source or copied tree before publication, preventing unrelated hard-linked bytes from being inherited ([#774](https://github.com/Wladefant/veyyon/issues/774)).

@@ -794,6 +794,88 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("refuses equal-byte parent-directory swaps in source and copied fork evidence", async () => {
+    for (const side of ["source", "destination"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-parent-swap-${side}-`);
+      const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      try {
+        const original = "synthetic root recovery evidence";
+        const nestedBytes = "synthetic nested recovery evidence";
+        expect(await manager.saveArtifact(original, "bash")).toBe("0");
+        manager.appendMessage({ role: "user", content: "Keep artifact://0", timestamp: Date.now() });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected durable source session");
+        const sourceId = manager.getSessionId();
+        const sourceBytes = await fs.readFile(sourceFile, "utf8");
+        const sourceArtifact = await manager.getArtifactPath("0");
+        if (!sourceArtifact) throw new Error("expected source artifact");
+        const sourceDir = path.dirname(sourceArtifact);
+        const sourceNestedDir = path.join(sourceDir, "nested");
+        const sourceNestedFile = path.join(sourceNestedDir, "trace.txt");
+        await fs.mkdir(sourceNestedDir);
+        await fs.writeFile(sourceNestedFile, nestedBytes);
+        const outsideDir = path.join(temp.path(), "unrelated-synthetic-directory");
+        await fs.mkdir(outsideDir);
+        await fs.writeFile(path.join(outsideDir, "trace.txt"), nestedBytes);
+
+        const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+        const realLstat = nodeFs.promises.lstat.bind(nodeFs.promises);
+        let copiedDir: string | undefined;
+        let swappedDir: string | undefined;
+        const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
+          await realCopy(src, dst, options);
+          if (src === sourceDir) copiedDir = String(dst);
+        });
+        const statSpy = spyOn(nodeFs.promises, "lstat").mockImplementation(async target => {
+          const leaf = side === "source"
+            ? sourceNestedFile
+            : copiedDir && path.join(copiedDir, "nested", "trace.txt");
+          // The real copy has completed; substitute the ancestor exactly
+          // before a leaf check could rebaseline an external equal-byte file.
+          if (copiedDir && leaf && String(target) === leaf && !swappedDir) {
+            const directory = path.dirname(leaf);
+            await fs.rename(directory, `${directory}.parked`);
+            await fs.symlink(outsideDir, directory, "dir");
+            if (!(await realLstat(directory)).isSymbolicLink()) {
+              throw new Error("synthetic parent symlink was not installed");
+            }
+            swappedDir = directory;
+          }
+          return realLstat(target);
+        });
+        try {
+          await expect(manager.fork()).rejects.toThrow(
+            /artifact changed during digest read|artifact directory changed during verification/i,
+          );
+        } finally {
+          statSpy.mockRestore();
+          copySpy.mockRestore();
+          if (swappedDir) {
+            await fs.unlink(swappedDir);
+            await fs.rename(`${swappedDir}.parked`, swappedDir);
+          }
+        }
+        expect(swappedDir).toBeDefined();
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+        expect(await fs.readFile(sourceNestedFile, "utf8")).toBe(nestedBytes);
+        expect(await fs.readFile(path.join(outsideDir, "trace.txt"), "utf8")).toBe(nestedBytes);
+        expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+
+        const clean = await manager.fork();
+        if (!clean) throw new Error("expected successful clean retry");
+        const destinationDir = clean.newSessionFile.slice(0, -".jsonl".length);
+        expect(await fs.readFile(path.join(destinationDir, "nested", "trace.txt"), "utf8")).toBe(nestedBytes);
+        expect(await fs.readFile(path.join(destinationDir, "0.bash.log"), "utf8")).toBe(original);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
   it("refuses a substituted file descriptor at the fork artifact hash boundary", async () => {
     using temp = TempDir.createSync("@veyyon-fork-digest-open-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));

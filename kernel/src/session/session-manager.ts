@@ -2069,29 +2069,38 @@ export class SessionManager {
 			// messages. Refuse even an unrelated symlink (including a nested one):
 			// the ordinary artifact reader can otherwise follow the inherited link
 			// to bytes outside this session's evidence directory.
-			const assertSafeEntry = async (filename: string): Promise<boolean> => {
+			const assertSafeEntry = async (filename: string): Promise<fs.Stats> => {
 				const stat = await fs.promises.lstat(filename);
 				if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1) || (!stat.isFile() && !stat.isDirectory())) {
 					throw new Error("Cannot fork session: unsafe artifact entry");
 				}
-				return stat.isDirectory();
+				return stat;
 			};
-			const assertRegularTree = async (directory: string): Promise<string[]> => {
+			const assertRegularTree = async (directory: string) => {
 				const pending = [directory];
 				const entries: string[] = [];
+				// Pin the directory and file identities seen by each inventory
+				// before later pathname-based digest operations.
+				const directories = new Map<string, fs.Stats>();
+				const files = new Map<string, fs.Stats>();
 				while (pending.length > 0) {
 					const current = pending.pop()!;
-					if (!(await assertSafeEntry(current))) {
+					const currentStat = await assertSafeEntry(current);
+					if (!currentStat.isDirectory()) {
 						throw new Error("Cannot fork session: unsafe artifact tree");
 					}
+					directories.set(path.relative(directory, current), currentStat);
 					for (const name of await fs.promises.readdir(current)) {
 						const child = path.join(current, name);
-						const isDirectory = await assertSafeEntry(child);
-						entries.push(`${isDirectory ? "dir" : "file"}:${path.relative(directory, child)}`);
+						const childStat = await assertSafeEntry(child);
+						const isDirectory = childStat.isDirectory();
+						const relative = path.relative(directory, child);
+						entries.push(`${isDirectory ? "dir" : "file"}:${relative}`);
 						if (isDirectory) pending.push(child);
+						else files.set(relative, childStat);
 					}
 				}
-				return entries.sort();
+				return { entries: entries.sort(), directories, files };
 			};
 			// Check before copying to avoid publishing even a temporary linked
 			// destination on a known-bad input. The copy filter and destination
@@ -2117,8 +2126,8 @@ export class SessionManager {
 			});
 			const copiedTree = await assertRegularTree(nextArtifactDir);
 			if (
-				sourceTree.length !== copiedTree.length ||
-				sourceTree.some((entry, index) => entry !== copiedTree[index])
+				sourceTree.entries.length !== copiedTree.entries.length ||
+				sourceTree.entries.some((entry, index) => entry !== copiedTree.entries[index])
 			) {
 				throw new Error("Cannot fork session: artifact copy incomplete");
 			}
@@ -2128,14 +2137,39 @@ export class SessionManager {
 			// A pathname checked by lstat can be replaced before createReadStream()
 			// opens it. Hash through one pinned descriptor, refusing a symlink,
 			// special file, hard link or substituted inode before reading bytes.
-			const sha256File = async (filename: string, expected: fs.Stats): Promise<string> => {
+			const sha256File = async (
+				filename: string, expected: fs.Stats, root: string, directories: Map<string, fs.Stats>,
+			): Promise<string> => {
 				const changed = () => new Error("Cannot fork session: artifact changed during digest read");
+				const verifyAncestors = async () => {
+					const parent = path.relative(root, path.dirname(filename));
+					if (parent === ".." || parent.startsWith(`..${path.sep}`) || path.isAbsolute(parent)) {
+						throw changed();
+					}
+					let current = root;
+					let relative = "";
+					for (const component of ["", ...parent.split(path.sep).filter(Boolean)]) {
+						if (component) {
+							current = path.join(current, component);
+							relative = relative ? path.join(relative, component) : component;
+						}
+						const expectedDirectory = directories.get(relative);
+						if (!expectedDirectory) throw changed();
+						const actualDirectory = await fs.promises.lstat(current);
+						if (
+							!actualDirectory.isDirectory() ||
+							actualDirectory.dev !== expectedDirectory.dev ||
+							actualDirectory.ino !== expectedDirectory.ino
+						) throw changed();
+					}
+				};
 				const matches = (actual: fs.Stats): boolean =>
 					actual.isFile() &&
 					actual.nlink === 1 &&
 					actual.dev === expected.dev &&
 					actual.ino === expected.ino &&
 					actual.size === expected.size;
+				await verifyAncestors();
 				const before = await fs.promises.lstat(filename);
 				if (!matches(before)) throw changed();
 				// NOFOLLOW prevents POSIX symlink substitution; NONBLOCK avoids
@@ -2150,6 +2184,9 @@ export class SessionManager {
 						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
 				const file = await fs.promises.open(filename, flags);
 				try {
+					// O_NOFOLLOW covers only the leaf; refuse a changed parent
+					// before reading bytes through an already opened descriptor.
+					await verifyAncestors();
 					const opened = await file.stat();
 					const afterOpen = await fs.promises.lstat(filename);
 					if (!matches(opened) || !matches(afterOpen)) throw changed();
@@ -2167,6 +2204,7 @@ export class SessionManager {
 						digest.update(buffer.subarray(0, bytesRead));
 						position += bytesRead;
 					}
+					await verifyAncestors();
 					const afterRead = await file.stat();
 					const pathAfterRead = await fs.promises.lstat(filename);
 					if (
@@ -2177,22 +2215,22 @@ export class SessionManager {
 						pathAfterRead.mtimeMs !== before.mtimeMs ||
 						pathAfterRead.ctimeMs !== before.ctimeMs
 					) throw changed();
+					await verifyAncestors();
 					return digest.digest("hex");
 				} finally {
 					await file.close();
 				}
 			};
-			for (const entry of sourceTree) {
+			for (const entry of sourceTree.entries) {
 				if (!entry.startsWith("file:")) continue;
 				const filename = entry.slice("file:".length);
 				const referenced = referencedNames.has(filename);
 				const originalPath = path.join(oldArtifactDir, filename);
 				const copiedPath = path.join(nextArtifactDir, filename);
-				const [original, copied] = await Promise.all([
-					fs.promises.lstat(originalPath),
-					fs.promises.lstat(copiedPath),
-				]);
+				const original = sourceTree.files.get(filename);
+				const copied = copiedTree.files.get(filename);
 				if (
+					!original || !copied ||
 					!original.isFile() || !copied.isFile() ||
 					original.nlink > 1 || copied.nlink > 1 ||
 					original.size !== copied.size
@@ -2204,8 +2242,8 @@ export class SessionManager {
 					);
 				}
 				const [originalHash, copiedHash] = await Promise.all([
-					sha256File(originalPath, original),
-					sha256File(copiedPath, copied),
+					sha256File(originalPath, original, oldArtifactDir, sourceTree.directories),
+					sha256File(copiedPath, copied, nextArtifactDir, copiedTree.directories),
 				]);
 				if (originalHash !== copiedHash) {
 					throw new Error(
@@ -2213,6 +2251,19 @@ export class SessionManager {
 							? "Cannot fork session: referenced artifact bytes differ from source"
 							: "Cannot fork session: unreferenced artifact bytes differ from source",
 					);
+				}
+			}
+			// Recheck empty directories too: they have no file hash operation.
+			for (const [root, directories] of [
+				[oldArtifactDir, sourceTree.directories],
+				[nextArtifactDir, copiedTree.directories],
+			] as const) {
+				for (const [relative, expected] of directories) {
+					const actual = await fs.promises.lstat(path.join(root, relative));
+					if (
+						!actual.isDirectory() || actual.dev !== expected.dev ||
+						actual.ino !== expected.ino
+					) throw new Error("Cannot fork session: artifact directory changed during verification");
 				}
 			}
 		}
