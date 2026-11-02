@@ -2813,6 +2813,7 @@ describe("MCPManager event subscription contracts", () => {
 		const releaseOldUnsubscribe = Promise.withResolvers<void>();
 		const initialCursor = Promise.withResolvers<void>();
 		const replacementCursor = Promise.withResolvers<void>();
+		const deliveredAfterStop = Promise.withResolvers<void>();
 		let oldUnsubscribed = false;
 		let subscribeCount = 0;
 		const server = fakeMcpServer({
@@ -2863,7 +2864,9 @@ describe("MCPManager event subscription contracts", () => {
 			await withinHandlerChange(oldUnsubscribeEntered.promise, "old webhook unsubscribe started");
 			// This new explicit external owner must wait for the old tuple
 			// unsubscribe, then retain its live callback host after stop returns.
-			manager.setOnEvent(() => {});
+			manager.setOnEvent((_serverName, occurrence) => {
+				if (occurrence.eventId === "webhook-survived-stop") deliveredAfterStop.resolve();
+			});
 			const newStartup = manager.getEventStartupPromise(name);
 			if (!newStartup) throw new Error("Replacement webhook startup not registered");
 			await delay(30);
@@ -2876,13 +2879,30 @@ describe("MCPManager event subscription contracts", () => {
 			expect(oldUnsubscribed).toBe(true);
 			expect(subscribeCount).toBe(2);
 			expect(manager.getActiveEventSubscriptionCount(name)).toBe(1);
-			// Prove the actual Bun loopback host survived: the webhook receiver
-			// responds 405 to GET; a stopped listener rejects fetch entirely.
-			const liveHost = await withinHandlerChange(
-				fetch(`http://127.0.0.1:${listenPort}/events/stopped-owner`, { method: "GET" }),
-				"replacement webhook listener still accepts HTTP",
+			// A signed event through the real loopback webhook receiver must still
+			// reach the new owner after the old stop has completely settled.
+			const messageId = "webhook-survived-stop";
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify(event(messageId, "new-webhook-cursor"));
+			const signature = createHmac("sha256", Buffer.from(CALLBACK_SECRET.slice("whsec_".length), "base64"))
+				.update(`${messageId}.${timestamp}.${body}`)
+				.digest("base64");
+			const response = await withinHandlerChange(
+				fetch(`http://127.0.0.1:${listenPort}/events/stopped-owner`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "stop-race-2",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${signature}`,
+					},
+					body,
+				}),
+				"replacement webhook listener accepts a signed event",
 			);
-			expect(liveHost.status).toBe(405);
+			expect(response.status).toBe(202);
+			await withinHandlerChange(deliveredAfterStop.promise, "replacement owner receives signed event");
 		} finally {
 			releaseOldUnsubscribe.resolve();
 			try {
