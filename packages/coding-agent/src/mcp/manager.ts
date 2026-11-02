@@ -1487,6 +1487,12 @@ export class MCPManager {
 				// transport is still connected and belongs in the startup summary.
 				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) {
 					if (this.#connections.has(name)) connectedServers.add(name);
+					// The newer refresh may already have published before this startup
+					// aggregator runs. Preserve its exact owner tools instead of
+					// resetting the registry to the superseded initial snapshot.
+					for (const tool of this.#tools) {
+						if (tool.mcpServerName === name) allTools.push(tool);
+					}
 					continue;
 				}
 				if (task.tracked.status === "fulfilled") {
