@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Verify Windows discovery-record ACLs through read-only native security calls, without PowerShell startup delays during nested agent launch (Refs #932).
+
 ## [1.7.2] - 2026-11-01
 
 ### Added
