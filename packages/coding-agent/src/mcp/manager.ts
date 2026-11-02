@@ -444,6 +444,8 @@ export class MCPManager {
 	#epoch = 0;
 	/** Active bulk teardowns gate NEW starts until every closing snapshot is settled. */
 	#bulkDisconnectCount = 0;
+	/** One promise per explicitly retiring server; same-name callers join that teardown. */
+	#activeDisconnects = new Map<string, Promise<void>>();
 
 	constructor(
 		private cwd: string,
@@ -1300,6 +1302,16 @@ export class MCPManager {
 		const connectionTasks: ConnectionTask[] = [];
 
 		for (const [name, config] of Object.entries(configs)) {
+			// A closing transport is still in #connections until DELETE resolves.
+			// Never report it as a fresh successful explicit connection.
+			if (this.#activeDisconnects.has(name)) {
+				const message = `MCP server "${name}" disconnect is in progress`;
+				errors.set(name, message);
+				validationFailures.push({ name, message });
+				reportedErrors.add(name);
+				statusServerNames.push(name);
+				continue;
+			}
 			if (sources[name]) {
 				this.#sources.set(name, sources[name]);
 				const existing = this.#connections.get(name);
@@ -1652,6 +1664,7 @@ export class MCPManager {
 	 * Get current connection status for a server.
 	 */
 	getConnectionStatus(name: string): "connected" | "connecting" | "disconnected" {
+		if (this.#activeDisconnects.has(name)) return "disconnected";
 		if (this.#connections.has(name)) return "connected";
 		if (
 			this.#pendingConnections.has(name) ||
@@ -1709,6 +1722,7 @@ export class MCPManager {
 	 * Wait for a connection to complete (or fail).
 	 */
 	async waitForConnection(name: string): Promise<MCPServerConnection> {
+		if (this.#activeDisconnects.has(name)) throw new Error(`MCP server "${name}" disconnect is in progress`);
 		const connection = this.#connections.get(name);
 		if (connection) return connection;
 		const pending = this.#pendingConnections.get(name);
@@ -1737,7 +1751,7 @@ export class MCPManager {
 	 * Get all connected server names.
 	 */
 	getConnectedServers(): string[] {
-		return Array.from(this.#connections.keys());
+		return Array.from(this.#connections.keys()).filter(name => !this.#activeDisconnects.has(name));
 	}
 
 	/**
@@ -1753,7 +1767,28 @@ export class MCPManager {
 	/**
 	 * Disconnect from a specific server.
 	 */
-	async disconnectServer(name: string): Promise<void> {
+	disconnectServer(name: string): Promise<void> {
+		const ongoing = this.#activeDisconnects.get(name);
+		if (ongoing) return ongoing;
+		// Install the per-name gate synchronously before the first awaited drain.
+		// Multiple explicit disconnects share completion rather than reporting an
+		// early success while the old transport is still being closed.
+		const completion = Promise.withResolvers<void>();
+		this.#activeDisconnects.set(name, completion.promise);
+		void (async () => {
+			try {
+				await this.#disconnectServerOnce(name);
+				completion.resolve();
+			} catch (error) {
+				completion.reject(error);
+			} finally {
+				if (this.#activeDisconnects.get(name) === completion.promise) this.#activeDisconnects.delete(name);
+			}
+		})();
+		return completion.promise;
+	}
+
+	async #disconnectServerOnce(name: string): Promise<void> {
 		// Revoke a still-pending initial handshake synchronously, before any
 		// awaited event drain gives its late response an opportunity to enroll.
 		// Its success continuation will dispose that exact obsolete transport.
@@ -1845,7 +1880,7 @@ export class MCPManager {
 	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
 		// A reconnect beginning mid-shutdown would also capture its new epoch.
 		// Do not revive a server while disconnectAll is still closing transports.
-		if (this.#bulkDisconnectCount > 0) return null;
+		if (this.#bulkDisconnectCount > 0 || this.#activeDisconnects.has(name)) return null;
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
 			// An operator-driven reconnect is the recovery step after rotating a secret, so this
