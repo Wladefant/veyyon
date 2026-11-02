@@ -31,6 +31,25 @@ function commitHeadForRequest(init?: RequestInit) {
 }
 
 describe("cloud checkpoints", () => {
+	test("the shared capture filter rejects private credential material before workspace reads", () => {
+		const privatePaths = [
+			".ssh/id_ed25519", ".ssh/id_rsa", "project/.SSH/config",
+			".npmrc", "src/.netrc", ".pypirc", ".aws/credentials",
+			".azure/accessTokens.json", ".gnupg/private-keys-v1.d/private.key",
+			".kube/config", ".docker/config.json", ".terraform/terraform.tfstate",
+			".terraform.d/credentials.tfrc.json", ".git-credentials", ".gitconfig",
+			"project\\\\.SSH\\\\id_ed25519",
+		];
+		const safePaths = [
+			"src/a.ts", "docs/.ssh-guide.md", "src/npmrc-example.txt",
+			".github/workflows/ci.yml", "src/aws-client.ts",
+		];
+		const files = [...privatePaths, ...safePaths].map(path => ({
+			path, content: new Uint8Array(),
+		}));
+		expect(filterCheckpointFiles(files).map(file => file.path)).toEqual(safePaths);
+	});
+
 	test("an old explicit transfer fence cannot spend a newer shared-client owner", async () => {
 		let transfers = 0;
 		const fake: CheckpointFetch = async (input, init) => {

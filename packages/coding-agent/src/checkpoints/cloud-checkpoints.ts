@@ -38,7 +38,7 @@ export interface CheckpointFile {
 	content: Uint8Array;
 }
 const excluded =
-	/(^|\/)(?:\.env(?:\..*)?|\.git|\.agents|shared-auth|credentials?|browser|node_modules|\.cache|\.next|\.turbo|\.venv|venv|__pycache__|\.pytest_cache|\.lock|.*\.lock)(\/|$)/i;
+	/(^|\/)(?:\.env(?:\..*)?|\.git|\.agents|\.ssh|\.aws|\.azure|\.gnupg|\.kube|\.docker|\.terraform(?:\.d)?|\.npmrc|\.netrc|\.pypirc|\.git-credentials|\.gitconfig|shared-auth|credentials?|browser|node_modules|\.cache|\.next|\.turbo|\.venv|venv|__pycache__|\.pytest_cache|\.lock|.*\.lock)(\/|$)/i;
 export function filterCheckpointFiles(files: CheckpointFile[]): CheckpointFile[] {
 	return files.filter(
 		file =>
