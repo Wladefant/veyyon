@@ -499,13 +499,23 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		await expect(
 			withinConnectBoundary(manager.waitForConnection(name), "wait for retiring connection"),
 		).rejects.toThrow(/disconnect/i);
+		// The per-name gate must not halt healthy unrelated MCP servers.
+		const otherName = "single-disconnect-unaffected-peer";
+		const other = await withinConnectBoundary(
+			manager.connectServers({ [otherName]: config }, {}),
+			"unrelated connect while first server disconnects",
+		);
+		expect(other.connectedServers).toContain(otherName);
+		expect(manager.getConnectedServers()).toContain(otherName);
+		expect(initializeCalls).toBe(2);
 		releaseDelete.resolve();
 		await withinConnectBoundary(disconnecting, "held disconnect completion");
 		expect(deleteCalls).toBe(1);
 		expect(manager.getConnectedServers()).not.toContain(name);
 		const fresh = await withinConnectBoundary(manager.connectServers({ [name]: config }, {}), "fresh post-close connection");
 		expect(fresh.connectedServers).toContain(name);
-		expect(initializeCalls).toBe(2);
+		expect(initializeCalls).toBe(3);
+		expect(manager.getConnectedServers()).toContain("single-disconnect-unaffected-peer");
 		expect(manager.getTools().filter(tool => tool.mcpServerName === name)).toHaveLength(1);
 	} finally {
 		releaseDelete.resolve();
