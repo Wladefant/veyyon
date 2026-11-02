@@ -517,6 +517,31 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		expect(initializeCalls).toBe(3);
 		expect(manager.getConnectedServers()).toContain("single-disconnect-unaffected-peer");
 		expect(manager.getTools().filter(tool => tool.mcpServerName === name)).toHaveLength(1);
+
+		// A failed close must NOT leave the retiring transport advertised as
+		// connected when the per-name gate is released. Simulate only the
+		// external close rejection; all manager lifecycle code is production.
+		const connection = await withinConnectBoundary(manager.waitForConnection(name), "connected transport for close failure");
+		const originalClose = connection.transport.close.bind(connection.transport);
+		connection.transport.close = async () => { throw new Error("fixture close rejected"); };
+		try {
+			await expect(
+				withinConnectBoundary(manager.disconnectServer(name), "rejected transport close"),
+			).rejects.toThrow("fixture close rejected");
+			expect(manager.getConnectedServers()).not.toContain(name);
+			expect(manager.getConnectionStatus(name)).toBe("disconnected");
+			expect(manager.getServerConfig(name)).toBeUndefined();
+			expect(manager.getTools().filter(tool => tool.mcpServerName === name)).toEqual([]);
+		} finally {
+			connection.transport.close = originalClose;
+			await withinConnectBoundary(originalClose(), "retire fixture transport after injected failure");
+		}
+		const recovered = await withinConnectBoundary(
+			manager.connectServers({ [name]: config }, {}),
+			"explicit re-enrollment after rejected close",
+		);
+		expect(recovered.connectedServers).toContain(name);
+		expect(initializeCalls).toBe(4);
 	} finally {
 		releaseDelete.resolve();
 		try {
