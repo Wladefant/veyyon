@@ -390,9 +390,17 @@ export class CheckpointClient {
 			throw error;
 		}
 	}
-	async releaseLease(sessionId: string): Promise<CheckpointLease | undefined> {
+	async releaseLease(
+		sessionId: string,
+		expected?: Pick<CheckpointLease, "ownerNode" | "epoch">,
+	): Promise<CheckpointLease | undefined> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease) return undefined;
+		// A guard that held an earlier fence must never release a newer owner
+		// through this client's session-keyed lease cache.
+		if (
+			!lease ||
+			(expected && (lease.ownerNode !== expected.ownerNode || lease.epoch !== expected.epoch))
+		) return undefined;
 		try {
 			const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
 				method: "POST",
@@ -410,9 +418,12 @@ export class CheckpointClient {
 				throw new Error("Checkpoint authority release fence mismatch");
 			return released;
 		} finally {
-			// An ambiguous/invalid release response must not leave this client
-			// locally writable or silently reissue the external release.
-			this.loseLease(sessionId);
+			// An ambiguous/invalid response invalidates ONLY the fence sent with
+			// this release. A fresh guard can acquire a later epoch while a
+			// successful/failed older release response is still in flight.
+			const active = this.#leases.get(sessionId);
+			if (active?.ownerNode === lease.ownerNode && active.epoch === lease.epoch)
+				this.loseLease(sessionId);
 		}
 	}
 	loseLease(sessionId: string): void {

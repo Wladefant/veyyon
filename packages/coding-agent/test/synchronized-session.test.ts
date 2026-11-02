@@ -879,6 +879,127 @@ test("failed guard close cannot release a winner sharing its CheckpointClient", 
 	}
 });
 
+test("a stale guard cannot release a newer owner through a shared checkpoint client", async () => {
+	let activeOwner: string | undefined;
+	let epoch = 0;
+	let failOldRenewal = false;
+	const releases: string[] = [];
+	const fake: CheckpointFetch = async (input, init) => {
+		const action = new URL(String(input)).pathname.split("/").pop();
+		const body = JSON.parse(String(init?.body)) as { ownerNode: string; epoch?: number };
+		if (action === "lease") {
+			if (activeOwner && activeOwner !== body.ownerNode)
+				return Response.json({ error: "owned" }, { status: 409 });
+			if (!activeOwner) epoch++;
+			activeOwner = body.ownerNode;
+		} else if (action === "renew" || action === "release") {
+			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (action === "renew" && failOldRenewal && body.ownerNode === "owner-a") {
+				activeOwner = undefined; // The fake authority's old lease has expired.
+				return Response.json({ error: "lease expired" }, { status: 409 });
+			}
+			if (action === "release") {
+				releases.push(`${body.ownerNode}:${body.epoch}`);
+				epoch++;
+				activeOwner = undefined;
+			}
+		} else {
+			throw new Error("Unexpected checkpoint action");
+		}
+		return Response.json({
+			ownerNode: body.ownerNode, epoch,
+			expiresAt: action === "release" ? "1970-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const stale = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
+	const current = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	try {
+		await stale.admit();
+		failOldRenewal = true;
+		await expect(client.renewLease("s")).rejects.toThrow(/409/);
+		await current.admit();
+		expect(epoch).toBe(2);
+		await stale.close();
+		expect(releases).toEqual([]);
+		await client.assertWritable("s", 2);
+		await current.close();
+		expect(releases).toEqual(["owner-b:2"]);
+	} finally {
+		await Promise.allSettled([stale.close(), current.close()]);
+	}
+});
+
+test("a late old release reply cannot evict a newer owner's cached lease", async () => {
+	let activeOwner: string | undefined;
+	let epoch = 0;
+	let releaseOldReply!: () => void;
+	let releaseOldEntered!: () => void;
+	const oldReplyGate = new Promise<void>(resolve => { releaseOldReply = resolve; });
+	const oldReleaseEntered = new Promise<void>(resolve => { releaseOldEntered = resolve; });
+	const releases: string[] = [];
+	const fake: CheckpointFetch = async (input, init) => {
+		const action = new URL(String(input)).pathname.split("/").pop();
+		const body = JSON.parse(String(init?.body)) as { ownerNode: string; epoch?: number };
+		if (action === "lease") {
+			if (activeOwner && activeOwner !== body.ownerNode)
+				return Response.json({ error: "owned" }, { status: 409 });
+			if (!activeOwner) epoch++;
+			activeOwner = body.ownerNode;
+		} else if (action === "renew" || action === "release") {
+			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (action === "release") {
+				releases.push(`${body.ownerNode}:${body.epoch}`);
+				epoch++;
+				activeOwner = undefined;
+				const receipt = {
+					ownerNode: body.ownerNode, epoch,
+					expiresAt: "1970-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+				};
+				if (body.ownerNode === "owner-a") {
+					releaseOldEntered();
+					await oldReplyGate;
+				}
+				return Response.json(receipt);
+			}
+		} else {
+			throw new Error("Unexpected checkpoint action");
+		}
+		return Response.json({
+			ownerNode: body.ownerNode, epoch,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const previous = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
+	const replacement = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	try {
+		await previous.admit();
+		const oldClose = previous.close();
+		try {
+			await oldReleaseEntered;
+			await replacement.admit();
+			await client.assertWritable("s", 3);
+		} finally {
+			releaseOldReply();
+		}
+		await oldClose;
+		await client.assertWritable("s", 3);
+		await replacement.close();
+		expect(releases).toEqual(["owner-a:1", "owner-b:3"]);
+	} finally {
+		releaseOldReply();
+		await Promise.allSettled([previous.close(), replacement.close()]);
+	}
+});
+
 test("two default guards in one process cannot share a live cloud checkpoint lease", async () => {
 	let ownerNode: string | undefined;
 	let epoch = 1;

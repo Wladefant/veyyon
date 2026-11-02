@@ -141,8 +141,14 @@ export class SynchronizedSession {
 		await this.#admission?.catch(() => {});
 		await this.#renewal;
 		try {
-			// Never release another guard's cached lease when this guard failed to acquire ownership.
-			const released = this.#lease ? await this.client.releaseLease(this.sessionId) : undefined;
+			// Only the exact owner/epoch acquired by THIS guard may be released.
+			// Historical #lease truthiness does not prove current client ownership.
+			const released = this.#lease
+				? await this.client.releaseLease(this.sessionId, {
+					ownerNode: this.#lease.ownerNode,
+					epoch: this.#lease.epoch,
+				})
+				: undefined;
 			if (this.claim && this.#resumeToken && released && this.persistOwnership)
 				await this.persistOwnership(this.#resumeToken, released.epoch);
 		} finally {
