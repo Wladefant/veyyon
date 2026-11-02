@@ -2095,10 +2095,11 @@ export class SessionManager {
 		// A new file, so another writer's tail on the old one is not ours to carry,
 		// and the history we brought along is.
 		this.#forgetForeignWriter();
+		// Arm the existing publish-time breadcrumb hook. A failed new-file write
+		// keeps the old recovery pointer, while a later successful retry promotes
+		// the new one only after its JSONL is actually published.
+		this.#breadcrumbFresh = true;
 		await this.#rewriteAtomically();
-		// Do not publish a terminal recovery pointer to a nonexistent fork if the
-		// post-preflight JSONL rewrite fails. The old pointer remains recoverable.
-		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
