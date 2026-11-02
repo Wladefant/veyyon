@@ -427,6 +427,12 @@ export class MCPManager {
 	#eventServerDisconnectEpochs = new Map<string, number>();
 	// Callback function equality is insufficient across clear/re-enable cycles.
 	#eventConsumerRevision = 0;
+	// Auxiliary writers have independent custody: a cursor/control/provider
+	// replacement must not abort unrelated event-discovery startups, but must
+	// fence an older callback that resumes after an external setter.
+	#eventCursorWriterRevision = 0;
+	#eventControlWriterRevision = 0;
+	#eventCursorProviderRevision = 0;
 	// Identify a callback requesting shutdown from inside its own in-flight stream.
 	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
 	#eventCallbackContext = new AsyncLocalStorage<{
@@ -434,6 +440,9 @@ export class MCPManager {
 		consumerRevision: number;
 		serverName: string;
 		disconnectEpoch: number;
+		cursorWriterRevision: number;
+		controlWriterRevision: number;
+		cursorProviderRevision: number;
 	}>();
 
 	#eventCallbackIsObsolete(): boolean {
@@ -453,6 +462,9 @@ export class MCPManager {
 			consumerRevision: this.#eventConsumerRevision,
 			serverName,
 			disconnectEpoch: this.#eventServerDisconnectEpochs.get(serverName) ?? 0,
+			cursorWriterRevision: this.#eventCursorWriterRevision,
+			controlWriterRevision: this.#eventControlWriterRevision,
+			cursorProviderRevision: this.#eventCursorProviderRevision,
 		};
 		return this.#eventCallbackContext.run(scope, async () => {
 			try {
@@ -579,11 +591,19 @@ export class MCPManager {
 		// An obsolete or disconnected server's callback cannot replace the
 		// successor's cursor writer. External and current setters remain valid.
 		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.cursorWriterRevision !== this.#eventCursorWriterRevision) return;
+		this.#eventCursorWriterRevision++;
+		if (scope?.active) scope.cursorWriterRevision = this.#eventCursorWriterRevision;
 		this.#onEventCursor = handler;
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
 		// Obsolete and disconnected callbacks cannot change the resume authority.
 		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.cursorProviderRevision !== this.#eventCursorProviderRevision) return;
+		this.#eventCursorProviderRevision++;
+		if (scope?.active) scope.cursorProviderRevision = this.#eventCursorProviderRevision;
 		this.#eventCursorProvider = provider;
 	}
 
@@ -593,6 +613,10 @@ export class MCPManager {
 	): void {
 		// A stale or disconnected event callback cannot capture a successor's control.
 		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.controlWriterRevision !== this.#eventControlWriterRevision) return;
+		this.#eventControlWriterRevision++;
+		if (scope?.active) scope.controlWriterRevision = this.#eventControlWriterRevision;
 		this.#onEventControl = handler;
 	}
 
