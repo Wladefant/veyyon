@@ -135,6 +135,7 @@ test("a transfer claim is single-use across runtimes sharing the destination dev
 				expiresAt: "2099-01-01T00:00:00Z",
 				headSequence: 0,
 				manifestHash: "",
+				targetNode: "destination-device", transferId: "transfer-1",
 				resumeToken: pendingToken,
 			});
 		}
@@ -321,7 +322,7 @@ test("concurrent transferred-session close persists the resume epoch once", asyn
 		return Response.json({
 			ownerNode: "runtime-owner", epoch: action === "release" ? 6 : 5,
 			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
-			...(action === "claim" ? { resumeToken: token } : {}),
+			...(action === "claim" ? { targetNode: "destination-device", transferId: "transfer-close", resumeToken: token } : {}),
 		});
 	};
 	const session = new SynchronizedSession(
@@ -441,11 +442,11 @@ test("close during transfer claim releases the late grant without persisting a r
 		}
 		return Response.json({
 			ownerNode: "runtime-owner",
-			epoch: 5,
+			epoch: action === "release" ? 6 : 5,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
 			manifestHash: "",
-			resumeToken: "a-long-enough-pending-resume-capability",
+			...(action === "claim" ? { targetNode: "destination-device", transferId: "transfer-closing", resumeToken: "a-long-enough-pending-resume-capability" } : {}),
 		});
 	};
 	const marker = {
@@ -611,7 +612,7 @@ test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoc
 					expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0,
 					manifestHash: "",
-					...(action === "claim" ? { resumeToken: token } : {}),
+					...(action === "claim" ? { targetNode: "destination-device", transferId: "transfer-invalid-release", resumeToken: token } : {}),
 				});
 			};
 			const sessionId = `invalid-release-${scenario.name}`;
@@ -713,7 +714,7 @@ test("successful transfer retains its persisted resume capability on release", a
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
 			manifestHash: "",
-			...(action === "claim" ? { resumeToken: token } : {}),
+			...(action === "claim" ? { targetNode: "destination-device", transferId: "transfer-success", resumeToken: token } : {}),
 		});
 	};
 	const claim = {
@@ -792,6 +793,7 @@ test("invalid transfer grant cannot persist a resume capability before admission
 					expiresAt: scenario.expiresAt,
 					headSequence: 0,
 					manifestHash: "",
+					targetNode: "destination-device", transferId: "transfer-invalid-grant",
 					resumeToken: "a-long-enough-resume-capability",
 				});
 			};
