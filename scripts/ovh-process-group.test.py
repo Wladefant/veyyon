@@ -171,6 +171,47 @@ def run_startup_cancellation():
             kill_test_pids(pids)
 
 
+def run_cleanup_failure_status_cases():
+    statuses = (0, 7, 124, 137)
+    for original_status in statuses:
+        with tempfile.TemporaryDirectory() as directory:
+            pgid_file = Path(directory) / "pgid"
+            fake_bin = Path(directory) / "bin"
+            fake_bin.mkdir()
+            fake_ps = fake_bin / "ps"
+            fake_ps.write_text("""#!/bin/sh
+if [ "$*" = "-eo pgid=,stat=" ] && [ -f "$OVH_TEST_PGID_FILE" ]; then
+    printf '%s S\\n' "$(cat "$OVH_TEST_PGID_FILE")"
+else
+    exec /bin/ps "$@"
+fi
+""")
+            fake_ps.chmod(0o755)
+            command = (
+                "import os,sys; "
+                "open(os.environ['OVH_TEST_PGID_FILE'],'w').write(str(os.getpgrp())); "
+                "sys.exit(int(sys.argv[1]))"
+            )
+            env = dict(
+                os.environ,
+                PATH=f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                OVH_TEST_PGID_FILE=str(pgid_file),
+            )
+            result = subprocess.run(
+                ["bash", str(WRAPPER), "python3", "-c", command, str(original_status)],
+                env=env,
+                timeout=5,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            expected = 1 if original_status == 0 else original_status
+            require(
+                result.returncode == expected,
+                f"cleanup failure changed status {original_status} to {result.returncode}, expected {expected}",
+            )
+
+
 def run_deadline_case(mode):
     run_case(f"independent deadline {mode}", ["python3", "-c", TREE, mode], 124, need_tree=True, timeout="5s")
 
@@ -195,6 +236,7 @@ def main():
     run_deadline_case("deadline-stubborn")
     run_cleanup_case(None)
     run_cleanup_case("0")
+    run_cleanup_failure_status_cases()
     workflow_shell = "bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail"
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "step.sh"
@@ -202,7 +244,7 @@ def main():
         script.write_text("printf ok | tee \"$OUTPUT\"\n")
         result = subprocess.run(["bash", str(WRAPPER), "bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], env=dict(os.environ, OUTPUT=str(output)), timeout=4, check=False)
         require(result.returncode == 0 and output.read_text() == "ok", f"workflow shell pipeline failed: {workflow_shell}")
-    print("ovh-process-group: 13 passed, 0 failed")
+    print("ovh-process-group: 17 passed, 0 failed")
 
 
 if __name__ == "__main__":
