@@ -304,6 +304,43 @@ test("lease response body remains inside the checkpoint timeout", async () => {
 	await expect(client.assertWritable("s", 1)).rejects.toThrow(/lease/i);
 });
 
+test("checkpoint authority JSON refuses an oversized first chunk without consuming a second", async () => {
+	let pulls = 0;
+	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
+		pull(controller) {
+			pulls++;
+			if (pulls === 1) controller.enqueue(new Uint8Array(256 * 1024 + 1));
+			else controller.error(new Error("oversized JSON reader consumed a second chunk"));
+		},
+	}, { highWaterMark: 0 }), { status: 200 });
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/JSON exceeds 256 KiB/);
+	expect(pulls).toBe(1);
+	await expect(client.assertWritable("s", 1)).rejects.toThrow(/lease/i);
+});
+
+test("checkpoint authority JSON accepts a valid response split across streaming chunks", async () => {
+	const receipt = {
+		ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0, manifestHash: "",
+	};
+	const bytes = new TextEncoder().encode(JSON.stringify(receipt));
+	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(bytes.subarray(0, 7));
+			controller.enqueue(bytes.subarray(7));
+			controller.close();
+		},
+	}), { status: 200 });
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	expect(await client.acquireLease("s", "node-a")).toEqual(receipt);
+	await expect(client.assertWritable("s", receipt.epoch)).resolves.toBeUndefined();
+});
+
 test("restoration rejects an oversized streaming object without consuming a second chunk", async () => {
 	const object = { hash: "a".repeat(64), size: 1 };
 	const manifest = { objects: [object] };

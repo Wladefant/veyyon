@@ -124,8 +124,31 @@ export class CheckpointClient {
 			});
 			if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
 			if (response.status === 204) return undefined as T;
-			// The response body is part of the same bounded authority request.
-			return (await response.json()) as T;
+			// Keep JSON control-plane responses inside the same timeout AND byte cap.
+			// Binary checkpoint objects have their own bounded reader below.
+			if (!response.body) throw new Error("Checkpoint authority returned no JSON body");
+			const reader = response.body.getReader();
+			const chunks: Uint8Array[] = [];
+			const maxResponseBytes = 256 * 1024;
+			let received = 0;
+			let complete = false;
+			try {
+				while (true) {
+					const part = await reader.read();
+					if (part.done) {
+						complete = true;
+						break;
+					}
+					if (part.value.byteLength > maxResponseBytes - received)
+						throw new Error("Checkpoint authority JSON exceeds 256 KiB");
+					chunks.push(part.value);
+					received += part.value.byteLength;
+				}
+			} finally {
+				if (!complete) void reader.cancel().catch(() => {});
+				reader.releaseLock();
+			}
+			return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, received))) as T;
 		});
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
