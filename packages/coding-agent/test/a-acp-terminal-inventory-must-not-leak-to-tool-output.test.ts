@@ -24,8 +24,12 @@ function sessionFor(bridge: ClientBridge): ToolSession {
 				if (key === "bashInterceptor.enabled" || key === "astEdit.enabled") return false;
 				return undefined;
 			},
-			getBashInterceptorRules() { return []; },
-			getShellConfig() { return { shell: "/bin/bash", args: ["-l", "-c"], env: {}, prefix: undefined }; },
+			getBashInterceptorRules() {
+				return [];
+			},
+			getShellConfig() {
+				return { shell: "/bin/bash", args: ["-l", "-c"], env: {}, prefix: undefined };
+			},
 		},
 		getClientBridge: () => bridge,
 	});
@@ -42,8 +46,11 @@ function textOf(result: { content: readonly { type: string; text?: string }[] })
 async function bounded<T>(promise: Promise<T>, phase: string): Promise<T> {
 	const timeout = Promise.withResolvers<never>();
 	const timer = setTimeout(() => timeout.reject(new Error("Timed out awaiting " + phase)), 4_000);
-	try { return await Promise.race([promise, timeout.promise]); }
-	finally { clearTimeout(timer); }
+	try {
+		return await Promise.race([promise, timeout.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 it("refuses three fake environment assignments in ACP preview and completed BashTool output", async () => {
@@ -56,7 +63,9 @@ it("refuses three fake environment assignments in ACP preview and completed Bash
 		waitForExit: () => exit.promise,
 		currentOutput: async () => ({ output: INVENTORY, truncated: false }),
 		kill: async () => {},
-		release: async () => { releases++; },
+		release: async () => {
+			releases++;
+		},
 	};
 	const tool = new BashTool(sessionFor(bridge(handle)));
 	const running = tool.execute("synthetic-inventory", { command: "printf synthetic" }, undefined, update => {
@@ -65,8 +74,11 @@ it("refuses three fake environment assignments in ACP preview and completed Bash
 			preview.resolve();
 		}
 	});
-	try { await bounded(preview.promise, "first output poll"); }
-	finally { exit.resolve({ exitCode: 0, signal: null }); }
+	try {
+		await bounded(preview.promise, "first output poll");
+	} finally {
+		exit.resolve({ exitCode: 0, signal: null });
+	}
 	const completed = await bounded(running, "ACP terminal completion");
 	const views = [...updates, textOf(completed)];
 	for (const visible of views) {
@@ -78,6 +90,51 @@ it("refuses three fake environment assignments in ACP preview and completed Bash
 	expect(releases).toBe(1);
 }, 8_000);
 
+
+it("holds partial inventories across cumulative ACP output snapshots until classification", async () => {
+	const exit = Promise.withResolvers<{ exitCode: number; signal: null }>();
+	const thirdPreview = Promise.withResolvers<void>();
+	const snapshots = [
+		"ALPHA=fake-a\\n",
+		"ALPHA=fake-a\\nBETA=fake-b\\n",
+		INVENTORY,
+	];
+	let outputReads = 0;
+	const updates: string[] = [];
+	const handle: ClientBridgeTerminalHandle = {
+		terminalId: "synthetic-progressive-inventory",
+		waitForExit: () => exit.promise,
+		currentOutput: async () => ({
+			output: snapshots[Math.min(outputReads++, snapshots.length - 1)]!,
+			truncated: false,
+		}),
+		kill: async () => {},
+		release: async () => {},
+	};
+	const running = new BashTool(sessionFor(bridge(handle))).execute(
+		"synthetic-progressive-inventory",
+		{ command: "printf synthetic" },
+		undefined,
+		update => {
+			if (!update.content.some(part => part.type === "text")) return;
+			updates.push(textOf(update));
+			if (updates.length >= 3) thirdPreview.resolve();
+		},
+	);
+	try {
+		await bounded(thirdPreview.promise, "third inventory preview");
+	} finally {
+		exit.resolve({ exitCode: 0, signal: null });
+	}
+	const result = await bounded(running, "classified final result");
+	expect(updates.slice(0, 2)).toEqual(["", ""]);
+	for (const visible of [...updates, textOf(result)]) {
+		expect(visible).not.toContain("fake-a");
+		expect(visible).not.toContain("fake-b");
+		expect(visible).not.toContain("fake-c");
+	}
+	expect(textOf(result)).toContain("[credential output withheld]");
+}, 9_000);
 it("preserves normal client terminal output and terminal identity", async () => {
 	const handle: ClientBridgeTerminalHandle = {
 		terminalId: "synthetic-ordinary",
