@@ -10,9 +10,9 @@
  * `parked` ↔ `idle`.
  */
 
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clamp, errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "../session/agent-session";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
 
 export type AgentReviver = () => Promise<AgentSession>;
@@ -125,8 +125,6 @@ function adoption(
 const REVIVE_RECHECK_MS = 1_000;
 const TERMINAL_PARKED_TTL_MS = 5 * 60_000;
 const PARKED_ORPHAN_RECHECK_MS = 30_000;
-
-
 
 /**
  * Report a session's turns to the registry: `agent_start` on an `idle` ref makes
@@ -556,7 +554,6 @@ export class AgentLifecycleManager {
 			}
 		}
 	}
-
 
 	/**
 	 * Kill an agent and everything it spawned: abort the turn each one is in the

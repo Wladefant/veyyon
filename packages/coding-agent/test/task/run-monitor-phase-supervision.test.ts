@@ -114,7 +114,9 @@ describe("run monitor phase supervision", () => {
 		emit(event("message_start", { message: { role: "assistant", content: [] } }));
 		for (let i = 0; i < 4; i++) {
 			vi.advanceTimersByTime(179_999);
-			emit(event("message_update", { message: { role: "assistant", content: [{ type: "text", text: `step ${i}` }] } }));
+			emit(
+				event("message_update", { message: { role: "assistant", content: [{ type: "text", text: `step ${i}` }] } }),
+			);
 			expect(monitor.abortSignal.aborted).toBe(false);
 		}
 		monitor.finish();

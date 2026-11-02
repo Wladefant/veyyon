@@ -1049,7 +1049,14 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		scheduleProgress(applyAgentEvent(event));
 	};
 	const prepareStallRecovery = (): boolean => {
-		if (yieldCalled || abortReason !== "stalled" || stallRecoveries >= 1 || !abortSignal.aborted || !abortCleanupSettled) return false;
+		if (
+			yieldCalled ||
+			abortReason !== "stalled" ||
+			stallRecoveries >= 1 ||
+			!abortSignal.aborted ||
+			!abortCleanupSettled
+		)
+			return false;
 		activeWatchdogTools.clear();
 		stallRecoveries += 1;
 		abortController = new AbortController();
@@ -1125,14 +1132,22 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		yieldCalled: () => yieldCalled,
 		runtimeLimitExceeded: () => runtimeLimitExceeded,
 		hasExplicitAbortReason: () =>
-			abortReason === "signal" || abortReason === "stalled" || runtimeLimitExceeded || budgetLimitExceeded || budgetStopRequested,
+			abortReason === "signal" ||
+			abortReason === "stalled" ||
+			runtimeLimitExceeded ||
+			budgetLimitExceeded ||
+			budgetStopRequested,
 		budgetStopRequested: () => budgetStopRequested,
 		waitForBudgetStop: () => budgetStopAbortPromise ?? Promise.resolve(),
 		// A soft stop that never escalated still identifies as a budget abort so
 		// the lifecycle can park the agent as resumable instead of killing it.
 		abortKind: () => abortReason ?? (budgetStopRequested ? "budget" : undefined),
 		isAbortedRun: () =>
-			abortReason === "signal" || abortReason === "stalled" || runtimeLimitExceeded || budgetLimitExceeded || abortReason === undefined,
+			abortReason === "signal" ||
+			abortReason === "stalled" ||
+			runtimeLimitExceeded ||
+			budgetLimitExceeded ||
+			abortReason === undefined,
 		requestAbort,
 		abortActiveSession,
 		waitForActiveSessionAbort,

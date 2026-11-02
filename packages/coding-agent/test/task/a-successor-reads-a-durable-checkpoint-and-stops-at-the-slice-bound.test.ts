@@ -12,13 +12,13 @@ import { setImmediate } from "node:timers/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import * as executor from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import * as atomicWriter from "@veyyon/utils/atomic-write";
 import { TempDir } from "@veyyon/utils";
+import * as atomicWriter from "@veyyon/utils/atomic-write";
 import { makeToolSession, type ToolSessionOverrides } from "../helpers/tool-session";
 
 const assignment = "Continue the same slice.";
@@ -93,7 +93,6 @@ describe("explicit bounded lane successors", () => {
 		return (await tool()).execute(name, { agent: "task", name, task: assignment, successorOf } as TaskParams);
 	}
 
-
 	it("reads the predecessor checkpoint after all process-local state is lost", async () => {
 		await dispatch("Original");
 		const original = executed[0].id;
@@ -128,11 +127,15 @@ describe("explicit bounded lane successors", () => {
 		expect(refused.isError).toBe(true);
 		expect(JSON.stringify(refused.content)).toContain("successor-claimed");
 		const directory = dir.join("parent");
-		const claim = JSON.parse(await fs.readFile(path.join(directory, `${createHash("sha256").update(predecessor).digest("hex")}.checkpoint.json.claim`), "utf8"));
+		const claim = JSON.parse(
+			await fs.readFile(
+				path.join(directory, `${createHash("sha256").update(predecessor).digest("hex")}.checkpoint.json.claim`),
+				"utf8",
+			),
+		);
 		expect(claim.generation).toBe(1);
 		expect(claim.predecessorId).toBe(predecessor);
 	});
-
 
 	it("fails closed for missing checkpoints and path-like IDs", async () => {
 		for (const predecessor of ["Missing", "../escape", path.resolve(dir.path(), "escape")]) {
@@ -275,7 +278,9 @@ describe("explicit bounded lane successors", () => {
 		for (const [index, variant] of variants.entries()) {
 			const refused = await (await tool({ outputSchema: variant.outputSchema })).execute(`Drift${index}`, {
 				context: variant.context,
-				tasks: [{ agent: "task", name: `Drift${index}`, task: variant.task, cwd: variant.cwd, successorOf: predecessor }],
+				tasks: [
+					{ agent: "task", name: `Drift${index}`, task: variant.task, cwd: variant.cwd, successorOf: predecessor },
+				],
 			} as TaskParams);
 			expect(refused.isError).toBe(true);
 			expect(JSON.stringify(refused.content)).toContain("successor-workflow-changed");
@@ -301,29 +306,40 @@ describe("explicit bounded lane successors", () => {
 		filePath: { value: "/repo/.agents/task.md", pinned: false },
 	} satisfies Record<keyof AgentDefinition, { value: unknown; pinned: boolean }>;
 
-	it.each(Object.entries(agentFieldChanges))("decides %s drift before claiming the predecessor", async (field, change) => {
-		await dispatch("Original");
-		const predecessor = executed[0].id;
-		const changedDefinition = { ...agent, [field]: change.value } as AgentDefinition;
-		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [changedDefinition], projectAgentsDir: null });
-		if (field === "name") settings.override("agent.agents", { task: { enabled: true }, renamed: { enabled: true } });
-		const changed = await (await tool()).execute("Changed", {
-			agent: changedDefinition.name, name: "Changed", task: assignment, successorOf: predecessor,
-		} as TaskParams);
-		if (!change.pinned) {
-			expect(changed.isError).not.toBe(true);
+	it.each(Object.entries(agentFieldChanges))(
+		"decides %s drift before claiming the predecessor",
+		async (field, change) => {
+			await dispatch("Original");
+			const predecessor = executed[0].id;
+			const changedDefinition = { ...agent, [field]: change.value } as AgentDefinition;
+			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+				agents: [changedDefinition],
+				projectAgentsDir: null,
+			});
+			if (field === "name")
+				settings.override("agent.agents", { task: { enabled: true }, renamed: { enabled: true } });
+			const changed = await (await tool()).execute("Changed", {
+				agent: changedDefinition.name,
+				name: "Changed",
+				task: assignment,
+				successorOf: predecessor,
+			} as TaskParams);
+			if (!change.pinned) {
+				expect(changed.isError).not.toBe(true);
+				expect(executed).toHaveLength(2);
+				return;
+			}
+			expect(changed.isError).toBe(true);
+			expect(JSON.stringify(changed.content)).toContain("successor-workflow-changed");
+			expect(executed).toHaveLength(1);
+			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
+			const restored = await dispatch("Restored", predecessor);
+			expect(restored.isError).not.toBe(true);
 			expect(executed).toHaveLength(2);
-			return;
-		}
-		expect(changed.isError).toBe(true);
-		expect(JSON.stringify(changed.content)).toContain("successor-workflow-changed");
-		expect(executed).toHaveLength(1);
-		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
-		const restored = await dispatch("Restored", predecessor);
-		expect(restored.isError).not.toBe(true);
-		expect(executed).toHaveLength(2);
-		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
-	}, 2_000);
+			expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
+		},
+		2_000,
+	);
 
 	it("rejects missing and non-directory cwd before consuming the claim", async () => {
 		await dispatch("Original");
@@ -352,7 +368,9 @@ describe("explicit bounded lane successors", () => {
 			await fs.mkdir(parentCwd);
 			const taskTool = await tool({ cwd: parentCwd });
 			const original = await taskTool.execute("Original", {
-				agent: "task", name: "Original", task: assignment,
+				agent: "task",
+				name: "Original",
+				task: assignment,
 			} as TaskParams);
 			expect(original.isError).not.toBe(true);
 			const predecessor = executed[0].id;
@@ -360,7 +378,11 @@ describe("explicit bounded lane successors", () => {
 			for (const state of ["missing", "file"]) {
 				if (state === "file") await fs.writeFile(parentCwd, "plain file");
 				const refused = await taskTool.execute("Invalid inherited cwd", {
-					agent: "task", name: "Invalid inherited cwd", task: assignment, cwd, successorOf: predecessor,
+					agent: "task",
+					name: "Invalid inherited cwd",
+					task: assignment,
+					cwd,
+					successorOf: predecessor,
 				} as TaskParams);
 				expect(refused.isError).toBe(true);
 				expect(JSON.stringify(refused.content)).toContain(
@@ -372,7 +394,11 @@ describe("explicit bounded lane successors", () => {
 			await fs.rm(parentCwd);
 			await fs.mkdir(parentCwd);
 			const retry = await taskTool.execute("Restored inherited cwd", {
-				agent: "task", name: "Restored inherited cwd", task: assignment, cwd, successorOf: predecessor,
+				agent: "task",
+				name: "Restored inherited cwd",
+				task: assignment,
+				cwd,
+				successorOf: predecessor,
 			} as TaskParams);
 			expect(retry.isError).not.toBe(true);
 			expect(executed).toHaveLength(2);

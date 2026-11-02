@@ -59,7 +59,6 @@ export type AgentStatus = (typeof AGENT_STATUSES)[number];
 export const AGENT_TERMINAL_OUTCOMES = ["completed", "failed", "startup-failed", "cancelled", "stalled"] as const;
 export type AgentTerminalOutcome = (typeof AGENT_TERMINAL_OUTCOMES)[number];
 
-
 /**
  * The status transitions a live process may perform, keyed by the current status.
  *

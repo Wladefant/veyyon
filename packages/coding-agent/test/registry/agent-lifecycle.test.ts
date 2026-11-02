@@ -867,9 +867,7 @@ describe("AgentLifecycleManager", () => {
 		vi.advanceTimersByTime(30_000);
 		await flushAsync();
 
-		expect(transcript.customMessages()).toContain(
-			'Agent "RestoredOrphan" stalled: Parent session no longer exists.',
-		);
+		expect(transcript.customMessages()).toContain('Agent "RestoredOrphan" stalled: Parent session no longer exists.');
 		expect(transcript.flushCalls()).toBe(1);
 		expect(registry.get(orphan.id)).toBeUndefined();
 		expect(orphan.terminalOutcome).toBe("stalled");

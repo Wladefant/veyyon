@@ -1370,11 +1370,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 					? "completed"
 					: "failed";
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
-	AgentRegistry.global().recordTerminalOutcome(
-		id,
-		terminalOutcome,
-		finalAbortReason ?? (stderr || undefined),
-	);
+	AgentRegistry.global().recordTerminalOutcome(id, terminalOutcome, finalAbortReason ?? (stderr || undefined));
 	monitor.scheduleProgress(true);
 
 	// Emit lifecycle end event after finalization so yield status is reflected
@@ -2024,7 +2020,8 @@ function deriveAgentTelemetry(options: ExecutorOptions): AgentTelemetryConfig | 
 export type AgentPromptInputs = Pick<
 	ExecutorOptions,
 	"agent" | "context" | "planReference" | "worktree" | "outputSchema" | "outputSchemaOverridesAgent"
-> & Partial<Pick<ExecutorOptions, "id" | "parentAgentId">>;
+> &
+	Partial<Pick<ExecutorOptions, "id" | "parentAgentId">>;
 
 /** The agent's own system prompt section; it depends only on the run's fixed inputs. */
 export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {

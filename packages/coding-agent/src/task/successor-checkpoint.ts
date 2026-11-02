@@ -71,11 +71,7 @@ export async function claimSuccessorCheckpoint(
 	let checkpoint: SuccessorCheckpoint;
 	try {
 		const parsed = checkpointSchema(JSON.parse(await fs.readFile(file, "utf8")));
-		if (
-			parsed instanceof type.errors ||
-			parsed.agentId !== predecessorId ||
-			parsed.cancellationAcknowledged !== true
-		)
+		if (parsed instanceof type.errors || parsed.agentId !== predecessorId || parsed.cancellationAcknowledged !== true)
 			throw new Error("Invalid checkpoint");
 		checkpoint = parsed;
 	} catch {

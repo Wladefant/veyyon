@@ -185,7 +185,9 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 	// This adds no new reach an absolute path did not already allow.
 	const resolved = inherited
 		? parentCwd
-		: path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
+		: path.isAbsolute(trimmed)
+			? path.resolve(trimmed)
+			: path.resolve(parentCwd, trimmed);
 	try {
 		const st = await fs.stat(resolved);
 		if (!st.isDirectory()) {
@@ -195,9 +197,8 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 		if (err instanceof Error && err.message.startsWith("task cwd")) throw err;
 		// Name the relative input and what it resolved against, so a wrong parent
 		// cwd is diagnosable instead of showing only the joined absolute path.
-		const context = inherited || path.isAbsolute(trimmed)
-			? ""
-			: ` (resolved from relative "${trimmed}" against ${parentCwd})`;
+		const context =
+			inherited || path.isAbsolute(trimmed) ? "" : ` (resolved from relative "${trimmed}" against ${parentCwd})`;
 		throw new Error(`task cwd does not exist: ${resolved}${context}`);
 	}
 	if (!(await directoryExists(resolved))) {
