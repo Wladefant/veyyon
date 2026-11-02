@@ -18,10 +18,10 @@ import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
 
-import { ProducerOutputGuard } from "../../secrets/producer-output";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
+import { ProducerOutputGuard } from "../../secrets/producer-output";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
