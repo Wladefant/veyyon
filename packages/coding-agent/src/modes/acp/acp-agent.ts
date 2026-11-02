@@ -144,6 +144,7 @@ type PromptLifecycleError = Error & { readonly code: "ACP_SESSION_CLOSED" };
 
 type PromptTurnState = {
 	cancelRequested: boolean;
+	preparation: Promise<void>;
 	settled: boolean;
 	/**
 	 * Delivery of streamed assistant `error` chunks this turn (the mapper
@@ -731,32 +732,44 @@ export class AcpAgent implements Agent {
 				await previousTurn.cleanup;
 			}
 			throwIfRecordClosed(record);
-			if (await record.session.refreshExternalTurn()) {
-				await this.#replayNewlyAdoptedHistory(record);
-			}
 
 			const converted = convertPromptBlocks(params.prompt);
 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
-			record.promptTurn = {
+			const promptTurn: PromptTurnState = {
 				cancelRequested: false,
 				settled: false,
 				errorTextDelivery: undefined,
 				cleanup: undefined,
+				preparation: Promise.resolve(),
 				usageBaseline: cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 				unsubscribe: undefined,
 				resolve: pendingPrompt.resolve,
 				reject: pendingPrompt.reject,
 				promise: pendingPrompt.promise,
 			};
-
-			record.promptTurn.unsubscribe = record.session.subscribe(event => {
+			record.promptTurn = promptTurn;
+			promptTurn.unsubscribe = record.session.subscribe(event => {
 				this.#trackPromptEvent(record, event);
 			});
 
-			this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
-				finishPrompt(record, undefined, error);
+			promptTurn.preparation = (async () => {
+				if (await record.session.refreshExternalTurn()) {
+					if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
+					throwIfRecordClosed(record);
+					await this.#replayNewlyAdoptedHistory(record);
+				}
+				if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
+				throwIfRecordClosed(record);
+				await this.#runPromptOrCommand(record, converted.text, converted.images);
+			})().catch((error: unknown) => {
+				if (record.promptTurn === promptTurn && !promptTurn.settled) {
+					finishPrompt(record, undefined, error);
+				}
+				throw error;
 			});
-
+			// Preparation failure is delivered through pendingPrompt; retain the rejection
+			// for cancel cleanup without creating an unhandled rejection.
+			void promptTurn.preparation.catch(() => undefined);
 			return await pendingPrompt.promise;
 		});
 	}
@@ -893,7 +906,12 @@ export class AcpAgent implements Agent {
 			this.#cancelCleanupTimeoutMs,
 		);
 		try {
-			await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout.promise]);
+			const [abortResult, preparationResult] = await Promise.race([
+				Promise.allSettled([record.session.abort({ reason: USER_INTERRUPT_LABEL }), promptTurn.preparation]),
+				timeout.promise,
+			]);
+			if (abortResult.status === "rejected") throw abortResult.reason;
+			if (preparationResult.status === "rejected") throw preparationResult.reason;
 		} finally {
 			clearTimeout(timer);
 			// Order matters: clear `cleanup` before evicting the slot so the slot-eviction
