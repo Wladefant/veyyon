@@ -209,6 +209,12 @@ export class CheckpointClient {
 			this.loseLease(sessionId);
 			throw new Error("Checkpoint authority lease owner mismatch");
 		}
+		// Bind the one-use grant to the transfer named in the request before
+		// publishing its lease as locally writable. The authority echoes both.
+		if (result.targetNode !== targetNode || result.transferId !== transferId) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority transfer grant identity mismatch");
+		}
 		if (
 			typeof result.resumeToken !== "string" ||
 			result.resumeToken.length < 16 ||

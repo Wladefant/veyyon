@@ -507,6 +507,48 @@ test("checkpoint transfer grants reject an authority response for a different ru
 	expect(actions).toEqual(["claim", "claim"]);
 });
 
+// WHY: a successful /claim JSON response can carry a different transfer's
+// runtime lease. The requested one-use transfer identity must match before
+// admission for both initial claims and later resume-capability redemption.
+test("claim and resume receipts bind the requested target and transfer identity", async () => {
+	const scenarios = [
+		{ name: "valid", targetNode: "destination-device", transferId: "transfer-1", valid: true },
+		{ name: "foreign target", targetNode: "other-device", transferId: "transfer-1", valid: false },
+		{ name: "missing target", targetNode: undefined, transferId: "transfer-1", valid: false },
+		{ name: "foreign transfer", targetNode: "destination-device", transferId: "transfer-2", valid: false },
+		{ name: "missing transfer", targetNode: "destination-device", transferId: undefined, valid: false },
+	] as const;
+	for (const action of ["claim", "resume"] as const) {
+		for (const scenario of scenarios) {
+			const fake: CheckpointFetch = async input => {
+				expect(new URL(String(input)).pathname.endsWith("/claim")).toBe(true);
+				return Response.json({
+					ownerNode: "runtime-owner", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+					...(scenario.targetNode === undefined ? {} : { targetNode: scenario.targetNode }),
+					...(scenario.transferId === undefined ? {} : { transferId: scenario.transferId }),
+					resumeToken: "a-long-enough-pending-resume-capability",
+				});
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			});
+			const grant = action === "claim"
+				? client.claimTransfer("identity-s", "destination-device", "transfer-1", "a-long-enough-claim-capability", 4, "runtime-owner")
+				: client.resumeTransfer("identity-s", "destination-device", "transfer-1", "a-long-enough-resume-capability", 4, "runtime-owner");
+			if (scenario.valid) {
+				const accepted = await grant;
+				expect(accepted.lease.targetNode).toBe("destination-device");
+				expect(accepted.lease.transferId).toBe("transfer-1");
+				await expect(client.assertWritable("identity-s", 5)).resolves.toBeUndefined();
+			} else {
+				await expect(grant).rejects.toThrow(/transfer grant identity mismatch/);
+				await expect(client.assertWritable("identity-s", 5)).rejects.toThrow(/lease lost/);
+			}
+		}
+	}
+});
+
 test("an overlong authority resume capability cannot replace a one-time transfer claim", async () => {
 	let calls = 0;
 	const fake: CheckpointFetch = async () => {
@@ -692,6 +734,7 @@ test("checkpoint finalization accepts only affirmative authority receipts", asyn
 			if (action === "claim") return Response.json({
 				ownerNode: "runtime-owner", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
 				headSequence: 0, manifestHash: "",
+				targetNode: "destination-device", transferId: "transfer-1",
 				resumeToken: "a-long-enough-pending-resume-capability",
 			});
 			if (action === "finalize") return Response.json(scenario.receipt);
@@ -727,6 +770,7 @@ test("nonconfirming transfer finalization fences session admission but permits o
 		if (action === "claim") return Response.json({
 			ownerNode: "runtime-owner", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0, manifestHash: "",
+			targetNode: "destination-device", transferId: "transfer-1",
 			resumeToken: "a-long-enough-pending-resume-capability",
 		});
 		if (action === "release") return Response.json({
