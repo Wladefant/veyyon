@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-11-02
+
+### Changed
+
+- Terminal ownership failures name the record, verification step, original error code and message, elapsed time, and Windows ACL command deadline. Ownership checks still fail closed without retries ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
+### Fixed
+
+- Terminal writer ownership failures now report the owner record path, the failed verification step, the original error code and message, the elapsed time and the 15 s ACL deadline (#892, Refs #849).
+
+## [1.7.4] - 2026-11-02
+
+### Fixed
+
+- IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
