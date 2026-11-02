@@ -158,4 +158,55 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			},
 		);
 	}, 15_000);
+
+	// A single server-controlled SSE frame must not fan out thousands of
+	// concurrent client callbacks or diagnostics. This probes the actual
+	// transport over a loopback GET while all request handlers remain pending.
+	it("bounds oversized and repeated flat SSE batches without losing the next notification", async () => {
+		const makeRequest = (id: number) => ({
+			jsonrpc: "2.0",
+			id,
+			method: "roots/list",
+			params: {},
+		});
+		const oversized = Array.from({ length: 300 }, (_, index) => makeRequest(1_000 + index));
+		const bursts = Array.from({ length: 5 }, (_, burst) =>
+			Array.from({ length: 16 }, (_, index) => makeRequest(burst * 16 + index)),
+		);
+		const next = { jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "after-flood" } };
+		await withLiveSSE([oversized, ...bursts, Array.from({ length: 128 }, () => null), next],
+			async transport => {
+				const gate = Promise.withResolvers<void>();
+				const reachedCapacity = Promise.withResolvers<void>();
+				const receivedNext = Promise.withResolvers<void>();
+				const errors: string[] = [];
+				let started = 0;
+				const notifications: unknown[] = [];
+				transport.onError = error => errors.push(error.message);
+				transport.onRequest = async () => {
+					started++;
+					if (started === 32) reachedCapacity.resolve();
+					await gate.promise;
+					return { roots: [] };
+				};
+				transport.onNotification = (method, params) => {
+					notifications.push({ method, params });
+					if ((params as { source?: string })?.source === "after-flood") receivedNext.resolve();
+				};
+				try {
+					await bounded(transport.startSSEListener(), "SSE admission fixture GET");
+					await bounded(Promise.all([reachedCapacity.promise, receivedNext.promise]), "bounded SSE requests and recovery");
+					// Let any already-scheduled unbounded callbacks run before the oracle.
+					await Promise.resolve();
+					expect(started).toBe(32);
+					expect(notifications).toEqual([
+						{ method: "notifications/tools/list_changed", params: { source: "after-flood" } },
+					]);
+					expect(errors).toEqual([]);
+				} finally {
+					gate.resolve();
+				}
+			},
+		);
+	}, 15_000);
 });
