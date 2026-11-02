@@ -2214,6 +2214,73 @@ export class SessionManager {
 		await this.#refreshForeignLines();
 		return this.#foreignLines.length > 0;
 	}
+	/**
+	 * Adopt a completed turn written by another manager to this transcript.
+	 *
+	 * The stat/version check in {@link #refreshForeignLines} keeps the ordinary
+	 * no-change path cheap. A foreign line triggers one full load; only a new
+	 * assistant turn on the active branch is adopted. The caller must use this
+	 * only while its agent is idle.
+	 */
+	async refreshExternalTurn(): Promise<boolean> {
+		if (!(await this.holdsForeignEntries())) return false;
+		const sessionFile = this.#sessionFile;
+		if (!sessionFile) return false;
+
+		// Flush local appends before loading, so the foreign adoption cannot discard
+		// entries that were still pending in this manager's writer.
+		await this.flush();
+		const resolvedSessionFile = path.resolve(sessionFile);
+		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
+			operatorNotices: this.#operatorNotices,
+			coolCompactedHistory: true,
+		});
+		if (loaded.entries.length < 2) return false;
+
+		const fileEntries = loaded.entries;
+		const header = fileEntries[0] as SessionHeader;
+		if (header.id !== this.#sessionId) return false;
+		await resolveBlobRefsInEntries(
+			fileEntries,
+			new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
+			{
+				source: resolvedSessionFile,
+				operatorNotices: this.#operatorNotices,
+			},
+		);
+		const migrated = await migrateToCurrentVersion(fileEntries);
+		const entries = fileEntries.slice(1) as SessionEntry[];
+		const byId = new Map(entries.map(entry => [entry.id, entry]));
+		const activePath = walkBranchPath(byId, entries.at(-1));
+		const lastMessage = [...activePath].reverse().find(entry => entry.type === "message");
+		const hasNewActiveEntry = activePath.some(entry => !this.#index.has(entry.id));
+		if (!hasNewActiveEntry || lastMessage?.message.role !== "assistant") return false;
+
+		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
+		const lifecycleStarted = this.#lifecycleStarted;
+		const lifecycleEnded = this.#lifecycleEnded;
+		await this.#drainAndCloseWriter();
+		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
+		this.#applyEntries(header, entries, loaded.cold?.usage);
+		this.#lifecycleStarted = lifecycleStarted;
+		this.#lifecycleEnded = lifecycleEnded;
+		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
+		this.#hasTitleSlot = titleSlot !== undefined;
+		this.#fileIsCurrent = true;
+		this.#rewriteRequired = migrated;
+		this.#deferredLegacyRewrite = migrated;
+		this.#forceFileCreation = true;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) {
+			this.#rewriteRequired = true;
+			this.#deferredLegacyRewrite = false;
+		}
+		if (loaded.layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(loaded.layout);
+		this.#coolUnreachablePayloads();
+		return true;
+	}
+
 
 	/**
 	 * Drop only session files that this manager saw materialized for a draft and

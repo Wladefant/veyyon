@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP clients receive each completed external turn once before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+
 ## [1.7.6] - 2026-11-02
 
 ### Fixed

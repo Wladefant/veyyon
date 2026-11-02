@@ -184,6 +184,7 @@ type ManagedSessionRecord = {
 	promptTurn: PromptTurnState | undefined;
 	promptQueue: PromptQueueState;
 	liveMessageId: string | undefined;
+	displayedEntryIds: Set<string>;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	toolArgsById: Map<string, unknown>;
 	extensionsConfigured: boolean;
@@ -730,6 +731,9 @@ export class AcpAgent implements Agent {
 				await previousTurn.cleanup;
 			}
 			throwIfRecordClosed(record);
+			if (await record.session.refreshExternalTurn()) {
+				await this.#replayNewlyAdoptedHistory(record);
+			}
 
 			const converted = convertPromptBlocks(params.prompt);
 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
@@ -1271,6 +1275,7 @@ export class AcpAgent implements Agent {
 			await waitForAcpPromptIdle(record);
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
+			if (!record.background) this.#markSessionEntriesDisplayed(record);
 			finishPrompt(record, {
 				stopReason: resolveStopReason(event, promptTurn.cancelRequested),
 				usage: buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
@@ -1761,6 +1766,36 @@ export class AcpAgent implements Agent {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
+		this.#markSessionEntriesDisplayed(record);
+	}
+
+	async #replayNewlyAdoptedHistory(record: ManagedSessionRecord): Promise<void> {
+		const sessionId = record.session.sessionId;
+		const cwd = record.session.sessionManager.getCwd();
+		const newlyVisible = record.session.sessionManager
+			.getBranch()
+			.filter(entry => !record.displayedEntryIds.has(entry.id));
+		const replayedToolCallIds = new Set<string>();
+		const replayedToolCallArgs = new Map<string, unknown>();
+		for (const entry of newlyVisible) {
+			if (entry.type !== "message") continue;
+			for (const notification of this.#messageToReplayNotifications(
+				sessionId,
+				entry.message as ReplayableMessage,
+				cwd,
+				replayedToolCallIds,
+				replayedToolCallArgs,
+			)) {
+				await this.#connection.sessionUpdate(notification);
+			}
+		}
+		for (const entry of newlyVisible) record.displayedEntryIds.add(entry.id);
+	}
+
+	#markSessionEntriesDisplayed(record: ManagedSessionRecord): void {
+		for (const entry of record.session.sessionManager.getBranch()) {
+			record.displayedEntryIds.add(entry.id);
+		}
 	}
 
 	#messageToReplayNotifications(
@@ -2247,6 +2282,7 @@ function createManagedSessionRecord(session: AgentSession): ManagedSessionRecord
 		promptTurn: undefined,
 		promptQueue: { promise: Promise.resolve(), release: undefined },
 		liveMessageId: undefined,
+		displayedEntryIds: new Set(),
 		liveMessageProgress: undefined,
 		toolArgsById: new Map(),
 		extensionsConfigured: false,
