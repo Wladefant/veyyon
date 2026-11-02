@@ -829,3 +829,57 @@ test("invalid transfer grant cannot persist a resume capability before admission
 	}
 });
 
+test("two default guards in one process cannot share a live cloud checkpoint lease", async () => {
+	let ownerNode: string | undefined;
+	let epoch = 1;
+	let leaseRequests = 0;
+	const fake: CheckpointFetch = async (input, init) => {
+		const action = new URL(String(input)).pathname.split("/").pop();
+		const body = init?.body ? (JSON.parse(String(init.body)) as { ownerNode: string; epoch?: number }) : undefined;
+		if (action === "lease") {
+			leaseRequests++;
+			if (ownerNode && ownerNode !== body?.ownerNode)
+				return Response.json({ error: "already owned" }, { status: 409 });
+			ownerNode = body?.ownerNode;
+		} else if (action === "renew" || action === "release") {
+			if (ownerNode !== body?.ownerNode || epoch !== body?.epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (action === "release") {
+				epoch++;
+				ownerNode = undefined;
+			}
+		} else {
+			return Response.json({ error: "unexpected checkpoint action" }, { status: 404 });
+		}
+		return Response.json({
+			ownerNode: body?.ownerNode,
+			epoch,
+			expiresAt: action === "release" ? "1970-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const makeGuard = () =>
+		new SynchronizedSession(
+			"same-session",
+			new CheckpointClient({
+				baseUrl: "https://test",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
+			}),
+		);
+	const first = makeGuard();
+	const second = makeGuard();
+	try {
+		// A module-global default owner ID allows the authority's same-owner
+		// reentry for both independent guards. The second must now be refused.
+		expect(first.ownerNode).not.toBe(second.ownerNode);
+		await first.admit();
+		await expect(second.admit()).rejects.toThrow(/409/);
+		expect(leaseRequests).toBe(2);
+		await first.admit();
+	} finally {
+		await Promise.allSettled([first.close(), second.close()]);
+	}
+});
