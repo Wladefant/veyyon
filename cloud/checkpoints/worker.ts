@@ -47,6 +47,11 @@ export class SessionAuthority {
  if(action==="commit"){
  const manifest=manifestOf(body.manifest);if(!manifest || manifest.sequence!==Number(body.expectedHead)+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
  if (manifest.sessionId !== new URL(request.url).pathname.split("/")[3]) return json({error:"session identity mismatch"},400);
+ // Cheap advisory preflight avoids object reads by already-fenced writers.
+ // The transaction below MUST recheck ownership after asynchronous R2 work.
+ const preflightLease=await this.state.storage.get<Lease>("lease");
+ if(!preflightLease || preflightLease.ownerNode!==body.ownerNode || preflightLease.epoch!==body.epoch || Date.parse(preflightLease.expiresAt)<=Date.now())return json({error:"stale writer"},409);
+ if(await isUnclaimedTransfer(this.state.storage,preflightLease))return json({error:"transfer claim required"},409);
  const manifestHash=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
  for(const ref of manifest.objects){const object=await this.env.OBJECTS.get(ref.hash);if(!object || object.size!==ref.size || await digest(await object.arrayBuffer())!==ref.hash)return json({error:"missing or corrupt object"},422);}
  const result=await this.state.storage.transaction(async store=>{

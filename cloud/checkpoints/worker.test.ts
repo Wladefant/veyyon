@@ -15,10 +15,12 @@ function fixture() {
   try{return await callback(storage)}catch(error){data.clear();for(const [key,value] of snapshot)data.set(key,value);throw error}finally{release()}
  } };
  const objects = new Map<string, Uint8Array>();
- const env:Environment = { OBJECTS: { get: async key => {const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>bytes.slice().buffer}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
+ let objectGets=0;
+ let objectBufferReads=0;
+ const env:Environment = { OBJECTS: { get: async key => {objectGets++;const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>{objectBufferReads++;return bytes.slice().buffer}}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
  const authority = new SessionAuthority({storage}, env);
  const post = (action:string,body:unknown) => authority.fetch(new Request(`https://test/v1/sessions/s/${action}`, {method:"POST",body:JSON.stringify(body)}));
- return {post, objects, storage, data, authority, failPut:(key:string)=>{failPutKey=key}};
+ return {post, objects, storage, data, authority, objectAccess:()=>({gets:objectGets,buffers:objectBufferReads}), failPut:(key:string)=>{failPutKey=key}};
 }
 test("release advances epochs and replay is payload bound",async()=>{
  const {post,objects}=fixture();
@@ -172,6 +174,37 @@ test("a reservation cannot commit, renew, or release before its one-use claim is
  expect((await post("commit",{ownerNode:claimed.ownerNode,epoch:claimed.epoch,expectedHead:0,idempotencyKey:"after-claim",manifest})).status).toBe(200);
  expect((await post("renew",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
  expect((await post("release",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+});
+
+test("fenced commit owners cannot spend R2 reads before lease and claim admission",async()=>{
+ const {post,objects,objectAccess,data}=fixture();
+ const bytes=new Uint8Array([1,2,3]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ const original=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const body={ownerNode:"source",epoch:original.epoch,expectedHead:0,idempotencyKey:"preflight",manifest};
+ expect((await post("commit",{...body,ownerNode:"other"})).status).toBe(409);
+ expect((await post("commit",{...body,epoch:original.epoch-1})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ const released=await (await post("release",original)).json() as {ownerNode:string;epoch:number};
+ expect((await post("commit",{...body,epoch:released.epoch})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ const fresh=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const transferId="preflight-only";
+ const targetNode="destination";
+ const claimToken="preflight-claim-token";
+ const reserved=await (await post("transfer",{...fresh,targetNode,transferId,claimToken})).json() as {ownerNode:string;epoch:number};
+ expect((await post("commit",{...body,ownerNode:reserved.ownerNode,epoch:reserved.epoch})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ const reply=await post("claim",{targetNode,transferId,claimToken,epoch:reserved.epoch,ownerNode:"runtime"});
+ expect(reply.status).toBe(200);
+ const claimed=await reply.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:claimed.ownerNode,targetNode,transferId,epoch:reserved.epoch,leaseEpoch:claimed.epoch,resumeToken:claimed.resumeToken})).status).toBe(200);
+ expect((await post("commit",{...body,ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(true);
 });
 
 test("concurrent claim redemption grants one runtime and denies the other",async()=>{
