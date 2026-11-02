@@ -805,3 +805,52 @@ test("nonconfirming transfer finalization fences session admission but permits o
 		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
 });
+
+/**
+ * A corrupt authority head must not drive cross-session object retrievals or
+ * exceed the pinned Worker's 1..1024 objects / 1..100 sequence contract.
+ * All fakes are disposable; this is not a deployed Worker acceptance test.
+ */
+test("restoration rejects malformed and foreign heads before any object GET", async () => {
+	const good = {
+		version: 1, sessionId: "s", sequence: 1,
+		objects: [{ hash: "a".repeat(64), size: 1 }],
+	};
+	const cases: Array<{
+		name: string;
+		manifest: unknown;
+		headSequence: number;
+		expectedError: RegExp;
+	}> = [
+		{ name: "foreign-session", manifest: { ...good, sessionId: "other-session" }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{ name: "wrong-sequence", manifest: good, headSequence: 2, expectedError: /Invalid checkpoint head/ },
+		{ name: "unsupported-version", manifest: { ...good, version: 2 }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{ name: "zero-sequence", manifest: { ...good, sequence: 0 }, headSequence: 0, expectedError: /Invalid checkpoint head/ },
+		{ name: "sequence-over-limit", manifest: { ...good, sequence: 101 }, headSequence: 101, expectedError: /Invalid checkpoint head/ },
+		{ name: "empty-objects", manifest: { ...good, objects: [] }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{ name: "too-many-objects", manifest: { ...good, objects: Array.from({ length: 1025 }, () => good.objects[0]) }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{ name: "null-object", manifest: { ...good, objects: [null] }, headSequence: 1, expectedError: /Invalid checkpoint object reference/ },
+	];
+	for (const scenario of cases) {
+		let objectRequests = 0;
+		const fake: CheckpointFetch = async input => {
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith("/head"))
+				return Response.json({
+					sequence: scenario.headSequence,
+					manifest: scenario.manifest,
+					manifestHash: new Bun.SHA256().update(JSON.stringify(scenario.manifest)).digest("hex"),
+				});
+			objectRequests++;
+			throw new Error("Unexpected checkpoint object request");
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
+		});
+		await expect(client.restore("s")).rejects.toThrow(scenario.expectedError);
+		expect(objectRequests).toBe(0);
+	}
+});

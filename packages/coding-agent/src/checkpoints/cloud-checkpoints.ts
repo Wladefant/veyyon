@@ -506,13 +506,37 @@ export class CheckpointClient {
 		const head = await this.#request<{
 			sequence: number;
 			manifestHash: string;
-			manifest: { objects: { hash: string; size: number }[] };
+			manifest: {
+				version: number;
+				sessionId: string;
+				sequence: number;
+				objects: { hash: string; size: number }[];
+			};
 		} | null>(`/v1/sessions/${encodeURIComponent(sessionId)}/head`);
 		if (!head) return null;
-		if (createHash("sha256").update(JSON.stringify(head.manifest)).digest("hex") !== head.manifestHash)
+		// The pinned authority only persists bounded, same-session version-1
+		// manifests. Check that envelope before any encrypted-object GETs: a
+		// corrupt head must not multiply requests or fetch another session's data.
+		const manifest = head.manifest;
+		if (
+			!manifest ||
+			manifest.version !== 1 ||
+			manifest.sessionId !== sessionId ||
+			!Number.isSafeInteger(manifest.sequence) ||
+			manifest.sequence < 1 ||
+			manifest.sequence > 100 ||
+			head.sequence !== manifest.sequence ||
+			!Array.isArray(manifest.objects) ||
+			manifest.objects.length < 1 ||
+			manifest.objects.length > 1024
+		)
+			throw new Error("Invalid checkpoint head");
+		if (createHash("sha256").update(JSON.stringify(manifest)).digest("hex") !== head.manifestHash)
 			throw new Error("Manifest integrity failure");
 		const size = head.manifest.objects.reduce((total, object) => {
 			if (
+				!object ||
+				typeof object !== "object" ||
 				!Number.isSafeInteger(object.size) ||
 				object.size < 1 ||
 				object.size > 8388608 ||
