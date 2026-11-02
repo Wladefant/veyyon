@@ -112,7 +112,9 @@ export class SessionAuthority {
     current.epoch===transfer.targetEpoch &&
     current.claimHash===transfer.claimHash;
    if(live && current.ownerNode!==body.ownerNode && !pendingTransferReservation)return json({error:"another runtime holds the live checkpoint lease"},409);
-   if(claim?.spent && claimHash!==undefined && !claim.pendingResumeToken)return json({error:"transfer claim has already been spent"},409);
+   // The original one-use claim can recover a lost first response, but must
+    // never recover any new rotated pending token after a successful finalize.
+    if(claim?.spent && claimHash!==undefined && (claim.resumeHash!==undefined || !claim.pendingResumeToken))return json({error:"transfer claim has already been spent"},409);
    if(!claim?.spent && claimHash===undefined)return json({error:"resume capability required"},409);
    if(!claim?.spent && (current.ownerNode!==targetNode || current.epoch!==transfer.targetEpoch || current.claimHash!==transfer.claimHash))
     return json({error:"transfer claim is stale"},409);

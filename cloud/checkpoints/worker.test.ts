@@ -81,6 +81,41 @@ test("the first claim advances its fence even when the runtime label equals the 
  expect((await post("claim",body)).status).toBe(409);
 });
 
+test("a finalized original transfer claim cannot disclose a later pending rotated resume",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="rotated-one-use-revocation";
+ const claimToken="synthetic-original-transfer-capability";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const firstReply=await post("claim",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,claimToken});
+ expect(firstReply.status).toBe(200);
+ const first=await firstReply.json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ expect((await post("release",{ownerNode:"runtime-one",epoch:first.epoch})).status).toBe(200);
+ const rotatedReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken});
+ expect(rotatedReply.status).toBe(200);
+ const rotated=await rotatedReply.json() as {epoch:number;resumeToken:string};
+ expect(rotated.resumeToken).not.toBe(first.resumeToken);
+ const claimState=JSON.stringify(data.get(`claim:${transferId}`));
+ const leaseState=JSON.stringify(data.get("lease"));
+ // A stale holder of the original one-use token must not receive rotated P2,
+ // even when it copies the current owner's public label during P2's pending phase.
+ const staleReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken});
+ expect(staleReply.status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(claimState);
+ expect(JSON.stringify(data.get("lease"))).toBe(leaseState);
+ // The current finalized capability P1 is still authorized to replay P2
+ // for the same live runtime; this preserves lost-response idempotency.
+ const authorizedRetry=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken});
+ expect(authorizedRetry.status).toBe(200);
+ const retry=await authorizedRetry.json() as {epoch:number;resumeToken:string};
+ expect(retry.epoch).toBe(rotated.epoch);
+ expect(retry.resumeToken).toBe(rotated.resumeToken);
+ expect((await post("finalize",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:rotated.epoch,resumeToken:rotated.resumeToken})).status).toBe(200);
+ expect((await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
+});
+
 test("a reservation cannot commit, renew, or release before its one-use claim is redeemed",async()=>{
  const {post,objects,data}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
