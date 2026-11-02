@@ -336,6 +336,58 @@ describe("native recovery", () => {
 			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
 		}
 	});
+	test("restore refuses Windows device aliases, ADS and invalid portable names before publication", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "portable", cwd: root }) + "\n");
+		const bundle = await captureNativeCheckpoint(session, []);
+		const contents = Buffer.from("synthetic checkpoint data").toString("base64");
+		const invalid = [
+			"NUL",
+			"nested/CON.txt",
+			"nested/COM¹.md",
+			"LPT²",
+			"nested/file.txt:stream",
+			"trailing. ",
+			"notes?.md",
+			"a/\u0001.md",
+		];
+		for (const [index, path] of invalid.entries()) {
+			const candidate = {
+				...bundle,
+				workspace: { dirty: [path], files: [{ path, bytes: contents }] },
+			};
+			const destination = join(root, "denied-" + index);
+			await expect(restoreNativeCheckpoint(candidate, destination)).rejects.toThrow(/Unsafe checkpoint path/);
+			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+		}
+
+		// Artifact names pass through the same path grammar and must also fail.
+		const unsafeArtifact = { ...bundle, artifacts: { "CON.txt": contents } };
+		const artifactDestination = join(root, "denied-artifact");
+		await expect(restoreNativeCheckpoint(unsafeArtifact, artifactDestination)).rejects.toThrow(
+			/Unsafe checkpoint path/,
+		);
+		await expect(lstat(artifactDestination)).rejects.toMatchObject({ code: "ENOENT" });
+
+		const allowed = {
+			...bundle,
+			workspace: {
+				dirty: ["portable/notes.md", "COM10.txt"],
+				files: [
+					{ path: "portable/notes.md", bytes: contents },
+					{ path: "COM10.txt", bytes: contents },
+				],
+			},
+		};
+		const destination = join(root, "portable-restore");
+		await restoreNativeCheckpoint(allowed, destination);
+		expect(await readFile(join(destination, "workspace", "portable", "notes.md"), "utf8"))
+			.toBe("synthetic checkpoint data");
+		expect(await readFile(join(destination, "workspace", "COM10.txt"), "utf8"))
+			.toBe("synthetic checkpoint data");
+	});
+
 	test("restore refuses overwrite and explicit fork writes a different native session id", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");

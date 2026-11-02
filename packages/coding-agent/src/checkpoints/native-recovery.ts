@@ -22,13 +22,26 @@ export interface NativeCheckpointBundle {
 const forbidden =
 	/(^|\/)(?:\.env(?:\..*)?|\.git|\.agents|\.cache|\.next|\.turbo|\.venv|venv|node_modules|auth|browser|cache|locks?)(\/|$)/i;
 const deniedNames = /(?:^|\/)(?:.*\.lock|.*\.sqlite(?:-wal|-shm)?)$/i;
+// Checkpoint bundles are portable between Linux and Windows. Refuse Win32
+// device aliases and ambiguous/unsupported names before touching any file.
+const reservedWindowsDevice = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/i;
+function invalidPortableComponent(part: string): boolean {
+	return (
+		!part ||
+		part === "." ||
+		part === ".." ||
+		/[<>:"|?*\x00-\x1f]/.test(part) ||
+		/[. ]$/.test(part) ||
+		reservedWindowsDevice.test(part)
+	);
+}
 function safeRelative(value: string): string {
 	const normalized = value.replaceAll("\\", "/");
 	if (
 		!normalized ||
 		normalized.startsWith("/") ||
 		/^[A-Za-z]:/.test(normalized) ||
-		normalized.split("/").some(part => !part || part === "." || part === "..") ||
+		normalized.split("/").some(invalidPortableComponent) ||
 		forbidden.test(normalized) ||
 		deniedNames.test(normalized)
 	)
