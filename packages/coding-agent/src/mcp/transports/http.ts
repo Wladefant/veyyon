@@ -237,8 +237,14 @@ export class HttpTransport implements MCPTransport {
 			}
 		} catch (error) {
 			if (error instanceof Error && !isAbortError(error)) {
-				logger.debug("HTTP SSE stream error", { url: this.config.url, error: error.message });
-				this.onError?.(error);
+				// readSseJson may include untrusted SSE frame bytes in the
+				// JSON.parse SyntaxError. Never send them to logs or onError.
+				const diagnostic =
+					error instanceof SyntaxError
+						? new Error("MCP HTTP SSE stream received malformed JSON")
+						: error;
+				logger.debug("HTTP SSE stream error", { url: this.config.url, error: diagnostic.message });
+				this.onError?.(diagnostic);
 			}
 		}
 	}
