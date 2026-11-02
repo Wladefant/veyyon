@@ -424,6 +424,103 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("refuses to propagate unrelated artifact symlinks before a fork publishes history", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-symlink-boundary-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const original = "synthetic safe recovery evidence";
+      expect(await manager.saveArtifact(original, "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Keep evidence artifact://0", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected original source session");
+      const sourceId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected real local artifact");
+      const sourceDir = path.dirname(sourceArtifact);
+      const outside = path.join(temp.path(), "synthetic-outside-store.txt");
+      const outsideBytes = "SYNTHETIC OUTSIDE STORE: never copied to a fork";
+      await fs.writeFile(outside, outsideBytes);
+      const directLink = path.join(sourceDir, "77.extra.log");
+      const reservationDir = path.join(sourceDir, "unused-reservations");
+      await fs.mkdir(reservationDir);
+      const nestedLink = path.join(reservationDir, "78.extra.log");
+      await fs.symlink(outside, directLink, "file");
+      await fs.symlink(outside, nestedLink, "file");
+      const beforeInventory = (await fs.readdir(path.dirname(sourceFile))).sort();
+
+      // The unreferenced artifact://77 link must not be inherited just because
+      // a different, legitimate artifact://0 was referenced in the transcript.
+      await expect(manager.fork()).rejects.toThrow(/unsafe artifact (entry|tree)/i);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect((await fs.readdir(path.dirname(sourceFile))).sort()).toEqual(beforeInventory);
+      expect((await fs.lstat(directLink)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+
+      await fs.unlink(directLink);
+      // Valid empty directories may be retained, but symlinks inside them
+      // must be refused just as symlinks at the artifact root are.
+      await expect(manager.fork()).rejects.toThrow(/unsafe artifact (entry|tree)/i);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+
+      await fs.unlink(nestedLink);
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected safe evidence-preserving fork");
+      const destinationDir = fork.newSessionFile.slice(0, -".jsonl".length);
+      expect(await fs.readFile(path.join(destinationDir, "0.bash.log"), "utf8")).toBe(original);
+      expect((await fs.stat(path.join(destinationDir, "unused-reservations"))).isDirectory()).toBe(true);
+      expect((await fs.readdir(destinationDir)).some(name => name.startsWith("77."))).toBe(false);
+      expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("rejects a referenced symlink in forkFrom before publishing its new session", async () => {
+    using temp = TempDir.createSync("@veyyon-forkfrom-referenced-symlink-");
+    const cwd = path.join(temp.path(), "project");
+    const sessions = path.join(temp.path(), "sessions");
+    const source = SessionManager.create(cwd, sessions);
+    try {
+      expect(await source.saveArtifact("synthetic referenced bytes", "bash")).toBe("0");
+      source.appendMessage({ role: "user", content: "Required artifact://0", timestamp: Date.now() });
+      await source.flush();
+      const sourceFile = source.getSessionFile();
+      if (!sourceFile) throw new Error("expected original source session");
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await source.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original source artifact");
+      const parked = path.join(temp.path(), "synthetic-original-artifact.txt");
+      await fs.rename(sourceArtifact, parked);
+      await fs.symlink(parked, sourceArtifact, "file");
+      try {
+        const beforeInventory = (await fs.readdir(sessions)).sort();
+        await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+          suppressBreadcrumb: true,
+        })).rejects.toThrow(/referenced artifact is not a regular file/i);
+        expect((await fs.readdir(sessions)).sort()).toEqual(beforeInventory);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+        expect(await fs.readFile(parked, "utf8")).toBe("synthetic referenced bytes");
+      } finally {
+        await fs.unlink(sourceArtifact);
+        await fs.rename(parked, sourceArtifact);
+      }
+    } finally {
+      await source.close();
+    }
+  });
+
   it("refuses a referenced artifact that became a directory without changing the original session", async () => {
     using temp = TempDir.createSync("@veyyon-fork-invalid-artifact-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
