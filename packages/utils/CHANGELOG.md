@@ -7,6 +7,15 @@
 ### Added
 
 - Discovery readers can check sibling records with one parent ACL check and one batch of candidate file ACL checks ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
+### Fixed
+
+- Record Telegram turn consumption once across the original message and all transferred copies ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
 
 ## [1.7.1] - 2026-10-31
 

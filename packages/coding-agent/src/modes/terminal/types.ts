@@ -8,6 +8,7 @@ import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { ShakeMode } from "@veyyon/kernel/session/shake-types";
 import type { Component, Container, EditorTheme, Loader, OverlayOptions, Spacer, Text, TUI } from "@veyyon/tui";
+import type { TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { CollabGuestLink } from "../../collab/guest";
 import type { CollabHost } from "../../collab/host";
 import type { KeybindingsManager } from "../../config/keybindings";
@@ -77,6 +78,7 @@ export type SubmittedUserInput = {
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
+	telegramTrace?: TelegramDeliveryTraceData;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -351,6 +353,7 @@ export interface InteractiveModeContext {
 		customType?: string;
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
+		telegramTrace?: TelegramDeliveryTraceData;
 	}): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;

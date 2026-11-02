@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-11-02
+
+### Fixed
+
+- Terminal writer ownership failures now report the owner record path, the failed verification step, the original error code and message, the elapsed time and the 15 s ACL deadline (#892, Refs #849).
+
+## [1.7.4] - 2026-11-02
+
+### Fixed
+
+- IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
+## [1.7.3] - 2026-11-01
+
+### Fixed
+
+- ACP preserves the first streamed reply chunk when `message_start` arrives late ([PR #830](https://github.com/Wladefant/veyyon/pull/830)).
+
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
