@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
-import { makeAssistantMessage } from "../helpers";
+import { makeAssistantMessage as makeBaseAssistantMessage } from "./helpers";
+
+function makeAssistantMessage(text: string) {
+	return { ...makeBaseAssistantMessage(), content: [{ type: "text" as const, text }] };
+}
 
 const directories: string[] = [];
 
@@ -39,7 +43,11 @@ async function writeExternalTurn(file: string, directory: string, marker: string
 
 function contextText(manager: SessionManager): string {
 	return manager.buildSessionContext().messages
-		.map(message => (typeof message.content === "string" ? message.content : ""))
+		.map(message =>
+			typeof message.content === "string"
+				? message.content
+				: message.content.filter(block => block.type === "text").map(block => block.text).join(""),
+		)
 		.join("\n");
 }
 
