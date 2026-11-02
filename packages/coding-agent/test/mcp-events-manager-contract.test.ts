@@ -1839,6 +1839,86 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: replacing only the durable cursor/control/provider callbacks does not
+	// change the event consumer generation. A paused event handler must not later
+	// overwrite those more recent external choices. This exercises the real
+	// manager and HTTP protocol, not just setter return values; live delivery
+	// and disk durability remain outside this synthetic contract.
+	it("keeps auxiliary cursor, control and resume provider owned by their latest external writer", async () => {
+		const serverName = "auxiliary-setter-external-custody";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const currentGap = Promise.withResolvers<void>();
+		const currentCursor = Promise.withResolvers<void>();
+		const secondPoll = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const committedCursors: Array<string | null> = [];
+		let staleCursorCalls = 0;
+		let staleControlCalls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("held-auxiliary-callback", "first-occurrence")],
+					cursor: "first-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				secondPoll.resolve();
+				return { events: [], cursor: "second-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setEventCursorProvider(() => "initial-resume");
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "held-auxiliary-callback") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// These setters run inside the still-active old callback scope;
+			// only the auxiliary writers, not the event handler, were replaced.
+			manager.setOnEventCursor(() => { staleCursorCalls++; });
+			manager.setOnEventControl(() => { staleControlCalls++; });
+			manager.setEventCursorProvider(() => "stale-resume");
+			oldFinished.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "auxiliary-writer initial connection");
+			await withinHandlerChange(oldEntered.promise, "held auxiliary callback");
+			// Deliberately do NOT call setOnEvent: its unrelated global
+			// revision already fences stale callbacks in other tests.
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				committedCursors.push(cursor);
+				if (cursor === "first-page") currentCursor.resolve();
+			});
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "first-page") currentGap.resolve();
+			});
+			manager.setEventCursorProvider(() => "successor-resume");
+			releaseOld.resolve();
+			await withinHandlerChange(oldFinished.promise, "late auxiliary setter attempts");
+			await withinHandlerChange(Promise.all([currentGap.promise, currentCursor.promise]), "current auxiliary callbacks");
+			expect(staleCursorCalls).toBe(0);
+			expect(staleControlCalls).toBe(0);
+			expect(committedCursors).toContain("first-page");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondPoll.promise, "reenrollment using successor resume cursor");
+			expect(requestedCursors).toEqual(["initial-resume", "successor-resume"]);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "auxiliary-writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
