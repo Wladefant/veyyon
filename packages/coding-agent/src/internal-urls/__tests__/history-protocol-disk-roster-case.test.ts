@@ -232,4 +232,78 @@ describe("history:// case-folded disk roster", () => {
 		}
 	});
 
+
+	it("keeps discoverable registered advisor transcripts out of every agent-facing history path", async () => {
+		const temp = TempDir.createSync("@veyyon-history-advisor-private-");
+		try {
+			registerArtifactsDir(temp.path());
+			await createDiskArchive(temp.path(), "Guide");
+			await createDiskArchive(temp.path(), "Helper");
+			AgentRegistry.global().register({
+				id: "Guide",
+				displayName: "Guide",
+				kind: "advisor",
+				session: null,
+				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
+				status: "parked",
+			});
+			register("Scout", true);
+
+			const handler = new HistoryProtocolHandler();
+			const index = (await handler.resolve(parseInternalUrl("history://"))).content;
+			expect(index).not.toContain("| Guide |");
+			expect(index).toContain("| Scout |");
+			expect(index).toContain("| Helper | on disk |");
+			const names = (await handler.complete()).map(item => item.value);
+			expect(names).not.toContain("Guide");
+			expect(names).toContain("Scout");
+			expect(names).toContain("Helper");
+
+			// The same private ID must not be reintroduced by case-insensitive
+			// disk fallback, for either markdown or stored exact/search routes.
+			for (const id of ["Guide", "guide", "GUIDE"]) {
+				for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
+					await expect(handler.resolve(parseInternalUrl(`history://${id}${suffix}`)))
+						.rejects.toThrow("Unknown agent");
+				}
+			}
+			const archived = await handler.resolve(parseInternalUrl("history://Helper?entry=saved-entry&limit=1000"));
+			expect((JSON.parse(archived.content) as { status: string }).status).toBe("ok");
+			expect((await handler.resolve(parseInternalUrl("history://Scout"))).notes)
+				.toContain("Source: live session");
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it("preserves an exact live visible ID even when a separate advisor has the folded spelling", async () => {
+		const temp = TempDir.createSync("@veyyon-history-advisor-folded-");
+		try {
+			registerArtifactsDir(temp.path());
+			await createDiskArchive(temp.path(), "Guide");
+			AgentRegistry.global().register({
+				id: "Guide",
+				displayName: "Guide",
+				kind: "advisor",
+				session: null,
+				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
+				status: "parked",
+			});
+			register("guide", true);
+
+			const handler = new HistoryProtocolHandler();
+			const index = (await handler.resolve(parseInternalUrl("history://"))).content;
+			expect(index).toContain("| guide |");
+			expect(index).not.toContain("| Guide |");
+			expect((await handler.complete()).map(item => item.value)).toEqual(["guide"]);
+			expect((await handler.resolve(parseInternalUrl("history://guide"))).notes)
+				.toContain("Source: live session");
+			for (const name of ["Guide", "GUIDE"]) {
+				await expect(handler.resolve(parseInternalUrl(`history://${name}`)))
+					.rejects.toThrow("Unknown agent");
+			}
+		} finally {
+			await temp.remove();
+		}
+	});
 });
