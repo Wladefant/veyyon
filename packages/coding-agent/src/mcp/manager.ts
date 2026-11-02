@@ -1486,12 +1486,15 @@ export class MCPManager {
 				// A later live refresh owns this catalog, but the original
 				// transport is still connected and belongs in the startup summary.
 				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) {
-					if (this.#connections.has(name)) connectedServers.add(name);
-					// The newer refresh may already have published before this startup
-					// aggregator runs. Preserve its exact owner tools instead of
-					// resetting the registry to the superseded initial snapshot.
-					for (const tool of this.#tools) {
-						if (tool.mcpServerName === name) allTools.push(tool);
+					const live = this.#connections.get(name);
+					// The newer refresh may already have published, but an explicit
+					// disconnect can retire that connection before this startup
+					// aggregator runs. Never re-expose tools after retirement.
+					if (live && !this.#retiredToolConnections.has(live)) {
+						connectedServers.add(name);
+						for (const tool of this.#tools) {
+							if (tool.mcpServerName === name) allTools.push(tool);
+						}
 					}
 					continue;
 				}
