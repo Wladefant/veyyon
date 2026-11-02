@@ -50,6 +50,45 @@ describe("cloud checkpoints", () => {
 		expect(filterCheckpointFiles(files).map(file => file.path)).toEqual(safePaths);
 	});
 
+	test("matching and fallback explicit source fences preserve legitimate handoff", async () => {
+		for (const withCachedSource of [true, false]) {
+			let transfers = 0;
+			const fake: CheckpointFetch = async (input, init) => {
+				const path = new URL(String(input)).pathname;
+				if (path.endsWith("/lease")) return Response.json({
+					ownerNode: "owner-a", epoch: 3, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+				if (path.endsWith("/transfer")) {
+					transfers++;
+					const body = JSON.parse(String(init?.body));
+					expect(body).toMatchObject({
+						ownerNode: "owner-a", epoch: 3, targetNode: "target-node",
+						transferId: "transfer-id",
+					});
+					return Response.json({
+						ownerNode: "target-node", targetNode: "target-node",
+						transferId: "transfer-id", epoch: 4,
+						expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+					});
+				}
+				throw new Error("Unexpected authority endpoint");
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test",
+				key: new Uint8Array(32), fetch: fake,
+			});
+			if (withCachedSource) await client.acquireLease("s", "owner-a");
+			const transferred = await client.transferLease(
+				"s", "target-node", "c".repeat(16), "transfer-id",
+				{ ownerNode: "owner-a", epoch: 3 },
+			);
+			expect(transferred).toMatchObject({ ownerNode: "target-node", epoch: 4 });
+			expect(transfers).toBe(1);
+			await expect(client.assertWritable("s", 3, "owner-a")).rejects.toThrow(/lease lost/);
+		}
+	});
+
 	test("an old explicit transfer fence cannot spend a newer shared-client owner", async () => {
 		let transfers = 0;
 		const fake: CheckpointFetch = async (input, init) => {
