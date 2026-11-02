@@ -895,6 +895,11 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		// Reverse of the existing single-first test: this second public API
 		// call must join the bulk-owned A close, not call transport.close again.
 		single = manager.disconnectServer(names.a);
+		// Let the explicit call reach its transport-close boundary before
+		// unblocking bulk. Otherwise the old duplicate close might be hidden
+		// by bulk clearing the registry first: a green-by-luck negative.
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(aCloseCalls).toBe(1);
 		releaseAClose.resolve();
 		await withinConnectBoundary(Promise.all([bulk, single]), "bulk-first joined disconnect");
 		expect(aCloseCalls).toBe(1);
