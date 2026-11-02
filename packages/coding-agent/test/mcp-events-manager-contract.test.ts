@@ -1919,6 +1919,71 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: an active callback can legitimately choose a newer cursor,
+	// control, and resume handler twice in one turn. A generation guard that
+	// does not update the current callback's own scope rejects the second
+	// change while wrongly treating the first callback as authoritative.
+	it("lets a current event callback replace its auxiliary writers twice", async () => {
+		const serverName = "auxiliary-setter-current-custody";
+		const gapObserved = Promise.withResolvers<void>();
+		const cursorObserved = Promise.withResolvers<void>();
+		const secondPoll = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const currentCursors: Array<string | null> = [];
+		let obsoleteCursorInvocations = 0;
+		let obsoleteControlInvocations = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("current-auxiliary-writer", "self-event-cursor")],
+					cursor: "self-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				secondPoll.resolve();
+				return { events: [], cursor: "restarted-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setEventCursorProvider(() => "initial-resume");
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "current-auxiliary-writer") return;
+			manager.setOnEventCursor(() => { obsoleteCursorInvocations++; });
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				currentCursors.push(cursor);
+				if (cursor === "self-page") cursorObserved.resolve();
+			});
+			manager.setOnEventControl(() => { obsoleteControlInvocations++; });
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "self-page") gapObserved.resolve();
+			});
+			manager.setEventCursorProvider(() => "discarded-resume");
+			manager.setEventCursorProvider(() => "latest-resume");
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "current auxiliary writer connection");
+			await withinHandlerChange(Promise.all([gapObserved.promise, cursorObserved.promise]), "current auxiliary callbacks");
+			expect(obsoleteCursorInvocations).toBe(0);
+			expect(obsoleteControlInvocations).toBe(0);
+			expect(currentCursors).toContain("self-page");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondPoll.promise, "current auxiliary provider reenrollment");
+			expect(requestedCursors).toEqual(["initial-resume", "latest-resume"]);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "current auxiliary writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 	// WHY: a bad callback URI was logged but the manager left an active event
 	// subscription with no registration, retry or usable cursor. The consumer
 	// must see an explicit failed state rather than a phantom live feed.
