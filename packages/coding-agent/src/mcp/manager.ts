@@ -1444,7 +1444,9 @@ export class MCPManager {
 								if (
 									this.#connections.get(name) !== connection ||
 									this.#retiredToolConnections.has(connection)
-								) return;
+								) {
+									return;
+								}
 								if (connection.tools !== undefined) {
 									this.#lastErrors.delete(name);
 									onStatus?.({ type: "connected", serverName: name });
@@ -1452,11 +1454,16 @@ export class MCPManager {
 								} else {
 									const message = errorMessage(recoveryError ?? error);
 									this.#lastErrors.set(name, message);
-									onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
+									onStatus?.({
+										type: "failed",
+										serverName: name,
+										error: message,
+										foreign: this.#isForeignServer(name),
+									});
 								}
 							};
 							const refresh = this.#pendingToolRefreshes.get(name);
-							const finished = refresh?.connection === connection
+							const finished = refresh && refresh.connection === connection
 								? refresh.promise.then(() => settleRecovery(), recoveryError => settleRecovery(recoveryError))
 								: settleRecovery();
 							void finished.catch(recoveryError => {
