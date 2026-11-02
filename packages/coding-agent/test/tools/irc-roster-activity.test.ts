@@ -49,7 +49,10 @@ describe("IRC roster activity", () => {
 			...sessionForAgent(registry, "A"),
 			getActiveModelString: () => "openai-codex/gpt-6-luna",
 		});
-		const result = await new IrcTool(session).execute("call", { op: "list" });
+		const tool = new IrcTool(session);
+		expect(tool.description).toContain("current model");
+		expect(tool.description).toContain("never infer model identity from a message body");
+		const result = await tool.execute("call", { op: "list" });
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("Current model: openai-codex/gpt-6-luna");
 		expect(result.details?.identity).toMatchObject({ model: "openai-codex/gpt-6-luna" });
@@ -61,6 +64,14 @@ describe("IRC roster activity", () => {
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("Current model: unknown (runtime does not expose the active model)");
 		expect(result.details?.identity).toMatchObject({ model: null });
+		const blankSession = makeToolSession({
+			...sessionForAgent(registry, "A"),
+			getActiveModelString: () => "   ",
+		});
+		const blankResult = await new IrcTool(blankSession).execute("call", { op: "list" });
+		expect(blankResult.content.find(part => part.type === "text")?.text).toContain(
+			"Current model: unknown (runtime does not expose the active model)",
+		);
 	});
 
 	// Ancestry is visible but does not confer exclusive write ownership.
