@@ -2091,12 +2091,14 @@ export class SessionManager {
 		this.#startLifecycle("created");
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
-		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		// A new file, so another writer's tail on the old one is not ours to carry,
 		// and the history we brought along is.
 		this.#forgetForeignWriter();
 		await this.#rewriteAtomically();
+		// Do not publish a terminal recovery pointer to a nonexistent fork if the
+		// post-preflight JSONL rewrite fails. The old pointer remains recoverable.
+		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
