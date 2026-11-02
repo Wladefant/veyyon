@@ -90,6 +90,8 @@ export class CheckpointClient {
 	#fetch: CheckpointFetch;
 	#timeout: number;
 	#leases = new Map<string, CheckpointLease>();
+	// Admission tokens fence out-of-order authority replies on a shared client.
+	#leaseAdmissions = new Map<string, symbol>();
 	#lost = new Set<string>();
 	#pendingCommits = new Map<string, { ciphertext: Uint8Array; payloadHash: string; idempotencyKey: string }>();
 	#activeCommits = new Map<string, { payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }>();
@@ -161,24 +163,45 @@ export class CheckpointClient {
 			return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, received))) as T;
 		});
 	}
+	#beginLeaseAdmission(sessionId: string): symbol {
+		const attempt = Symbol("checkpoint lease admission");
+		this.#leaseAdmissions.set(sessionId, attempt);
+		return attempt;
+	}
+	#assertLeaseAdmissionCurrent(sessionId: string, attempt: symbol): void {
+		if (this.#leaseAdmissions.get(sessionId) !== attempt)
+			throw new Error("Checkpoint lease admission superseded");
+	}
+	#finishLeaseAdmission(sessionId: string, attempt: symbol): void {
+		if (this.#leaseAdmissions.get(sessionId) === attempt)
+			this.#leaseAdmissions.delete(sessionId);
+	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
-		const lease = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ ownerNode }),
-		});
-		if (!lease || lease.ownerNode !== ownerNode) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority lease owner mismatch");
+		const attempt = this.#beginLeaseAdmission(sessionId);
+		try {
+			const lease = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ownerNode }),
+			});
+			// A later admission/claim (or explicit lease loss) wins even if this
+			// older request reports a nominally valid or invalid authority grant.
+			this.#assertLeaseAdmissionCurrent(sessionId, attempt);
+			if (!lease || lease.ownerNode !== ownerNode) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority lease owner mismatch");
+			}
+			if (!hasLiveLeaseFence(lease)) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority lease fence invalid");
+			}
+			this.#leases.set(sessionId, lease);
+			this.#lost.delete(sessionId);
+			return lease;
+		} finally {
+			this.#finishLeaseAdmission(sessionId, attempt);
 		}
-		if (!hasLiveLeaseFence(lease)) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority lease fence invalid");
-		}
-		this.#leases.set(sessionId, lease);
-		this.#lost.delete(sessionId);
-		return lease;
 	}
 	async #redeemTransfer(
 		sessionId: string,
@@ -201,55 +224,61 @@ export class CheckpointClient {
 		const capability = "claimToken" in credential ? credential.claimToken : credential.resumeToken;
 		if (typeof capability !== "string" || capability.length < 16 || capability.length > 128)
 			throw new Error("Invalid checkpoint transfer capability");
-		const result = await this.#request<CheckpointLease & { resumeToken: string }>(
-			`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
-			{
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					targetNode,
-					transferId,
-					...credential,
-					epoch: transferEpoch,
-					ownerNode: runtimeOwner,
-				}),
-			},
-		);
-		if (!result || result.ownerNode !== runtimeOwner) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority lease owner mismatch");
+		const attempt = this.#beginLeaseAdmission(sessionId);
+		try {
+			const result = await this.#request<CheckpointLease & { resumeToken: string }>(
+				`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						targetNode,
+						transferId,
+						...credential,
+						epoch: transferEpoch,
+						ownerNode: runtimeOwner,
+					}),
+				},
+			);
+			this.#assertLeaseAdmissionCurrent(sessionId, attempt);
+			if (!result || result.ownerNode !== runtimeOwner) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority lease owner mismatch");
+			}
+			// Bind the one-use grant to the transfer named in the request before
+			// publishing its lease as locally writable. The authority echoes both.
+			if (result.targetNode !== targetNode || result.transferId !== transferId) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority transfer grant identity mismatch");
+			}
+			if (
+				typeof result.resumeToken !== "string" ||
+				result.resumeToken.length < 16 ||
+				result.resumeToken.length > 128
+			) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority did not issue a valid resume capability");
+			}
+			// A transfer grant is written to durable ownership metadata before the
+			// first ordinary admission check. Refuse an expired/invalid authority
+			// fence here, before a one-time claim is replaced by a resume marker.
+			const expiresAt = typeof result.expiresAt === "string" ? Date.parse(result.expiresAt) : Number.NaN;
+			if (
+				!Number.isSafeInteger(result.epoch) ||
+				result.epoch < transferEpoch ||
+				!Number.isFinite(expiresAt) ||
+				expiresAt <= Date.now()
+			) {
+				this.loseLease(sessionId);
+				throw new Error("Checkpoint authority transfer grant has invalid lease fence");
+			}
+			const { resumeToken, ...lease } = result;
+			this.#leases.set(sessionId, lease);
+			this.#lost.delete(sessionId);
+			return { lease, resumeToken };
+		} finally {
+			this.#finishLeaseAdmission(sessionId, attempt);
 		}
-		// Bind the one-use grant to the transfer named in the request before
-		// publishing its lease as locally writable. The authority echoes both.
-		if (result.targetNode !== targetNode || result.transferId !== transferId) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority transfer grant identity mismatch");
-		}
-		if (
-			typeof result.resumeToken !== "string" ||
-			result.resumeToken.length < 16 ||
-			result.resumeToken.length > 128
-		) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority did not issue a valid resume capability");
-		}
-		// A transfer grant is written to durable ownership metadata before the
-		// first ordinary admission check. Refuse an expired/invalid authority
-		// fence here, before a one-time claim is replaced by a resume marker.
-		const expiresAt = typeof result.expiresAt === "string" ? Date.parse(result.expiresAt) : Number.NaN;
-		if (
-			!Number.isSafeInteger(result.epoch) ||
-			result.epoch < transferEpoch ||
-			!Number.isFinite(expiresAt) ||
-			expiresAt <= Date.now()
-		) {
-			this.loseLease(sessionId);
-			throw new Error("Checkpoint authority transfer grant has invalid lease fence");
-		}
-		const { resumeToken, ...lease } = result;
-		this.#leases.set(sessionId, lease);
-		this.#lost.delete(sessionId);
-		return { lease, resumeToken };
 	}
 	async claimTransfer(
 		sessionId: string,
@@ -446,6 +475,8 @@ export class CheckpointClient {
 		}
 	}
 	loseLease(sessionId: string): void {
+		// Explicit revocation also invalidates replies that are still in flight.
+		this.#leaseAdmissions.delete(sessionId);
 		this.#leases.delete(sessionId);
 		this.#lost.add(sessionId);
 	}

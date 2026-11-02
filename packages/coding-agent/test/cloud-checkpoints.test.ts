@@ -31,6 +31,84 @@ function commitHeadForRequest(init?: RequestInit) {
 }
 
 describe("cloud checkpoints", () => {
+	test("a late valid or invalid lease reply cannot change a newer owner's fence", async () => {
+		for (const staleReply of ["valid", "wrong-owner"] as const) {
+			let releaseOld!: (response: Response) => void;
+			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			const grant = (ownerNode: string, epoch: number) => ({
+				ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			});
+			const fake: CheckpointFetch = async (_input, init) => {
+				const { ownerNode } = JSON.parse(String(init?.body));
+				return ownerNode === "owner-old"
+					? pendingOld
+					: Response.json(grant("owner-new", 9));
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test",
+				key: new Uint8Array(32), fetch: fake,
+			});
+			const earlier = client.acquireLease("s", "owner-old");
+			const later = await client.acquireLease("s", "owner-new");
+			const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+			releaseOld(Response.json(grant(staleReply === "valid" ? "owner-old" : "foreign-owner", 1)));
+			await rejection;
+			expect(later).toMatchObject({ ownerNode: "owner-new", epoch: 9 });
+			await expect(client.assertWritable("s", 9, "owner-new")).resolves.toBeUndefined();
+			await expect(client.assertWritable("s", 1, "owner-old")).rejects.toThrow(/lease lost/);
+		}
+	});
+
+	test("a late transfer-claim reply cannot overwrite or invalidate a newer lease", async () => {
+		for (const staleReply of ["valid", "wrong-transfer"] as const) {
+			let releaseOld!: (response: Response) => void;
+			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			const fake: CheckpointFetch = async input => {
+				const path = new URL(String(input)).pathname;
+				if (path.endsWith("/claim")) return pendingOld;
+				if (path.endsWith("/lease")) return Response.json({
+					ownerNode: "owner-new", epoch: 9, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+				throw new Error("Unexpected authority endpoint");
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test",
+				key: new Uint8Array(32), fetch: fake,
+			});
+			const earlier = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-old");
+			await client.acquireLease("s", "owner-new");
+			const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+			releaseOld(Response.json({
+				ownerNode: "owner-old", targetNode: "target-node",
+				transferId: staleReply === "valid" ? "transfer-id" : "different-transfer",
+				resumeToken: "r".repeat(16), epoch: 5,
+				expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+			}));
+			await rejection;
+			await expect(client.assertWritable("s", 9, "owner-new")).resolves.toBeUndefined();
+		}
+	});
+
+	test("explicit lease loss invalidates a still-pending admission response", async () => {
+		let releaseOld!: (response: Response) => void;
+		const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test",
+			key: new Uint8Array(32), fetch: async () => pendingOld,
+		});
+		const earlier = client.acquireLease("s", "owner-old");
+		client.loseLease("s");
+		const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+		releaseOld(Response.json({
+			ownerNode: "owner-old", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		}));
+		await rejection;
+		await expect(client.assertWritable("s", 1, "owner-old")).rejects.toThrow(/lease lost/);
+	});
+
 	test("commit preflight refuses impossible cloud identities and head numbers without uploads", async () => {
 		const requests: string[] = [];
 		const fake: CheckpointFetch = async (input, init) => {
