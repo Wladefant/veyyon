@@ -235,9 +235,13 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			const release = Promise.withResolvers<void>();
 			const firstCapacity = Promise.withResolvers<void>();
 			const admittedAfterRelease = Promise.withResolvers<void>();
+			const observedCapacityBarrier = Promise.withResolvers<void>();
 			let started = 0;
 			const errors: string[] = [];
 			transport.onError = error => errors.push(error.message);
+			transport.onNotification = (_method, params) => {
+				if ((params as { source?: string })?.source === "capacity-fence") observedCapacityBarrier.resolve();
+			};
 			transport.onRequest = async () => {
 				started++;
 				if (started === 32) firstCapacity.resolve();
@@ -250,7 +254,15 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 				sendFrame(Array.from({ length: 32 }, (_, index) => makeRequest(index)));
 				await bounded(firstCapacity.promise, "32 pending SSE request handlers");
 				sendFrame(makeRequest(99));
-				await Promise.resolve();
+				// The next ordered SSE notification is a real transport
+				// barrier. It prevents the capacity assertion passing merely
+				// because the over-budget request has not reached the client.
+				sendFrame({
+					jsonrpc: "2.0",
+					method: "notifications/tools/list_changed",
+					params: { source: "capacity-fence" },
+				});
+				await bounded(observedCapacityBarrier.promise, "over-capacity SSE frame processed");
 				expect(started).toBe(32);
 				release.resolve();
 
