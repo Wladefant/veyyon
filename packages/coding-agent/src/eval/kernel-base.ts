@@ -634,6 +634,40 @@ export async function releaseKernel(
 }
 
 /**
+ * Drain a kernel's untrusted OS stderr before its caller writes diagnostics.
+ * One producer guard spans byte chunks; no raw fragment reaches onSafeOutput.
+ * Missing/failed reads do not flush held prefixes into a persistent sink.
+ */
+export async function drainKernelStderr(
+	stream: ReadableStream<Uint8Array>,
+	onSafeOutput: (safeText: string) => void,
+): Promise<void> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	const guard = new ProducerOutputGuard();
+	const publish = (safe: string): void => {
+		if (safe.trim()) onSafeOutput(safe);
+	};
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			publish(guard.push(decoder.decode(value, { stream: true })));
+		}
+		// Finish a split UTF-8 code point and the final (possibly partial) record.
+		publish(guard.push(decoder.decode()) + guard.finish());
+	} catch {
+		// Reader errors must not flush a potentially incomplete inventory prefix.
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {
+			/* ignore */
+		}
+	}
+}
+
+/**
  * Shared subprocess-backed kernel machinery for the language runners. Each
  * language subclasses this, supplying its binary/runner via a static `start()`
  * and its wire protocol via {@link BaseKernelOptions.buildPayload}. The IPC loop
@@ -979,37 +1013,12 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	}
 
 	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
-		const reader = stream.getReader();
-		const decoder = new TextDecoder();
-		// Stderr may contain raw user/runtime output, not only trusted runner diagnostics.
-		// One guard for the entire stream must classify records across arbitrary OS chunks
-		// BEFORE logger persistence; a fresh per-chunk sanitizer would leak split rows.
-		const guard = new ProducerOutputGuard();
-		const publish = (visible: string): void => {
-			if (visible.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: visible });
-		};
-		const loop = async () => {
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					publish(guard.push(decoder.decode(value, { stream: true })));
-				}
-				// TextDecoder can hold a split UTF-8 sequence; finish it and classify the
-				// last partial record before releasing any diagnostic to the logger.
-				publish(guard.push(decoder.decode()) + guard.finish());
-			} catch {
-				// A failed stderr reader must never flush a potentially incomplete prefix.
-			} finally {
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
-			}
-		};
-		void loop();
+		// The logger sink must never see the unclassified byte stream.
+		void drainKernelStderr(stream, visible => {
+			logger.warn(`${this.#options.languageName} runner stderr`, { text: visible });
+		});
 	}
+
 	async #handleLine(line: string): Promise<void> {
 		if (!line.trim()) return;
 		let frame: Frame;
