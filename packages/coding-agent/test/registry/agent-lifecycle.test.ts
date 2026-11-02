@@ -80,7 +80,15 @@ describe("AgentLifecycleManager", () => {
 		sessionFile: string | null = `/tmp/${id}.jsonl`,
 		parentId?: string,
 	) {
-		return registry.register({ id, displayName: "task", kind: "sub", session, sessionFile, parentId, status: "idle" });
+		return registry.register({
+			id,
+			displayName: "task",
+			kind: "sub",
+			session,
+			sessionFile,
+			parentId,
+			status: "idle",
+		});
 	}
 
 	function registerReportingParent(): string {
