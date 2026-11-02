@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
@@ -64,6 +65,36 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		enableLsp: false,
 	};
 
+	it("records terminal registry outcomes when a run completes", async () => {
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const session = createMockSession(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "tool-terminal-outcome"));
+		});
+		mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "agent-terminal-completed",
+			settings,
+		});
+
+		expect(AgentRegistry.global().get("agent-terminal-completed")?.terminalOutcome).toBe("completed");
+	});
+
+	it("records a stalled terminal outcome after recovery fails", async () => {
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const handle = createMockSessionHandle(() => {}, { hangUntilAbort: true });
+		mockCreateAgentSession(handle.session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "agent-stalled-terminal-outcome",
+			settings,
+		});
+
+		expect(result.abortReason).toContain("stalled");
+		expect(AgentRegistry.global().get("agent-stalled-terminal-outcome")?.terminalOutcome).toBe("stalled");
+	});
 	it("aborts a stalled agent and surfaces a runtime-limit reason", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 1_000 });
 		const handle = createMockSessionHandle(() => {}, { hangUntilAbort: true });

@@ -724,4 +724,103 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Waking")).toBeUndefined();
 		expect(lifecycle.has("Waking")).toBe(false);
 	});
+	it("prunes parked terminal agents after the fixed five-minute retention TTL", async () => {
+		vi.useFakeTimers();
+		const parked = registry.register({
+			id: "Expired",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/Expired.jsonl",
+			status: "parked",
+		});
+		registry.recordTerminalOutcome("Expired", "completed");
+		expect(parked.terminalOutcome).toBe("completed");
+		lifecycle.adopt("Expired", { idleTtlMs: 0 });
+
+		vi.advanceTimersByTime(5 * 60_000 - 1);
+		await flushAsync();
+		expect(registry.get("Expired")).toBe(parked);
+		vi.advanceTimersByTime(1);
+		await flushAsync();
+
+		expect(registry.get("Expired")).toBeUndefined();
+		expect(parked.terminalOutcome).toBe("completed");
+		await expect(lifecycle.ensureLive("Expired")).rejects.toThrow(/history:\/\/Expired/);
+	});
+
+	it("marks an unfinished parked child stalled before cleaning up its missing-parent orphan", async () => {
+		const parent = registry.register({
+			id: "Gone",
+			displayName: "parent",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
+		const child = registry.register({
+			id: "Orphan",
+			displayName: "child",
+			kind: "sub",
+			parentId: "Gone",
+			session: null,
+			sessionFile: "/tmp/Orphan.jsonl",
+			status: "parked",
+		});
+		registry.unregister(parent.id);
+		await flushAsync();
+
+		expect(registry.get("Orphan")).toBeUndefined();
+		expect(child.terminalOutcome).toBe("stalled");
+		expect(child.terminalOutcomeReason).toMatch(/parent/i);
+	});
+
+	it("does not classify root sessions without a parent as missing-parent orphans", async () => {
+		const root = registry.register({
+			id: "main:root",
+			displayName: "root",
+			kind: "main",
+			session: null,
+			status: "parked",
+		});
+		await lifecycle.cleanupParkedOrphans();
+		expect(registry.get(root.id)).toBe(root);
+	});
+
+	it("reports unfinished parked assignments as stalled before ordinary pruning", async () => {
+		const parked = registry.register({
+			id: "Unfinished",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/Unfinished.jsonl",
+			status: "parked",
+		});
+		await lifecycle.prune("Unfinished");
+
+		expect(parked.terminalOutcome).toBe("stalled");
+		expect(parked.terminalOutcomeReason).toMatch(/pruned|pruning/i);
+		expect(registry.get("Unfinished")).toBeUndefined();
+	});
+
+	it("rechecks restored parked refs for missing parents after allowing registration to settle", async () => {
+		vi.useFakeTimers();
+		AgentLifecycleManager.resetGlobalForTests();
+		lifecycle = new AgentLifecycleManager(registry);
+		const orphan = registry.register({
+			id: "RestoredOrphan",
+			displayName: "task",
+			kind: "sub",
+			parentId: "AbsentParent",
+			session: null,
+			sessionFile: "/tmp/RestoredOrphan.jsonl",
+			status: "parked",
+		});
+		expect(registry.get(orphan.id)).toBe(orphan);
+
+		vi.advanceTimersByTime(30_000);
+		await flushAsync();
+
+		expect(registry.get(orphan.id)).toBeUndefined();
+		expect(orphan.terminalOutcome).toBe("stalled");
+	});
 });

@@ -5,7 +5,7 @@
  * It does not prove real crashes, cross-process coordination, exact-once external actions, or model behavior.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -15,7 +15,7 @@ import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import * as executor from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
-import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import * as atomicWriter from "@veyyon/utils/atomic-write";
 import { TempDir } from "@veyyon/utils";
 import { makeToolSession, type ToolSessionOverrides } from "../helpers/tool-session";
@@ -39,6 +39,7 @@ function result(options: executor.ExecutorOptions): SingleResult {
 		durationMs: 1,
 		tokens: 0,
 		requests: 1,
+		cancellationAcknowledged: true,
 	};
 }
 
@@ -125,14 +126,56 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(2);
 		expect(refused.isError).toBe(true);
 		expect(JSON.stringify(refused.content)).toContain("successor-claimed");
+		const directory = dir.join("parent");
+		const claim = JSON.parse(await fs.readFile(path.join(directory, `${createHash("sha256").update(predecessor).digest("hex")}.checkpoint.json.claim`), "utf8"));
+		expect(claim.generation).toBe(1);
+		expect(claim.predecessorId).toBe(predecessor);
 	});
+
 
 	it("fails closed for missing checkpoints and path-like IDs", async () => {
 		for (const predecessor of ["Missing", "../escape", path.resolve(dir.path(), "escape")]) {
 			const refused = await dispatch("Invalid", predecessor);
 			expect(refused.isError).toBe(true);
+			expect(JSON.stringify(refused.content)).toContain("successor-checkpoint-unavailable");
+			expect(JSON.stringify(refused.content)).toContain("spawn a fresh lane");
+			expect(JSON.stringify(refused.content)).toContain(`history://${predecessor}`);
 		}
 		expect(executed).toHaveLength(0);
+	});
+
+	it("refuses an idle predecessor that has no settled cancellation outcome", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		AgentRegistry.global().register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "idle",
+			session: null,
+			sessionFile: null,
+		});
+		const refused = await dispatch("Unsettled", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("successor-predecessor-active");
+		expect(executed).toHaveLength(1);
+	});
+
+	it("refuses a predecessor with a live session even after terminal outcome recording", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		AgentRegistry.global().register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			session: {} as AgentSession,
+			sessionFile: null,
+			terminalOutcome: "completed",
+		});
+		const refused = await dispatch("Still live", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("successor-predecessor-active");
+		expect(executed).toHaveLength(1);
 	});
 
 	it("rejects corrupt and unknown-version checkpoints", async () => {
@@ -397,7 +440,7 @@ describe("explicit bounded lane successors", () => {
 		expect(JSON.stringify(failed.details)).toContain("checkpoint disk failure");
 	});
 
-	it("rejects wrong checkpoint identity, required shape and stale version one", async () => {
+	it("rejects wrong checkpoint identity, required shape, and legacy checkpoint versions", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
 		const directory = dir.join("parent");
@@ -408,7 +451,7 @@ describe("explicit bounded lane successors", () => {
 		const invalidCheckpoints: Array<[string, unknown]> = [
 			["wrong agent ID", { ...original, agentId: "Wrong identity" }],
 			["missing required results", { ...original, results: undefined }],
-			["stale version one", { ...original, version: 1 }],
+			["stale version two", { ...original, version: 2 }],
 		];
 		for (const [caseName, invalid] of invalidCheckpoints) {
 			await fs.writeFile(checkpointPath, JSON.stringify(invalid));
@@ -418,6 +461,22 @@ describe("explicit bounded lane successors", () => {
 			expect(executed).toHaveLength(1);
 		}
 	});
+	it("fails closed when predecessor cancellation is not acknowledged", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const directory = dir.join("parent");
+		const file = (await fs.readdir(directory)).find(name => name.endsWith(".checkpoint.json"));
+		if (!file) throw new Error("No durable checkpoint");
+		const checkpointPath = path.join(directory, file);
+		const checkpoint = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+		await fs.writeFile(checkpointPath, JSON.stringify({ ...checkpoint, cancellationAcknowledged: false }));
+
+		const refused = await dispatch("Unacknowledged", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("successor-checkpoint-unavailable");
+		expect(executed).toHaveLength(1);
+	});
+
 
 	it("completes concurrent claims and the third-successor refusal within a deadline", async () => {
 		await dispatch("Original");
@@ -440,5 +499,7 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(1);
 		expect(refused.isError).toBe(true);
 		expect(JSON.stringify(refused.content)).toContain("successor-workflow-changed");
+		expect(JSON.stringify(refused.content)).toContain("spawn a fresh lane");
+		expect(JSON.stringify(refused.content)).toContain(`history://${executed[0].id}`);
 	});
 });
