@@ -420,6 +420,8 @@ export class MCPManager {
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
 	#pendingToolLoads = new Map<string, Promise<ToolLoadResult>>();
+	/** An initial tools/list superseded by a newer notification must never publish or enter the startup snapshot. */
+	#supersededInitialToolLoads = new WeakSet<Promise<ToolLoadResult>>();
 	#sources = new Map<string, SourceMeta>();
 	// Last connection failure per server, retained so `/mcp list` can show *why*
 	// a server is not connected instead of a bare "not connected". Cleared when
@@ -1415,6 +1417,7 @@ export class MCPManager {
 				.then(async ({ connection, serverTools }) => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
+					if (this.#supersededInitialToolLoads.has(toolsPromise)) return;
 					const reconnect = () => this.reconnectServer(name);
 					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 					this.#replaceServerTools(name, customTools);
@@ -1428,6 +1431,7 @@ export class MCPManager {
 				.catch(error => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
+					if (this.#supersededInitialToolLoads.has(toolsPromise)) return;
 					const message = errorMessage(error);
 					this.#lastErrors.set(name, message);
 					onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
@@ -1476,6 +1480,8 @@ export class MCPManager {
 
 			for (const task of connectionTasks) {
 				const { name } = task;
+				// A later live refresh owns this server's catalog now, not the original startup snapshot.
+				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) continue;
 				if (task.tracked.status === "fulfilled") {
 					const value = task.tracked.value;
 					if (!value) continue;
@@ -2111,6 +2117,12 @@ export class MCPManager {
 		// manager-level stale checks can run. Serialize requests for the SAME
 		// live connection; a second notification schedules a newer pass instead
 		// of letting a slow old response roll the catalog backwards.
+		const initialToolLoad = this.#pendingToolLoads.get(name);
+		// The first discovery request also writes connection.tools in client.ts.
+		// Mark it obsolete before yielding, and let it finish before the fresh
+		// request starts. This prevents either cache or registry from going back
+		// to an older initial snapshot when a notification arrives mid-startup.
+		if (initialToolLoad) this.#supersededInitialToolLoads.add(initialToolLoad);
 		const active = this.#pendingToolRefreshes.get(name);
 		if (active?.connection === connection) {
 			active.again = true;
@@ -2122,6 +2134,16 @@ export class MCPManager {
 		this.#pendingToolRefreshes.set(name, state);
 		void (async () => {
 			try {
+				// The startup tools/list request is outside the refresh-only
+				// single-flight map. Drain it before querying fresh tools. A failed
+				// initial request does not prevent a later notification recovery.
+				if (initialToolLoad) {
+					try {
+						await initialToolLoad;
+					} catch {
+						// The queued refresh is still eligible to recover this live connection.
+					}
+				}
 				do {
 					state.again = false;
 					if (this.#retiredToolConnections.has(connection) || this.#connections.get(name) !== connection) break;
