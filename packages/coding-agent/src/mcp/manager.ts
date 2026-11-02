@@ -1500,16 +1500,29 @@ export class MCPManager {
 			}
 		}
 
+		// This call can include only a new subset of servers. Its allTools
+		// array contains only this batch, while #tools also owns tools from
+		// previously connected peers. Replacing the entire registry would
+		// silently drop every peer not in the current connection request (and
+		// an already-connected-only request would empty it).
+		//
+		// Replace exact server owners represented in the current batch, while
+		// preserving other peers and any already-published background tools.
+		// Server ownership comes from MCPTool / DeferredMCPTool metadata, not
+		// the sanitized name prefix (which is not collision-free).
+		const replacingOwners = new Set(
+			allTools.map(tool => tool.mcpServerName).filter((name): name is string => name !== undefined),
+		);
+		const fullCatalog = this.#tools.filter(tool => !replacingOwners.has(tool.mcpServerName ?? ""));
+		fullCatalog.push(...allTools);
 		// Stable sort by name so the order is independent of connection completion.
 		// See `sortMCPToolsByName` for the cache-stability rationale.
-		sortMCPToolsByName(allTools);
-
-		// Update cached tools
-		this.#tools = allTools;
+		sortMCPToolsByName(fullCatalog);
+		this.#tools = fullCatalog;
 		allowBackgroundLogging = true;
 
 		return {
-			tools: allTools,
+			tools: fullCatalog,
 			errors,
 			connectedServers: Array.from(connectedServers),
 			exaApiKeys: [], // Will be populated by discoverAndConnect
