@@ -565,8 +565,10 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 			const args = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
 			throwIfAborted(signal);
 			callAttempted = true;
-			const result = await callTool(this.connection, this.tool.name, args, { signal });
-			return buildResult(result, this.connection.name, this.tool.name, provider, providerName, rawParams);
+			// Argument expansion can yield while another explicit call reconnects;
+			// this invocation dispatches only on the connection it captured.
+			const result = await callTool(attemptedConnection, this.tool.name, args, { signal });
+			return buildResult(result, attemptedConnection.name, this.tool.name, provider, providerName, rawParams);
 		} catch (error) {
 			rethrowIfAborted(error, signal);
 			if (callAttempted && mcpFailureWarrantsReconnect(error)) {
