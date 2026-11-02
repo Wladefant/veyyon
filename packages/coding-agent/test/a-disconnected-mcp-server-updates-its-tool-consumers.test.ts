@@ -421,7 +421,7 @@ async function exerciseInitialRefreshRace(initialRejects: boolean): Promise<void
 	manager.setOnToolsChanged(tools => observed.push(tools.map(tool => tool.name)));
 	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
 		const expired = Promise.withResolvers<never>();
-		const timer = setTimeout(() => expired.reject(new Error("MCP " + phase + " did not settle")), 8_000);
+		const timer = setTimeout(() => expired.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
 		try {
 			return await Promise.race([work, expired.promise]);
 		} finally {
@@ -486,7 +486,7 @@ async function exerciseInitialRefreshRace(initialRejects: boolean): Promise<void
 	server.off("error", listening.reject);
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
-	const config = { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/mcp" };
+	const config = { type: "http" as const, url: `http://127.0.0.1:${address.port}/mcp` };
 	let connecting: ReturnType<MCPManager["connectServers"]> | undefined;
 	let refreshing: Promise<void> | undefined;
 	let restoreRequest: (() => void) | undefined;
@@ -550,5 +550,13 @@ async function exerciseInitialRefreshRace(initialRejects: boolean): Promise<void
 	}
 }
 
-it("a newer refresh supersedes a successful pending initial tool discovery", () => exerciseInitialRefreshRace(false), 30_000);
-it("a queued refresh recovers initial list failure and reports healthy startup", () => exerciseInitialRefreshRace(true), 30_000);
+it(
+	"a newer refresh supersedes a successful pending initial tool discovery",
+	() => exerciseInitialRefreshRace(false),
+	30_000,
+);
+it(
+	"a queued refresh recovers initial list failure and reports healthy startup",
+	() => exerciseInitialRefreshRace(true),
+	30_000,
+);
