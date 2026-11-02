@@ -149,6 +149,41 @@ describe("cloud checkpoints", () => {
 		}
 	});
 
+	test("a pending one-use claim blocks competing claims, leases and transfers before dispatch", async () => {
+		let releaseGrant!: (result: Response) => void;
+		const pendingGrant = new Promise<Response>(resolve => { releaseGrant = resolve; });
+		const requests: string[] = [];
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop()!;
+			requests.push(action);
+			if (action === "claim") return pendingGrant;
+			throw new Error(`Unexpected overlapping authority request: ${action}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test",
+			key: new Uint8Array(32), fetch: fake,
+		});
+		const primary = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-a");
+		await expect(client.claimTransfer(
+			"s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-b",
+		)).rejects.toThrow(/transfer admission already in flight/);
+		await expect(client.acquireLease("s", "owner-b")).rejects.toThrow(/transfer admission already in flight/);
+		await expect(client.transferLease(
+			"s", "target-node", "c".repeat(16), "transfer-id",
+			{ ownerNode: "owner-a", epoch: 4 },
+		)).rejects.toThrow(/transfer admission already in flight/);
+		expect(requests).toEqual(["claim"]);
+		releaseGrant(Response.json({
+			ownerNode: "owner-a", targetNode: "target-node", transferId: "transfer-id",
+			resumeToken: "r".repeat(16), epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		}));
+		const granted = await primary;
+		expect(granted.resumeToken).toBe("r".repeat(16));
+		await expect(client.assertWritable("s", 5, "owner-a")).resolves.toBeUndefined();
+		expect(requests).toEqual(["claim"]);
+	});
+
 	test("two actual guards retain winner admission and renewal after late former lease", async () => {
 		for (const staleReply of ["valid", "invalid"] as const) {
 			let releaseOld!: (reply: Response) => void;

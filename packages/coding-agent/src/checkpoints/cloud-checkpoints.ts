@@ -92,6 +92,8 @@ export class CheckpointClient {
 	#leases = new Map<string, CheckpointLease>();
 	// Admission tokens fence out-of-order authority replies on a shared client.
 	#leaseAdmissions = new Map<string, symbol>();
+	// A one-use transfer capability must not be spent concurrently by two guards.
+	#transferClaimsInFlight = new Set<string>();
 	#lost = new Set<string>();
 	#pendingCommits = new Map<string, { ciphertext: Uint8Array; payloadHash: string; idempotencyKey: string }>();
 	#activeCommits = new Map<string, { payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }>();
@@ -178,6 +180,8 @@ export class CheckpointClient {
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
+		if (this.#transferClaimsInFlight.has(sessionId))
+			throw new Error("Checkpoint transfer admission already in flight");
 		const attempt = this.#beginLeaseAdmission(sessionId);
 		try {
 			const lease = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/lease`, {
@@ -224,6 +228,11 @@ export class CheckpointClient {
 		const capability = "claimToken" in credential ? credential.claimToken : credential.resumeToken;
 		if (typeof capability !== "string" || capability.length < 16 || capability.length > 128)
 			throw new Error("Invalid checkpoint transfer capability");
+		// Reject another claim/resume before sending a one-use capability, and
+		// do not let an ordinary lease admission supersede its unresolved receipt.
+		if (this.#transferClaimsInFlight.has(sessionId))
+			throw new Error("Checkpoint transfer admission already in flight");
+		this.#transferClaimsInFlight.add(sessionId);
 		const attempt = this.#beginLeaseAdmission(sessionId);
 		try {
 			const result = await this.#request<CheckpointLease & { resumeToken: string }>(
@@ -278,6 +287,7 @@ export class CheckpointClient {
 			return { lease, resumeToken };
 		} finally {
 			this.#finishLeaseAdmission(sessionId, attempt);
+			this.#transferClaimsInFlight.delete(sessionId);
 		}
 	}
 	async claimTransfer(
@@ -335,6 +345,8 @@ export class CheckpointClient {
 		transferId: string,
 		source?: { ownerNode: string; epoch: number },
 	): Promise<CheckpointLease> {
+		if (this.#transferClaimsInFlight.has(sessionId))
+			throw new Error("Checkpoint transfer admission already in flight");
 		const lease = this.#leases.get(sessionId);
 		const active = lease && !this.#lost.has(sessionId) ? lease : undefined;
 		// A recovery caller may carry an older source fence. Never silently
