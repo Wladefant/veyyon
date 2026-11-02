@@ -31,6 +31,33 @@ function register(id: string, live = false): void {
 	});
 }
 
+/** Synthetic roots retain their scope even when the root session is parked. */
+function scopedRoot(id: string, scope: string, live: boolean): void {
+	AgentRegistry.global().register({
+		id,
+		displayName: id,
+		kind: "main",
+		scope,
+		session: live
+			? ({ messages: [], sessionManager: { getArtifactsDir: () => null } } as unknown as AgentSession)
+			: null,
+		sessionFile: null,
+		status: live ? "running" : "parked",
+	});
+}
+
+function scopedParkedScout(parentId: string, sessionFile: string): void {
+	AgentRegistry.global().register({
+		id: "Scout",
+		displayName: "Scout",
+		kind: "sub",
+		parentId,
+		session: null,
+		sessionFile,
+		status: "parked",
+	});
+}
+
 async function createDiskArchive(root: string, id: string, folder = "saved"): Promise<void> {
 	const dir = path.join(root, folder);
 	await fs.mkdir(dir, { recursive: true });
@@ -149,6 +176,59 @@ describe("history:// case-folded disk roster", () => {
 			const result = await handler.resolve(parseInternalUrl(`history://${alias}`));
 			expect(result.notes).toContain("Source: live session");
 			expect(result.content).toContain("# Reviewer (running)");
+		}
+	});
+
+	it("refuses parked foreign conversation history in index, overview, exact, search and completions", async () => {
+		const temp = TempDir.createSync("@veyyon-history-parked-foreign-scope-");
+		try {
+			await createDiskArchive(temp.path(), "Scout");
+			const file = path.join(temp.path(), "saved", "Scout.jsonl");
+			scopedRoot("acp:a", "session-a", true);
+			scopedRoot("acp:b", "session-b", false);
+			scopedParkedScout("acp:b", file);
+
+			// A live-only root count incorrectly sees one conversation and
+			// leaks B's archived transcript through the process-global registry.
+			const handler = new HistoryProtocolHandler();
+			for (const url of ["history://", "history://Scout", "history://Scout?q=saved",
+				"history://Scout?entry=saved-entry&limit=1000"]) {
+				await expect(handler.resolve(parseInternalUrl(url)))
+					.rejects.toThrow(/2 conversations at once/);
+			}
+			expect(await handler.complete()).toEqual([]);
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it("retains same-scope parked retrieval and one-scope archived-only continuity", async () => {
+		const temp = TempDir.createSync("@veyyon-history-same-parked-scope-");
+		try {
+			await createDiskArchive(temp.path(), "Scout");
+			const file = path.join(temp.path(), "saved", "Scout.jsonl");
+			const check = async (): Promise<void> => {
+				const handler = new HistoryProtocolHandler();
+				const result = await handler.resolve(parseInternalUrl("history://Scout?entry=saved-entry&limit=1000"));
+				const payload = JSON.parse(result.content) as { status: string; fragment: string; sessionId: string };
+				expect(payload.status).toBe("ok");
+				expect(payload.sessionId).toBe("saved-session");
+				expect(payload.fragment).toContain("saved text");
+				expect((await handler.resolve(parseInternalUrl("history://"))).content).toContain("| Scout |");
+				expect((await handler.complete()).map(item => item.value)).toContain("Scout");
+			};
+
+			scopedRoot("acp:a", "session-a", true);
+			scopedParkedScout("acp:a", file);
+			await check();
+
+			// No live root but a single retained scope: stored history still works.
+			AgentRegistry.resetGlobalForTests();
+			scopedRoot("acp:b", "session-b", false);
+			scopedParkedScout("acp:b", file);
+			await check();
+		} finally {
+			await temp.remove();
 		}
 	});
 
