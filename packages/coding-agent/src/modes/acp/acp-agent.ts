@@ -185,7 +185,8 @@ type ManagedSessionRecord = {
 	promptTurn: PromptTurnState | undefined;
 	promptQueue: PromptQueueState;
 	liveMessageId: string | undefined;
-	displayedEntryIds: Set<string>;
+	knownEntryIds: Set<string>;
+	pendingExternalReplayIds: Set<string>;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	toolArgsById: Map<string, unknown>;
 	extensionsConfigured: boolean;
@@ -617,7 +618,7 @@ export class AcpAgent implements Agent {
 	async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
 		assertAbsoluteCwd(params.cwd);
 		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers ?? []);
-		this.#markSessionEntriesDisplayed(record);
+		this.#markSessionEntriesKnown(record);
 		const response: ResumeSessionResponse = {
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
@@ -754,7 +755,14 @@ export class AcpAgent implements Agent {
 			});
 
 			promptTurn.preparation = (async () => {
-				await record.session.refreshExternalTurn();
+				this.#markSessionEntriesKnown(record);
+				if (await record.session.refreshExternalTurn()) {
+					for (const entry of record.session.sessionManager.getBranch()) {
+						if (record.knownEntryIds.has(entry.id)) continue;
+						record.pendingExternalReplayIds.add(entry.id);
+						record.knownEntryIds.add(entry.id);
+					}
+				}
 				promptTurn.usageBaseline = cloneUsageStatistics(record.session.sessionManager.getUsageStatistics());
 				if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
 				throwIfRecordClosed(record);
@@ -1294,7 +1302,7 @@ export class AcpAgent implements Agent {
 			await waitForAcpPromptIdle(record);
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
-			if (!record.background) this.#markSessionEntriesDisplayed(record);
+			if (!record.background) this.#markSessionEntriesKnown(record);
 			finishPrompt(record, {
 				stopReason: resolveStopReason(event, promptTurn.cancelRequested),
 				usage: buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
@@ -1784,18 +1792,19 @@ export class AcpAgent implements Agent {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
-		this.#markSessionEntriesDisplayed(record);
+		this.#markSessionEntriesKnown(record);
+		record.pendingExternalReplayIds.clear();
 	}
 
 	async #replayNewlyAdoptedHistory(record: ManagedSessionRecord): Promise<void> {
 		const sessionId = record.session.sessionId;
 		const cwd = record.session.sessionManager.getCwd();
-		const newlyVisible = record.session.sessionManager
+		const pendingEntries = record.session.sessionManager
 			.getBranch()
-			.filter(entry => !record.displayedEntryIds.has(entry.id));
+			.filter(entry => record.pendingExternalReplayIds.has(entry.id));
 		const replayedToolCallIds = new Set<string>();
 		const replayedToolCallArgs = new Map<string, unknown>();
-		for (const entry of newlyVisible) {
+		for (const entry of pendingEntries) {
 			if (entry.type !== "message") continue;
 			for (const notification of this.#messageToReplayNotifications(
 				sessionId,
@@ -1807,12 +1816,14 @@ export class AcpAgent implements Agent {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
-		for (const entry of newlyVisible) record.displayedEntryIds.add(entry.id);
+		for (const entry of pendingEntries) {
+			record.pendingExternalReplayIds.delete(entry.id);
+		}
 	}
 
-	#markSessionEntriesDisplayed(record: ManagedSessionRecord): void {
+	#markSessionEntriesKnown(record: ManagedSessionRecord): void {
 		for (const entry of record.session.sessionManager.getBranch()) {
-			record.displayedEntryIds.add(entry.id);
+			record.knownEntryIds.add(entry.id);
 		}
 	}
 
@@ -2300,7 +2311,8 @@ function createManagedSessionRecord(session: AgentSession): ManagedSessionRecord
 		promptTurn: undefined,
 		promptQueue: { promise: Promise.resolve(), release: undefined },
 		liveMessageId: undefined,
-		displayedEntryIds: new Set(),
+		knownEntryIds: new Set(),
+		pendingExternalReplayIds: new Set(),
 		liveMessageProgress: undefined,
 		toolArgsById: new Map(),
 		extensionsConfigured: false,

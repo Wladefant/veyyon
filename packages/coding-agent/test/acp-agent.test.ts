@@ -2718,6 +2718,92 @@ describe("ACP agent", () => {
 		expect(session.promptCalls).toEqual(["establish external transcript", "deliver adopted history", "continue after replay"]);
 		harness.abortController.abort();
 	});
+	it("cancels preparation before starting the prompt and holds the queue until refresh ends", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const refreshStarted = Promise.withResolvers<void>();
+		const releaseRefresh = Promise.withResolvers<void>();
+		session.refreshExternalTurn = async () => {
+			refreshStarted.resolve();
+			await releaseRefresh.promise;
+			return false;
+		};
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "cancel during refresh" }],
+		});
+		await refreshStarted.promise;
+		const cancelOperation = harness.agent.cancel({ sessionId: created.sessionId });
+		expect((await firstPrompt).stopReason).toBe("cancelled");
+		expect(session.promptCalls).toEqual([]);
+
+		const nextPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "after refresh cancellation" }],
+		});
+		expect(session.promptCalls).toEqual([]);
+		releaseRefresh.resolve();
+		await cancelOperation;
+		expect((await nextPrompt).stopReason).toBe("end_turn");
+		expect(session.promptCalls).toEqual(["after refresh cancellation"]);
+		harness.abortController.abort();
+	});
+	it("does not replay local history when cancellation skips agent_end", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const originalPrompt = session.prompt.bind(session);
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.promptCalls.push(text);
+			session.isStreaming = true;
+			const userMessage = { role: "user" as const, content: text, timestamp: Date.now() };
+			const assistantMessage = makeAssistantMessage("local assistant before cancel");
+			session.sessionManager.appendMessage(userMessage);
+			session.sessionManager.appendMessage(assistantMessage);
+			for (const listener of session.listeners()) {
+				listener({ type: "message_start", message: userMessage } as AgentSessionEvent);
+				listener({ type: "message_end", message: userMessage } as AgentSessionEvent);
+				listener({ type: "message_start", message: assistantMessage } as AgentSessionEvent);
+				listener({ type: "message_update", message: assistantMessage, assistantMessageEvent: { type: "text_delta", delta: "local assistant before cancel" } } as AgentSessionEvent);
+			}
+			started.resolve();
+			await release.promise;
+			session.isStreaming = false;
+			return true;
+		};
+
+		const firstPrompt = harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "local user before cancel" }],
+		});
+		await started.promise;
+		const cancelOperation = harness.agent.cancel({ sessionId: created.sessionId });
+		expect((await firstPrompt).stopReason).toBe("cancelled");
+		release.resolve();
+		await cancelOperation;
+
+		harness.updates.length = 0;
+		session.prompt = originalPrompt;
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "continue after cancellation" }],
+		});
+		const replayedText = harness.updates
+			.filter(
+				update =>
+					update.sessionId === created.sessionId &&
+					(update.update.sessionUpdate === "user_message_chunk" ||
+						update.update.sessionUpdate === "agent_message_chunk"),
+			)
+			.map(update => ("content" in update.update && update.update.content.type === "text" ? update.update.content.text : ""))
+			.join("\n");
+		expect(replayedText).not.toContain("local user before cancel");
+		expect(replayedText).not.toContain("local assistant before cancel");
+		harness.abortController.abort();
+	});
 	it("suppresses late updates after cancel and waits cleanup before the next prompt", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
