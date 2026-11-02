@@ -454,6 +454,16 @@ export class MCPManager {
 		);
 	}
 
+	// Configuration is owned only by an actually active, current callback.
+	// An async descendant inherits a present ALS scope after that callback
+	// completes; treating its inactive scope as "external" would let it steal a
+	// newer cursor/control/provider writer. Shutdown/drain deliberately keeps
+	// the separate active-only #eventCallbackIsObsolete rule.
+	#eventCallbackCannotConfigure(): boolean {
+		const scope = this.#eventCallbackContext.getStore();
+		return (scope !== undefined && !scope.active) || this.#eventCallbackIsObsolete();
+	}
+
 	// AsyncLocalStorage outlives the handler in detached timers/promises. Track
 	// the *actual* callback lifetime so later external stop still drains work.
 	async #withEventCallback<T>(serverName: string, handler: () => T | Promise<T>): Promise<T> {
@@ -533,7 +543,7 @@ export class MCPManager {
 		// A callback started under a previous consumer must not undo a newer
 		// external clear/replacement. In particular, its late re-enable would
 		// wait on the previous callback's drain and deadlock that same callback.
-		if (this.#eventCallbackIsObsolete()) return;
+		if (this.#eventCallbackCannotConfigure()) return;
 		this.#eventConsumerRevision++;
 		// A callback intentionally clearing and re-enabling its OWN handler is
 		// still a valid synchronous configuration sequence.
@@ -590,7 +600,7 @@ export class MCPManager {
 	): void {
 		// An obsolete or disconnected server's callback cannot replace the
 		// successor's cursor writer. External and current setters remain valid.
-		if (this.#eventCallbackIsObsolete()) return;
+		if (this.#eventCallbackCannotConfigure()) return;
 		const scope = this.#eventCallbackContext.getStore();
 		if (scope?.active && scope.cursorWriterRevision !== this.#eventCursorWriterRevision) return;
 		this.#eventCursorWriterRevision++;
@@ -599,7 +609,7 @@ export class MCPManager {
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
 		// Obsolete and disconnected callbacks cannot change the resume authority.
-		if (this.#eventCallbackIsObsolete()) return;
+		if (this.#eventCallbackCannotConfigure()) return;
 		const scope = this.#eventCallbackContext.getStore();
 		if (scope?.active && scope.cursorProviderRevision !== this.#eventCursorProviderRevision) return;
 		this.#eventCursorProviderRevision++;
@@ -612,7 +622,7 @@ export class MCPManager {
 		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
 	): void {
 		// A stale or disconnected event callback cannot capture a successor's control.
-		if (this.#eventCallbackIsObsolete()) return;
+		if (this.#eventCallbackCannotConfigure()) return;
 		const scope = this.#eventCallbackContext.getStore();
 		if (scope?.active && scope.controlWriterRevision !== this.#eventControlWriterRevision) return;
 		this.#eventControlWriterRevision++;
