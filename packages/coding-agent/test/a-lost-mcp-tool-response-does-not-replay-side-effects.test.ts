@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { createServer } from "node:http";
 import { DeferredMCPTool, MCPTool } from "../src/mcp/tool-bridge";
+import { HttpTransport } from "../src/mcp/transports/http";
 import { resolveMCPTimeoutMs } from "../src/mcp/timeout";
 import { mcpTimeoutMessage } from "../src/mcp/transports/transport-failure";
 import type { MCPServerConnection, MCPToolCallResult, MCPToolDefinition, MCPTransport } from "../src/mcp/types";
@@ -454,4 +456,84 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		expect(JSON.stringify(result)).toContain("MCP error -32603");
 		expect(JSON.stringify(result)).not.toContain("outcome unknown");
 	});
+
+	// Producer-consumer control: drive a REAL Streamable HTTP transport with
+	// a private loopback server that counts tools/call before withholding the
+	// response. A mock transport alone cannot prove the transport's own
+	// timeout wording reaches the model-facing wrapper unchanged.
+	it("a real HTTP tools/call deadline keeps a counted effect unknown and does not advise retry", async () => {
+		const timeoutMs = 700;
+		let effects = 0;
+		let holdReply = true;
+		const server = createServer((request, response) => {
+			void (async () => {
+				if (request.method !== "POST" || request.url !== "/mcp") {
+					response.writeHead(404).end();
+					return;
+				}
+				let body = "";
+				for await (const chunk of request) {
+					body += Buffer.from(chunk).toString("utf8");
+					if (body.length > 16_384) throw new Error("Synthetic HTTP request exceeded bound");
+				}
+				const call = JSON.parse(body) as { method: string; id: string | number };
+				if (call.method !== "tools/call") {
+					response.writeHead(400).end();
+					return;
+				}
+				effects++;
+				if (holdReply) return; // completed effect, lost result; only fixture socket remains.
+				response.writeHead(200, { "Content-Type": "application/json" });
+				response.end(JSON.stringify({
+					jsonrpc: "2.0", id: call.id,
+					error: { code: -32603, message: "the application rejected the second explicit call" },
+				}));
+			})().catch(() => {
+				if (!response.headersSent) response.writeHead(400).end();
+				else response.end();
+			});
+		});
+		const ready = Promise.withResolvers<void>();
+		server.once("error", ready.reject);
+		server.listen(0, "127.0.0.1", ready.resolve);
+		await boundedUnknownOutcome(ready.promise);
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("HTTP loopback fixture had no port");
+		const config = { type: "http" as const, url: `http://127.0.0.1:${address.port}/mcp`, timeout: timeoutMs };
+		const transport = new HttpTransport(config);
+		try {
+			await boundedUnknownOutcome(transport.connect());
+			const live = { ...connection(transport), config };
+			const tool = new MCPTool(live, writeTool);
+			const first = await boundedUnknownOutcome(
+				tool.execute("first-withheld-reply", { value: FAKE_PRIVATE_ARG }, undefined, context),
+			);
+			expect(effects).toBe(1);
+			expect(first.isError).toBe(true);
+			expect(JSON.stringify(first)).toContain("outcome unknown");
+			expect(JSON.stringify(first)).toContain("Do not automatically repeat");
+			expect(JSON.stringify(first)).not.toContain("retry this call at most once");
+			expect(JSON.stringify(first)).not.toContain(FAKE_PRIVATE_ARG);
+
+			// A separate explicit invocation may still reach the same transport;
+			// a correlated JSON-RPC application error is a known failed action.
+			holdReply = false;
+			const second = await boundedUnknownOutcome(
+				tool.execute("second-explicit-call", { value: "safe" }, undefined, context),
+			);
+			expect(effects).toBe(2);
+			expect(second.isError).toBe(true);
+			expect(JSON.stringify(second)).toContain("MCP error -32603");
+			expect(JSON.stringify(second)).not.toContain("outcome unknown");
+		} finally {
+			try {
+				await boundedUnknownOutcome(transport.close());
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(error => (error ? stopped.reject(error) : stopped.resolve()));
+				await boundedUnknownOutcome(stopped.promise);
+			}
+		}
+	}, 12_000);
 });
