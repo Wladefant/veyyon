@@ -129,14 +129,20 @@ describe("terminal ownership claims", () => {
 		await expect(assertNotTerminalOwned(withoutEndpoint, root)).resolves.toBeUndefined();
 	});
 
-	/**
-	 * The same dead claim that is ignored when owner-only is refused when another user can read it: an
-	 * unverifiable claim may be a live owner, so it blocks instead of being skipped.
-	 */
-	it("refuses a claim another user can read instead of skipping it", async () => {
+	it("ignores malformed publisher-shaped records for dead pids without matching unrelated sessions", async () => {
 		const root = await tempRoot();
-		const sessionFile = path.join(root, "broad.jsonl");
-		await writeClaim(root, sessionFile, endpointFor(root, "broad-gone"), deadPid(), true);
+		const unrelatedSession = path.join(root, "other.jsonl");
+		const pid = deadPid();
+		const malformed = path.join(root, "run", "terminals", `${pid}-${crypto.randomUUID()}.json`);
+		await fsp.mkdir(path.dirname(malformed), { recursive: true });
+		await fsp.writeFile(malformed, "{ malformed");
+		await expect(assertNotTerminalOwned(unrelatedSession, root)).resolves.toBeUndefined();
+	});
+
+	it("refuses a broadly readable claim for a live pid with record diagnostics", async () => {
+		const root = await tempRoot();
+		const sessionFile = path.join(root, "broad-live.jsonl");
+		await writeClaim(root, sessionFile, endpointFor(root, "broad-live-gone"), process.pid, true);
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow(
 			"Cannot establish terminal writer ownership",
 		);
