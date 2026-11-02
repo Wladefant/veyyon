@@ -17,11 +17,29 @@ function fixture() {
  const objects = new Map<string, Uint8Array>();
  let objectGets=0;
  let objectBufferReads=0;
- const env:Environment = { OBJECTS: { get: async key => {objectGets++;const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>{objectBufferReads++;return bytes.slice().buffer}}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
+ let beforeObjectGet:(()=>void)|undefined;
+ const env:Environment = { OBJECTS: { get: async key => {objectGets++;beforeObjectGet?.();const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>{objectBufferReads++;return bytes.slice().buffer}}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
  const authority = new SessionAuthority({storage}, env);
  const post = (action:string,body:unknown) => authority.fetch(new Request(`https://test/v1/sessions/s/${action}`, {method:"POST",body:JSON.stringify(body)}));
- return {post, objects, storage, data, authority, objectAccess:()=>({gets:objectGets,buffers:objectBufferReads}), failPut:(key:string)=>{failPutKey=key}};
+ return {post, objects, storage, data, authority, objectAccess:()=>({gets:objectGets,buffers:objectBufferReads}), beforeRead:(callback:()=>void)=>{beforeObjectGet=callback}, failPut:(key:string)=>{failPutKey=key}};
 }
+test("a lease change during object verification cannot commit past the final authority fence",async()=>{
+ const {post,objects,data,beforeRead,objectAccess}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number;expiresAt:string};
+ const bytes=new Uint8Array([2,4,6]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ // The advisory preflight sees the original live lease. Simulate a
+ // concurrent lease replacement exactly when object verification starts.
+ beforeRead(()=>data.set("lease",{...lease,epoch:lease.epoch+1}));
+ const reply=await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"race-final-fence",manifest});
+ expect(reply.status).toBe(409);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(false);
+ expect(data.has("replay:race-final-fence")).toBe(false);
+});
+
 test("release advances epochs and replay is payload bound",async()=>{
  const {post,objects}=fixture();
  const lease=await (await post("lease",{ownerNode:"a"})).json() as {epoch:number;ownerNode:string};
