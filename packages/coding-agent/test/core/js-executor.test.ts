@@ -533,7 +533,7 @@ describe("executeJs", () => {
 		const controller = new AbortController();
 		const execution = executeJs(
 			[
-				"console.log('inventory status\\n{\\n  \"ALPHA\": \"neutral-one\",\\n  \"BETA\": \"neutral-two\"');",
+				'console.log(\'inventory status\\n{\\n  "ALPHA": "neutral-one",\\n  "BETA": "neutral-two"\');',
 				"await new Promise(() => {})",
 			].join("\n"),
 			{
