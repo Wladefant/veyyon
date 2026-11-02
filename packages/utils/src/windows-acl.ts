@@ -4,7 +4,7 @@ import { escapeTerminalText } from "./terminal-safe";
 import { errorMessage } from "./type-guards";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
-const WINDOWS_ACL_TIMEOUT_MS = 15_000;
+export const WINDOWS_ACL_TIMEOUT_MS = 15_000;
 
 export interface WindowsAclCommandResult {
 	exitCode: number;
