@@ -524,6 +524,23 @@ describe("native recovery", () => {
 			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
 		}
 	});
+	test("capture rejects DOS console aliases and COM0/LPT0 before reading artifacts", async () => {
+		if (process.platform === "win32") return;
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "dos-aliases", cwd: root }) + "\n");
+		const artifactRoot = join(root, "session");
+		await mkdir(artifactRoot);
+		for (const name of ["CONIN$", "conout$.txt", "COM0", "LPT0.md"]) {
+			const file = join(artifactRoot, name);
+			await writeFile(file, "synthetic safe fixture only");
+			await expect(captureNativeCheckpoint(session, [])).rejects.toThrow(/Unsafe checkpoint path/);
+			await rm(file);
+		}
+		await writeFile(join(artifactRoot, "COM10.txt"), "ordinary portable filename");
+		const accepted = await captureNativeCheckpoint(session, []);
+		expect(Object.keys(accepted.artifacts)).toEqual(["COM10.txt"]);
+	});
 	test("restore refuses Windows device aliases, ADS and invalid portable names before publication", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");
@@ -535,6 +552,10 @@ describe("native recovery", () => {
 			"nested/CON.txt",
 			"nested/COM¹.md",
 			"LPT²",
+			"nested/CONIN$",
+			"CONOUT$.txt",
+			"COM0",
+			"lpt0.md",
 			"nested/file.txt:stream",
 			"trailing. ",
 			"notes?.md",

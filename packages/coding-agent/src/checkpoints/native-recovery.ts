@@ -24,7 +24,7 @@ const forbidden =
 const deniedNames = /(?:^|\/)(?:.*\.lock|.*\.sqlite(?:-wal|-shm)?)$/i;
 // Checkpoint bundles are portable between Linux and Windows. Refuse Win32
 // device aliases and ambiguous/unsupported names before touching any file.
-const reservedWindowsDevice = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/i;
+const reservedWindowsDevice = /^(?:con|conin\$|conout\$|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
 function invalidPortableComponent(part: string): boolean {
 	return (
 		!part ||
