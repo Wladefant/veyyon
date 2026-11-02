@@ -559,6 +559,8 @@ test("an overlong authority resume capability cannot replace a one-time transfer
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
 			manifestHash: "",
+			targetNode: "destination",
+			transferId: "transfer-1",
 			resumeToken: "x".repeat(129),
 		});
 	};
