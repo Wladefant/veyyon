@@ -173,8 +173,13 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		const bursts = Array.from({ length: 5 }, (_, burst) =>
 			Array.from({ length: 16 }, (_, index) => makeRequest(burst * 16 + index)),
 		);
-		const next = { jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "after-flood" } };
-		await withLiveSSE([oversized, ...bursts, Array.from({ length: 128 }, () => null), next],
+		const next = {
+			jsonrpc: "2.0",
+			method: "notifications/tools/list_changed",
+			params: { source: "after-flood" },
+		};
+		await withLiveSSE(
+			[oversized, ...bursts, Array.from({ length: 128 }, () => null), next],
 			async transport => {
 				const gate = Promise.withResolvers<void>();
 				const reachedCapacity = Promise.withResolvers<void>();
