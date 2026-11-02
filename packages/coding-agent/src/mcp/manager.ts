@@ -1857,6 +1857,10 @@ export class MCPManager {
 	 */
 	async disconnectAll(): Promise<void> {
 		this.#bulkDisconnectCount++;
+		// Keep bulk-owned close promises in the same per-server registry as
+		// explicit disconnectServer calls. A later single disconnect must join
+		// an already-running bulk close, never invoke transport.close twice.
+		const bulkOwnedCloses: Array<{ name: string; promise: Promise<void> }> = [];
 		try {
 			// Invalidate any in-flight reconnection attempts that outlive this call.
 			// They captured the old epoch; after increment they'll detect staleness.
@@ -1866,17 +1870,18 @@ export class MCPManager {
 			for (const conn of this.#connections.values()) {
 				conn.transport.onClose = undefined;
 			}
-			// Join already-started single-server teardowns rather than invoking
-			// close twice. Include a retiring server even if its
-			// connection was already removed before this snapshot.
+			// Include already-started single-server teardowns, even when their
+			// connection has been removed. Register every new bulk-owned close
+			// BEFORE starting it so the reverse bulk→single order joins too.
 			const retiring = new Set(this.#activeDisconnects.keys());
-			const promises = [
-				...this.#activeDisconnects.values(),
-				...Array.from(this.#connections.entries())
-					.filter(([name]) => !retiring.has(name))
-					.map(([, connection]) => disconnectServer(connection)),
-			];
-			await Promise.allSettled(promises);
+			const alreadyClosing = Array.from(this.#activeDisconnects.values());
+			for (const [name, connection] of this.#connections.entries()) {
+				if (retiring.has(name)) continue;
+				const promise = Promise.resolve().then(() => disconnectServer(connection));
+				this.#activeDisconnects.set(name, promise);
+				bulkOwnedCloses.push({ name, promise });
+			}
+			await Promise.allSettled([...alreadyClosing, ...bulkOwnedCloses.map(close => close.promise)]);
 
 			this.#pendingConnections.clear();
 			this.#pendingToolLoads.clear();
@@ -1889,6 +1894,9 @@ export class MCPManager {
 			this.#subscribedResources.clear();
 			this.#reconnectHistory.clear();
 		} finally {
+			for (const { name, promise } of bulkOwnedCloses) {
+				if (this.#activeDisconnects.get(name) === promise) this.#activeDisconnects.delete(name);
+			}
 			this.#bulkDisconnectCount--;
 		}
 	}
