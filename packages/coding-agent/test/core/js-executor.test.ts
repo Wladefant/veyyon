@@ -527,6 +527,38 @@ describe("executeJs", () => {
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 
+	it.each(["timeout", "cancel"])("withholds an incomplete structured inventory on %s", async mode => {
+		const chunks: string[] = [];
+		const controller = new AbortController();
+		const execution = executeJs(
+			[
+				"console.log('{');",
+				'console.log(\'  "ALPHA": "neutral-one",\');',
+				'console.log(\'  "BETA": "neutral-two"\');',
+				"await new Promise(() => {})",
+			].join("\n"),
+			{
+				sessionId,
+				session,
+				sessionFile,
+				onChunk: chunk => {
+					chunks.push(chunk);
+				},
+				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
+			},
+		);
+		if (mode === "cancel") {
+			// The executor cancellation contract is signal-driven, so this intentionally
+			// uses a real timer rather than advancing the worker's independent clock.
+			setTimeout(() => controller.abort(new Error("cancelled")), 100);
+		}
+		const result = await execution;
+		expect(result.cancelled).toBe(true);
+		expect(chunks.join("")).not.toContain("ALPHA");
+		expect(chunks.join("")).not.toContain("BETA");
+		expect(result.output).not.toContain("ALPHA");
+		expect(result.output).not.toContain("BETA");
+	});
 	it("cancels execution when the timeout expires", async () => {
 		const result = await executeJs("await new Promise(() => {})", {
 			sessionId,

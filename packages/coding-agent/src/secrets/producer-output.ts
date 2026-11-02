@@ -212,6 +212,7 @@ export class ProducerOutputGuard {
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
+		if (!this.#withholding && this.#structured && this.#depth > 0) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
 		return output;
