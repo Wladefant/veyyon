@@ -890,9 +890,14 @@ export class MCPManager {
 			return;
 		}
 		const path = callback.pathname;
+		// Same-subscription refresh may reuse its existing callback path.
+		// The registry is keyed by scoped id, never the raw remote id.
+		const ownRegistrationKey = subscription.webhookId
+			? webhookRegistrationKey(path, subscription.webhookId)
+			: undefined;
 		if (
 			[...this.#webhookRegistrations].some(
-				([id, registration]) => id !== subscription.webhookId && registration.callbackPath === path,
+				([registrationKey, registration]) => registrationKey !== ownRegistrationKey && registration.callbackPath === path,
 			) ||
 			this.#webhookVerificationRoutes.has(path)
 		) {
