@@ -12,9 +12,11 @@ import { PassThrough } from "node:stream";
 import {
 	applyOwnerOnlyWindowsAcl,
 	verifyOwnerOnlyWindowsAcl,
+	verifyOwnerOnlyWindowsAcls,
 	type WindowsAclCommandRunner,
 	type WindowsAclOptions,
 } from "@veyyon/utils";
+
 
 let cleanupPath: string | undefined;
 const originalSystemRoot = process.env.SystemRoot;
@@ -320,6 +322,25 @@ describe("owner-only Windows ACL helpers", () => {
 			await expect(verifyOwnerOnlyWindowsAcl(filePath)).rejects.toThrow(
 				"ACL does not contain exactly two access rules",
 			);
+		});
+		it("verifies an all-protected batch and rejects a loose ACL at every file position", async () => {
+			cleanupPath = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-owner-acl-batch-"));
+			const files = [0, 1, 2].map(index => path.join(cleanupPath!, `record-${index}.json`));
+			for (const filePath of files) {
+				await fs.writeFile(filePath, "{}");
+				await applyOwnerOnlyWindowsAcl(filePath);
+			}
+
+			await expect(verifyOwnerOnlyWindowsAcls(files)).resolves.toBeUndefined();
+			for (const filePath of files) {
+				const granted = spawnSync("icacls", [filePath, "/grant", "*S-1-1-0:(R)"], { windowsHide: true });
+				expect(granted.status).toBe(0);
+				await expect(verifyOwnerOnlyWindowsAcls(files)).rejects.toThrow();
+				const removed = spawnSync("icacls", [filePath, "/remove", "*S-1-1-0"], { windowsHide: true });
+				expect(removed.status).toBe(0);
+				await applyOwnerOnlyWindowsAcl(filePath);
+				await verifyOwnerOnlyWindowsAcls(files);
+			}
 		});
 	});
 });
