@@ -112,6 +112,20 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 		expect(repeated.tools.map(tool => tool.name).sort()).toEqual(expected);
 		expect(initialized).toEqual({ a: 1, b: 1 });
 		expect(listRequests).toEqual({ a: 1, b: 1 });
+
+		// A disconnected peer must disappear; a no-op batch must not revive
+		// its tools or erase B. An explicit later A connect is a new session.
+		await within(manager.disconnectServer(names.a), "disconnect only A");
+		expect(manager.getConnectedServers()).toEqual([names.b]);
+		expect(catalog()).toEqual([bTool]);
+		const noOp = await within(manager.connectServers({}, {}), "empty incremental batch");
+		expect(noOp.tools.map(tool => tool.name)).toEqual([bTool]);
+		expect(catalog()).toEqual([bTool]);
+		const restored = await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "explicit A recovery");
+		expect(restored.tools.map(tool => tool.name).sort()).toEqual(expected);
+		expect(catalog()).toEqual(expected);
+		expect(initialized).toEqual({ a: 2, b: 1 });
+		expect(listRequests).toEqual({ a: 2, b: 1 });
 	} finally {
 		try {
 			await within(manager.disconnectAll(), "manager teardown");
