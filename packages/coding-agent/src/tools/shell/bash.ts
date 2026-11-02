@@ -1272,11 +1272,14 @@ export class BashTool
 				} catch (error) {
 					logger.warn("ACP terminal final output read failed", { terminalId: handle.terminalId, error });
 				}
-				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(guardClientTerminalOutput(current, true), {
-					exitCode: undefined,
-					cancelled: false,
-					timedOut: true,
-				});
+				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(
+					guardClientTerminalOutput(current, true),
+					{
+						exitCode: undefined,
+						cancelled: false,
+						timedOut: true,
+					},
+				);
 				return this.#buildCompletedResult(timedOutResult, call.timeoutSec, {
 					...resultOptions,
 					notices: call.notices,
@@ -1486,10 +1489,7 @@ function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
  * ACP returns cumulative snapshots, not chunks. Classify each snapshot from its start,
  * holding incomplete records and assignment prefixes until the command's final read.
  */
-function guardClientTerminalOutput(
-	output: ClientBridgeTerminalOutput,
-	completed = false,
-): ClientBridgeTerminalOutput {
+function guardClientTerminalOutput(output: ClientBridgeTerminalOutput, completed = false): ClientBridgeTerminalOutput {
 	const guard = new ProducerOutputGuard();
 	const filtered = guard.push(output.output);
 	return { ...output, output: filtered + (completed ? guard.finish() : "") };

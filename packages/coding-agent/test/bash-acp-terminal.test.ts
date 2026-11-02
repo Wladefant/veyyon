@@ -1,16 +1,16 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/session/client-bridge";
 import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
+
 // stub alone leaves it loading the developer's real ~/.veyyon agent.db.
 useIsolatedGlobalSettings();
-
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
 function makeSession(
@@ -317,7 +317,6 @@ describe("BashTool ACP terminal routing", () => {
 		expect((failure as Error).message).not.toContain("BETA=classified-beta");
 		expect((failure as Error).message).not.toContain("GAMMA=classified-gamma");
 	});
-
 
 	// The command deadline and the poll tick used to be `Bun.sleep` promises raced against the exit:
 	// a command that finished first left both armed, the deadline for the rest of its timeout, holding
