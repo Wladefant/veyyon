@@ -149,9 +149,9 @@ describe("native recovery", () => {
 		await writeFile(file, JSON.stringify({ type: "session", id: "paths", cwd: root }) + "\n");
 		const artifacts = join(root, "session");
 		await mkdir(artifacts);
-		for (let start = 0; start < 1200; start += 64) {
-			await Promise.all(Array.from({ length: Math.min(64, 1200 - start) }, (_, index) =>
-				writeFile(join(artifacts, `long-${"x".repeat(230)}-${String(start + index).padStart(4, "0")}`), "")));
+		for (let start = 0; start < 1700; start += 64) {
+			await Promise.all(Array.from({ length: Math.min(64, 1700 - start) }, (_, index) =>
+				writeFile(join(artifacts, `long-${"x".repeat(150)}-${String(start + index).padStart(4, "0")}`), "")));
 		}
 		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
 	});
@@ -385,6 +385,25 @@ describe("native recovery", () => {
 		expect(await readFile(join(allowedDestination, "sessions", "session", "safe.txt"), "utf8")).toBe("synthetic safe artifact");
 	});
 
+	test("native capture and restore reject conventional credential names before reading", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "named-secrets", cwd: root }) + "\n");
+		const ssh = join(root, ".ssh");
+		await mkdir(ssh);
+		const names = [join(ssh, "id_ed25519"), join(root, ".npmrc"), join(root, ".netrc")];
+		for (const file of names) {
+			await writeFile(file, "synthetic placeholder only");
+			await expect(captureNativeCheckpoint(session, [file])).rejects.toThrow(/Unsafe checkpoint path/);
+		}
+		const approved = await captureNativeCheckpoint(session, []);
+		for (const [index, name] of [".ssh/id_ed25519", ".npmrc", ".netrc"].entries()) {
+			const destination = join(root, "reject-credential-artifact-" + index);
+			const injected = { ...approved, artifacts: { [name]: Buffer.from("synthetic").toString("base64") } };
+			await expect(restoreNativeCheckpoint(injected, destination)).rejects.toThrow(/Unsafe checkpoint path/);
+			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+		}
+	});
 	test("restore rejects workspace paths excluded by the capture policy", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");

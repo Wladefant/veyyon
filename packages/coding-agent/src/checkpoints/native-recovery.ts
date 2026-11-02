@@ -20,7 +20,7 @@ export interface NativeCheckpointBundle {
 }
 
 const forbidden =
-	/(^|\/)(?:\.env(?:\..*)?|\.git|\.agents|\.cache|\.next|\.turbo|\.venv|venv|node_modules|auth|browser|cache|locks?)(\/|$)/i;
+	/(^|\/)(?:\.env(?:\..*)?|\.git|\.agents|\.ssh|\.npmrc|\.netrc|\.cache|\.next|\.turbo|\.venv|venv|node_modules|auth|browser|cache|locks?)(\/|$)/i;
 const deniedNames = /(?:^|\/)(?:.*\.lock|.*\.sqlite(?:-wal|-shm)?)$/i;
 // Checkpoint bundles are portable between Linux and Windows. Refuse Win32
 // device aliases and ambiguous/unsupported names before touching any file.
