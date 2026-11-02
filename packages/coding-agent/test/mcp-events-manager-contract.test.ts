@@ -2813,11 +2813,23 @@ describe("MCPManager event subscription contracts", () => {
 		const releaseOldUnsubscribe = Promise.withResolvers<void>();
 		const initialCursor = Promise.withResolvers<void>();
 		const replacementCursor = Promise.withResolvers<void>();
+		const replacementEventsListed = Promise.withResolvers<void>();
+		let eventListCalls = 0;
 		const deliveredAfterStop = Promise.withResolvers<void>();
 		let oldUnsubscribed = false;
 		let subscribeCount = 0;
 		const server = fakeMcpServer({
 			delivery: "webhook",
+			eventsList: () => {
+				eventListCalls++;
+				if (eventListCalls === 2) replacementEventsListed.resolve();
+				return { events: [{
+					name: EVENT_NAME,
+					description: "private webhook test",
+					inputSchema: { type: "object" },
+					delivery: ["webhook"],
+				}] };
+			},
 			webhookSubscribe: async () => {
 				subscribeCount++;
 				if (subscribeCount > 1 && !oldUnsubscribed) {
@@ -2869,6 +2881,9 @@ describe("MCPManager event subscription contracts", () => {
 			});
 			const newStartup = manager.getEventStartupPromise(name);
 			if (!newStartup) throw new Error("Replacement webhook startup not registered");
+			await withinHandlerChange(replacementEventsListed.promise, "replacement webhook descriptor read");
+			// The new owner has reached its list boundary; old tuple teardown
+			// must fence its subscribe even while the old unsubscribe is held.
 			await delay(30);
 			expect(subscribeCount).toBe(1);
 			releaseOldUnsubscribe.resolve();
