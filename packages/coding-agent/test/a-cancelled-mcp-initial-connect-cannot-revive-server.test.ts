@@ -138,6 +138,7 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 	const aDeleteEntered = Promise.withResolvers<void>();
 	const releaseADelete = Promise.withResolvers<void>();
 	const bDeleteObserved = Promise.withResolvers<void>();
+	let aInitializations = 0;
 	let bInitializations = 0;
 	let cInitializations = 0;
 	const server = createServer(async (request, response) => {
@@ -170,6 +171,7 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 			}
 			let result: Record<string, unknown>;
 			if (message.method === "initialize") {
+				if (route === "a") aInitializations++;
 				if (route === "c") cInitializations++;
 				if (route === "b" && ++bInitializations === 1) {
 					bInitializeEntered.resolve();
@@ -237,6 +239,12 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 		).rejects.toThrow(/bulk disconnect.*in progress/i);
 		expect(cInitializations).toBe(0);
 		expect(manager.getServerConfig(names.c)).toBeUndefined();
+		// Manual/automatic reconnect must also not capture the incremented epoch
+		// while the old A transport is still in disconnectAll's close snapshot.
+		expect(
+			await withinConnectBoundary(manager.reconnectServer(names.a, { manual: true }), "reconnect while bulk disconnect runs"),
+		).toBeNull();
+		expect(aInitializations).toBe(1);
 		releaseADelete.resolve();
 		await withinConnectBoundary(bulkShutdown, "bulk shutdown completion");
 		await withinConnectBoundary(originalConnect, "original parallel connections");
