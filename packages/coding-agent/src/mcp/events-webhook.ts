@@ -59,6 +59,10 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			const routeKey = options.registrationKey?.(path, subscriptionId) ?? subscriptionId;
 			const registration = options.registrations.get(routeKey);
 			const verification = options.verificationRoutes.get(path);
+			// Keep the exact authority that admitted this request. Reading an
+			// HTTP body can yield while a subscription is replaced or retired.
+			const registrationSecret = registration?.secret;
+			const verificationSecret = verification?.secret;
 			const pendingVerification = verification !== undefined && registration === undefined;
 			if (registration && registration.callbackPath !== path) return new Response(null, { status: 503 });
 			if (!registration && !pendingVerification) return new Response(null, { status: 503 });
@@ -112,8 +116,8 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 					return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 				});
 			};
-			const signedByRegistration = signatureMatches(registration?.secret);
-			const signedByVerification = verification !== undefined && signatureMatches(verification.secret);
+			const signedByRegistration = signatureMatches(registrationSecret);
+			const signedByVerification = verification !== undefined && signatureMatches(verificationSecret);
 			if (!signedByRegistration && !signedByVerification) return new Response(null, { status: 401 });
 			let event: unknown;
 			try {
@@ -121,7 +125,20 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			} catch {
 				return new Response(null, { status: 400 });
 			}
+			// A body stream can finish after stop/refresh replaced the original
+			// registration. Never enqueue under a retired registration's HMAC key.
+			// Checking only after body parsing preserves ordinary OLD-key events
+			// while their registration is still active during a pending renewal.
+			const currentRegistration = options.registrations.get(routeKey);
+			const registrationIsCurrent =
+				currentRegistration === registration && currentRegistration?.secret === registrationSecret;
 			if (isVerificationChallenge(event)) {
+				const currentVerification = options.verificationRoutes.get(path);
+				if (
+					!registrationIsCurrent ||
+					currentVerification !== verification ||
+					currentVerification?.secret !== verificationSecret
+				) return new Response(null, { status: 503 });
 				// When renewal is pending, only the newly resolved key proves
 				// possession; the old active key cannot approve its replacement.
 				if (verification !== undefined && !signedByVerification) return new Response(null, { status: 401 });
@@ -129,6 +146,7 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			}
 			if (pendingVerification) return new Response(null, { status: 503 });
 			if (!registration) return new Response(null, { status: 503 });
+			if (!registrationIsCurrent) return new Response(null, { status: 503 });
 			if (!signedByRegistration) return new Response(null, { status: 401 });
 			let message: MCPWebhookMessage | undefined;
 			if (isWebhookControl(event)) {
