@@ -556,7 +556,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         const beforeInventory = (await fs.readdir(sessions)).sort();
         await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
           suppressBreadcrumb: true,
-        })).rejects.toThrow(/referenced artifact is not a regular file/i);
+        })).rejects.toThrow(/unsafe artifact entry/i);
         expect((await fs.readdir(sessions)).sort()).toEqual(beforeInventory);
         expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
         expect(await fs.readFile(parked, "utf8")).toBe("synthetic referenced bytes");
