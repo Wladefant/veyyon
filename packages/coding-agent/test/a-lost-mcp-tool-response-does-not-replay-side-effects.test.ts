@@ -160,4 +160,31 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		expect(result.isError).not.toBe(true);
 		expect(result.content[0]).toEqual({ type: "text", text: "first dispatch succeeded" });
 	});
+	it("does not label a lost response as retryable after deferred pre-dispatch recovery", async () => {
+		let connectionAttempts = 0;
+		let sideEffects = 0;
+		const recovered = connection(fakeTransport(async () => {
+			sideEffects++;
+			// The *first* tools/call occurs on the recovered transport; its
+			// side effect commits, then the response disappears.
+			throw new Error("ECONNRESET");
+		}));
+		const tool = new DeferredMCPTool(
+			"write-fixture",
+			writeTool,
+			async () => {
+				connectionAttempts++;
+				throw new Error("MCP server not connected");
+			},
+			undefined,
+			async () => recovered,
+		);
+		const result = await tool.execute("first-dispatch-reply-lost", { value: "once" }, undefined, context);
+		expect(connectionAttempts).toBe(1);
+		expect(sideEffects).toBe(1);
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result)).toContain("outcome unknown");
+		expect(JSON.stringify(result)).not.toContain("ECONNRESET");
+	});
+
 });
