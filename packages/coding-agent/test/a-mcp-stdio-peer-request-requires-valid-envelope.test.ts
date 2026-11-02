@@ -107,4 +107,23 @@ describe("MCP stdio inbound peer method envelopes", () => {
 			await bounded(transport.close(), "synthetic stdio peer teardown");
 		}
 	}, 15_000);
+	// The special JSON-RPC id:null parse-error reply is a genuine response
+	// only when it has no method. Do not confuse it with the rejected hybrid.
+	it("still rejects the pending client call on a genuine unattributable JSON-RPC parse error", async () => {
+		const transport = createPeer([
+			{ jsonrpc: "2.0", id: null, error: { code: -32700, message: "synthetic parse error" } },
+		]);
+		const errors: string[] = [];
+		transport.onError = error => errors.push(error.message);
+		try {
+			await bounded(transport.connect(), "synthetic stdio parse-error peer startup");
+			await expect(
+				bounded(transport.request("tools/list", {}, { timeoutMs: 3_000 }), "genuine id:null failure"),
+			).rejects.toThrow("MCP error -32700: synthetic parse error");
+			expect(errors).toEqual(["MCP error -32700: synthetic parse error"]);
+		} finally {
+			await bounded(transport.close(), "synthetic stdio parse-error peer teardown");
+		}
+	}, 15_000);
+
 });
