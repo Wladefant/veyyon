@@ -129,6 +129,43 @@ describe("native recovery", () => {
 		await truncate(dirty, 48 * 1024 * 1024);
 		await expect(captureNativeCheckpoint(file, [dirty])).rejects.toThrow(/capture exceeds raw-byte budget/);
 	});
+	test("cloud capture caps zero-byte artifact fanout while local forks retain their policy", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "fanout", cwd: root }) + "\n");
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		for (let start = 0; start < 2049; start += 64) {
+			await Promise.all(Array.from({ length: Math.min(64, 2049 - start) }, (_, index) =>
+				writeFile(join(artifacts, `zero-${start + index}.txt`), "")));
+		}
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
+		const local = await captureNativeCheckpoint(file, [], "local");
+		expect(Object.keys(local.artifacts)).toHaveLength(2049);
+	});
+	test("cloud metadata path bytes are bounded independently of file count", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "paths", cwd: root }) + "\n");
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		for (let start = 0; start < 1200; start += 64) {
+			await Promise.all(Array.from({ length: Math.min(64, 1200 - start) }, (_, index) =>
+				writeFile(join(artifacts, `long-${"x".repeat(230)}-${String(start + index).padStart(4, "0")}`), "")));
+		}
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
+	});
+	test("cloud encoded-envelope estimate rejects large allowed artifacts before base64 expansion", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "envelope", cwd: root }) + "\n");
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		const large = join(artifacts, "large.bin");
+		await writeFile(large, "");
+		await truncate(large, 45 * 1024 * 1024);
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/encoded envelope budget/);
+	});
 	test("local forks do not inherit the Cloudflare ciphertext byte ceiling", async () => {
 		const root = await scratch();
 		const file = join(root, "local.jsonl");

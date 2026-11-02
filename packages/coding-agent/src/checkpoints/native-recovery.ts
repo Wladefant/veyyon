@@ -2,7 +2,7 @@ import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/sess
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, rename, rm, type FileHandle, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, realpath, rename, rm, type FileHandle, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
@@ -58,18 +58,29 @@ async function assertNoSymlink(path: string): Promise<void> {
 	const info = await lstat(path);
 	if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in checkpoints: ${path}`);
 }
-async function walkFiles(root: string, base = root): Promise<string[]> {
-	// The initial traversal root is user-derived, too: a linked sibling of the
-	// session journal must not be treated as approved capture data.
+interface WalkBudget { remainingEntries: number; remainingPathBytes: number }
+async function walkFiles(root: string, base = root, budget?: WalkBudget): Promise<string[]> {
+	// Stream traversal entries instead of materializing an unbounded readdir
+	// array. A cloud budget is shared across nested directories and fails before
+	// opening file contents; local forks retain their historical policy.
 	await assertNoSymlink(root);
-	const names = await readdir(root);
 	const found: string[] = [];
-	for (const name of names) {
-		const path = join(root, name);
+	for await (const entry of await opendir(root)) {
+		const path = join(root, entry.name);
 		await assertNoSymlink(path);
 		const info = await lstat(path);
-		if (info.isDirectory()) found.push(...(await walkFiles(path, base)));
-		else if (info.isFile()) found.push(safeRelative(relative(base, path).split(sep).join("/")));
+		if (info.isDirectory()) found.push(...(await walkFiles(path, base, budget)));
+		else if (info.isFile()) {
+			const rel = safeRelative(relative(base, path).split(sep).join("/"));
+			if (budget) {
+				const size = Buffer.byteLength(rel, "utf8");
+				if (budget.remainingEntries < 1 || size > budget.remainingPathBytes)
+					throw new Error("Checkpoint capture exceeds metadata budget");
+				budget.remainingEntries--;
+				budget.remainingPathBytes -= size;
+			}
+			found.push(rel);
+		}
 	}
 	return found;
 }
@@ -77,6 +88,11 @@ async function walkFiles(root: string, base = root): Promise<string[]> {
 // encoded without compression, so more than 48 MiB of raw file bytes could
 // never fit, even before JSON and the AES-GCM envelope are included.
 const MAX_CAPTURE_RAW_BYTES = 48 * 1024 * 1024;
+// Bound cloud metadata and pre-encryption allocation even for zero-byte files.
+// Local forks do not inherit these Cloudflare-envelope limits.
+const MAX_CLOUD_CAPTURE_ENTRIES = 2048;
+const MAX_CLOUD_CAPTURE_PATH_BYTES = 256 * 1024;
+const MAX_CLOUD_CAPTURE_ESTIMATED_JSON_BYTES = 60 * 1024 * 1024;
 const CAPTURE_READ_CHUNK_BYTES = 64 * 1024;
 
 /** Offline forks are not Cloudflare 64 MiB ciphertext objects. Preserve their
@@ -308,17 +324,45 @@ export async function captureNativeCheckpoint(
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
 	let remainingBytes = nativeCaptureByteBudget(mode);
+	let capturedEntries = 0;
+	let capturedPathBytes = 0;
+	let estimatedJsonBytes = 64 * 1024;
+	const remainingListingBudget = (): WalkBudget | undefined =>
+		mode === "cloud" ? {
+			remainingEntries: MAX_CLOUD_CAPTURE_ENTRIES - capturedEntries,
+			remainingPathBytes: MAX_CLOUD_CAPTURE_PATH_BYTES - capturedPathBytes,
+		} : undefined;
 	const readIncluded = async (
 		filePath: string,
 		approvedRoot?: string,
 		scope: CheckpointSourceScope = "workspace",
 	): Promise<Uint8Array> => {
+		const label = approvedRoot ? relative(approvedRoot, filePath).split(sep).join("/") : "session.jsonl";
+		const labelBytes = Buffer.byteLength(label, "utf8");
+		if (mode === "cloud" && (capturedEntries >= MAX_CLOUD_CAPTURE_ENTRIES ||
+			capturedPathBytes + labelBytes > MAX_CLOUD_CAPTURE_PATH_BYTES))
+			throw new Error("Checkpoint capture exceeds metadata budget");
 		const content = await readStable(filePath, remainingBytes, approvedRoot, scope);
+		if (mode === "cloud") {
+			// Base64 and JSON metadata are materialized later; reject a bounded
+			// conservative envelope before those larger allocations occur.
+			const estimate = 4 * Math.ceil(content.byteLength / 3) + 2 * labelBytes + 256;
+			if (estimatedJsonBytes + estimate > MAX_CLOUD_CAPTURE_ESTIMATED_JSON_BYTES)
+				throw new Error("Checkpoint capture exceeds encoded envelope budget");
+			estimatedJsonBytes += estimate;
+			capturedEntries++;
+			capturedPathBytes += labelBytes;
+		}
 		remainingBytes -= content.byteLength;
 		return content;
 	};
 	const bytes = await readIncluded(journalPath);
 	const header = parseHeader(bytes);
+	if (mode === "cloud") {
+		estimatedJsonBytes += Buffer.byteLength(JSON.stringify(header), "utf8");
+		if (estimatedJsonBytes > MAX_CLOUD_CAPTURE_ESTIMATED_JSON_BYTES)
+			throw new Error("Checkpoint capture exceeds encoded envelope budget");
+	}
 	const sessionId = header.id as string;
 	const artifactRoot = journalPath.slice(0, -6);
 	const artifacts: Record<string, string> = {};
@@ -333,7 +377,7 @@ export async function captureNativeCheckpoint(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	if (artifactRootExists) {
-		for (const rel of await walkFiles(artifactRoot)) {
+		for (const rel of await walkFiles(artifactRoot, artifactRoot, remainingListingBudget())) {
 			// Artifacts are automatic captures, not an explicit selection of
 			// sensitive workspace paths. Apply the same exclusion policy first.
 			if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
@@ -379,7 +423,7 @@ export async function captureNativeCheckpoint(
 			throw new Error(`Workspace path escapes its root: ${input}`);
 		const info = await lstat(path);
 		if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in workspace capture: ${path}`);
-		const data = info.isDirectory() ? await walkFiles(path) : [safeRelative(basename(path))];
+		const data = info.isDirectory() ? await walkFiles(path, path, remainingListingBudget()) : [safeRelative(basename(path))];
 		for (const rel of data) {
 			const full = info.isDirectory() ? join(path, ...rel.split("/")) : path;
 			// Validate the complete workspace-relative path before reading any bytes:
