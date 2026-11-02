@@ -276,7 +276,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		const started = new Promise<void>(resolve => {
 			finalIdleStarted = resolve;
 		});
-		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 180_000 });
 		const handle = createMockSessionHandle(
 			({ emit }) => {
 				emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
