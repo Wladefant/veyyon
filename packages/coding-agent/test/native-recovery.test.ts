@@ -391,6 +391,24 @@ describe("native recovery", () => {
 		await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
 		await expect(captureNativeCheckpoint(session, [join(escape, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
 	});
+	test("native artifact named __proto__ survives capture and restore as an own JSON key", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "proto-name", cwd: root }) + "\n");
+		const artifactRoot = join(root, "session");
+		await mkdir(artifactRoot);
+		await writeFile(join(artifactRoot, "__proto__"), "synthetic artifact with a safe filename");
+		const bundle = await captureNativeCheckpoint(session, []);
+		expect(Object.hasOwn(bundle.artifacts, "__proto__")).toBe(true);
+		expect(Object.getPrototypeOf(bundle.artifacts)).toBe(Object.prototype);
+		expect(Buffer.from(bundle.artifacts["__proto__"]!, "base64").toString("utf8"))
+			.toBe("synthetic artifact with a safe filename");
+		const recovered = JSON.parse(JSON.stringify(bundle)) as typeof bundle;
+		const target = join(root, "restored-proto-name");
+		await restoreNativeCheckpoint(recovered, target);
+		expect(await readFile(join(target, "sessions", "session", "__proto__"), "utf8"))
+			.toBe("synthetic artifact with a safe filename");
+	});
 	test("artifact capture and restore reject private shared-policy paths before publication", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");

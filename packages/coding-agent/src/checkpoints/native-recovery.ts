@@ -386,7 +386,14 @@ export async function captureNativeCheckpoint(
 			// sensitive workspace paths. Apply the same exclusion policy first.
 			if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
 				throw new Error("Artifact paths include excluded checkpoint files");
-			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact"));
+			// A valid filename such as "__proto__" must be an own JSON key,
+			// not an assignment to Object.prototype's inherited setter.
+			Object.defineProperty(artifacts, rel, {
+				value: encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact")),
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
 		}
 	}
 	const blobs: Record<string, string> = {};
