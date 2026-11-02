@@ -34,6 +34,14 @@ export interface MCPWebhookReceiver {
 	handle(request: Request): Promise<Response>;
 }
 
+/** Scope a remote subscription id by its configured callback route.
+ * Different MCP servers may issue the same opaque id. The manager owns
+ * unique callback paths and must not let one server replace another's map key.
+ */
+export function webhookRegistrationKey(callbackPath: string, remoteId: string): string {
+	return JSON.stringify([callbackPath, remoteId]);
+}
+
 /** Build a verifier for registered subscriptions; the caller owns secret resolution and lifecycle. */
 export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWebhookReceiver {
 	const now = options.now ?? Date.now;
@@ -43,7 +51,11 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			const path = new URL(request.url).pathname;
 			const subscriptionId = request.headers.get("X-MCP-Subscription-Id");
 			if (!subscriptionId) return new Response(null, { status: 400 });
-			const registration = options.registrations.get(subscriptionId);
+			const scopedKey = webhookRegistrationKey(path, subscriptionId);
+			// Standalone callers may still use raw-id maps; MCPManager always
+			// registers scoped keys and resolves collisions by the verified path.
+			const routeKey = options.registrations.has(scopedKey) ? scopedKey : subscriptionId;
+			const registration = options.registrations.get(routeKey);
 			const verification = options.verificationRoutes.get(path);
 			const pendingVerification = verification !== undefined && registration === undefined;
 			if (registration && registration.callbackPath !== path) return new Response(null, { status: 503 });
@@ -114,7 +126,7 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			}
 			if (!message) return new Response(null, { status: 400 });
 			try {
-				const outcome = await options.accept(subscriptionId, message);
+				const outcome = await options.accept(routeKey, message);
 				return new Response(null, { status: outcome === "duplicate" ? 204 : 202 });
 			} catch {
 				return new Response(null, { status: 503 });

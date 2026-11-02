@@ -46,6 +46,7 @@ import {
 } from "./client";
 import {
 	createWebhookReceiver,
+	webhookRegistrationKey,
 	type MCPWebhookControl,
 	type MCPWebhookMessage,
 	type MCPWebhookRegistration,
@@ -937,14 +938,18 @@ export class MCPManager {
 				return;
 			}
 			if (subscription.webhookId) {
-				this.#webhookRegistrations.delete(subscription.webhookId);
-				this.#webhookSubscriptions.delete(subscription.webhookId);
-				this.#webhookPortById.delete(subscription.webhookId);
+				const previousKey = webhookRegistrationKey(path, subscription.webhookId);
+				this.#webhookRegistrations.delete(previousKey);
+				this.#webhookSubscriptions.delete(previousKey);
+				this.#webhookPortById.delete(previousKey);
 			}
 			subscription.webhookId = result.id;
-			this.#webhookRegistrations.set(result.id, { secret, name: requested.name, callbackPath: path });
-			this.#webhookSubscriptions.set(result.id, { serverName, key });
-			this.#webhookPortById.set(result.id, port);
+			// Remote ids are unique only within the issuing server; the verified
+			// callback path names the owner inside this shared local receiver.
+			const registrationKey = webhookRegistrationKey(path, result.id);
+			this.#webhookRegistrations.set(registrationKey, { secret, name: requested.name, callbackPath: path });
+			this.#webhookSubscriptions.set(registrationKey, { serverName, key });
+			this.#webhookPortById.set(registrationKey, port);
 			this.#webhookVerificationRoutes.delete(path);
 			if (result.truncated) {
 				await this.#recordEventControl(serverName, key, {
@@ -1330,10 +1335,11 @@ export class MCPManager {
 		const id = subscription.webhookId;
 		const port = subscription.webhookPort;
 		if (subscription.webhookPath) this.#webhookVerificationRoutes.delete(subscription.webhookPath);
-		if (id) {
-			this.#webhookRegistrations.delete(id);
-			this.#webhookSubscriptions.delete(id);
-			this.#webhookPortById.delete(id);
+		if (id && subscription.webhookPath) {
+			const registrationKey = webhookRegistrationKey(subscription.webhookPath, id);
+			this.#webhookRegistrations.delete(registrationKey);
+			this.#webhookSubscriptions.delete(registrationKey);
+			this.#webhookPortById.delete(registrationKey);
 		}
 		const closeHost = port === undefined ? undefined : () => this.#closeUnusedWebhookHost(port);
 		if (id && unsubscribeWebhook && subscription.connection && subscription.config?.webhook) {
