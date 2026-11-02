@@ -803,3 +803,129 @@ it("bulk MCP teardown joins a concurrent per-server close without a duplicate cl
 		}
 	}
 }, 35_000);
+
+
+// WHY: bulk shutdown can begin closing a live transport before a concurrent
+// explicit per-server disconnect. Both callers must join one actual close,
+// independent of HTTP's duplicate-DELETE suppression. The fixture does not
+// prove real installed provider teardown or Windows host behavior.
+it("a single-server MCP disconnect joins bulk-owned close without another transport close attempt", async () => {
+	const names = { a: "bulk-first-close-a", b: "bulk-first-close-b" };
+	const aCloseEntered = Promise.withResolvers<void>();
+	const releaseAClose = Promise.withResolvers<void>();
+	let aCloseCalls = 0;
+	let bCloseCalls = 0;
+	let aDeletes = 0;
+	let bDeletes = 0;
+	const server = createServer(async (request, response) => {
+		try {
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : undefined;
+			if (!route) {
+				response.writeHead(404).end();
+				return;
+			}
+			if (request.method === "DELETE") {
+				if (route === "a") aDeletes++;
+				else bDeletes++;
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { id?: number | string; method?: string };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			const result: Record<string, unknown> = message.method === "initialize"
+				? {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "bulk-first-close", version: "1.0.0" },
+				}
+				: message.method === "tools/list"
+					? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
+					: {};
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": "bulk-first-" + route } : {}),
+			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const ready = Promise.withResolvers<void>();
+	server.once("error", ready.reject);
+	server.listen(0, "127.0.0.1", () => ready.resolve());
+	await withinConnectBoundary(ready.promise, "bulk-first fixture listen");
+	server.off("error", ready.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected HTTP fixture address");
+	const manager = new MCPManager(process.cwd());
+	const configs = {
+		[names.a]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/a" },
+		[names.b]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/b" },
+	};
+	let bulk: Promise<void> | undefined;
+	let single: Promise<void> | undefined;
+	try {
+		const loaded = await withinConnectBoundary(manager.connectServers(configs, {}), "bulk-first peer connections");
+		expect(loaded.connectedServers.sort()).toEqual([names.a, names.b].sort());
+		const a = await withinConnectBoundary(manager.waitForConnection(names.a), "bulk-first A transport");
+		const b = await withinConnectBoundary(manager.waitForConnection(names.b), "bulk-first B transport");
+		const closeA = a.transport.close.bind(a.transport);
+		const closeB = b.transport.close.bind(b.transport);
+		a.transport.close = async () => {
+			aCloseCalls++;
+			aCloseEntered.resolve();
+			if (aCloseCalls === 1) await releaseAClose.promise;
+			await closeA();
+		};
+		b.transport.close = async () => {
+			bCloseCalls++;
+			await closeB();
+		};
+
+		bulk = manager.disconnectAll();
+		await withinConnectBoundary(aCloseEntered.promise, "bulk first A close entered");
+		// Reverse of the existing single-first test: this second public API
+		// call must join the bulk-owned A close, not call transport.close again.
+		single = manager.disconnectServer(names.a);
+		releaseAClose.resolve();
+		await withinConnectBoundary(Promise.all([bulk, single]), "bulk-first joined disconnect");
+		expect(aCloseCalls).toBe(1);
+		expect(bCloseCalls).toBe(1);
+		expect(aDeletes).toBe(1);
+		expect(bDeletes).toBe(1);
+		expect(manager.getConnectedServers()).toEqual([]);
+		expect(manager.getTools()).toEqual([]);
+		expect(manager.getServerConfig(names.a)).toBeUndefined();
+		expect(manager.getServerConfig(names.b)).toBeUndefined();
+
+		const reconnected = await withinConnectBoundary(
+			manager.connectServers({ [names.a]: configs[names.a] }, {}),
+			"fresh A connect after joined close",
+		);
+		expect(reconnected.connectedServers).toContain(names.a);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === names.a)).toHaveLength(1);
+	} finally {
+		releaseAClose.resolve();
+		try {
+			if (single) await withinConnectBoundary(single, "bulk-first single cleanup");
+			if (bulk) await withinConnectBoundary(bulk, "bulk-first bulk cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "bulk-first manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "bulk-first HTTP shutdown");
+			}
+		}
+	}
+}, 35_000);
