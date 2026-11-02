@@ -585,8 +585,8 @@ test("an uncertain transfer fences the old writer before the remote answer and n
 	await expect(client.assertWritable("ambiguous-transfer", grant.epoch)).rejects.toThrow(/lease lost/);
 });
 
-test("transfer receipt must bind target owner, next epoch, and live deadline before reporting success", async () => {
-	const scenarios: Array<{ name: string; ownerNode: string; epoch: number | undefined; expiresAt: string; valid: boolean }> = [
+test("transfer receipt must bind target identity, transfer ID, next epoch, and live deadline", async () => {
+	const scenarios: Array<{ name: string; ownerNode: string; epoch: number | undefined; expiresAt: string; valid: boolean; targetNode?: string; transferId?: string }> = [
 		{ name: "valid", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: true },
 		{ name: "wrong-owner", ownerNode: "foreign", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: false },
 		{ name: "stale-epoch", ownerNode: "destination", epoch: 4, expiresAt: "2099-01-01T00:00:00Z", valid: false },
@@ -594,6 +594,10 @@ test("transfer receipt must bind target owner, next epoch, and live deadline bef
 		{ name: "missing-epoch", ownerNode: "destination", epoch: undefined, expiresAt: "2099-01-01T00:00:00Z", valid: false },
 		{ name: "expired", ownerNode: "destination", epoch: 5, expiresAt: "2000-01-01T00:00:00Z", valid: false },
 		{ name: "malformed-expiry", ownerNode: "destination", epoch: 5, expiresAt: "not-a-date", valid: false },
+		{ name: "wrong-target", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", targetNode: "other-device", valid: false },
+		{ name: "missing-target", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", targetNode: undefined, valid: false },
+		{ name: "wrong-transfer", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", transferId: "other-transfer", valid: false },
+		{ name: "missing-transfer", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", transferId: undefined, valid: false },
 	];
 	for (const scenario of scenarios) {
 		let transfers = 0;
@@ -608,6 +612,8 @@ test("transfer receipt must bind target owner, next epoch, and live deadline bef
 			transfers++;
 			return Response.json({
 				ownerNode: scenario.ownerNode, epoch: scenario.epoch, expiresAt: scenario.expiresAt,
+				targetNode: "targetNode" in scenario ? scenario.targetNode : "destination",
+				transferId: "transferId" in scenario ? scenario.transferId : "transfer-2",
 				headSequence: 0, manifestHash: "",
 			});
 		};
@@ -619,6 +625,8 @@ test("transfer receipt must bind target owner, next epoch, and live deadline bef
 		if (scenario.valid) {
 			const receipt = await client.transferLease(sessionId, "destination", "a-long-enough-claim-token", "transfer-2");
 			expect(receipt.ownerNode).toBe("destination");
+			expect(receipt.targetNode).toBe("destination");
+			expect(receipt.transferId).toBe("transfer-2");
 			expect(receipt.epoch).toBe(5);
 		} else {
 			await expect(client.transferLease(

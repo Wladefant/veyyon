@@ -335,6 +335,8 @@ export class CheckpointClient {
 		if (
 			!next ||
 			next.ownerNode !== targetNode ||
+			next.targetNode !== targetNode ||
+			next.transferId !== transferId ||
 			!Number.isSafeInteger(next.epoch) ||
 			next.epoch !== epoch + 1 ||
 			!Number.isFinite(expiresAt) ||
