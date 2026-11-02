@@ -31,8 +31,8 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import * as path from "node:path";
 import { isFsError } from "./fs-error";
 import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
 
