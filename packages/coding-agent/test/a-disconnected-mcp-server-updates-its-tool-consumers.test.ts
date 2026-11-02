@@ -560,3 +560,163 @@ it(
 	() => exerciseInitialRefreshRace(true),
 	30_000,
 );
+
+
+// WHY: A finishes its original tools/list while a second server B is still
+// loading. A subsequently publishes refreshed tools, but the final startup
+// aggregator must not replay A's stale tracked initial tool-list snapshot.
+// This uses real loopback HTTP transports and a held peer cache-read boundary,
+// not a wall-clock race to finish within startup's 250 ms grace.
+it("a completed startup catalog does not replace a newer live refresh while a peer waits", async () => {
+	const owner = "completed-startup-owner";
+	const peer = "pending-startup-peer";
+	const oldName = createMCPToolName(owner, "old_before_refresh");
+	const freshName = createMCPToolName(owner, "fresh_after_refresh");
+	const peerName = createMCPToolName(peer, "peer_tool");
+	const oldPublished = Promise.withResolvers<void>();
+	const peerListEntered = Promise.withResolvers<void>();
+	const peerPublished = Promise.withResolvers<void>();
+	const releasePeerList = Promise.withResolvers<void>();
+	const cacheReadEntered = Promise.withResolvers<void>();
+	const releaseCacheRead = Promise.withResolvers<void>();
+	let ownerLists = 0;
+	const storage = {
+		getCache: (_key: string) => null,
+		setCache: (_key: string, _raw: string, _expires: number) => {},
+	} as unknown as AgentStorage;
+	const cache = new MCPToolCache(storage);
+	const readCache = cache.get.bind(cache);
+	cache.get = async (name, config) => {
+		if (name === peer) {
+			cacheReadEntered.resolve();
+			await releaseCacheRead.promise;
+		}
+		return readCache(name, config);
+	};
+	const manager = new MCPManager(process.cwd(), cache);
+	const notices: string[][] = [];
+	manager.setOnToolsChanged(tools => {
+		const names = tools.map(tool => tool.name);
+		notices.push(names);
+		if (names.includes(oldName)) oldPublished.resolve();
+		if (names.includes(peerName)) peerPublished.resolve();
+	});
+	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
+		const deadline = Promise.withResolvers<never>();
+		const timer = setTimeout(() => deadline.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
+		try {
+			return await Promise.race([work, deadline.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	const server = createServer(async (request, response) => {
+		try {
+			if (request.method === "DELETE") {
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST" || (request.url !== "/owner" && request.url !== "/peer")) {
+				response.writeHead(405).end();
+				return;
+			}
+			let raw = "";
+			for await (const chunk of request) {
+				raw += String(chunk);
+				if (raw.length > 16_384) throw new Error("Private MCP request exceeded fixture limit");
+			}
+			const message = JSON.parse(raw) as { id?: string | number; method?: string };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "delayed-aggregate-fixture", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				if (request.url === "/peer") {
+					peerListEntered.resolve();
+					await releasePeerList.promise;
+					result = { tools: [{ name: "peer_tool", inputSchema: { type: "object", properties: {} } }] };
+				} else {
+					ownerLists++;
+					result = {
+						tools: [{
+							name: ownerLists === 1 ? "old_before_refresh" : "fresh_after_refresh",
+							inputSchema: { type: "object", properties: {} },
+						}],
+					};
+				}
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": `aggregate-${request.url}` } : {}),
+			});
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await bounded(listening.promise, "private loopback startup");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Missing private loopback port");
+	const config = (route: string) => ({
+		type: "http" as const,
+		url: `http://127.0.0.1:${address.port}/${route}`,
+	});
+	let startup: Promise<Awaited<ReturnType<MCPManager["connectServers"]>>> | undefined;
+	try {
+		const pendingStartup = manager.connectServers({ [owner]: config("owner"), [peer]: config("peer") }, {});
+		startup = pendingStartup;
+		// Only B is still loading after the actual startup grace. Holding the
+		// cache read keeps the final aggregation open without a timing guess.
+		await bounded(
+			Promise.all([oldPublished.promise, peerListEntered.promise, cacheReadEntered.promise]),
+			"completed A and B held in peer cache lookup",
+		);
+		expect(ownerLists).toBe(1);
+		const liveOwner = await bounded(manager.waitForConnection(owner), "owner connection");
+		expect(liveOwner.tools?.map(tool => tool.name)).toEqual(["old_before_refresh"]);
+		await bounded(manager.refreshServerTools(owner), "fresh owner refresh");
+		expect(ownerLists).toBe(2);
+		expect(liveOwner.tools?.map(tool => tool.name)).toEqual(["fresh_after_refresh"]);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === owner).map(tool => tool.name)).toEqual([freshName]);
+
+		releasePeerList.resolve();
+		await bounded(peerPublished.promise, "real B catalog publication");
+		releaseCacheRead.resolve();
+		const result = await bounded(pendingStartup, "two-server startup aggregation");
+		expect(result.connectedServers).toContain(owner);
+		expect(result.connectedServers).toContain(peer);
+		expect(result.tools.filter(tool => tool.mcpServerName === owner).map(tool => tool.name)).toEqual([freshName]);
+		expect(result.tools.filter(tool => tool.mcpServerName === peer).map(tool => tool.name)).toEqual([peerName]);
+		expect(manager.getTools().map(tool => tool.name)).toEqual([freshName, peerName].sort());
+		expect(manager.getTools().map(tool => tool.name)).not.toContain(oldName);
+		expect(notices.at(-1)).toEqual([freshName, peerName].sort());
+	} finally {
+		releasePeerList.resolve();
+		releaseCacheRead.resolve();
+		try {
+			if (startup) await bounded(startup, "pending startup cleanup");
+		} finally {
+			try {
+				await bounded(manager.disconnectAll(), "fixture manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await bounded(stopped.promise, "private fixture close");
+			}
+		}
+	}
+}, 30_000);
