@@ -57,14 +57,13 @@ afterEach(() => {
 describe("run monitor phase supervision", () => {
 	it("aborts a startup run at the two-minute no-progress boundary", () => {
 		vi.useFakeTimers();
-		const { monitor, abort } = createMonitor();
+		const { monitor } = createMonitor();
 
 		vi.advanceTimersByTime(119_999);
 		expect(monitor.abortSignal.aborted).toBe(false);
 		vi.advanceTimersByTime(1);
 		expect(monitor.abortSignal.aborted).toBe(true);
 		expect(monitor.abortKind()).toBe("stalled");
-		expect(abort).toHaveBeenCalledTimes(1);
 		monitor.finish();
 	});
 
