@@ -4,6 +4,7 @@
  * Discovers, connects to, and manages MCP servers.
  * Handles tool loading and lifecycle.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import * as url from "node:url";
 import type { TSchema } from "@veyyon/ai";
@@ -389,6 +390,11 @@ export class MCPManager {
 			if (!target || !subscription) throw new Error("MCP webhook subscription is not active");
 			if (isWebhookControlMessage(message)) {
 				const outcome = await this.#recordEventControl(target.serverName, target.key, message);
+				// Control acceptance may finish after this subscription is explicitly stopped.
+				// Preserve its acknowledgement, but never publish an old cursor or resubscribe.
+				if (subscription.controller.signal.aborted || this.#activeEvents.get(target.key) !== subscription) {
+					return outcome === "duplicate" ? "duplicate" : "queued";
+				}
 				if (message.type === "gap") {
 					await this.#recordEventCursor(subscription, message.cursor ?? null);
 				} else if (message.error.code === -32024) {
@@ -410,6 +416,64 @@ export class MCPManager {
 		| "duplicate"
 		| Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
+	// Key-based webhook unsubscribe blocks only that canonical subscription,
+	// not independent poll/push feeds or unrelated webhook callbacks.
+	#eventConsumerStopBarriers = new Map<string, Promise<void>>();
+	// While disconnectServer drains an old callback, do not re-enroll on the
+	// connection still awaiting closure. Other servers may keep delivering.
+	#eventServerDisconnects = new Map<string, Promise<void>>();
+	// A callback's server can be disconnected independently of the global
+	// event consumer. A new connection reuses the name but never its authority.
+	#eventServerDisconnectEpochs = new Map<string, number>();
+	// Callback function equality is insufficient across clear/re-enable cycles.
+	#eventConsumerRevision = 0;
+	// Auxiliary writers have independent custody: a cursor/control/provider
+	// replacement must not abort unrelated event-discovery startups, but must
+	// fence an older callback that resumes after an external setter.
+	#eventCursorWriterRevision = 0;
+	#eventControlWriterRevision = 0;
+	#eventCursorProviderRevision = 0;
+	// Identify a callback requesting shutdown from inside its own in-flight stream.
+	// Otherwise awaiting streamProcessing/lifecycle in stopEvents self-deadlocks.
+	#eventCallbackContext = new AsyncLocalStorage<{
+		active: boolean;
+		consumerRevision: number;
+		serverName: string;
+		disconnectEpoch: number;
+		cursorWriterRevision: number;
+		controlWriterRevision: number;
+		cursorProviderRevision: number;
+	}>();
+
+	#eventCallbackIsObsolete(): boolean {
+		const scope = this.#eventCallbackContext.getStore();
+		return Boolean(
+			scope?.active &&
+				(scope.consumerRevision !== this.#eventConsumerRevision ||
+					scope.disconnectEpoch !== (this.#eventServerDisconnectEpochs.get(scope.serverName) ?? 0)),
+		);
+	}
+
+	// AsyncLocalStorage outlives the handler in detached timers/promises. Track
+	// the *actual* callback lifetime so later external stop still drains work.
+	async #withEventCallback<T>(serverName: string, handler: () => T | Promise<T>): Promise<T> {
+		const scope = {
+			active: true,
+			consumerRevision: this.#eventConsumerRevision,
+			serverName,
+			disconnectEpoch: this.#eventServerDisconnectEpochs.get(serverName) ?? 0,
+			cursorWriterRevision: this.#eventCursorWriterRevision,
+			controlWriterRevision: this.#eventControlWriterRevision,
+			cursorProviderRevision: this.#eventCursorProviderRevision,
+		};
+		return this.#eventCallbackContext.run(scope, async () => {
+			try {
+				return await handler();
+			} finally {
+				scope.active = false;
+			}
+		});
+	}
 	#eventStartupControllers = new Map<string, AbortController>();
 	#eventStartupPromises = new Map<string, Promise<void>>();
 
@@ -465,6 +529,15 @@ export class MCPManager {
 				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
 			| undefined,
 	): void {
+		const callbackScope = this.#eventCallbackContext.getStore();
+		// A callback started under a previous consumer must not undo a newer
+		// external clear/replacement. In particular, its late re-enable would
+		// wait on the previous callback's drain and deadlock that same callback.
+		if (this.#eventCallbackIsObsolete()) return;
+		this.#eventConsumerRevision++;
+		// A callback intentionally clearing and re-enabling its OWN handler is
+		// still a valid synchronous configuration sequence.
+		if (callbackScope?.active) callbackScope.consumerRevision = this.#eventConsumerRevision;
 		this.#onEvent = handler;
 		if (handler) {
 			for (const [serverName, connection] of this.#connections) {
@@ -474,15 +547,63 @@ export class MCPManager {
 		} else {
 			for (const controller of this.#eventStartupControllers.values()) controller.abort();
 			this.#eventStartupControllers.clear();
+			// Clearing the event consumer must also revoke live subscriptions.
+			// Otherwise their streams keep running against an absent handler.
+			const active = [...this.#activeEvents.entries()];
+			// A callback may clear and re-enable its own handler, then await the
+			// replacement startup. Do not make that startup await the old callback's
+			// lifecycle: it would depend on itself. Detached descendants have an
+			// inactive callback scope and retain the normal external drain.
+			const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
+			for (const [key, subscription] of active) this.#stopEvent(key, subscription);
+			// The setter remains synchronous; consume teardown rejections and
+			// report failures without exposing transport diagnostics or credentials.
+			// Stop all active feeds immediately, but carry each asynchronous
+			// teardown only on that feed's key. A second clear chains its own
+			// same-key cleanup without losing the previous unsubscribe.
+			for (const [key, subscription] of active) {
+				const previousStop = this.#eventConsumerStopBarriers.get(key);
+				const stopBarrier = Promise.allSettled([
+					previousStop,
+					subscription.stream?.done,
+					// Keep remote/webhook teardown ordered by key, but do not
+					// join the caller's in-flight callback chain on re-enrollment.
+					fromEventCallback ? undefined : subscription.streamProcessing,
+					fromEventCallback ? undefined : subscription.lifecycle,
+					subscription.unsubscribe,
+				].filter(Boolean)).then(results => {
+					const failed = results.filter(result => result.status === "rejected").length;
+					if (failed > 0) logger.warn("MCP event handler removal cleanup failed", { failed });
+				});
+				this.#eventConsumerStopBarriers.set(key, stopBarrier);
+				void stopBarrier.then(() => {
+					if (this.#eventConsumerStopBarriers.get(key) === stopBarrier) {
+						this.#eventConsumerStopBarriers.delete(key);
+					}
+				});
+			}
 		}
 	}
 
 	setOnEventCursor(
 		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
 	): void {
+		// An obsolete or disconnected server's callback cannot replace the
+		// successor's cursor writer. External and current setters remain valid.
+		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.cursorWriterRevision !== this.#eventCursorWriterRevision) return;
+		this.#eventCursorWriterRevision++;
+		if (scope?.active) scope.cursorWriterRevision = this.#eventCursorWriterRevision;
 		this.#onEventCursor = handler;
 	}
 	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
+		// Obsolete and disconnected callbacks cannot change the resume authority.
+		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.cursorProviderRevision !== this.#eventCursorProviderRevision) return;
+		this.#eventCursorProviderRevision++;
+		if (scope?.active) scope.cursorProviderRevision = this.#eventCursorProviderRevision;
 		this.#eventCursorProvider = provider;
 	}
 
@@ -490,6 +611,12 @@ export class MCPManager {
 	setOnEventControl(
 		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
 	): void {
+		// A stale or disconnected event callback cannot capture a successor's control.
+		if (this.#eventCallbackIsObsolete()) return;
+		const scope = this.#eventCallbackContext.getStore();
+		if (scope?.active && scope.controlWriterRevision !== this.#eventControlWriterRevision) return;
+		this.#eventControlWriterRevision++;
+		if (scope?.active) scope.controlWriterRevision = this.#eventControlWriterRevision;
 		this.#onEventControl = handler;
 	}
 
@@ -512,19 +639,49 @@ export class MCPManager {
 		this.#eventStartupControllers.get(serverName)?.abort();
 		this.#eventStartupControllers.delete(serverName);
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
+		// Concurrent event callbacks may both request stop: skipping only the
+		// caller's own stream can still deadlock while each awaits the other.
+		const scope = this.#eventCallbackContext.getStore();
+		// A callback of B is independent of A's drain, even while B requests it.
+		const fromEventCallback = scope?.active === true && scope.serverName === serverName;
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			matching.flatMap(([, subscription]) => [
+				subscription.stream?.done,
+				fromEventCallback ? undefined : subscription.streamProcessing,
+				fromEventCallback ? undefined : subscription.lifecycle,
+				subscription.unsubscribe,
+			]).filter(Boolean),
 		);
 	}
 
 	async stopEvents(): Promise<void> {
+		const scope = this.#eventCallbackContext.getStore();
+		// An obsolete handler may still be awaiting an earlier event. Its late
+		// stop must not revoke a replacement consumer installed by another owner.
+		// External stops and stops from the current handler retain their behavior.
+		if (this.#eventCallbackIsObsolete()) return;
+		// An external stop invalidates callbacks already in flight. Otherwise
+		// they may re-enable a subscription while this stop drains only the old
+		// snapshot, leaving the replacement running after stopEvents settles.
+		this.#eventConsumerRevision++;
+		// A callback deliberately stopping its own consumer may still install
+		// a successor after its own stop; only superseded callbacks lose custody.
+		if (scope?.active) scope.consumerRevision = this.#eventConsumerRevision;
 		for (const controller of this.#eventStartupControllers.values()) controller.abort();
 		this.#eventStartupControllers.clear();
 		const active = [...this.#activeEvents.entries()];
+		// Concurrent event callbacks may both request stop: skipping only the
+		// caller's own stream can still deadlock while each awaits the other.
+		const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			active.flatMap(([, subscription]) => [
+				subscription.stream?.done,
+				fromEventCallback ? undefined : subscription.streamProcessing,
+				fromEventCallback ? undefined : subscription.lifecycle,
+				subscription.unsubscribe,
+			]).filter(Boolean),
 		);
 		for (const [port, host] of this.#webhookHosts) {
 			this.#webhookHosts.delete(port);
@@ -537,7 +694,13 @@ export class MCPManager {
 		connection: MCPServerConnection,
 		config: MCPServerConfig["events"],
 	): Promise<void> {
-		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		const consumerRevision = this.#eventConsumerRevision;
+		if (
+			this.#eventServerDisconnects.has(serverName) ||
+			!this.#onEvent ||
+			!isMCPEventsEnabled(config) ||
+			!connection.capabilities.events
+		) return;
 		const eventsConfig = config;
 		this.#eventStartupControllers.get(serverName)?.abort();
 		const controller = new AbortController();
@@ -557,15 +720,24 @@ export class MCPManager {
 			}
 			if (
 				controller.signal.aborted ||
+				this.#eventServerDisconnects.has(serverName) ||
+				consumerRevision !== this.#eventConsumerRevision ||
 				!this.#onEvent ||
 				this.#connections.get(serverName) !== connection
 			) {
 				return;
 			}
 			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
-			for (const requested of eventsConfig.subscriptions) {
+			// An old key-based unsubscribe may be held while other keys need
+			// to enroll. Independent launches must not inherit that latency.
+			await Promise.all(eventsConfig.subscriptions.map(async requested => {
+				const key = this.#eventKey(serverName, requested);
+				const stopBarrier = this.#eventConsumerStopBarriers.get(key);
+				if (stopBarrier) await stopBarrier;
 				if (
 					controller.signal.aborted ||
+					this.#eventServerDisconnects.has(serverName) ||
+					consumerRevision !== this.#eventConsumerRevision ||
 					!this.#onEvent ||
 					this.#connections.get(serverName) !== connection
 				) {
@@ -573,20 +745,18 @@ export class MCPManager {
 				}
 				const descriptor = byName.get(requested.name);
 				if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
-					const key = this.#eventKey(serverName, requested);
 					const active = this.#activeEvents.get(key);
 					if (active) this.#stopEvent(key, active);
-					continue;
+					return;
 				}
 				if (requested.mode === "push" && !connection.transport.streamRequest) {
 					logger.warn("Configured MCP event push mode is unsupported by this transport", {
 						path: `mcp:${serverName}`,
 						event: requested.name,
 					});
-					continue;
+					return;
 				}
-				const key = this.#eventKey(serverName, requested);
-				if (this.#activeEvents.has(key)) continue;
+				if (this.#activeEvents.has(key)) return;
 				const subscription: ActiveMCPEventSubscription = {
 					controller: new AbortController(),
 					serverName,
@@ -605,7 +775,7 @@ export class MCPManager {
 				} else {
 					subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
 				}
-			}
+			}));
 		})();
 		this.#eventStartupPromises.set(serverName, promise);
 		try {
@@ -664,15 +834,22 @@ export class MCPManager {
 			return;
 		}
 		this.#eventSubscriptionFailures.delete(key);
+		// A rejected callback has no remote registration. Leave a failed
+		// diagnostic, never a phantom active feed that cannot receive events.
+		const refuseCallback = (reason: string): void => {
+			logger.error(reason, { path: `mcp:${serverName}` });
+			this.#eventSubscriptionFailures.set(key, reason);
+			this.#stopEvent(key, subscription, false);
+		};
 		let callback: URL;
 		try {
 			callback = new URL(webhook.callbackUrl);
 		} catch {
-			logger.error("MCP webhook callback URL is invalid", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback URL is invalid");
 			return;
 		}
 		if (callback.protocol !== "https:" || callback.username !== "" || callback.password !== "" || callback.hash !== "") {
-			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback must use HTTPS without embedded credentials or a fragment");
 			return;
 		}
 		const path = callback.pathname;
@@ -682,7 +859,7 @@ export class MCPManager {
 			) ||
 			this.#webhookVerificationRoutes.has(path)
 		) {
-			logger.error("MCP webhook callback path must be unique within this session", { path: `mcp:${serverName}` });
+			refuseCallback("MCP webhook callback path must be unique within this session");
 			return;
 		}
 		const port = webhook.listenPort;
@@ -740,6 +917,9 @@ export class MCPManager {
 					cursor: result.cursor ?? null,
 				});
 			}
+			// A stop during durable gap acceptance must not commit the old watermark.
+			if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription ||
+				this.#connections.get(serverName) !== connection) return;
 			await this.#recordEventCursor(subscription, result.cursor ?? null);
 			if (
 				subscription.controller.signal.aborted ||
@@ -813,7 +993,7 @@ export class MCPManager {
 	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
 		const handler = this.#onEventCursor;
 		if (!handler) throw new Error("MCP event cursor callback is not configured");
-		await handler(subscription.serverName, subscription.key, cursor);
+		await this.#withEventCallback(subscription.serverName, () => handler(subscription.serverName, subscription.key, cursor));
 		subscription.cursor = cursor;
 	}
 
@@ -824,7 +1004,10 @@ export class MCPManager {
 	): Promise<void | "queued" | "duplicate"> {
 		const handler = this.#onEventControl;
 		if (!handler) throw new Error("MCP event control callback is not configured");
-		return await handler(serverName, key, control);
+		const subscription = this.#activeEvents.get(key);
+		return await (subscription
+			? this.#withEventCallback(serverName, () => handler(serverName, key, control))
+			: handler(serverName, key, control));
 	}
 
 	#eventKey(serverName: string, subscription: MCPServerEventSubscriptionConfig): string {
@@ -838,7 +1021,7 @@ export class MCPManager {
 		cursor?: string | null,
 		commitOccurrenceCursor = true,
 	): Promise<boolean> {
-		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
+		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) return false;
 		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
 			logger.warn("Skipping invalid MCP event occurrence", {
 				path: `mcp:${serverName}`,
@@ -851,7 +1034,13 @@ export class MCPManager {
 		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
-		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
+		const outcome = await this.#withEventCallback(serverName, () => this.#onEvent!(serverName, deliveryEvent, key));
+		// An in-flight handler may settle after stop or replacement. Its cursor must stay replayable.
+		if (subscription.controller.signal.aborted || this.#activeEvents.get(key) !== subscription) {
+			// Delivery already reached the owning journal. Keep the accepted/duplicate
+			// acknowledgement honest even though the stopped cursor must not advance.
+			return outcome !== "duplicate";
+		}
 		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
 		subscription.seen.add(event.eventId);
 		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
@@ -864,7 +1053,9 @@ export class MCPManager {
 		key: string,
 		subscription: ActiveMCPEventSubscription,
 	): Promise<void> {
-		while (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+		const isCurrent = () =>
+			!subscription.controller.signal.aborted && this.#activeEvents.get(key) === subscription;
+		while (isCurrent()) {
 			const previousCursor = subscription.cursor;
 			try {
 				const result = await pollEvents(
@@ -875,8 +1066,12 @@ export class MCPManager {
 					{ signal: subscription.controller.signal },
 				);
 				for (const event of result.events) {
+					if (!isCurrent()) return;
 					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
 				}
+				// Stopping while an occurrence is being persisted must not acknowledge the
+				// rest of its page: those undelivered events must remain replayable.
+				if (!isCurrent()) return;
 				if (result.truncated) {
 					await this.#recordEventControl(serverName, key, {
 						type: "gap",
@@ -884,6 +1079,7 @@ export class MCPManager {
 						cursor: result.cursor ?? null,
 					});
 				}
+				if (!isCurrent()) return;
 				await this.#recordEventCursor(subscription, result.cursor ?? null);
 				if (result.hasMore) continue;
 				const delay = Math.max(1_000, Number.isFinite(result.nextPollMs) ? result.nextPollMs! : 30_000);
@@ -930,6 +1126,8 @@ export class MCPManager {
 			});
 			return;
 		}
+		const isCurrent = () =>
+			!subscription.controller.signal.aborted && this.#activeEvents.get(key) === subscription;
 		let streamId: string | number | undefined;
 		subscription.streamProcessing = Promise.resolve();
 		subscription.streamFailed = false;
@@ -952,7 +1150,7 @@ export class MCPManager {
 				if (!notification.method.startsWith("notifications/events/")) return;
 				this.#armStreamHeartbeat(subscription);
 				subscription.streamProcessing = subscription.streamProcessing!.then(async () => {
-					if (subscription.streamFailed || subscription.controller.signal.aborted) return;
+					if (subscription.streamFailed || !isCurrent()) return;
 					if (!value) throw new Error("MCP event stream frame has no params");
 					const rawCursor = value.cursor;
 					if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
@@ -969,7 +1167,7 @@ export class MCPManager {
 								path: `mcp:${serverName}`,
 								event: value.name,
 							});
-							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+							if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 							return;
 						}
 						await this.#deliverEvent(serverName, key, subscription, value, cursor);
@@ -984,14 +1182,14 @@ export class MCPManager {
 								...(cursor !== undefined ? { cursor } : {}),
 							});
 						}
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 					} else if (notification.method === "notifications/events/gap") {
 						await this.#recordEventControl(serverName, key, {
 							type: "gap",
 							messageId: controlMessageId,
 							...(cursor !== undefined ? { cursor } : {}),
 						});
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						if (cursor !== undefined && isCurrent()) await this.#recordEventCursor(subscription, cursor);
 					} else if (notification.method === "notifications/events/error") {
 						const error = value.error as { code?: unknown } | undefined;
 						logger.warn("MCP event stream reported a transient error", {
@@ -1013,6 +1211,9 @@ export class MCPManager {
 								...(error?.data ? { data: error.data } : {}),
 							},
 						});
+						// A terminated control may finish after a user stop; never silently
+						// revive a subscription that shutdown already removed.
+						if (!isCurrent()) return;
 						this.#stopEvent(key, subscription, false);
 						if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
 							void this.#refreshEventDescriptors(serverName);
@@ -1721,6 +1922,29 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
+		const existing = this.#eventServerDisconnects.get(name);
+		if (existing) {
+			const scope = this.#eventCallbackContext.getStore();
+			// An A callback cannot await the external A teardown that is awaiting
+			// that callback. Only this exact server-origin path returns early;
+			// unrelated B callbacks still await the real A disconnect outcome.
+			if (scope?.active && scope.serverName === name) return;
+			await existing;
+			return;
+		}
+		// Revoke A's callback authority before the first async drain yields,
+		// without revoking unrelated B's shared event consumer.
+		this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+		const disconnect = this.#disconnectServerOnce(name);
+		this.#eventServerDisconnects.set(name, disconnect);
+		try {
+			await disconnect;
+		} finally {
+			if (this.#eventServerDisconnects.get(name) === disconnect) this.#eventServerDisconnects.delete(name);
+		}
+	}
+
+	async #disconnectServerOnce(name: string): Promise<void> {
 		await this.#stopServerEvents(name);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
@@ -1813,9 +2037,22 @@ export class MCPManager {
 		}
 
 		const pending = this.#pendingReconnections.get(name);
-		if (pending) return pending;
+		if (pending) {
+			const scope = this.#eventCallbackContext.getStore();
+			// An external reconnect may be draining this exact callback. It cannot
+			// await a promise that is in turn waiting for the callback to return.
+			if (scope?.active && scope.serverName === name) {
+				throw new Error("An MCP event callback cannot await its server's in-flight reconnect");
+			}
+			return pending;
+		}
 
 		if (this.#tripReconnectBreaker(name)) {
+			// A suspended transport is no longer an event-feed owner. Without
+			// this drain, manual recovery has no oldConnection to retire, and
+			// the stale key prevents the replacement from enrolling events.
+			this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+			await this.#stopServerEvents(name);
 			return null;
 		}
 
@@ -1926,10 +2163,19 @@ export class MCPManager {
 		// reconnect loop by that amount on every server restart.
 		const reconnectEpoch = this.#epoch;
 		if (oldConnection) {
-			// Detach onClose to prevent re-entrant reconnect from the close itself
+			// Explicit /mcp reconnect must retire this server's old feed, just as
+			// an unexpected transport close does. Remove the stale connection before
+			// awaiting its callback drain so an external handler change cannot start
+			// new events against a transport being replaced.
+			this.#eventServerDisconnectEpochs.set(name, (this.#eventServerDisconnectEpochs.get(name) ?? 0) + 1);
+			// Detach first: stream cancellation during the drain may itself close
+			// this transport. Its stale onClose must never start another reconnect.
 			oldConnection.transport.onClose = undefined;
-			closeTransportDetached(oldConnection.transport, name, "reconnect-replaced");
 			this.#connections.delete(name);
+			await this.#stopServerEvents(name);
+			// Keep transport close detached: the HTTP DELETE may take its full
+			// request timeout and does not belong on the reconnect critical path.
+			closeTransportDetached(oldConnection.transport, name, "reconnect-replaced");
 		}
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
