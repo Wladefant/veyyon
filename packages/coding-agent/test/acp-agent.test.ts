@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { setImmediate, setTimeout } from "node:timers/promises";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import {
-	ClientSideConnection,
-	ndJsonStream,
 	type AgentSideConnection,
 	type Client,
 	type ClientCapabilities,
+	ClientSideConnection,
 	type CreateElicitationRequest,
 	type CreateElicitationResponse,
+	ndJsonStream,
 	type PromptRequest,
 	type PromptResponse,
 	type SessionNotification,
@@ -31,9 +31,9 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // from the command the way it did when the wording became "priority tier".
 import { PRIORITY_TIER_COMMAND_LABEL } from "@veyyon/coding-agent/config/service-tier";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import type { RuntimeMCPConfig } from "@veyyon/coding-agent/mcp/runtime-config";
-import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
 	AcpAgent,
@@ -231,7 +231,6 @@ class FakeAgentSession {
 	setSlashCommands(_commands: unknown[]): void {
 		// no-op for tests
 	}
-
 
 	async refreshExternalTurn(): Promise<boolean> {
 		return await this.sessionManager.refreshExternalTurn();
@@ -689,19 +688,21 @@ describe("ACP agent", () => {
 					? [tool.name]
 					: [],
 			);
-		const refreshTools = spyOn(FakeAgentSession.prototype, "refreshMCPTools").mockImplementation(
-			async function (this: FakeAgentSession, tools: unknown[]) {
-				toolNamesBySession.set(this, namesFrom(tools));
-			},
-		);
+		const refreshTools = spyOn(FakeAgentSession.prototype, "refreshMCPTools").mockImplementation(async function (
+			this: FakeAgentSession,
+			tools: unknown[],
+		) {
+			toolNamesBySession.set(this, namesFrom(tools));
+		});
 		const firstTurnTools: string[][] = [];
 		const originalPrompt = FakeAgentSession.prototype.prompt;
-		const prompt = spyOn(FakeAgentSession.prototype, "prompt").mockImplementation(
-			async function (this: FakeAgentSession, text: string) {
-				firstTurnTools.push(toolNamesBySession.get(this) ?? []);
-				return await originalPrompt.call(this, text);
-			},
-		);
+		const prompt = spyOn(FakeAgentSession.prototype, "prompt").mockImplementation(async function (
+			this: FakeAgentSession,
+			text: string,
+		) {
+			firstTurnTools.push(toolNamesBySession.get(this) ?? []);
+			return await originalPrompt.call(this, text);
+		});
 		const sessionIds: string[] = [];
 		const withInitializationBarrier = async <T>(
 			operation: () => Promise<T>,
@@ -1304,88 +1305,87 @@ describe("ACP agent", () => {
 	});
 
 	/**
-		 * WHY: an active ACP client has already seen its local branch, but a
-		 * sequential CLI writer can append a completed turn to the same file.
-		 * The next prompt must show only that new turn, once. This test does not
-		 * cover concurrent writers or partially written foreign turns.
-		 */
-		it("replays each completed external turn once before the next prompt", async () => {
-			const harness = await createHarness();
-			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-			const session = harness.findSession(created.sessionId);
-			if (!session) throw new Error("ACP session was not registered");
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "Start the conversation." }],
-			});
-			const file = session.sessionManager.getSessionFile();
-			if (!file) throw new Error("ACP session has no transcript file");
-
-			const appendExternalTurn = async (marker: string): Promise<void> => {
-				const external = await SessionManager.open(file, harness.cwdA);
-				external.appendMessage({ role: "user", content: `Store ${marker}.`, timestamp: Date.now() });
-				external.appendMessage(makeAssistantMessage(`Stored ${marker}.`));
-				await external.flush();
-				await external.close();
-			};
-			const visibleText = (): string[] =>
-				harness.updates
-					.filter(
-						update =>
-							update.sessionId === created.sessionId &&
-							(update.update.sessionUpdate === "user_message_chunk" ||
-								update.update.sessionUpdate === "agent_message_chunk"),
-					)
-					.map(update => (update.update.content.type === "text" ? update.update.content.text : ""));
-			const clearUpdates = (): void => {
-				harness.updates.length = 0;
-			};
-
-			const firstMarker = "EXTERNAL-FIRST";
-			await appendExternalTurn(firstMarker);
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "What did the CLI store?" }],
-			});
-			const firstVisible = visibleText();
-			expect(firstVisible.join("\\n")).toContain(firstMarker);
-			expect(firstVisible.filter(text => text.includes(firstMarker))).toHaveLength(2);
-
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "Continue without another external write." }],
-			});
-			expect(visibleText().some(text => text.includes(firstMarker))).toBe(false);
-
-			const secondMarker = "EXTERNAL-SECOND";
-			await appendExternalTurn(secondMarker);
-			clearUpdates();
-			await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "What was stored next?" }],
-			});
-			const secondVisible = visibleText();
-			expect(secondVisible.join("\\n")).toContain(secondMarker);
-			expect(secondVisible.filter(text => text.includes(secondMarker))).toHaveLength(2);
-			expect(secondVisible.some(text => text.includes(firstMarker))).toBe(false);
-
-			await harness.agent.closeSession({ sessionId: created.sessionId });
-			const cold = await SessionManager.open(file, harness.cwdA);
-			const coldText = cold
-				.buildSessionContext()
-				.messages.map(message => (typeof message.content === "string" ? message.content : ""))
-				.join("\\n");
-			expect(cold.getSessionId()).toBe(created.sessionId);
-			expect(coldText).toContain("What did the CLI store?");
-			expect(coldText).toContain(firstMarker);
-			expect(coldText).toContain(secondMarker);
-			expect(cold.getSessionFile()).toBe(file);
-			await cold.close();
-			harness.abortController.abort();
-			await Bun.sleep(0);
+	 * WHY: an active ACP client has already seen its local branch, but a
+	 * sequential CLI writer can append a completed turn to the same file.
+	 * The next prompt must show only that new turn, once. This test does not
+	 * cover concurrent writers or partially written foreign turns.
+	 */
+	it("replays each completed external turn once before the next prompt", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("ACP session was not registered");
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Start the conversation." }],
 		});
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+
+		const appendExternalTurn = async (marker: string): Promise<void> => {
+			const external = await SessionManager.open(file, harness.cwdA);
+			external.appendMessage({ role: "user", content: `Store ${marker}.`, timestamp: Date.now() });
+			external.appendMessage(makeAssistantMessage(`Stored ${marker}.`));
+			await external.flush();
+			await external.close();
+		};
+		const visibleText = (): string[] =>
+			harness.updates.flatMap(({ sessionId, update }) =>
+				sessionId === created.sessionId &&
+				(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
+				update.content.type === "text"
+					? [update.content.text]
+					: [],
+			);
+		const clearUpdates = (): void => {
+			harness.updates.length = 0;
+		};
+
+		const firstMarker = "EXTERNAL-FIRST";
+		await appendExternalTurn(firstMarker);
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "What did the CLI store?" }],
+		});
+		const firstVisible = visibleText();
+		expect(firstVisible.join("\\n")).toContain(firstMarker);
+		expect(firstVisible.filter(text => text.includes(firstMarker))).toHaveLength(2);
+
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "Continue without another external write." }],
+		});
+		expect(visibleText().some(text => text.includes(firstMarker))).toBe(false);
+
+		const secondMarker = "EXTERNAL-SECOND";
+		await appendExternalTurn(secondMarker);
+		clearUpdates();
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "What was stored next?" }],
+		});
+		const secondVisible = visibleText();
+		expect(secondVisible.join("\\n")).toContain(secondMarker);
+		expect(secondVisible.filter(text => text.includes(secondMarker))).toHaveLength(2);
+		expect(secondVisible.some(text => text.includes(firstMarker))).toBe(false);
+
+		await harness.agent.closeSession({ sessionId: created.sessionId });
+		const cold = await SessionManager.open(file, harness.cwdA);
+		const coldText = cold
+			.buildSessionContext()
+			.messages.map(message => ("content" in message && typeof message.content === "string" ? message.content : ""))
+			.join("\\n");
+		expect(cold.getSessionId()).toBe(created.sessionId);
+		expect(coldText).toContain("What did the CLI store?");
+		expect(coldText).toContain(firstMarker);
+		expect(coldText).toContain(secondMarker);
+		expect(cold.getSessionFile()).toBe(file);
+		await cold.close();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
 	it("loads a stored session by ID when the client cwd has changed", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
@@ -1474,9 +1474,9 @@ describe("ACP agent", () => {
 		await stored.sessionManager.flush();
 
 		try {
-			await expect(
-				harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB }),
-			).rejects.toThrow(`ACP session not found: ${stored.sessionId}`);
+			await expect(harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB })).rejects.toThrow(
+				`ACP session not found: ${stored.sessionId}`,
+			);
 		} finally {
 			harness.abortController.abort();
 		}
@@ -2609,6 +2609,52 @@ describe("ACP agent", () => {
 		}
 	});
 
+	it("cancels a prompt while external history is refreshing without starting it", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const refreshEntered = Promise.withResolvers<void>();
+		const releaseRefresh = Promise.withResolvers<void>();
+		const refresh = session.refreshExternalTurn.bind(session);
+		session.refreshExternalTurn = async () => {
+			refreshEntered.resolve();
+			await releaseRefresh.promise;
+			return false;
+		};
+		try {
+			const pending = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "cancel before provider work" }],
+			});
+			await refreshEntered.promise;
+			await harness.agent.cancel({ sessionId: created.sessionId });
+			// The disk gate stays closed, so this liveness bound needs the real clock.
+			const cancelResponseDeadlineMs = 1_000;
+			const deadline = Promise.withResolvers<boolean>();
+			const timer = globalThis.setTimeout(() => deadline.resolve(false), cancelResponseDeadlineMs);
+			let respondedBeforePreflight: boolean;
+			try {
+				respondedBeforePreflight = await Promise.race([pending.then(() => true), deadline.promise]);
+			} finally {
+				clearTimeout(timer);
+			}
+			expect(respondedBeforePreflight, "cancel responded before preflight").toBe(true);
+			expect((await pending).stopReason).toBe("cancelled");
+			expect(session.promptCalls).toEqual([]);
+			session.refreshExternalTurn = refresh;
+			releaseRefresh.resolve();
+			await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "next turn" }],
+			});
+			expect(session.promptCalls).toEqual(["next turn"]);
+		} finally {
+			releaseRefresh.resolve();
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.abortController.abort();
+		}
+	});
+
 	it("suppresses late updates after cancel and waits cleanup before the next prompt", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
@@ -2624,6 +2670,13 @@ describe("ACP agent", () => {
 			await releaseAbortPromise;
 		};
 		const finishPrompt = holdPromptStreaming(session);
+		const heldPrompt = session.prompt.bind(session);
+		const secondPromptStarted = Promise.withResolvers<void>();
+		session.prompt = async text => {
+			const pending = heldPrompt(text);
+			if (text === "after cancel") secondPromptStarted.resolve();
+			return await pending;
+		};
 
 		const firstPrompt = harness.agent.prompt({
 			sessionId: created.sessionId,
@@ -2659,6 +2712,8 @@ describe("ACP agent", () => {
 
 		releaseAbort();
 		await cancelPrompt;
+		// The held prompt replaces its resolver on entry, not when cleanup ends.
+		await secondPromptStarted.promise;
 		finishPrompt();
 		await secondPrompt;
 		expect(session.promptCalls).toEqual(["cancel me", "after cancel"]);

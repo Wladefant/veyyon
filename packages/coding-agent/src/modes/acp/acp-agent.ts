@@ -64,8 +64,8 @@ import { loadSlashCommands } from "../../extensibility/slash-commands";
 // handler and reaches hundreds of modules.
 import { listLocalPlanFileUrls } from "../../internal-urls/local-protocol";
 import { MCPManager } from "../../mcp/manager";
-import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
+import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import type { MCPServerConfig } from "../../mcp/types";
 import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
@@ -719,7 +719,10 @@ export class AcpAgent implements Agent {
 				await this.#closeManagedSession(params.sessionId, record);
 			});
 		}
-		return await this.#queuePrompt(record, async () => {
+		const pendingPrompt = Promise.withResolvers<PromptResponse>();
+		// A cancel response must not wait for preflight I/O. The queue still holds
+		// the next prompt until that I/O and the cancelled turn have drained.
+		this.#queuePrompt(record, async () => {
 			const previousTurn = record.promptTurn;
 			if (previousTurn) {
 				// Wait for any prompt that's still settling or whose cancel cleanup is
@@ -731,12 +734,8 @@ export class AcpAgent implements Agent {
 				await previousTurn.cleanup;
 			}
 			throwIfRecordClosed(record);
-			if (await record.session.refreshExternalTurn()) {
-				await this.#replayNewlyAdoptedHistory(record);
-			}
 
 			const converted = convertPromptBlocks(params.prompt);
-			const pendingPrompt = Promise.withResolvers<PromptResponse>();
 			record.promptTurn = {
 				cancelRequested: false,
 				settled: false,
@@ -748,6 +747,18 @@ export class AcpAgent implements Agent {
 				reject: pendingPrompt.reject,
 				promise: pendingPrompt.promise,
 			};
+			const promptTurn = record.promptTurn;
+			try {
+				if (await record.session.refreshExternalTurn()) {
+					if (!promptTurn.settled) await this.#replayNewlyAdoptedHistory(record);
+				}
+				throwIfRecordClosed(record);
+			} catch (error: unknown) {
+				finishPrompt(record, undefined, error);
+				return await pendingPrompt.promise;
+			}
+			// Cancellation also applies while the disk refresh is in flight.
+			if (promptTurn.settled) return await pendingPrompt.promise;
 
 			record.promptTurn.unsubscribe = record.session.subscribe(event => {
 				this.#trackPromptEvent(record, event);
@@ -758,7 +769,8 @@ export class AcpAgent implements Agent {
 			});
 
 			return await pendingPrompt.promise;
-		});
+		}).catch(pendingPrompt.reject);
+		return await pendingPrompt.promise;
 	}
 
 	async #queuePrompt(record: ManagedSessionRecord, run: () => Promise<PromptResponse>): Promise<PromptResponse> {
@@ -1745,7 +1757,6 @@ export class AcpAgent implements Agent {
 		});
 	}
 
-
 	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await listStoredSessions();
 		return sessions.find(session => session.id === sessionId);
@@ -2639,6 +2650,10 @@ function wrapReplayContent(
 
 function extractReplayContent(content: unknown, errorMessage: string | undefined): PromptRequest["prompt"] {
 	const replay: PromptRequest["prompt"] = [];
+	// Raw session entries retain string user content; context replay uses blocks.
+	if (typeof content === "string" && content.length > 0) {
+		replay.push({ type: "text", text: content });
+	}
 	if (Array.isArray(content)) {
 		for (const item of content) {
 			if (typeof item !== "object" || item === null || !("type" in item)) {
