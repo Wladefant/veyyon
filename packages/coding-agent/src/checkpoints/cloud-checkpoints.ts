@@ -336,9 +336,14 @@ export class CheckpointClient {
 		source?: { ownerNode: string; epoch: number },
 	): Promise<CheckpointLease> {
 		const lease = this.#leases.get(sessionId);
-		if ((!lease || this.#lost.has(sessionId)) && !source) throw new Error("Checkpoint lease required for transfer");
-		const ownerNode = lease && !this.#lost.has(sessionId) ? lease.ownerNode : source!.ownerNode;
-		const epoch = lease && !this.#lost.has(sessionId) ? lease.epoch : source!.epoch;
+		const active = lease && !this.#lost.has(sessionId) ? lease : undefined;
+		// A recovery caller may carry an older source fence. Never silently
+		// substitute a newer shared-client owner's lease for that caller.
+		if (source && active && (active.ownerNode !== source.ownerNode || active.epoch !== source.epoch))
+			throw new Error("Checkpoint source lease changed before transfer");
+		if (!active && !source) throw new Error("Checkpoint lease required for transfer");
+		const ownerNode = active ? active.ownerNode : source!.ownerNode;
+		const epoch = active ? active.epoch : source!.epoch;
 		if (!isCheckpointNodeLabel(targetNode)) throw new Error("A valid target node is required");
 		if (!claimToken || claimToken.length < 16 || claimToken.length > 128) throw new Error("A valid transfer claim token is required");
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid source node is required");

@@ -31,6 +31,37 @@ function commitHeadForRequest(init?: RequestInit) {
 }
 
 describe("cloud checkpoints", () => {
+	test("an old explicit transfer fence cannot spend a newer shared-client owner", async () => {
+		let transfers = 0;
+		const fake: CheckpointFetch = async (input, init) => {
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith("/lease")) {
+				const { ownerNode } = JSON.parse(String(init?.body));
+				return Response.json({
+					ownerNode, epoch: ownerNode === "owner-a" ? 1 : 2,
+					expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+				});
+			}
+			if (path.endsWith("/transfer")) {
+				transfers++;
+				throw new Error("Must not transfer another owner's lease");
+			}
+			throw new Error("Unexpected authority endpoint");
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test",
+			key: new Uint8Array(32), fetch: fake,
+		});
+		const old = await client.acquireLease("s", "owner-a");
+		const next = await client.acquireLease("s", "owner-b");
+		await expect(client.transferLease(
+			"s", "target-node", "c".repeat(16), "transfer-id",
+			{ ownerNode: old.ownerNode, epoch: old.epoch },
+		)).rejects.toThrow(/source lease changed/);
+		expect(transfers).toBe(0);
+		await expect(client.assertWritable("s", next.epoch, "owner-b")).resolves.toBeUndefined();
+	});
+
 	test("a late valid or invalid lease reply cannot change a newer owner's fence", async () => {
 		for (const staleReply of ["valid", "wrong-owner"] as const) {
 			let releaseOld!: (response: Response) => void;
