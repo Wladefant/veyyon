@@ -101,6 +101,8 @@ type ActiveMCPEventSubscription = {
 	webhookId?: string;
 	webhookPath?: string;
 	webhookPort?: number;
+	/** Pending challenge route identity, scoped to this subscription's attempt. */
+	webhookVerificationRoute?: { secret: string };
 	unsubscribe?: Promise<void>;
 };
 
@@ -908,7 +910,20 @@ export class MCPManager {
 		const port = webhook.listenPort;
 		subscription.webhookPath = path;
 		subscription.webhookPort = port;
-		this.#webhookVerificationRoutes.set(path, { secret });
+		// A retired subscribe can finish after a different canonical event key
+		// has reserved this same callback path. Only its own pending route may
+		// be removed by cancellation, an RPC failure, or a successful renewal.
+		const verificationRoute = { secret };
+		subscription.webhookVerificationRoute = verificationRoute;
+		this.#webhookVerificationRoutes.set(path, verificationRoute);
+		const clearVerificationRoute = (): void => {
+			if (this.#webhookVerificationRoutes.get(path) === verificationRoute) {
+				this.#webhookVerificationRoutes.delete(path);
+			}
+			if (subscription.webhookVerificationRoute === verificationRoute) {
+				subscription.webhookVerificationRoute = undefined;
+			}
+		};
 		try {
 			if (!this.#webhookHosts.has(port)) {
 				this.#webhookHosts.set(port, startMCPWebhookHost(this.#webhookReceiver, port));
@@ -927,7 +942,7 @@ export class MCPManager {
 				!this.#activeEvents.has(key) ||
 				this.#connections.get(serverName) !== connection
 			) {
-				this.#webhookVerificationRoutes.delete(path);
+				clearVerificationRoute();
 				subscription.unsubscribe = unsubscribeFromEvents(
 					connection,
 					requested.name,
@@ -956,7 +971,7 @@ export class MCPManager {
 			this.#webhookRegistrations.set(registrationKey, { secret, name: requested.name, callbackPath: path });
 			this.#webhookSubscriptions.set(registrationKey, { serverName, key });
 			this.#webhookPortById.set(registrationKey, port);
-			this.#webhookVerificationRoutes.delete(path);
+			clearVerificationRoute();
 			if (result.truncated) {
 				await this.#recordEventControl(serverName, key, {
 					type: "gap",
@@ -988,7 +1003,7 @@ export class MCPManager {
 				}, Math.max(1_000, refreshAt));
 			}
 		} catch (error) {
-			this.#webhookVerificationRoutes.delete(path);
+			clearVerificationRoute();
 			this.#closeUnusedWebhookHost(port);
 			logger.warn("MCP webhook subscription failed", {
 				path: `mcp:${serverName}`,
@@ -1340,7 +1355,14 @@ export class MCPManager {
 		subscription.stream?.cancel();
 		const id = subscription.webhookId;
 		const port = subscription.webhookPort;
-		if (subscription.webhookPath) this.#webhookVerificationRoutes.delete(subscription.webhookPath);
+		if (
+			subscription.webhookPath &&
+			subscription.webhookVerificationRoute &&
+			this.#webhookVerificationRoutes.get(subscription.webhookPath) === subscription.webhookVerificationRoute
+		) {
+			this.#webhookVerificationRoutes.delete(subscription.webhookPath);
+		}
+		subscription.webhookVerificationRoute = undefined;
 		if (id && subscription.webhookPath) {
 			const registrationKey = webhookRegistrationKey(subscription.webhookPath, id);
 			this.#webhookRegistrations.delete(registrationKey);
