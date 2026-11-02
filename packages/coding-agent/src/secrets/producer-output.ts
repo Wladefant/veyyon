@@ -13,7 +13,7 @@ const CREDENTIAL_KEY_PREFIX =
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
 const ENV_ASSIGNMENT = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
-const ENV_MAP_KEY = /["'](?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)["']\s*:/g;
+const ENV_MAP_KEY = /(?:["'](?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)["']|(?:^|[,{]\s*)[A-Z_][A-Z0-9_]*)\s*:/gm;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
 function isInventory(text: string): boolean {
@@ -46,10 +46,7 @@ export class ProducerOutputGuard {
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(
-		redact?: (text: string) => string,
-		pendingPrefixLength?: (text: string) => number,
-	) {
+	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
 		const owner = currentProducerSecretOwner();
 		this.#redact = redact ?? owner?.redact;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
@@ -170,7 +167,7 @@ export class ProducerOutputGuard {
 			if (newline < 0) break;
 			this.#recordLength = 0;
 			if (this.#dropping) {
-				output.push(this.#block() + "\n");
+				output.push(`${this.#block()}\n`);
 				break;
 			}
 			let pendingPrefix = 0;

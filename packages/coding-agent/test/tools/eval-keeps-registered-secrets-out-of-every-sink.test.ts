@@ -8,20 +8,18 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
+import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { makeToolSession } from "../helpers/tool-session";
 
 const CANARY = "synthetic-eval-\n\nregistered-value-6c84f1";
-const obfuscator = new SecretObfuscator([
-	{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" },
-]);
+const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" }]);
 let directory: string | undefined;
 
 afterEach(() => {
@@ -29,7 +27,6 @@ afterEach(() => {
 	directory = undefined;
 	disposeAllVmContexts();
 });
-
 
 function makeSession(artifactPath: string): ToolSession {
 	const settings = Settings.isolated();
@@ -59,10 +56,10 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const code = [
 			'const value = "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 			'print("split=" + value.slice(0, 16));',
-			'print(value.slice(16));',
+			"print(value.slice(16));",
 			'print("harmless-padding\\n".repeat(12000));',
 			'display(value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1");',
-			'display({ value });',
+			"display({ value });",
 			'return value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 		].join("\n");
 
@@ -75,7 +72,12 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const artifact = fs.existsSync(artifactPath) ? fs.readFileSync(artifactPath, "utf8") : "";
 		const details = result.details as EvalToolDetails & { meta?: unknown };
 		const originalOutput = details.cells?.[0]?.output ?? "";
-		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details), artifact];
+		const retained = [
+			JSON.stringify(progress),
+			JSON.stringify(result.content),
+			JSON.stringify(result.details),
+			artifact,
+		];
 
 		expect(progress.length).toBeGreaterThan(0);
 		for (const sink of retained) expect(sink).not.toContain(CANARY);
@@ -84,5 +86,60 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		expect(details.jsonOutputs).toEqual([{ value: obfuscator.obfuscate(CANARY) }]);
 		expect(JSON.stringify(result.content)).toContain("true");
 		expect(artifact).not.toContain(CANARY);
+	});
+
+	it("withholds unquoted environment-map inventories from every eval sink", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-inventory-"));
+		const artifactPath = path.join(directory, "eval-output.txt");
+		const session = makeSession(artifactPath);
+		const progress: AgentToolResult[] = [];
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			"console.log({ ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' })",
+			"console.log({",
+			"  DELTA: 'fake-d',",
+			"  EPSILON: 'fake-e',",
+			"  ZETA: 'fake-f'",
+			"})",
+		].join("\n");
+		const result = await tool.execute(
+			"synthetic-eval-inventory",
+			{ language: "js", code, reset: true },
+			undefined,
+			update => progress.push(update),
+		);
+		const artifact = fs.existsSync(artifactPath) ? fs.readFileSync(artifactPath, "utf8") : "";
+		const details = result.details as EvalToolDetails;
+		const sinks = [
+			...progress.map(update => (update.details as EvalToolDetails | undefined)?.cells?.[0]?.output ?? ""),
+			result.content.map(part => (part.type === "text" ? part.text : "")).join("\n"),
+			details.cells?.[0]?.output ?? "",
+			artifact,
+		];
+
+		for (const sink of sinks) {
+			for (const value of ["fake-a", "fake-b", "fake-c", "fake-d", "fake-e", "fake-f"]) {
+				expect(sink).not.toContain(value);
+			}
+		}
+		expect(result.content.map(part => (part.type === "text" ? part.text : "")).join("\n")).toContain(
+			"[credential output withheld]",
+		);
+	});
+
+	it("keeps ordinary one- and two-key objects and lowercase objects visible", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ordinary-object-"));
+		const session = makeSession(path.join(directory, "unused.txt"));
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			"console.log({ alpha: 'ordinary-a', beta: 'ordinary-b' })",
+			"console.log({ alpha: 'ordinary-a', beta: 'ordinary-b', gamma: 'ordinary-c' })",
+			"console.log({ ALPHA: 'ordinary-a', BETA: 'ordinary-b' })",
+		].join("\n");
+		const result = await tool.execute("synthetic-ordinary-objects", { language: "js", code, reset: true });
+		const output = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		expect(output).toContain("{ alpha: 'ordinary-a', beta: 'ordinary-b' }");
+		expect(output).toContain("{ alpha: 'ordinary-a', beta: 'ordinary-b', gamma: 'ordinary-c' }");
+		expect(output).toContain("{ ALPHA: 'ordinary-a', BETA: 'ordinary-b' }");
 	});
 });
