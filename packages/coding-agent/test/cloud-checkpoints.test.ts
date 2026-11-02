@@ -39,10 +39,15 @@ describe("cloud checkpoints", () => {
 			if (path.endsWith("/lease"))
 				return Response.json({
 					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					headSequence: 99, manifestHash: "",
 				});
 			if (path.includes("/objects/")) return new Response(null, { status: 201 });
-			if (path.endsWith("/commit")) return Response.json(commitHeadForRequest(init));
+			if (path.endsWith("/commit")) {
+				const { expectedHead, manifest } = JSON.parse(String(init?.body));
+				if (expectedHead !== 99 || manifest.sequence !== 100)
+					return Response.json({ error: "head conflict" }, { status: 409 });
+				return Response.json(commitHeadForRequest(init));
+			}
 			throw new Error(`Unexpected checkpoint request: ${path}`);
 		};
 		const client = new CheckpointClient({
