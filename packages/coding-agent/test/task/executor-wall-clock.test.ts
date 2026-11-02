@@ -334,6 +334,8 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 					terminalOutcome: result.terminalOutcome,
 					aborted: result.aborted,
 					abortReason: result.abortReason,
+					error: result.error,
+					stderr: result.stderr,
 					promptCount: handle.prompts.length,
 				})}`);
 				return result;
