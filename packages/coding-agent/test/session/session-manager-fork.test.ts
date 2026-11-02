@@ -901,14 +901,19 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       // source file or the unrelated synthetic target.
       const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
         if (copiedPath && String(file) === copiedPath && !swapped) {
-          swapped = true;
           await fs.rename(copiedPath, copiedPath + ".parked");
           await fs.symlink(outside, copiedPath, "file");
+          // A filesystem that rejects symlink creation must fail this test,
+          // not pass by throwing before the prohibited link was installed.
+          swapped = (await fs.lstat(copiedPath)).isSymbolicLink();
+          if (!swapped) throw new Error("synthetic symlink substitution was not installed");
         }
         return realOpen(file, flags, mode);
       });
       try {
-        await expect(manager.fork()).rejects.toThrow();
+        // A fixture/permissions error is not evidence that the fork's
+        // production descriptor guard rejected the injected symlink.
+        await expect(manager.fork()).rejects.toThrow(/artifact changed during digest read|ELOOP/);
       } finally {
         openSpy.mockRestore();
         copySpy.mockRestore();
