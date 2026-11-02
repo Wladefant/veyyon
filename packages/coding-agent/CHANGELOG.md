@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Supervision phases now use bounded watchdogs (120 s for startup, 180 s for streams, 15 min for tools, and 30 min for children). A timed-out phase supports one acknowledged recovery in the same session, and terminal outcomes remain durable with five-minute parked retention and bounded orphan cleanup.
+- Task successors cannot start after another successor claims the predecessor checkpoint. Retiring a predecessor preserves its history.
+
 ## [1.7.6] - 2026-11-02
 
 ### Fixed
