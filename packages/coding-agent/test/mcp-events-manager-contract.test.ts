@@ -2801,4 +2801,99 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// A previous stopEvents must not destroy a webhook host or unsubscribe a
+	// successor that starts while the old consumer is still draining. Unlike
+	// handler-clear, the global stop historically omitted the key barrier.
+	it("does not close a new webhook host during an earlier stopEvents", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const oldUnsubscribeEntered = Promise.withResolvers<void>();
+		const releaseOldUnsubscribe = Promise.withResolvers<void>();
+		const initialCursor = Promise.withResolvers<void>();
+		const replacementCursor = Promise.withResolvers<void>();
+		let oldUnsubscribed = false;
+		let subscribeCount = 0;
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => {
+				subscribeCount++;
+				if (subscribeCount > 1 && !oldUnsubscribed) {
+					throw new Error("replacement subscribed before old webhook tuple was released");
+				}
+				return {
+					id: `stop-race-${subscribeCount}`,
+					cursor: `stop-cursor-${subscribeCount}`,
+					refreshBefore: null,
+				};
+			},
+			webhookUnsubscribe: async () => {
+				oldUnsubscribeEntered.resolve();
+				await releaseOldUnsubscribe.promise;
+				oldUnsubscribed = true;
+				return {};
+			},
+		});
+		const name = "stop-webhook-host-race";
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_STOP_HOST_SECRET;
+		process.env.MCP_EVENTS_STOP_HOST_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_serverName, _key, cursor) => {
+			if (cursor === "stop-cursor-1") initialCursor.resolve();
+			if (cursor === "stop-cursor-2") replacementCursor.resolve();
+		});
+		let stop: Promise<void> | undefined;
+		try {
+			await withinHandlerChange(connect(manager, name, managerConfig(server, {
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME,
+					mode: "webhook",
+					webhook: {
+						callbackUrl: "https://callback.example.test/events/stopped-owner",
+						secretRef: "$MCP_EVENTS_STOP_HOST_SECRET",
+						listenPort,
+					},
+				}],
+			})), "initial webhook to stop");
+			await withinHandlerChange(initialCursor.promise, "initial stopped webhook cursor");
+			stop = manager.stopEvents();
+			await withinHandlerChange(oldUnsubscribeEntered.promise, "old webhook unsubscribe started");
+			// This new explicit external owner must wait for the old tuple
+			// unsubscribe, then retain its live callback host after stop returns.
+			manager.setOnEvent(() => {});
+			const newStartup = manager.getEventStartupPromise(name);
+			if (!newStartup) throw new Error("Replacement webhook startup not registered");
+			await delay(30);
+			expect(subscribeCount).toBe(1);
+			releaseOldUnsubscribe.resolve();
+			await withinHandlerChange(
+				Promise.all([stop, newStartup, replacementCursor.promise]),
+				"old stop and replacement webhook registration",
+			);
+			expect(oldUnsubscribed).toBe(true);
+			expect(subscribeCount).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(1);
+			// Prove the actual Bun loopback host survived: the webhook receiver
+			// responds 405 to GET; a stopped listener rejects fetch entirely.
+			const liveHost = await withinHandlerChange(
+				fetch(`http://127.0.0.1:${listenPort}/events/stopped-owner`, { method: "GET" }),
+				"replacement webhook listener still accepts HTTP",
+			);
+			expect(liveHost.status).toBe(405);
+		} finally {
+			releaseOldUnsubscribe.resolve();
+			try {
+				if (stop) await withinHandlerChange(stop, "pending stop cleanup");
+				await withinHandlerChange(manager.disconnectAll(), "replacement host cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_STOP_HOST_SECRET;
+				else process.env.MCP_EVENTS_STOP_HOST_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
 });
