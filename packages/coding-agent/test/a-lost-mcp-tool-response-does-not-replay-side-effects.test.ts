@@ -294,4 +294,56 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		expect(staleRecoveryCalls).toBe(0);
 	});
 
+	// WHY: async local:// argument resolution yields between an explicit tool
+	// invocation's connection snapshot and dispatch. A separate explicit call
+	// may reconnect in that window; only that newer call owns its new transport.
+	// The external MCP transports alone are simulated, not the tool wrapper.
+	it("pins each explicit MCP call to its original transport while argument resolution yields", async () => {
+		let originalCalls = 0;
+		let recoveredCalls = 0;
+		let reconnects = 0;
+		const original = connection(fakeTransport(async () => {
+			originalCalls++;
+			throw new Error("ECONNRESET");
+		}));
+		const recovered = connection(fakeTransport(async () => {
+			recoveredCalls++;
+			return completedResult("explicit third call");
+		}));
+		const tool = new MCPTool(original, writeTool, async () => {
+			reconnects++;
+			return recovered;
+		});
+
+		// Recursing through many ordinary argument values drives the actual
+		// asynchronous prepareOutboundArgs path, rather than mocking that method.
+		// The later short invocation completes its reconnect before A dispatches.
+		const slowArgs = {
+			value: "first",
+			additional: Array.from({ length: 192 }, (_, index) => `synthetic-${index}`),
+		};
+		const firstPending = tool.execute("first-long-preparation", slowArgs, undefined, context);
+		const second = await boundedUnknownOutcome(
+			tool.execute("second-short-preparation", { value: "second" }, undefined, context),
+		);
+		expect(second.isError).toBe(true);
+		expect(originalCalls).toBe(1);
+		expect(recoveredCalls).toBe(0);
+
+		const first = await boundedUnknownOutcome(firstPending);
+		expect(first.isError).toBe(true);
+		expect(JSON.stringify(first)).toContain("outcome unknown");
+		// The first invocation never silently migrates its attempted tools/call
+		// to the replacement selected by the later explicit invocation.
+		expect(originalCalls).toBe(2);
+		expect(recoveredCalls).toBe(0);
+		expect(reconnects).toBe(2);
+
+		const third = await boundedUnknownOutcome(
+			tool.execute("third-explicit", { value: "third" }, undefined, context),
+		);
+		expect(third.isError).not.toBe(true);
+		expect(third.content[0]).toEqual({ type: "text", text: "explicit third call" });
+		expect(recoveredCalls).toBe(1);
+	});
 });
