@@ -8,10 +8,10 @@
 import { expect, it } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { disposeKernelSessionsByOwner, executePython } from "@veyyon/coding-agent/eval/py/executor";
 import { TempDir } from "@veyyon/utils";
 import { setTransports } from "@veyyon/utils/logger";
 import { describeRequiringTool } from "../../../utils/test/helpers/requires-tool";
+import { PythonKernel } from "../../src/eval/py/kernel";
 
 const OWNER = "kernel-stderr-inventory-test";
 
@@ -28,18 +28,31 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 		using tempDir = TempDir.createSync("@veyyon-kernel-stderr-");
 		const logs = path.join(tempDir.path(), "logs");
 		setTransports({ file: logs });
+		const kernels: PythonKernel[] = [];
 		try {
-			const result = await executePython(
+			const inventoryKernel = await PythonKernel.start({
+				cwd: tempDir.path(),
+				sessionId: `kernel-stderr-inventory:${crypto.randomUUID()}`,
+				kernelOwnerId: OWNER,
+			});
+			kernels.push(inventoryKernel);
+			const result = await inventoryKernel.execute(
 				"import os; os.write(2, b'ALPHA=fake-a\\n'); os.write(2, b'BETA=fake-b\\n'); os.write(2, b'GAMMA=fake-c\\n')",
-				{ sessionId: `kernel-stderr-inventory:${crypto.randomUUID()}`, kernelOwnerId: OWNER },
 			);
-			expect(result.exitCode).toBe(0);
-			const safeResult = await executePython(
+			expect(result.status).toBe("ok");
+
+			const safeKernel = await PythonKernel.start({
+				cwd: tempDir.path(),
+				sessionId: `kernel-stderr-safe:${crypto.randomUUID()}`,
+				kernelOwnerId: OWNER,
+			});
+			kernels.push(safeKernel);
+			const safeResult = await safeKernel.execute(
 				"import os; os.write(2, b'ordinary diagnostic\\n'); os.write(2, b'final diagnostic without newline')",
-				{ sessionId: `kernel-stderr-safe:${crypto.randomUUID()}`, kernelOwnerId: OWNER },
 			);
-			expect(safeResult.exitCode).toBe(0);
-			await disposeKernelSessionsByOwner(OWNER);
+			expect(safeResult.status).toBe("ok");
+			await Promise.all(kernels.map(kernel => kernel.shutdown()));
+			kernels.length = 0;
 			const content = await readLogDirectory(logs);
 
 			expect(content).toContain("ordinary diagnostic");
@@ -48,7 +61,7 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 			expect(content).not.toContain("BETA=fake-b");
 			expect(content).not.toContain("GAMMA=fake-c");
 		} finally {
-			await disposeKernelSessionsByOwner(OWNER);
+			await Promise.all(kernels.map(kernel => kernel.shutdown()));
 			setTransports({ file: false, console: false });
 		}
 	}, 30_000);
