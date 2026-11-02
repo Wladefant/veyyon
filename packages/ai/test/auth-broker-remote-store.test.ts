@@ -111,6 +111,41 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials).toEqual([]);
 	});
 
+	test("reconciles a silent SSE peer revocation after the wall clock moves backward", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await streamReady.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		// The broker commits a peer revoke, but the established stream delivers
+		// no delta. Simulate a real backwards wall-time step after its last frame.
+		expect(storage!.disableCredentialById(id, "synthetic peer revocation before clock rollback")).toBe(true);
+		const nativeWallNow = Date.now.bind(Date);
+		const clockSpy = spyOn(Date, "now").mockImplementation(() => nativeWallNow() - 3_600_000);
+		try {
+			// An idle verifier using Date.now() would skip every 25-ms tick for
+			// roughly an hour. The production monotonic timer must not do so.
+			await waitUntil(() => remote!.snapshot.credentials.length === 0);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		} finally {
+			clockSpy.mockRestore();
+		}
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected canonical broker truth");
+		expect(authoritative.snapshot.credentials).toEqual([]);
+	});
+
 	test("retains a known safety block through an idle SSE GET failure, then adopts a peer block", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

@@ -280,7 +280,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #snapshotStreamVerifyIntervalMs: number;
 	readonly #onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
 	#snapshot: SnapshotResponse = emptySnapshot();
+	/** Wall time remains necessary for broker-provided rotatesInMs deadlines. */
 	#snapshotReceivedAt = Date.now();
+	/** Inactivity is elapsed time and must survive backward system-clock steps. */
+	#snapshotReceivedMonotonicAt = performance.now();
 	#generation = 0;
 	/** Monotonic revision of accepted broker state AND local edits; fences stale GETs across restarts and disables. */
 	#appliedSnapshotRevision = 0;
@@ -343,6 +346,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#generation = generation;
 		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = nowMs;
+		this.#snapshotReceivedMonotonicAt = performance.now();
 		const onSnapshot = this.#onSnapshot;
 		if (!onSnapshot) return;
 		try {
@@ -482,7 +486,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				return; // Stream closed or store shutdown; never leave an orphan timer.
 			}
 			if (this.#closed || signal.aborted) return;
-			if (Date.now() - this.#snapshotReceivedAt < this.#snapshotStreamVerifyIntervalMs) continue;
+			if (performance.now() - this.#snapshotReceivedMonotonicAt < this.#snapshotStreamVerifyIntervalMs) continue;
 			const revisionAtRequest = this.#appliedSnapshotRevision;
 			try {
 				const result = await this.#client.fetchSnapshot({ signal });
@@ -585,6 +589,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#generation = generation;
 		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
+		this.#snapshotReceivedMonotonicAt = performance.now();
 	}
 
 	#removeStreamCredential(id: number, refresher: RefresherSchedule, generation: number, serverNowMs: number): void {
@@ -595,6 +600,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#generation = generation;
 		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
+		this.#snapshotReceivedMonotonicAt = performance.now();
 	}
 
 	/** Re-hydrate the in-memory snapshot from the broker. */
