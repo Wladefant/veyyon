@@ -118,7 +118,7 @@ status=$?
 cleanup
 cleanup_status=$?
 trap - EXIT
-if (( cleanup_status != 0 )); then
-  exit 1
+if (( cleanup_status != 0 && status == 0 )); then
+  status=1
 fi
 exit "$status"

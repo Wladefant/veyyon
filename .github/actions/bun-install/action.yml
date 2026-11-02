@@ -108,39 +108,34 @@ runs:
 
            echo "::notice title=Bun cache diagnostic::effective_cache=${effective_cache:-unknown}, expected_cache=~/.bun/install/cache, cache_hit=${CACHE_HIT:-false}, runner=${RUNNER_NAME:-unknown}, BUN_INSTALL=${BUN_INSTALL:-unset}"
 
-           # 2. Config parser for [install.cache] allowed keys: dir, disable, disableManifest
+           # 2. Read only the allowed [install.cache] scalar settings.
            for cfg in "bunfig.toml" "${HOME}/.bunfig.toml"; do
              echo "--- Checking bunfig: ${cfg} ---"
              if [ ! -f "${cfg}" ]; then
                echo "${cfg}: missing"
                echo "::notice title=Bunfig install.cache config::${cfg}: missing"
-             else
-               echo "${cfg}: present"
-               parsed="$(awk '
-                 BEGIN { in_cache = 0; count = 0 }
-                 /^\[/ {
-                   in_cache = ($0 ~ /^\[install\.cache\]/)
-                   next
-                 }
-                 in_cache {
-                   if ($0 ~ /^[[:space:]]*(dir|disable|disableManifest)[[:space:]]*=/) {
-                     line = $0
-                     sub(/^[[:space:]]*/, "", line)
-                     print line
-                     count++
-                   }
-                 }
-                 END {
-                   if (count == 0) {
-                     print "(none)"
-                   }
-                 }
-               ' "${cfg}")"
-               echo "Allowed [install.cache] settings:"
-               echo "${parsed}"
-               notice_line="$(echo "${parsed}" | tr '\n' ' ' | sed -e 's/[[:space:]]*$//')"
-               echo "::notice title=Bunfig install.cache config::${cfg}: ${notice_line}"
+               continue
              fi
+             if ! parsed="$(BUNFIG_PATH="$cfg" bun -e '
+               const fs = require("node:fs");
+               try {
+                 const config = Bun.TOML.parse(fs.readFileSync(process.env.BUNFIG_PATH, "utf8"));
+                 const cache = config.install?.cache;
+                 const selected = {};
+                 if (typeof cache?.dir === "string") selected.dir = cache.dir;
+                 if (typeof cache?.disable === "boolean") selected.disable = cache.disable;
+                 if (typeof cache?.disableManifest === "boolean") selected.disableManifest = cache.disableManifest;
+                 console.log(JSON.stringify(selected));
+               } catch {
+                 process.exitCode = 1;
+               }
+             ' 2>/dev/null)"; then
+               echo "${cfg}: unreadable or invalid"
+               echo "::notice title=Bunfig install.cache config::${cfg}: unreadable or invalid"
+               continue
+             fi
+             echo "Allowed [install.cache] settings: ${parsed}"
+             echo "::notice title=Bunfig install.cache config::${cfg}: ${parsed}"
            done
 
            # 3. Read-only Linux load evidence
