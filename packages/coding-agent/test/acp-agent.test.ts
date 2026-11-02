@@ -1349,9 +1349,16 @@ describe("ACP agent", () => {
 		await session.sessionManager.flush();
 		await appendExternalTurn(firstMarker);
 		clearUpdates();
-		await harness.agent.prompt({
+		const firstResponse = await harness.agent.prompt({
 			sessionId: created.sessionId,
 			prompt: [{ type: "text", text: "What did the CLI store?" }],
+		});
+		expect(firstResponse.usage).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cachedReadTokens: 2,
+			cachedWriteTokens: 1,
+			totalTokens: 18,
 		});
 		const firstVisible = visibleText();
 		expect(firstVisible.join("\\n")).toContain(firstMarker);
@@ -1488,7 +1495,7 @@ describe("ACP agent", () => {
 		}
 	});
 
-	it("resumes a stored session without replaying it, and refuses a missing id or a foreign cwd", async () => {
+	it("resumes a stored session without replaying existing history and replays only later external history", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
 		harness.sessions.push(stored);
@@ -1508,6 +1515,32 @@ describe("ACP agent", () => {
 			),
 		).toEqual([]);
 
+		const file = stored.sessionManager.getSessionFile();
+		if (!file) throw new Error("resumed session has no transcript file");
+		const external = await SessionManager.open(file, harness.cwdA);
+		external.appendMessage({ role: "user", content: "external user turn", timestamp: Date.now() });
+		external.appendMessage(makeAssistantMessage("external assistant turn"));
+		await external.flush();
+		await external.close();
+		harness.updates.length = 0;
+
+		await harness.agent.prompt({
+			sessionId: stored.sessionId,
+			prompt: [{ type: "text", text: "continue" }],
+		});
+		const replayed = harness.updates
+			.filter(
+				update =>
+					update.sessionId === stored.sessionId &&
+					(update.update.sessionUpdate === "user_message_chunk" ||
+						update.update.sessionUpdate === "agent_message_chunk"),
+			)
+			.map(update => ("content" in update.update && update.update.content.type === "text" ? update.update.content.text : ""));
+		expect(replayed.join("\n")).not.toContain("hello");
+		expect(replayed.join("\n")).not.toContain("reply");
+		expect(replayed.filter(text => text.includes("external user turn"))).toHaveLength(1);
+		expect(replayed.filter(text => text.includes("external assistant turn"))).toHaveLength(1);
+
 		await expect(harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB })).rejects.toThrow(
 			`ACP session ${stored.sessionId} is already loaded for`,
 		);
@@ -1516,7 +1549,6 @@ describe("ACP agent", () => {
 		);
 
 		harness.abortController.abort();
-		await Bun.sleep(0);
 	});
 
 	it.each([
@@ -2615,39 +2647,76 @@ describe("ACP agent", () => {
 		}
 	});
 
-	it("cancels preparation before starting the prompt and holds the queue until refresh ends", async () => {
+	it("cancels after external adoption and replays adopted history on the next prompt", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "establish external transcript" }],
+		});
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+		await session.sessionManager.flush();
+		const external = await SessionManager.open(file, harness.cwdA);
+		external.appendMessage({ role: "user", content: "adopted external user", timestamp: Date.now() });
+		external.appendMessage(makeAssistantMessage("adopted external assistant"));
+		await external.flush();
+		await external.close();
+
 		const refreshStarted = Promise.withResolvers<void>();
 		const releaseRefresh = Promise.withResolvers<void>();
+		const refreshExternalTurn = session.refreshExternalTurn.bind(session);
 		session.refreshExternalTurn = async () => {
 			refreshStarted.resolve();
 			await releaseRefresh.promise;
-			return false;
+			return await refreshExternalTurn();
 		};
+		harness.updates.length = 0;
 		const firstPrompt = harness.agent.prompt({
 			sessionId: created.sessionId,
-			prompt: [{ type: "text", text: "cancel during refresh" }],
+			prompt: [{ type: "text", text: "cancel during adoption" }],
 		});
 		await refreshStarted.promise;
 		const cancelOperation = harness.agent.cancel({ sessionId: created.sessionId });
-		const cancelled = await firstPrompt;
-		expect(cancelled.stopReason).toBe("cancelled");
-		expect(session.promptCalls).toEqual([]);
-
-		const nextPrompt = harness.agent.prompt({
-			sessionId: created.sessionId,
-			prompt: [{ type: "text", text: "after refresh cancellation" }],
-		});
-		expect(session.promptCalls).toEqual([]);
+		expect((await firstPrompt).stopReason).toBe("cancelled");
 		releaseRefresh.resolve();
 		await cancelOperation;
-		const nextResponse = await nextPrompt;
-		expect(nextResponse.stopReason).toBe("end_turn");
-		expect(session.promptCalls).toEqual(["after refresh cancellation"]);
+
+		harness.updates.length = 0;
+		session.refreshExternalTurn = refreshExternalTurn;
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "deliver adopted history" }],
+		});
+		const replayed = harness.updates
+			.filter(
+				update =>
+					update.sessionId === created.sessionId &&
+					(update.update.sessionUpdate === "user_message_chunk" ||
+						update.update.sessionUpdate === "agent_message_chunk"),
+			)
+			.map(update => ("content" in update.update && update.update.content.type === "text" ? update.update.content.text : ""));
+		expect(replayed.filter(text => text.includes("adopted external user"))).toHaveLength(1);
+		expect(replayed.filter(text => text.includes("adopted external assistant"))).toHaveLength(1);
+		harness.updates.length = 0;
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "continue after replay" }],
+		});
+		const laterVisibleText = harness.updates
+			.filter(
+				update =>
+					update.sessionId === created.sessionId &&
+					(update.update.sessionUpdate === "user_message_chunk" ||
+						update.update.sessionUpdate === "agent_message_chunk"),
+			)
+			.map(update => ("content" in update.update && update.update.content.type === "text" ? update.update.content.text : ""))
+			.join("\n");
+		expect(laterVisibleText).not.toContain("adopted external user");
+		expect(laterVisibleText).not.toContain("adopted external assistant");
+		expect(session.promptCalls).toEqual(["establish external transcript", "deliver adopted history", "continue after replay"]);
 		harness.abortController.abort();
-		await Bun.sleep(0);
 	});
 	it("suppresses late updates after cancel and waits cleanup before the next prompt", async () => {
 		const harness = await createHarness();

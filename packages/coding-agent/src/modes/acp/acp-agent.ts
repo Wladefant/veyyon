@@ -617,6 +617,7 @@ export class AcpAgent implements Agent {
 	async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
 		assertAbsoluteCwd(params.cwd);
 		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers ?? []);
+		this.#markSessionEntriesDisplayed(record);
 		const response: ResumeSessionResponse = {
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
@@ -753,11 +754,11 @@ export class AcpAgent implements Agent {
 			});
 
 			promptTurn.preparation = (async () => {
-				if (await record.session.refreshExternalTurn()) {
-					if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
-					throwIfRecordClosed(record);
-					await this.#replayNewlyAdoptedHistory(record);
-				}
+				await record.session.refreshExternalTurn();
+				promptTurn.usageBaseline = cloneUsageStatistics(record.session.sessionManager.getUsageStatistics());
+				if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
+				throwIfRecordClosed(record);
+				await this.#replayNewlyAdoptedHistory(record);
 			})();
 			void promptTurn.preparation
 				.then(async () => {

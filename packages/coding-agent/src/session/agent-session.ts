@@ -1045,6 +1045,7 @@ export class AgentSession {
 
 	/** Prompts in flight and the power assertion held while any runs. */
 	readonly #inFlight: TurnsInFlight;
+	readonly #promptPreparations = new Set<Promise<boolean>>();
 	#abortInProgress = false;
 	/**
 	 * Turns that ended while `abort()` was running. `abort()` clears `#abortInProgress` once the agent
@@ -5445,10 +5446,17 @@ export class AgentSession {
 			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<void> {
-		await this.refreshExternalTurn();
+		const generation = this.#promptGeneration;
+		const preparation = this.refreshExternalTurn();
+		this.#promptPreparations.add(preparation);
+		try {
+			await preparation;
+		} finally {
+			this.#promptPreparations.delete(preparation);
+		}
+		if (this.#promptGeneration !== generation) return;
 		this.#inFlight.begin();
 		startupMarker("prompt:start");
-		const generation = this.#promptGeneration;
 		try {
 			// The turn leaves rest: take the held at-rest reading before the flush below or the prompt
 			// appends a message, since the reading is at rest only while the session holds none.
@@ -6323,6 +6331,7 @@ export class AgentSession {
 			const postPromptDrain = this.#cancelPostPromptTasks();
 			this.agent.abort(options?.reason);
 			await postPromptDrain;
+			await Promise.allSettled(this.#promptPreparations);
 			await this.agent.waitForIdle();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
@@ -8093,6 +8102,8 @@ export class AgentSession {
 		if (!(await this.sessionManager.refreshExternalTurn())) return false;
 		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
+		this.#todo.syncFromBranch();
+		this.#todo.resetForNewContext();
 		return true;
 	}
 
