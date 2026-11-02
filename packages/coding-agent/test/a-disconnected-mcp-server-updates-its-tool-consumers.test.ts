@@ -1,5 +1,6 @@
 import { expect, it } from "bun:test";
 import type { MCPRequestOptions, MCPToolsListResult } from "../src/mcp/types";
+import { createServer } from "node:http";
 import * as path from "node:path";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import { createMCPToolName } from "@veyyon/coding-agent/mcp/tool-bridge";
@@ -389,5 +390,129 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 	} finally {
 		releaseFailure.resolve();
 		await bounded(manager.disconnectAll(), "fixture teardown");
+	}
+}, 30_000);
+
+
+// WHY: initial discovery's tools/list can settle after a newer live refresh.
+// A single connection/cache must never publish the superseded initial catalog.
+// Real HTTP MCP handshake and MCPManager; only the newer list reply is faked.
+it("a notification refresh cannot be overtaken by the still-pending initial tool discovery", async () => {
+	const name = "initial-refresh-order";
+	const firstListEntered = Promise.withResolvers<void>();
+	const releaseInitialList = Promise.withResolvers<void>();
+	const manager = new MCPManager(process.cwd());
+	const observed: string[][] = [];
+	manager.setOnToolsChanged(tools => observed.push(tools.map(tool => tool.name)));
+	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
+		const expired = Promise.withResolvers<never>();
+		const timer = setTimeout(() => expired.reject(new Error("MCP " + phase + " did not settle")), 8_000);
+		try {
+			return await Promise.race([work, expired.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	const server = createServer(async (request, response) => {
+		try {
+			if (request.method === "DELETE") {
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { method?: string; id?: string | number };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "initial-refresh-order-fixture", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				firstListEntered.resolve();
+				await releaseInitialList.promise;
+				result = { tools: [{ name: "stale_initial", inputSchema: { type: "object", properties: {} } }] };
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": "initial-refresh-fixture" } : {}),
+			});
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await bounded(listening.promise, "private fixture listen");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
+	const config = { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/mcp" };
+	let connecting: Promise<unknown> | undefined;
+	let refreshing: Promise<void> | undefined;
+	let restoreRequest: (() => void) | undefined;
+	let refreshRequests = 0;
+	try {
+		connecting = manager.connectServers({ [name]: config }, {});
+		await bounded(firstListEntered.promise, "first initial tools/list request");
+		const connection = await bounded(manager.waitForConnection(name), "initialized HTTP connection");
+		const transport = connection.transport;
+		const originalRequest = transport.request;
+		transport.request = async <T = unknown>(
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		): Promise<T> => {
+			if (method === "tools/list") {
+				refreshRequests++;
+				return { tools: [{ name: "fresh_notification", inputSchema: { type: "object", properties: {} } }] } as T;
+			}
+			return originalRequest.call(transport, method, params, options) as Promise<T>;
+		};
+		restoreRequest = () => {
+			transport.request = originalRequest;
+		};
+		refreshing = manager.refreshServerTools(name);
+		// Old code starts request 2 before the initial request settles.
+		expect(refreshRequests).toBe(0);
+		releaseInitialList.resolve();
+		await bounded(Promise.all([connecting, refreshing]), "startup and queued refresh");
+		expect(refreshRequests).toBe(1);
+		const newest = [createMCPToolName(name, "fresh_notification")];
+		const obsolete = createMCPToolName(name, "stale_initial");
+		expect(manager.getTools().map(tool => tool.name)).toEqual(newest);
+		expect(connection.tools?.map(tool => tool.name)).toEqual(["fresh_notification"]);
+		expect(observed).not.toEqual([]);
+		expect(observed.every(names => !names.includes(obsolete))).toBe(true);
+		expect(observed.at(-1)).toEqual(newest);
+	} finally {
+		releaseInitialList.resolve();
+		try {
+			if (connecting) await bounded(connecting, "startup cleanup");
+			if (refreshing) await bounded(refreshing, "refresh cleanup");
+		} finally {
+			restoreRequest?.();
+			try {
+				await bounded(manager.disconnectAll(), "manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await bounded(stopped.promise, "private fixture close");
+			}
+		}
 	}
 }, 30_000);
