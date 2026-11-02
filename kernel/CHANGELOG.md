@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal ownership checks can ignore unreadable or malformed publisher records. The filename PID must be dead, or its derived endpoint must be absent. Live or uncertain claims still fail closed ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
 ## [1.7.5] - 2026-11-02
 
 ### Changed
