@@ -116,6 +116,34 @@ test("a finalized original transfer claim cannot disclose a later pending rotate
  expect((await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
 });
 
+test("an expired rotated pending lease rejects the spent original transfer token",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="rotated-expired-fence";
+ const claimToken="synthetic-expired-original-capability";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const initial=await (await post("claim",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,claimToken})).json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:initial.epoch,resumeToken:initial.resumeToken})).status).toBe(200);
+ expect((await post("release",{ownerNode:"runtime-one",epoch:initial.epoch})).status).toBe(200);
+ const pending=await (await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:initial.resumeToken})).json() as {epoch:number;resumeToken:string};
+ const lease=data.get("lease") as {expiresAt:string;epoch:number;ownerNode:string};
+ lease.expiresAt=new Date(0).toISOString();
+ const beforeClaim=JSON.stringify(data.get(`claim:${transferId}`));
+ const beforeLease=JSON.stringify(data.get("lease"));
+ // An expired lease must not reactivate original C and hand P2 to a new owner.
+ expect((await post("claim",{ownerNode:"stale-third-runtime",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(beforeClaim);
+ expect(JSON.stringify(data.get("lease"))).toBe(beforeLease);
+ // Current finalized P1 remains authorized for interrupted P2 recovery.
+ const recoveredReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:initial.resumeToken});
+ expect(recoveredReply.status).toBe(200);
+ const recovered=await recoveredReply.json() as {epoch:number;resumeToken:string};
+ expect(recovered.epoch).toBeGreaterThan(pending.epoch);
+ expect(recovered.resumeToken).toBe(pending.resumeToken);
+ expect((await post("finalize",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:recovered.epoch,resumeToken:recovered.resumeToken})).status).toBe(200);
+});
+
 test("a reservation cannot commit, renew, or release before its one-use claim is redeemed",async()=>{
  const {post,objects,data}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
