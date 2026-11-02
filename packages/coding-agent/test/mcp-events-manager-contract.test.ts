@@ -3242,4 +3242,96 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
+
+	// A reconnect also drains the retired B event handler before creating a
+	// replacement transport. A->reconnect(B) / B->disconnect(A) is the same
+	// cyclic callback wait graph as two disconnects; no background retry.
+	it("rejects a mixed reconnect/disconnect event callback cycle", async () => {
+		const aName = "mixed-reconnect-A";
+		const bName = "mixed-reconnect-B";
+		const aEntered = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const releaseBoth = Promise.withResolvers<void>();
+		const aFinished = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const outcomes: string[] = [];
+		let settled = false;
+		let bPolls = 0;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("mixed-A", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: ++bPolls === 1 ? [event("mixed-B", "B-cursor")] : [],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "mixed-A") {
+				aEntered.resolve();
+				await releaseBoth.promise;
+				try {
+					const replacement = await manager.reconnectServer(bName);
+					if (!replacement) throw new Error("Expected live replacement B after cycle refusal");
+					outcomes.push("A-reconnected-B");
+				} finally {
+					aFinished.resolve();
+				}
+			}
+			if (name === bName && occurrence.eventId === "mixed-B") {
+				bEntered.resolve();
+				await releaseBoth.promise;
+				try {
+					await manager.disconnectServer(aName);
+					outcomes.push("B-falsely-disconnected-A");
+				} catch (error) {
+					if (!(error instanceof Error) || !error.message.includes("cyclic MCP event disconnect")) {
+						throw error;
+					}
+					outcomes.push("B-cycle-rejected");
+				} finally {
+					bFinished.resolve();
+				}
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "mixed A initial connection");
+			await withinHandlerChange(aEntered.promise, "mixed A entered");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "mixed B initial connection");
+			await withinHandlerChange(bEntered.promise, "mixed B entered");
+			releaseBoth.resolve();
+			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "mixed cycle settles");
+			settled = true;
+			expect(outcomes.sort()).toEqual(["A-reconnected-B", "B-cycle-rejected"]);
+			expect(manager.getConnectedServers().sort()).toEqual([aName, bName].sort());
+			expect(serverB.requests.filter(x => x.method === "initialize").length).toBeGreaterThanOrEqual(2);
+			await withinHandlerChange(manager.disconnectAll(), "external mixed-cycle owner cleanup");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+		} finally {
+			releaseBoth.resolve();
+			try {
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "mixed callback cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
 });
