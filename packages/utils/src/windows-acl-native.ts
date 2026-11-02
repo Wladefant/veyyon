@@ -62,7 +62,8 @@ function failure(operation: string, code: number): Error {
 
 /** Same policy as the ACL writer: current user owner, protected DACL, exactly user + SYSTEM full control. */
 export function verifyNativeOwnerOnlyWindowsAcl(filePath: string): void {
-	const { security, kernel } = (api ??= loadSecurityApi());
+	api ??= loadSecurityApi();
+	const { security, kernel } = api;
 	const target = Buffer.from(`${filePath}\0`, "utf16le");
 	const attributes = kernel.GetFileAttributesW(target);
 	if (attributes === 0xffff_ffff) throw failure("GetFileAttributesW", kernel.GetLastError());
