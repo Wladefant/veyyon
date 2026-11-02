@@ -63,6 +63,35 @@ test("a failed resume-marker rename removes the temporary capability", async () 
 	expect(await readdir(root)).toEqual(["checkpoint-ownership.json"]);
 });
 
+test("ownership sidecars reject overlong capabilities and 64 KiB overflow before admission", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-bounded-sidecar-"));
+	roots.push(root);
+	const sessions = join(root, "sessions");
+	await mkdir(sessions);
+	const sessionFile = join(sessions, "session.jsonl");
+	await writeFile(
+		sessionFile,
+		JSON.stringify({ type: "session", id: "transfer", cwd: root, checkpointHandoff: identity }) + "\n",
+	);
+	const recoveryPath = join(root, "recovery.json");
+	await writeFile(recoveryPath, JSON.stringify({ sessionId: "transfer", checkpointTransfer: true }));
+	const markerPath = join(sessions, "checkpoint-ownership.json");
+	for (const invalid of [
+		{ ...marker, claimToken: "x".repeat(129) },
+		{ ...marker, claimToken: undefined, resumeToken: "x".repeat(129) },
+	]) {
+		await writeFile(markerPath, JSON.stringify(invalid));
+		await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/marker is missing or invalid/);
+	}
+	await writeFile(markerPath, JSON.stringify(marker).padEnd(64 * 1024, " "));
+	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).resolves.toMatchObject({ marker });
+	await writeFile(markerPath, JSON.stringify(marker).padEnd(64 * 1024 + 1, " "));
+	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/ownership marker is unreadable/);
+	await writeFile(markerPath, JSON.stringify(marker));
+	await writeFile(recoveryPath, JSON.stringify({ sessionId: "transfer", checkpointTransfer: true }).padEnd(64 * 1024 + 1, " "));
+	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/Cannot verify restored checkpoint ownership/);
+});
+
 test("a copied native journal without sidecars never resumes as an ordinary checkpoint", async () => {
 	const root = await mkdtemp(join(tmpdir(), "session-ownership-copy-"));
 	roots.push(root);

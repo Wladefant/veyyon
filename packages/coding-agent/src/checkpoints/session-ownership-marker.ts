@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SESSION_TITLE_SLOT_BYTES } from "@veyyon/kernel/session/session-entries";
 import { parseTitleSlotLine } from "@veyyon/kernel/session/session-title-slot";
-import { type FileHandle, open, readFile, rename, rm } from "node:fs/promises";
+import { type FileHandle, open, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 
@@ -33,8 +33,8 @@ function isSessionOwnershipMarker(value: unknown): value is SessionOwnershipMark
 		typeof value.epoch !== "number" ||
 		!Number.isSafeInteger(value.epoch) ||
 		value.epoch < value.transferEpoch ||
-		("claimToken" in value && (typeof value.claimToken !== "string" || value.claimToken.length < 16)) ||
-		("resumeToken" in value && (typeof value.resumeToken !== "string" || value.resumeToken.length < 16)) ||
+		("claimToken" in value && (typeof value.claimToken !== "string" || value.claimToken.length < 16 || value.claimToken.length > 128)) ||
+		("resumeToken" in value && (typeof value.resumeToken !== "string" || value.resumeToken.length < 16 || value.resumeToken.length > 128)) ||
 		(Boolean("claimToken" in value) === Boolean("resumeToken" in value))
 	)
 		return false;
@@ -129,6 +129,26 @@ async function readNativeHandoffIdentity(
 	};
 }
 
+/** Bound transferred-session sidecars before JSON parsing. A malformed or
+ * growing recovery/ownership file must not allocate unbounded session-load RAM. */
+async function readBoundedOwnershipJson(path: string): Promise<unknown> {
+	const maxBytes = 64 * 1024;
+	const buffer = Buffer.alloc(maxBytes + 1);
+	const file = await open(path, "r");
+	try {
+		let size = 0;
+		while (size < buffer.byteLength) {
+			const { bytesRead } = await file.read(buffer, size, buffer.byteLength - size, size);
+			if (bytesRead === 0) break;
+			size += bytesRead;
+		}
+		if (size > maxBytes) throw new Error("Checkpoint ownership sidecar exceeds the 64 KiB read limit");
+		return JSON.parse(buffer.subarray(0, size).toString("utf8"));
+	} finally {
+		await file.close();
+	}
+}
+
 export async function readSessionOwnershipMarker(sessionFile: string, sessionId: string): Promise<{
 	path: string;
 	marker: SessionOwnershipMarker;
@@ -138,7 +158,7 @@ export async function readSessionOwnershipMarker(sessionFile: string, sessionId:
 	const identity = await readNativeHandoffIdentity(sessionFile, sessionId);
 	let recoveryValue: unknown;
 	try {
-		recoveryValue = JSON.parse(await readFile(join(directory, "..", "recovery.json"), "utf8"));
+		recoveryValue = await readBoundedOwnershipJson(join(directory, "..", "recovery.json"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT")
 			throw new Error("Cannot verify restored checkpoint ownership", { cause: error });
@@ -158,7 +178,7 @@ export async function readSessionOwnershipMarker(sessionFile: string, sessionId:
 	}
 	let markerValue: unknown;
 	try {
-		markerValue = JSON.parse(await readFile(path, "utf8"));
+		markerValue = await readBoundedOwnershipJson(path);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT")
 			throw new Error("Transferred session ownership marker is unreadable", { cause: error });
