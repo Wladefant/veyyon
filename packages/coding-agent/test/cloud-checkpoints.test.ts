@@ -31,6 +31,48 @@ function commitHeadForRequest(init?: RequestInit) {
 }
 
 describe("cloud checkpoints", () => {
+	test("commit preflight refuses impossible cloud identities and head numbers without uploads", async () => {
+		const requests: string[] = [];
+		const fake: CheckpointFetch = async (input, init) => {
+			const path = new URL(String(input)).pathname;
+			requests.push(path);
+			if (path.endsWith("/lease"))
+				return Response.json({
+					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (path.includes("/objects/")) return new Response(null, { status: 201 });
+			if (path.endsWith("/commit")) return Response.json(commitHeadForRequest(init));
+			throw new Error(`Unexpected checkpoint request: ${path}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		await client.acquireLease("s", "node-a");
+		for (const invalidId of ["", "bad/path", "x".repeat(129)]) {
+			await expect(client.commit(invalidId, bundle, 0)).rejects.toThrow(/Invalid checkpoint session identity/);
+		}
+		for (const invalidHead of [-1, 0.5, 100, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+			await expect(client.commit("s", bundle, invalidHead)).rejects.toThrow(/Invalid checkpoint expected head/);
+		}
+		await expect(client.commit("s", {
+			...bundle, native: { ...bundle.native, sessionId: "foreign" },
+		}, 0)).rejects.toThrow(/bundle session identity mismatch/);
+		await expect(client.commit("s", {
+			...bundle, native: { ...bundle.native, header: { ...bundle.native.header, id: "foreign" } },
+		}, 0)).rejects.toThrow(/bundle session identity mismatch/);
+		expect(requests).toEqual(["/v1/sessions/s/lease"]);
+		// The last legal cloud head still permits sequence 100.
+		expect(await client.commit("s", bundle, 99)).toMatchObject({ sequence: 100 });
+		expect(requests.filter(path => path.includes("/objects/"))).toHaveLength(1);
+		expect(requests.filter(path => path.endsWith("/commit"))).toHaveLength(1);
+		const disabled = new CheckpointClient({
+			baseUrl: "", token: "", key: new Uint8Array(), fetch: fake,
+		});
+		await expect(disabled.commit("s", bundle, 0)).rejects.toThrow(/disabled or not configured/);
+		expect(requests).toHaveLength(3);
+	});
+
 	test("round trips ciphertext larger than the service object cap", async () => {
 		const objects = new Map<string, Uint8Array>();
 		let head: unknown = null;

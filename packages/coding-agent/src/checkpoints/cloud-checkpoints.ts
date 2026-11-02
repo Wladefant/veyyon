@@ -429,6 +429,20 @@ export class CheckpointClient {
 			throw new Error("Checkpoint lease lost; synchronized writes are fenced");
 	}
 	async commit(sessionId: string, bundle: CheckpointBundle, expectedHead: number): Promise<unknown> {
+		// Reject impossible cloud writes before allocating encrypted ciphertext
+		// or uploading immutable objects. These mirror the pinned authority caps.
+		if (!this.enabled) throw new Error("Cloud checkpoints are disabled or not configured");
+		if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) throw new Error("Invalid checkpoint session identity");
+		if (!Number.isSafeInteger(expectedHead) || expectedHead < 0 || expectedHead >= 100)
+			throw new Error("Invalid checkpoint expected head");
+		// The Worker cannot inspect encrypted native bytes. Never commit a
+		// differently identified source beneath this session's authority head.
+		if (
+			bundle.native.sessionId !== sessionId ||
+			bundle.native.header.type !== "session" ||
+			bundle.native.header.id !== sessionId
+		)
+			throw new Error("Checkpoint bundle session identity mismatch");
 		const lease = this.#leases.get(sessionId);
 		if (!lease) throw new Error("Checkpoint lease required");
 		await this.assertWritable(sessionId, lease.epoch);
