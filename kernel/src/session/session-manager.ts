@@ -1978,6 +1978,22 @@ export class SessionManager {
 		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
 		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
 
+		// A pinned forkFrom() target may name another persisted session, and a
+		// missing source artifact directory must not allow its pre-existing
+		// destination sidecar to become this fork's unrelated recovery evidence.
+		// Refuse both occupied paths before any copy or JSONL publication. This
+		// preflight protects known existing targets; it is not a cross-process
+		// exclusive reservation of a newly created destination path.
+		for (const destination of [nextSessionFile, nextArtifactDir]) {
+			try {
+				await fs.promises.lstat(destination);
+			} catch (error) {
+				if (isEnoent(error)) continue;
+				throw error;
+			}
+			throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+		}
+
 		// Preserve the original referenced bytes before mutating the active
 		// session identity, entries or file. A best-effort post-switch copy can
 		// otherwise leave inherited artifact://0 pointing at unrelated new output.
