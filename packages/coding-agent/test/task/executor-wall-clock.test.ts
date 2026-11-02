@@ -45,6 +45,7 @@ function mockCreateAgentSession(session: AgentSession) {
 
 describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -80,20 +81,59 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 
 		expect(AgentRegistry.global().get("agent-terminal-completed")?.terminalOutcome).toBe("completed");
 	});
+	it("records a failed terminal outcome", async () => {
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const session = createMockSession(() => {
+			throw new Error("agent prompt failed");
+		});
+		mockCreateAgentSession(session);
+
+		await runSubprocess({
+			...baseOptions,
+			id: "agent-terminal-failed",
+			settings,
+		});
+
+		expect(AgentRegistry.global().get("agent-terminal-failed")?.terminalOutcome).toBe("failed");
+	});
+	it("records setup failures as startup-failed", async () => {
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		vi.spyOn(sdkModule, "createAgentSession").mockRejectedValue(new Error("session startup failed"));
+
+		await runSubprocess({
+			...baseOptions,
+			id: "agent-terminal-startup-failed",
+			settings,
+		});
+
+		expect(AgentRegistry.global().get("agent-terminal-startup-failed")?.terminalOutcome).toBe("startup-failed");
+	});
 
 	it("records a stalled terminal outcome after recovery fails", async () => {
+		vi.useFakeTimers();
+		const controller = new AbortController();
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const handle = createMockSessionHandle(() => {}, { hangUntilAbort: true });
 		mockCreateAgentSession(handle.session);
 
-		const result = await runSubprocess({
+		const resultPromise = runSubprocess({
 			...baseOptions,
 			id: "agent-stalled-terminal-outcome",
 			settings,
+			signal: controller.signal,
 		});
-
-		expect(result.abortReason).toContain("stalled");
-		expect(AgentRegistry.global().get("agent-stalled-terminal-outcome")?.terminalOutcome).toBe("stalled");
+		try {
+			await vi.advanceTimersByTimeAsync(120_001);
+			expect(handle.abortCalls()).toBe(1);
+			await vi.advanceTimersByTimeAsync(120_001);
+			expect(handle.abortCalls()).toBe(2);
+			const result = await resultPromise;
+			expect(result.abortReason).toContain("stalled");
+			expect(AgentRegistry.global().get("agent-stalled-terminal-outcome")?.terminalOutcome).toBe("stalled");
+		} finally {
+			controller.abort();
+			await resultPromise;
+		}
 	});
 	it("aborts a stalled agent and surfaces a runtime-limit reason", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 1_000 });
@@ -114,9 +154,48 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.abortReason).toContain("runtime limit exceeded");
 		expect(result.abortReason).toContain("task.maxRuntimeMs=1000");
 		expect(handle.abortCalls()).toBeGreaterThanOrEqual(1);
+		expect(result.cancellationAcknowledged).toBe(true);
 		// Sanity: must finish in roughly the configured window (allow generous slack
 		// for CI; the contract is "doesn't hang for hours", not "exactly 50 ms").
 		expect(elapsedMs).toBeLessThan(10_000);
+	});
+	it("does not recover or acknowledge a stalled run while abort cleanup is pending", async () => {
+		vi.useFakeTimers();
+		let settleAbort: (() => void) | undefined;
+		let abortCalls = 0;
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const handle = createMockSessionHandle(() => {}, { hangUntilAbort: true });
+		handle.session.abort = async () => {
+			abortCalls++;
+			return new Promise<void>(resolve => {
+				settleAbort = resolve;
+			});
+		};
+		mockCreateAgentSession(handle.session);
+
+		const controller = new AbortController();
+		const resultPromise = runSubprocess({
+			...baseOptions,
+			id: "agent-pending-abort",
+			settings,
+			signal: controller.signal,
+		});
+		try {
+			await vi.advanceTimersByTimeAsync(120_001);
+			await vi.advanceTimersByTimeAsync(5_001);
+			const result = await resultPromise;
+
+			expect(abortCalls).toBe(1);
+			expect(handle.prompts).toHaveLength(1);
+			expect(result.abortReason).toContain("stalled");
+			expect(result.cancellationAcknowledged).toBe(false);
+			expect(AgentRegistry.global().get("agent-pending-abort")?.terminalOutcome).toBe("stalled");
+		} finally {
+			controller.abort();
+			settleAbort?.();
+			await vi.advanceTimersByTimeAsync(5_001);
+			await resultPromise;
+		}
 	});
 
 	it("does not abort early when the runtime budget is unlimited", async () => {

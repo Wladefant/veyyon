@@ -2,23 +2,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface SessionStub {
 	session: AgentSession;
 	flushCalls: () => number;
 	disposeCalls: () => number;
+	customMessages: () => string[];
 }
 
 /** Minimal durable session exposing the flush-before-dispose boundary owned by the lifecycle manager. */
 function makeSessionStub(dispose?: () => Promise<void>, flush?: () => Promise<void>): SessionStub {
 	let flushCount = 0;
 	let disposeCount = 0;
+	const messages: string[] = [];
 	const stub = {
 		sessionManager: {
 			flush: async () => {
 				flushCount++;
 				await flush?.();
 			},
+			appendCustomMessageEntry: (_type: string, content: string) => {
+				messages.push(content);
+				return "entry";
+			},
+			close: async () => {},
 		},
 		dispose: async () => {
 			disposeCount++;
@@ -29,6 +37,7 @@ function makeSessionStub(dispose?: () => Promise<void>, flush?: () => Promise<vo
 		session: stub as unknown as AgentSession,
 		flushCalls: () => flushCount,
 		disposeCalls: () => disposeCount,
+		customMessages: () => messages,
 	};
 }
 
@@ -787,25 +796,63 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("reports unfinished parked assignments as stalled before ordinary pruning", async () => {
+		const parentSession = makeSessionStub();
+		registry.register({
+			id: "Parent",
+			displayName: "parent",
+			kind: "main",
+			session: parentSession.session,
+			sessionFile: "/tmp/Parent.jsonl",
+		});
 		const parked = registry.register({
 			id: "Unfinished",
 			displayName: "task",
 			kind: "sub",
+			parentId: "Parent",
 			session: null,
 			sessionFile: "/tmp/Unfinished.jsonl",
 			status: "parked",
 		});
 		await lifecycle.prune("Unfinished");
 
+		expect(parentSession.customMessages()).toContain(
+			'Agent "Unfinished" stalled: Assignment was pruned before reporting a terminal outcome.',
+		);
+		expect(parentSession.flushCalls()).toBe(1);
 		expect(parked.terminalOutcome).toBe("stalled");
 		expect(parked.terminalOutcomeReason).toMatch(/pruned|pruning/i);
 		expect(registry.get("Unfinished")).toBeUndefined();
+	});
+
+	it("clears the prior terminal outcome only when a new assignment starts", () => {
+		const ref = registry.register({
+			id: "Reused",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
+		registry.recordTerminalOutcome("Reused", "completed", "first run");
+		registry.recordTerminalOutcome("Reused", "failed", "late report");
+		expect(ref.terminalOutcome).toBe("completed");
+		expect(ref.terminalOutcomeReason).toBe("first run");
+
+		registry.setStatus("Reused", "idle");
+		expect(ref.terminalOutcome).toBe("completed");
+		registry.setStatus("Reused", "running");
+		expect(ref.terminalOutcome).toBeUndefined();
+		expect(ref.terminalOutcomeReason).toBeUndefined();
 	});
 
 	it("rechecks restored parked refs for missing parents after allowing registration to settle", async () => {
 		vi.useFakeTimers();
 		AgentLifecycleManager.resetGlobalForTests();
 		lifecycle = new AgentLifecycleManager(registry);
+		const transcript = makeSessionStub();
+		vi.spyOn(SessionManager, "open").mockResolvedValue(
+			transcript.session.sessionManager as unknown as SessionManager,
+		);
+
 		const orphan = registry.register({
 			id: "RestoredOrphan",
 			displayName: "task",
@@ -820,7 +867,73 @@ describe("AgentLifecycleManager", () => {
 		vi.advanceTimersByTime(30_000);
 		await flushAsync();
 
+		expect(transcript.customMessages()).toContain(
+			'Agent "RestoredOrphan" stalled: Parent session no longer exists.',
+		);
+		expect(transcript.flushCalls()).toBe(1);
 		expect(registry.get(orphan.id)).toBeUndefined();
 		expect(orphan.terminalOutcome).toBe("stalled");
+	});
+
+	it("does not release a parked ref revived while its stalled notification flushes", async () => {
+		const flushGate = deferred();
+		const flushStarted = deferred();
+		const parentSession = makeSessionStub(undefined, async () => {
+			flushStarted.resolve();
+			await flushGate.promise;
+		});
+		registry.register({
+			id: "RaceParent",
+			displayName: "parent",
+			kind: "main",
+			session: parentSession.session,
+			sessionFile: "/tmp/RaceParent.jsonl",
+		});
+		const ref = registry.register({
+			id: "RaceChild",
+			displayName: "task",
+			kind: "sub",
+			parentId: "RaceParent",
+			session: null,
+			sessionFile: "/tmp/RaceChild.jsonl",
+			status: "parked",
+		});
+
+		const pruning = lifecycle.prune(ref.id);
+		await flushStarted.promise;
+		registry.setStatus(ref.id, "idle");
+		registry.setStatus(ref.id, "running");
+		flushGate.resolve();
+		await pruning;
+
+		expect(registry.get(ref.id)).toBe(ref);
+		expect(ref.status).toBe("running");
+		expect(ref.terminalOutcome).toBeUndefined();
+	});
+
+	it("keeps an unfinished parked ref registered when its stalled notification cannot be persisted", async () => {
+		const parentSession = makeSessionStub(undefined, async () => {
+			throw new Error("disk unavailable");
+		});
+		registry.register({
+			id: "ParentWithFailedFlush",
+			displayName: "parent",
+			kind: "main",
+			session: parentSession.session,
+			sessionFile: "/tmp/ParentWithFailedFlush.jsonl",
+		});
+		const parked = registry.register({
+			id: "Unreported",
+			displayName: "task",
+			kind: "sub",
+			parentId: "ParentWithFailedFlush",
+			session: null,
+			sessionFile: "/tmp/Unreported.jsonl",
+			status: "parked",
+		});
+		await lifecycle.prune(parked.id);
+
+		expect(registry.get(parked.id)).toBe(parked);
+		expect(parked.terminalOutcome).toBeUndefined();
 	});
 });
