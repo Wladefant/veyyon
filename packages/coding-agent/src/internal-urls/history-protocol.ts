@@ -149,6 +149,12 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			}
 			ref = matches[0];
 		}
+		// A known registered ref with no live/retained session must never borrow
+		// a different registered identity's disk transcript through case-folded
+		// fallback. Keep unique-ID archival recovery and direct ref reads.
+		const diskFallbackSafe = !advisorFolded.has(agentId.toLowerCase()) &&
+			!registered.some(candidate => candidate.id !== ref?.id &&
+				candidate.id.toLowerCase() === agentId.toLowerCase());
 
 		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
 		// Resolve only registry-owned or uniquely discovered session files, never a
@@ -164,7 +170,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				if (searchRequest && searchRequest.leafId === undefined) searchRequest.leafId = selectedLeaf;
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
-			if (!sessionFile && !ref?.session && !advisorFolded.has(agentId.toLowerCase())) {
+			if (!sessionFile && !ref?.session && diskFallbackSafe) {
 				const disk = await sessionFilesFromDisk();
 				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];
@@ -232,7 +238,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		} else {
 			// No live session and no retained sessionFile — try the disk scan before
 			// giving up, in case the transcript lingers under an artifacts dir.
-			if (!advisorFolded.has(ref.id.toLowerCase())) {
+			if (diskFallbackSafe) {
 				const disk = await resolveFromDisk(ref.id);
 				if (disk) return { ...disk, url: url.href };
 			}
