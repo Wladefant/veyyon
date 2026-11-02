@@ -8,6 +8,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
@@ -570,5 +571,60 @@ describe("executeJs", () => {
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
 		expect(result.output).toContain("Command timed out");
+	});
+});
+describe("ProducerOutputGuard finalization", () => {
+	it("does not release withheld inventory when finish is called twice", () => {
+		const guard = new ProducerOutputGuard();
+		expect(guard.push('{\n  "ALPHA": "fake-a",\n')).toBe("");
+		expect(guard.push('  "BETA": "fake-b",\n')).toBe("");
+		expect(guard.finish()).toBe(BLOCKED_OUTPUT_RECORD);
+		expect(guard.finish()).toBe("");
+	});
+
+	it("withholds an incomplete final line after an ordinary status line", () => {
+		const guard = new ProducerOutputGuard();
+		const output =
+			guard.push("ordinary status\n{\n") +
+			guard.push('  "ALPHA": "fake-a",\n') +
+			guard.push('  "BETA": "fake-b"') +
+			guard.finish();
+
+		expect(output).toBe(`ordinary status\n${BLOCKED_OUTPUT_RECORD}`);
+		expect(output).not.toContain("fake-a");
+		expect(output).not.toContain("fake-b");
+	});
+
+	it("withholds an incomplete inventory split into individual characters", () => {
+		const guard = new ProducerOutputGuard();
+		for (const char of '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n') {
+			expect(guard.push(char)).toBe("");
+		}
+		expect(guard.finish()).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("emits a complete structured object with two ordinary keys", () => {
+		const guard = new ProducerOutputGuard();
+		const closed = '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"\n}\n';
+		const output = guard.push(closed.slice(0, 17)) + guard.push(closed.slice(17)) + guard.finish();
+
+		expect(output).toBe(closed);
+	});
+
+	it("allows two complete assignments but blocks three", () => {
+		for (const count of [2, 3]) {
+			const guard = new ProducerOutputGuard();
+			const chunks = ["ALPHA=fake-a\n", "BETA=fake-b\n", "GAMMA=fake-c\n"].slice(0, count);
+			const output = chunks.map(chunk => guard.push(chunk)).join("") + guard.finish();
+
+			if (count === 2) {
+				expect(output).toBe(chunks.join(""));
+			} else {
+				expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+				expect(output).not.toContain("fake-a");
+				expect(output).not.toContain("fake-b");
+				expect(output).not.toContain("fake-c");
+			}
+		}
 	});
 });
