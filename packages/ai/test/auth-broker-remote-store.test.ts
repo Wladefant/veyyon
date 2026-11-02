@@ -1715,6 +1715,90 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("keeps a peer-committed block safe while the older DELETE acknowledgement reconciles", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const oldUntilMs = Date.now() + 90_000;
+		expect(await peer.upsertCredentialBlock(id, {
+			providerKey: "anthropic", blockScope: "old-scope",
+			blockedUntilMs: oldUntilMs, updatedAtMs: Date.now(),
+		})).toEqual({ ok: true });
+		const seeded = await peer.fetchSnapshot();
+		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
+
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...seeded.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		const releaseCanonicalRead = Promise.withResolvers<void>();
+		let canonicalReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) throw new Error("unexpected long poll with stalled SSE");
+			canonicalReads += 1;
+			await releaseCanonicalRead.promise;
+			return realFetch(opts);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: seeded.snapshot });
+		await streamReady.promise;
+		expect(remote.getCredentialBlock(id, "anthropic", "old-scope")).toBe(oldUntilMs);
+
+		const actualDelete = client.deleteCredentialBlocks.bind(client);
+		const deleteCommitted = Promise.withResolvers<void>();
+		const releaseDeleteReply = Promise.withResolvers<void>();
+		spyOn(client, "deleteCredentialBlocks").mockImplementation(async (credentialId, signal) => {
+			const reply = await actualDelete(credentialId, signal);
+			expect(reply).toEqual({ ok: true });
+			deleteCommitted.resolve();
+			await releaseDeleteReply.promise;
+			return reply;
+		});
+		remote.deleteCredentialBlocks(id);
+		await deleteCommitted.promise;
+		try {
+			// The broker DELETE is completed, but the local client's SSE is stalled.
+			const afterDelete = await peer.fetchSnapshot();
+			if (afterDelete.status !== 200) throw new Error("expected deleted broker blocks");
+			expect(afterDelete.snapshot.credentials.find(entry => entry.id === id)?.blocks ?? []).toEqual([]);
+			const peerUntilMs = Date.now() + 180_000;
+			expect(await peer.upsertCredentialBlock(id, {
+				providerKey: "anthropic", blockScope: "peer-scope",
+				blockedUntilMs: peerUntilMs, updatedAtMs: Date.now(),
+			})).toEqual({ ok: true });
+			const authoritative = await peer.fetchSnapshot();
+			if (authoritative.status !== 200) throw new Error("expected broker scope after peer POST");
+			expect(authoritative.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "peer-scope", blockedUntilMs: peerUntilMs },
+			]);
+			expect(canonicalReads).toBe(0);
+			// The remote store has seen no B mutation: a local epoch-only fence
+			// cannot identify this peer commit when the older DELETE ack arrives.
+			releaseDeleteReply.resolve();
+			await waitUntil(() => canonicalReads === 1);
+			// Do not transiently unblock on the acknowledged DELETE while waiting
+			// for the canonical broker read that establishes the peer's scope.
+			expect(remote.getCredentialBlock(id, "anthropic", "old-scope")).toBe(oldUntilMs);
+			releaseCanonicalRead.resolve();
+			await waitUntil(() =>
+				remote!.getCredentialBlock(id, "anthropic", "peer-scope") === peerUntilMs &&
+				remote!.getCredentialBlock(id, "anthropic", "old-scope") === undefined
+			);
+			expect(canonicalReads).toBe(1);
+			expect(remote.listCredentialBlocks([id])).toMatchObject([
+				{ credentialId: id, providerKey: "anthropic", blockScope: "peer-scope", blockedUntilMs: peerUntilMs },
+			]);
+		} finally {
+			releaseDeleteReply.resolve();
+			releaseCanonicalRead.resolve();
+		}
+	});
+
 	test("reconciles a committed broker block DELETE whose acknowledgment was lost while SSE stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
