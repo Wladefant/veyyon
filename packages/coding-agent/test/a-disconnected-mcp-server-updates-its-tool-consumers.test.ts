@@ -222,3 +222,86 @@ it("does not republish tools from a refresh completed after server disconnect", 
 		await bounded(manager.disconnectAll(), "manager cleanup");
 	}
 }, 30_000);
+
+
+// WHY: two notifications may request tools/list concurrently for the same
+// live transport. A delayed *older* reply must never overwrite the newest
+// catalog in either the connection cache or the manager registry.
+// The manager and stdio fixture are real; only this transport response seam
+// is controlled. No installed ACP/T3 evidence is claimed.
+it("serializes overlapping live-server tool refreshes and retains the newest catalog", async () => {
+	const name = "sequenced-refresh";
+	const manager = new MCPManager(process.cwd());
+	const startupCatalog = Promise.withResolvers<void>();
+	const changes: string[][] = [];
+	manager.setOnToolsChanged(tools => {
+		const names = tools.map(tool => tool.name);
+		changes.push(names);
+		if (names.filter(tool => tool.startsWith(`mcp__${name}_`)).length === MANY_TOOL_COUNT) {
+			startupCatalog.resolve();
+		}
+	});
+	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
+		const timeout = Promise.withResolvers<never>();
+		const timer = setTimeout(() => timeout.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
+		try {
+			return await Promise.race([work, timeout.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	const firstRequestEntered = Promise.withResolvers<void>();
+	const releaseFirstResponse = Promise.withResolvers<void>();
+	let firstRefresh: Promise<void> | undefined;
+	let secondRefresh: Promise<void> | undefined;
+	let interceptedListRequests = 0;
+	try {
+		const fixture = { type: "stdio" as const, command: process.execPath, args: [FIXTURE_PATH] };
+		await bounded(manager.connectServers({ [name]: fixture }, {}), "initial connection");
+		await bounded(startupCatalog.promise, "initial 45-tool catalog");
+		const connection = await bounded(manager.waitForConnection(name), "live fixture connection");
+		const transport = connection.transport;
+		const originalRequest = transport.request;
+		transport.request = async <T = unknown>(
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		): Promise<T> => {
+			if (method === "tools/list") {
+				interceptedListRequests++;
+				if (interceptedListRequests === 1) {
+					firstRequestEntered.resolve();
+					await releaseFirstResponse.promise;
+					return { tools: [{ name: "old_catalog", inputSchema: { type: "object", properties: {} } }] } as T;
+				}
+				if (interceptedListRequests === 2) {
+					return { tools: [{ name: "new_catalog", inputSchema: { type: "object", properties: {} } }] } as T;
+				}
+				throw new Error("Unexpected extra tools/list request after coalescing");
+			}
+			return realRequest(method, params, options);
+		};
+		try {
+			firstRefresh = manager.refreshServerTools(name);
+			await bounded(firstRequestEntered.promise, "held first list response");
+			secondRefresh = manager.refreshServerTools(name);
+			// Old code starts request 2 immediately; a single-flight manager
+			// must let request 1 finish before sending request 2.
+			expect(interceptedListRequests).toBe(1);
+			releaseFirstResponse.resolve();
+			await bounded(Promise.all([firstRefresh, secondRefresh]), "coalesced second refresh");
+			expect(interceptedListRequests).toBe(2);
+			const latest = [createMCPToolName(name, "new_catalog")];
+			expect(manager.getTools().filter(tool => tool.mcpServerName === name).map(tool => tool.name)).toEqual(latest);
+			expect(connection.tools?.map(tool => tool.name)).toEqual(["new_catalog"]);
+			expect(changes.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
+		} finally {
+			releaseFirstResponse.resolve();
+			await bounded(Promise.allSettled([firstRefresh, secondRefresh].filter((p): p is Promise<void> => !!p)), "refresh drain");
+			transport.request = originalRequest;
+		}
+	} finally {
+		releaseFirstResponse.resolve();
+		await bounded(manager.disconnectAll(), "fixture teardown");
+	}
+}, 30_000);
