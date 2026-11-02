@@ -1748,11 +1748,11 @@ export class MCPManager {
 		}
 
 		// Remove tools from this server and notify consumers
-		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
-		// The prefix must be derived the same way the tool names were, or a server
-		// whose name needed sanitizing keeps its stale tools AND gains a second
-		// copy on every reconnect. See `mcpToolNamePrefix`.
+		// Change detection and removal must share the same canonical server
+		// prefix. Otherwise names such as `mcp-server-1` remove their tools but
+		// never notify the session's tool registry consumer.
 		const prefix = mcpToolNamePrefix(name);
+		const hadTools = this.#tools.some(t => t.name.startsWith(prefix));
 		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
 
