@@ -18,6 +18,7 @@ import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
 
+import { ProducerOutputGuard } from "../../secrets/producer-output";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
@@ -387,6 +388,22 @@ function isInteractiveResult(result: BashResult | BashInteractiveResult): result
  * `truncationFromSummary` recognises that shape and says the elided amount is
  * unknown rather than deriving a range from it.
  */
+/**
+ * ACP terminal/output is an untrusted producer exactly like local Bash stdout.
+ * Classify the whole client snapshot before preview or final result/artifact.
+ * Previews do not flush unfinished candidate records: a leading one/two-row
+ * environment inventory cannot escape while the third row is still arriving.
+ * Each terminal/output reply is a snapshot, not a trusted incremental record.
+ */
+function protectBridgeTerminalOutput(
+	output: ClientBridgeTerminalOutput,
+	final: boolean,
+): ClientBridgeTerminalOutput {
+	const guard = new ProducerOutputGuard();
+	const visible = guard.push(output.output);
+	return { ...output, output: final ? visible + guard.finish() : visible };
+}
+
 function summarizeBridgeOutput<T extends { exitCode: number | undefined; cancelled: boolean; timedOut?: boolean }>(
 	output: ClientBridgeTerminalOutput,
 	rest: T,
@@ -1271,7 +1288,7 @@ export class BashTool
 				} catch (error) {
 					logger.warn("ACP terminal final output read failed", { terminalId: handle.terminalId, error });
 				}
-				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(current, {
+				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(protectBridgeTerminalOutput(current, true), {
 					exitCode: undefined,
 					cancelled: false,
 					timedOut: true,
@@ -1287,7 +1304,7 @@ export class BashTool
 			const finalOutput = await handle.currentOutput();
 			const { exitCode, signal: exitSignal } = clientTerminalExit(exitStatus);
 			const bridgeResult: BashResult = {
-				...summarizeBridgeOutput(finalOutput, { exitCode, cancelled: false }),
+				...summarizeBridgeOutput(protectBridgeTerminalOutput(finalOutput, true), { exitCode, cancelled: false }),
 				signal: exitSignal,
 			};
 			const bridgeNotices: string[] = [];
@@ -1564,7 +1581,7 @@ async function waitForClientTerminal(
 			// `signal?.aborted` and exits via the abort branch.
 			if (pollOutput === undefined) continue;
 			onUpdate?.({
-				content: [{ type: "text", text: pollOutput.output }],
+				content: [{ type: "text", text: protectBridgeTerminalOutput(pollOutput, false).output }],
 				details: { terminalId: handle.terminalId },
 			});
 		}
