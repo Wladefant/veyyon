@@ -1,7 +1,8 @@
 import { expect, it } from "bun:test";
 import * as path from "node:path";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
-import { mcpToolNamePrefix } from "@veyyon/coding-agent/mcp/tool-bridge";
+import { createMCPToolName } from "@veyyon/coding-agent/mcp/tool-bridge";
+import { MANY_TOOL_COUNT, manyToolName } from "./fixtures/many-tools-mcp";
 
 // WHY: a disconnected server's tools can vanish from MCPManager while a tool
 // consumer never receives the changed registry when the configured server name
@@ -13,15 +14,21 @@ const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "many-tools-mcp.ts")
 it("a sanitized MCP server disconnect updates consumers without removing sibling tools", async () => {
 	const serverName = "mcp-server-1";
 	const siblingName = "ordinary";
-	const serverPrefix = mcpToolNamePrefix(serverName);
-	const siblingPrefix = mcpToolNamePrefix(siblingName);
+	// Require the entire advertised fixture catalog before treating discovery
+	// as complete: placeholder/connecting tool names can share these prefixes.
+	const expectedServerTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
+		createMCPToolName(serverName, manyToolName(i)),
+	);
+	const expectedSiblingTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
+		createMCPToolName(siblingName, manyToolName(i)),
+	);
 	const manager = new MCPManager(process.cwd());
 	const observedRegistries: string[][] = [];
 	const bothLoaded = Promise.withResolvers<void>();
 	manager.setOnToolsChanged(tools => {
 		const names = tools.map(tool => tool.name);
 		observedRegistries.push(names);
-		if (names.some(name => name.startsWith(serverPrefix)) && names.some(name => name.startsWith(siblingPrefix))) {
+		if (expectedServerTools.every(name => names.includes(name)) && expectedSiblingTools.every(name => names.includes(name))) {
 			bothLoaded.resolve();
 		}
 	});
@@ -42,14 +49,12 @@ it("a sanitized MCP server disconnect updates consumers without removing sibling
 			clearTimeout(timer);
 		}
 		const initial = manager.getTools().map(tool => tool.name);
-		expect(initial.some(name => name.startsWith(serverPrefix))).toBe(true);
-		expect(initial.some(name => name.startsWith(siblingPrefix))).toBe(true);
+		expect(initial).toEqual([...expectedServerTools, ...expectedSiblingTools].sort());
 
 		const priorNotifications = observedRegistries.length;
 		await manager.disconnectServer(serverName);
 		const afterSanitizedDisconnect = manager.getTools().map(tool => tool.name);
-		expect(afterSanitizedDisconnect.some(name => name.startsWith(serverPrefix))).toBe(false);
-		expect(afterSanitizedDisconnect.some(name => name.startsWith(siblingPrefix))).toBe(true);
+		expect(afterSanitizedDisconnect).toEqual([...expectedSiblingTools].sort());
 		// Old source removes the sanitized tools but does not notify, because its
 		// hadTools predicate checks a raw prefix with an embedded hyphen.
 		expect(observedRegistries).toHaveLength(priorNotifications + 1);
