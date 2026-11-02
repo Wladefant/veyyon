@@ -741,35 +741,20 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	deleteCredentialBlocks(credentialId: number): void {
 		// A DELETE covers every block scope for this ID. Its success cannot
 		// unblock a still-pending upsert or a newer accepted local block.
-		const revisionAtDelete = this.#appliedSnapshotRevision;
 		const mutation = Symbol("block-delete");
 		this.#startCredentialBlockMutation(credentialId, mutation);
-		// A later block POST can fully settle before this DELETE's old HTTP
-		// acknowledgement arrives. Its pending-set is then empty, but removing
-		// the blocks here would erase that broker-confirmed newer restriction.
-		const mutationEpochAtDelete = this.#credentialBlockMutationEpoch;
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(response => {
 				if (!response.ok) {
 					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
 				}
-				const otherPending = (this.#pendingCredentialBlockMutations.get(credentialId)?.size ?? 0) > 1;
-				if (
-					revisionAtDelete === this.#appliedSnapshotRevision &&
-					mutationEpochAtDelete === this.#credentialBlockMutationEpoch &&
-					!otherPending
-				) {
-					this.#deleteSnapshotBlocks(credentialId);
-					for (const blockKey of this.#credentialBlockReconcileAfter.keys()) {
-						if (blockKey.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(blockKey);
-					}
-					this.#invalidateUsageCache();
-				} else {
-					// Broker-side deletion may have raced another scope's write;
-					// defer a full authoritative read until both have settled.
-					this.#credentialBlockReconciliationPending.add(credentialId);
-				}
+				// A successful DELETE acknowledges its own commit, not the absence
+				// of newer peer safety blocks. With stalled SSE, the local mutation
+				// epoch and applied revision cannot detect broker writes by a peer.
+				// Retain the known restriction until the canonical broker GET is
+				// applied; failed reads remain restrictive and report stale state.
+				this.#credentialBlockReconciliationPending.add(credentialId);
 				this.#settleCredentialBlockMutation(credentialId, mutation, false);
 			})
 			.catch(error => {
