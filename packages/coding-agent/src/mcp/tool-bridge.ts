@@ -315,6 +315,29 @@ function buildErrorResult(
 	};
 }
 
+/** An attempted tools/call has no verified completion if the transport loses its reply.
+ * The protocol carries no universally enforced idempotency receipt, so a fresh
+ * connection is not authority to send the same action again. Do not echo the
+ * peer's error text or raw caller arguments into this model-visible result.
+ */
+function buildUnknownOutcomeResult(
+	serverName: string,
+	mcpToolName: string,
+	provider: string | undefined,
+	providerName: string | undefined,
+): CustomToolResult<MCPToolDetails> {
+	return {
+		content: [{
+			type: "text",
+			text:
+				`MCP tool "${mcpToolName}" on server "${serverName}" outcome unknown: the request may have reached the server, but its completion response was not verified. ` +
+				"Do not automatically repeat this call. Reconcile through a read-only receipt/status or ask the operator before any new invocation.",
+		}],
+		details: { serverName, mcpToolName, isError: true, provider, providerName },
+		isError: true,
+	};
+}
+
 /**
  * Re-throw abort-related errors so they bypass error-result handling.
  *
@@ -502,40 +525,25 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		const rawParams = params;
 		const provider = this.connection._source?.provider;
 		const providerName = this.connection._source?.providerName;
+		const failedServerName = this.connection.name;
+		let callAttempted = false;
 
 		try {
 			const args = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
 			throwIfAborted(signal);
+			callAttempted = true;
 			const result = await callTool(this.connection, this.tool.name, args, { signal });
 			return buildResult(result, this.connection.name, this.tool.name, provider, providerName, rawParams);
 		} catch (error) {
 			rethrowIfAborted(error, signal);
-			if (this.reconnect && mcpFailureWarrantsReconnect(error)) {
-				const newConn = await reconnectWithAbort(this.reconnect, signal);
-				if (newConn) {
-					// Rebind so subsequent calls on this instance use the fresh connection
-					this.connection = newConn;
-					const retryProvider = newConn._source?.provider ?? provider;
-					const retryProviderName = newConn._source?.providerName ?? providerName;
-					try {
-						const retryArgs = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
-						throwIfAborted(signal);
-						const result = await callTool(newConn, this.tool.name, retryArgs, { signal });
-						return buildResult(result, newConn.name, this.tool.name, retryProvider, retryProviderName, rawParams);
-					} catch (retryError) {
-						rethrowIfAborted(retryError, signal);
-						return buildErrorResult(
-							retryError,
-							this.connection.name,
-							this.tool.name,
-							retryProvider,
-							retryProviderName,
-							rawParams,
-						);
-					}
+			if (callAttempted && mcpFailureWarrantsReconnect(error)) {
+				if (this.reconnect) {
+					const newConn = await reconnectWithAbort(this.reconnect, signal);
+					if (newConn) this.connection = newConn; // Future explicit calls may use the recovered connection.
 				}
+				return buildUnknownOutcomeResult(failedServerName, this.tool.name, provider, providerName);
 			}
-			return buildErrorResult(error, this.connection.name, this.tool.name, provider, providerName, rawParams);
+			return buildErrorResult(error, failedServerName, this.tool.name, provider, providerName, rawParams);
 		}
 	}
 }
@@ -608,9 +616,11 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		try {
 			const connection = await untilAborted(signal, () => this.getConnection());
 			throwIfAborted(signal);
+			let callAttempted = false;
 			try {
 				const args = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
 				throwIfAborted(signal);
+				callAttempted = true;
 				const result = await callTool(connection, this.tool.name, args, { signal });
 				return buildResult(
 					result,
@@ -622,35 +632,14 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				);
 			} catch (callError) {
 				rethrowIfAborted(callError, signal);
-				if (this.reconnect && mcpFailureWarrantsReconnect(callError)) {
-					const newConn = await reconnectWithAbort(this.reconnect, signal);
-					if (newConn) {
-						const retryProvider = newConn._source?.provider ?? provider;
-						const retryProviderName = newConn._source?.providerName ?? providerName;
-						try {
-							const retryArgs = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
-							throwIfAborted(signal);
-							const result = await callTool(newConn, this.tool.name, retryArgs, { signal });
-							return buildResult(
-								result,
-								this.serverName,
-								this.tool.name,
-								retryProvider,
-								retryProviderName,
-								rawParams,
-							);
-						} catch (retryError) {
-							rethrowIfAborted(retryError, signal);
-							return buildErrorResult(
-								retryError,
-								this.serverName,
-								this.tool.name,
-								retryProvider,
-								retryProviderName,
-								rawParams,
-							);
-						}
-					}
+				if (callAttempted && mcpFailureWarrantsReconnect(callError)) {
+					if (this.reconnect) await reconnectWithAbort(this.reconnect, signal);
+					return buildUnknownOutcomeResult(
+						this.serverName,
+						this.tool.name,
+						connection._source?.provider ?? provider,
+						connection._source?.providerName ?? providerName,
+					);
 				}
 				return buildErrorResult(callError, this.serverName, this.tool.name, provider, providerName, rawParams);
 			}

@@ -56,7 +56,7 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 				effects++;
 				return completedResult("accepted on explicit request");
 			}));
-			const toolDef: MCPToolDefinition = hint === undefined
+			const toolDef = hint === undefined
 				? writeTool
 				: { ...writeTool, annotations: { idempotentHint: hint } };
 			const tool = new MCPTool(oldConnection, toolDef, async () => {
