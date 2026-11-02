@@ -1857,31 +1857,34 @@ export class MCPManager {
 	 */
 	async disconnectAll(): Promise<void> {
 		this.#bulkDisconnectCount++;
-		// Keep bulk-owned close promises in the same per-server registry as
-		// explicit disconnectServer calls. A later single disconnect must join
-		// an already-running bulk close, never invoke transport.close twice.
-		const bulkOwnedCloses: Array<{ name: string; promise: Promise<void> }> = [];
 		try {
-			// Invalidate any in-flight reconnection attempts that outlive this call.
-			// They captured the old epoch; after increment they'll detect staleness.
+			// The epoch invalidates in-flight work that began before shutdown.
+			// The bulk admission gate stays set until all per-name cleanup finishes.
 			this.#epoch++;
 			await this.stopEvents();
-			// Detach onClose before closing to prevent spurious reconnect attempts
+			// Detach callbacks before shutdown to avoid transport-close reconnects.
 			for (const conn of this.#connections.values()) {
 				conn.transport.onClose = undefined;
 			}
-			// Include already-started single-server teardowns, even when their
-			// connection has been removed. Register every new bulk-owned close
-			// BEFORE starting it so the reverse bulk→single order joins too.
-			const retiring = new Set(this.#activeDisconnects.keys());
+			// The public per-name disconnect promise covers BOTH transport close
+			// and registry/tool/config cleanup. A raw close promise could resolve
+			// while an unrelated B close was held, falsely reporting A complete.
+			// Reuse already-started per-name promises, then synchronously enroll
+			// each remaining name so bulk→single and single→bulk join exactly once.
 			const alreadyClosing = Array.from(this.#activeDisconnects.values());
-			for (const [name, connection] of this.#connections.entries()) {
-				if (retiring.has(name)) continue;
-				const promise = Promise.resolve().then(() => disconnectServer(connection));
-				this.#activeDisconnects.set(name, promise);
-				bulkOwnedCloses.push({ name, promise });
+			const closing = Array.from(this.#connections.keys())
+				.filter(name => !this.#activeDisconnects.has(name))
+				.map(name => this.disconnectServer(name));
+			const outcomes = await Promise.allSettled([...alreadyClosing, ...closing]);
+			const failedCloses = outcomes.filter(outcome => outcome.status === "rejected").length;
+			if (failedCloses > 0) {
+				// Transport errors may include endpoints or credentials: only report
+				// the aggregate count, never raw exceptions or untrusted server names.
+				logger.warn("MCP bulk disconnect did not close every server cleanly", {
+					path: "mcp:disconnectAll",
+					failedCloses,
+				});
 			}
-			await Promise.allSettled([...alreadyClosing, ...bulkOwnedCloses.map(close => close.promise)]);
 
 			this.#pendingConnections.clear();
 			this.#pendingToolLoads.clear();
@@ -1894,9 +1897,6 @@ export class MCPManager {
 			this.#subscribedResources.clear();
 			this.#reconnectHistory.clear();
 		} finally {
-			for (const { name, promise } of bulkOwnedCloses) {
-				if (this.#activeDisconnects.get(name) === promise) this.#activeDisconnects.delete(name);
-			}
 			this.#bulkDisconnectCount--;
 		}
 	}
