@@ -2,6 +2,7 @@ import { expect, it } from "bun:test";
 import { createServer } from "node:http";
 import { MCPManager } from "../src/mcp/manager";
 import { createMCPToolName } from "../src/mcp/tool-bridge";
+import type { MCPToolCache } from "../src/mcp/tool-cache";
 
 // WHY: the server's first initialize response may arrive after the operator
 // explicitly disconnects it. The stale connection must not resurrect config,
@@ -258,6 +259,130 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 				const stopped = Promise.withResolvers<void>();
 				server.close(() => stopped.resolve());
 				await withinConnectBoundary(stopped.promise, "bulk fixture server shutdown");
+			}
+		}
+	}
+}, 35_000);
+
+
+// WHY: the initial startup batch can still be waiting on tool-cache discovery
+// after a bulk teardown has already removed its live transports. An old batch
+// must not republish a completed peer's cached tools after disconnectAll.
+it("a stale MCP startup batch cannot publish tools after bulk teardown completes", async () => {
+	const bInitializeEntered = Promise.withResolvers<void>();
+	const releaseBInitialize = Promise.withResolvers<void>();
+	const aToolsServed = Promise.withResolvers<void>();
+	const cacheReadEntered = Promise.withResolvers<void>();
+	const releaseCacheRead = Promise.withResolvers<void>();
+	const bTransportRetired = Promise.withResolvers<void>();
+	const server = createServer(async (request, response) => {
+		try {
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : null;
+			if (!route) {
+				response.writeHead(404).end();
+				return;
+			}
+			if (request.method === "DELETE") {
+				if (route === "b" && request.headers["mcp-session-id"] === "stale-cache-b") {
+					bTransportRetired.resolve();
+				}
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { method?: string; id?: string | number };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				if (route === "b") {
+					bInitializeEntered.resolve();
+					await releaseBInitialize.promise;
+				}
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "stale-aggregate-batch", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				result = { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] };
+				if (route === "a") aToolsServed.resolve();
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": `stale-cache-${route}` } : {}),
+			});
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await withinConnectBoundary(listening.promise, "stale batch HTTP listen");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected private fixture address");
+	const configs = {
+		"stale-batch-a": { type: "http" as const, url: `http://127.0.0.1:${address.port}/a` },
+		"stale-batch-b": { type: "http" as const, url: `http://127.0.0.1:${address.port}/b` },
+	};
+	// Only the external cache interface is controlled. The manager, HTTP MCP
+	// initialization, tool listing and disconnectAll are all production paths.
+	const cache = {
+		async get(): Promise<null> {
+			cacheReadEntered.resolve();
+			await releaseCacheRead.promise;
+			return null;
+		},
+		async set(): Promise<void> {},
+	} as unknown as MCPToolCache;
+	const manager = new MCPManager(process.cwd(), cache);
+	let initial: Promise<unknown> | undefined;
+	try {
+		initial = manager.connectServers(configs, {});
+		await withinConnectBoundary(
+			Promise.all([aToolsServed.promise, bInitializeEntered.promise]),
+			"stale batch A tools and B pending initialize",
+		);
+		// After 250ms, the startup batch waits for its optional cached
+		// tools, even though A has already completed tools/list.
+		await withinConnectBoundary(cacheReadEntered.promise, "held external tool-cache read");
+		expect(manager.getConnectedServers()).toContain("stale-batch-a");
+		await withinConnectBoundary(manager.disconnectAll(), "bulk teardown before cache completion");
+		expect(manager.getTools()).toEqual([]);
+		releaseBInitialize.resolve();
+		await withinConnectBoundary(bTransportRetired.promise, "stale pending B transport close");
+		releaseCacheRead.resolve();
+		const completed = await withinConnectBoundary(initial, "stale aggregate startup completion");
+		const load = completed as { tools: Array<{ name: string }>; connectedServers: string[] };
+		expect(load.tools).toEqual([]);
+		expect(load.connectedServers).toEqual([]);
+		expect(manager.getTools()).toEqual([]);
+		expect(manager.getConnectedServers()).toEqual([]);
+	} finally {
+		releaseBInitialize.resolve();
+		releaseCacheRead.resolve();
+		try {
+			if (initial) await withinConnectBoundary(initial, "stale cache fixture connection cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "stale cache manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "stale cache server shutdown");
 			}
 		}
 	}
