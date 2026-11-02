@@ -2711,4 +2711,94 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
+
+	// WHY: a detached async child retains A's callback scope after A returns.
+	// A later explicit B consumer must not be revoked by A's stale stop, while
+	// the existing same-consumer detached-stop/drain contract stays intact.
+	it("does not let a detached stale stop revoke a replacement event consumer", async () => {
+		const serverName = "detached-stale-stop-after-replace";
+		const firstCursor = Promise.withResolvers<void>();
+		const successorCursor = Promise.withResolvers<void>();
+		const laterCursor = Promise.withResolvers<void>();
+		const releaseDetached = Promise.withResolvers<void>();
+		const detachedStopDone = Promise.withResolvers<void>();
+		let detachedScheduled = false;
+		let allowLaterOccurrence = false;
+		let pollCount = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				pollCount++;
+				if (pollCount === 1) {
+					return { events: [event("from-A", "A-occurrence")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 };
+				}
+				if (pollCount === 2) {
+					return { events: [event("from-B", "B-occurrence")], cursor: "B-page", hasMore: false, nextPollMs: 50 };
+				}
+				if (allowLaterOccurrence) {
+					return { events: [event("B-still-alive", "B-later")], cursor: "B-later-page", hasMore: false, nextPollMs: 30_000 };
+				}
+				return { events: [], cursor: "B-idle", hasMore: false, nextPollMs: 50 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const deliveredToB: string[] = [];
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === "A-occurrence") firstCursor.resolve();
+			if (cursor === "B-occurrence") successorCursor.resolve();
+			if (cursor === "B-later") laterCursor.resolve();
+		});
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "from-A") return;
+			detachedScheduled = true;
+			// This async child is deliberately NOT awaited by the event callback:
+			// its inherited ALS scope is inactive by the time B takes ownership.
+			void (async () => {
+				try {
+					await releaseDetached.promise;
+					await manager.stopEvents();
+					detachedStopDone.resolve();
+				} catch (error) {
+					detachedStopDone.reject(error);
+				}
+			})();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A poll subscription");
+			await withinHandlerChange(firstCursor.promise, "A first accepted occurrence");
+			expect(detachedScheduled).toBe(true);
+
+			// B is an independent external replacement, not a callback-owned
+			// restart and not merely another event on A's original subscription.
+			manager.setOnEvent(undefined);
+			manager.setOnEvent((_name, occurrence) => { deliveredToB.push(occurrence.eventId); });
+			await withinHandlerChange(successorCursor.promise, "B replacement occurrence and cursor");
+			expect(deliveredToB).toEqual(["from-B"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+			releaseDetached.resolve();
+			await withinHandlerChange(detachedStopDone.promise, "A late detached stop");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+			// A stale stop must not only leave B's registry entry but also
+			// preserve its ability to consume and commit a later event cursor.
+			allowLaterOccurrence = true;
+			await withinHandlerChange(laterCursor.promise, "B subsequent event after stale stop");
+			expect(deliveredToB).toEqual(["from-B", "B-still-alive"]);
+		} finally {
+			releaseDetached.resolve();
+			try {
+				if (detachedScheduled) await withinHandlerChange(detachedStopDone.promise, "detached stop cleanup");
+			} finally {
+				try {
+					await withinHandlerChange(manager.disconnectAll(), "detached stale-stop manager cleanup");
+				} finally {
+					server.stop();
+				}
+			}
+		}
+	}, 20_000);
+
 });
