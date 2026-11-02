@@ -22,6 +22,7 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 	const name = "initially-cancelled-server";
 	const initializeEntered = Promise.withResolvers<void>();
 	const releaseFirstInitialize = Promise.withResolvers<void>();
+	const firstTerminated = Promise.withResolvers<void>();
 	let initializeCalls = 0;
 	let publishedToolLists = 0;
 	let closeRequests = 0;
@@ -29,6 +30,7 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 		try {
 			if (request.method === "DELETE") {
 				closeRequests++;
+				if (request.headers["mcp-session-id"] === "test-custody-session-1") firstTerminated.resolve();
 				response.writeHead(204).end();
 				return;
 			}
@@ -61,7 +63,10 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 			} else {
 				result = {};
 			}
-			response.writeHead(200, { "content-type": "application/json" });
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": `test-custody-session-${initializeCalls}` } : {}),
+			});
 			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		} catch {
 			response.writeHead(500).end();
@@ -87,6 +92,8 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 		expect(manager.getConnectedServers()).not.toContain(name);
 		releaseFirstInitialize.resolve();
 		await withinConnectBoundary(initial, "obsolete initial connect result");
+		await withinConnectBoundary(firstTerminated.promise, "obsolete initialized session transport close");
+		expect(closeRequests).toBe(1);
 		expect(manager.getServerConfig(name)).toBeUndefined();
 		expect(manager.getConnectedServers()).not.toContain(name);
 		expect(manager.getTools().filter(tool => tool.mcpServerName === name)).toEqual([]);
@@ -112,7 +119,4 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 			await withinConnectBoundary(stopped.promise, "private server shutdown");
 		}
 	}
-	// A close request is a transport detail; it is deliberately not used as
-	// an oracle because no-session-id HTTP servers may not send DELETE.
-	expect(closeRequests).toBeGreaterThanOrEqual(0);
 }, 30_000);
