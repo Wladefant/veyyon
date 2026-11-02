@@ -186,8 +186,14 @@ export class CheckpointClient {
 			this.loseLease(sessionId);
 			throw new Error("Checkpoint authority lease owner mismatch");
 		}
-		if (typeof result.resumeToken !== "string" || result.resumeToken.length < 16)
+		if (
+			typeof result.resumeToken !== "string" ||
+			result.resumeToken.length < 16 ||
+			result.resumeToken.length > 128
+		) {
+			this.loseLease(sessionId);
 			throw new Error("Checkpoint authority did not issue a valid resume capability");
+		}
 		// A transfer grant is written to durable ownership metadata before the
 		// first ordinary admission check. Refuse an expired/invalid authority
 		// fence here, before a one-time claim is replaced by a resume marker.

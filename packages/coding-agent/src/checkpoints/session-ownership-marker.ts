@@ -208,6 +208,16 @@ export async function persistSessionResumeCapability(
 	resumeToken: string,
 	epoch: number,
 ): Promise<void> {
+	// A failed/foreign authority grant must not replace the unspent claim
+	// with a marker that this reader or the authority later rejects.
+	if (
+		typeof resumeToken !== "string" ||
+		resumeToken.length < 16 ||
+		resumeToken.length > 128 ||
+		!Number.isSafeInteger(epoch) ||
+		epoch < marker.transferEpoch
+	)
+		throw new Error("Invalid checkpoint resume capability or fencing epoch");
 	const consumed: SessionOwnershipMarker = { ...marker, resumeToken, epoch };
 	delete consumed.claimToken;
 	const temporary = `${path}.${randomUUID()}.tmp`;

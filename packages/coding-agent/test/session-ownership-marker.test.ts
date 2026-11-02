@@ -92,6 +92,26 @@ test("ownership sidecars reject overlong capabilities and 64 KiB overflow before
 	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/Cannot verify restored checkpoint ownership/);
 });
 
+test("invalid rotated resume inputs leave the original claim marker unchanged", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-invalid-rotation-"));
+	roots.push(root);
+	const markerPath = join(root, "checkpoint-ownership.json");
+	const original = JSON.stringify(marker);
+	await writeFile(markerPath, original, { mode: 0o600 });
+	const validToken = "a-resume-capability-long-enough";
+	for (const [token, epoch] of [
+		["short", 8],
+		["x".repeat(129), 8],
+		[validToken, Number.NaN],
+		[validToken, 6],
+	] as [string, number][]) {
+		await expect(persistSessionResumeCapability(markerPath, marker, token, epoch))
+			.rejects.toThrow(/Invalid checkpoint resume capability or fencing epoch/);
+		expect(await readFile(markerPath, "utf8")).toBe(original);
+		expect(await readdir(root)).toEqual(["checkpoint-ownership.json"]);
+	}
+});
+
 test("a copied native journal without sidecars never resumes as an ordinary checkpoint", async () => {
 	const root = await mkdtemp(join(tmpdir(), "session-ownership-copy-"));
 	roots.push(root);

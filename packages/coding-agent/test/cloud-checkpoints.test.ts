@@ -419,6 +419,29 @@ test("checkpoint transfer grants reject an authority response for a different ru
 	expect(actions).toEqual(["claim", "claim"]);
 });
 
+test("an overlong authority resume capability cannot replace a one-time transfer claim", async () => {
+	let calls = 0;
+	const fake: CheckpointFetch = async () => {
+		calls++;
+		return Response.json({
+			ownerNode: "owner-a",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			resumeToken: "x".repeat(129),
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	await expect(
+		client.claimTransfer("session-a", "destination", "transfer-1", "a-long-enough-claim-token", 4, "owner-a"),
+	).rejects.toThrow(/valid resume capability/);
+	await expect(client.assertWritable("session-a", 5)).rejects.toThrow(/lease lost/);
+	expect(calls).toBe(1);
+});
+
 test("checkpoint renewal refuses a changed authority owner and revokes its cached lease", async () => {
 	let wrongOwner = false;
 	const fake: CheckpointFetch = async () => Response.json({
