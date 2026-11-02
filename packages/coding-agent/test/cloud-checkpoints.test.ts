@@ -394,7 +394,8 @@ test("checkpoint authority JSON accepts a valid response split across streaming 
 
 test("restoration rejects an oversized streaming object without consuming a second chunk", async () => {
 	const object = { hash: "a".repeat(64), size: 1 };
-	const manifest = { objects: [object] };
+	// Match the Worker head shape so the streaming-object assertion is reached.
+	const manifest = { version: 1, sessionId: "s", sequence: 1, objects: [object] };
 	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
 	let pulls = 0;
 	const fake: CheckpointFetch = async input => {
@@ -422,7 +423,8 @@ test("restoration rejects an oversized streaming object without consuming a seco
 
 test("restoration aborts a stalled object body before its eventual bytes", async () => {
 	const object = { hash: "a".repeat(64), size: 1 };
-	const manifest = { objects: [object] };
+	// Match the Worker head shape so the streaming-object assertion is reached.
+	const manifest = { version: 1, sessionId: "s", sequence: 1, objects: [object] };
 	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
 	let aborted = false;
 	const fake: CheckpointFetch = async (input, init) => {
@@ -835,14 +837,24 @@ test("restoration rejects malformed and foreign heads before any object GET", as
 			headSequence: 1,
 			expectedError: /Invalid checkpoint head/,
 		},
-		{ name: "zero-sequence", manifest: { ...good, sequence: 0 }, headSequence: 0, expectedError: /Invalid checkpoint head/ },
+		{
+			name: "zero-sequence",
+			manifest: { ...good, sequence: 0 },
+			headSequence: 0,
+			expectedError: /Invalid checkpoint head/,
+		},
 		{
 			name: "sequence-over-limit",
 			manifest: { ...good, sequence: 101 },
 			headSequence: 101,
 			expectedError: /Invalid checkpoint head/,
 		},
-		{ name: "empty-objects", manifest: { ...good, objects: [] }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{
+			name: "empty-objects",
+			manifest: { ...good, objects: [] },
+			headSequence: 1,
+			expectedError: /Invalid checkpoint head/,
+		},
 		{
 			name: "too-many-objects",
 			manifest: { ...good, objects: Array.from({ length: 1025 }, () => good.objects[0]) },
