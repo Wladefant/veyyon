@@ -2605,4 +2605,110 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 60_000);
 
+
+	// WHY: an asynchronous descendant inherits AsyncLocalStorage even after its
+	// source event callback has returned. It is not a new external owner and
+	// must not overwrite successor cursor, control or resume-provider handlers.
+	// This remains separate from shutdown's need to treat detached work as
+	// non-reentrant. Does not prove installed host/disk durability.
+	it("rejects detached event descendants replacing newer auxiliary writers", async () => {
+		const serverName = "inactive-descendant-auxiliary-writers";
+		const releaseDetached = Promise.withResolvers<void>();
+		const detachedSettled = Promise.withResolvers<void>();
+		const firstCommitted = Promise.withResolvers<void>();
+		const secondCursorReached = Promise.withResolvers<void>();
+		const secondGapReached = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const successorCursors: Array<string | null> = [];
+		let successorGapCount = 0;
+		let staleCursorCount = 0;
+		let staleGapCount = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("detached-original", "original-occurrence")],
+					cursor: "original-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				if (requestedCursors.length === 2) return {
+					events: [event("detached-successor", "successor-occurrence")],
+					cursor: "successor-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventControl(() => {});
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === "original-page") firstCommitted.resolve();
+		});
+		manager.setEventCursorProvider(() => "original-resume");
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "detached-original") return;
+			// Promise continuation is registered inside the active callback,
+			// but intentionally runs only AFTER the callback's page committed.
+			void releaseDetached.promise.then(() => {
+				manager.setOnEventCursor((_source, _key, cursor) => {
+					if (cursor === "successor-page") {
+						staleCursorCount++;
+						secondCursorReached.resolve();
+					}
+				});
+				manager.setOnEventControl((_source, _key, control) => {
+					if (control.type === "gap" && control.cursor === "successor-page") {
+						staleGapCount++;
+						secondGapReached.resolve();
+					}
+				});
+				manager.setEventCursorProvider(() => "detached-stale-resume");
+				detachedSettled.resolve();
+			});
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-writer initial connection");
+			// The page-level cursor follows the event callback's completed
+			// #withEventCallback scope; detached work remains deferred here.
+			await withinHandlerChange(firstCommitted.promise, "original page accepted");
+			manager.setOnEventCursor((_source, _key, cursor) => {
+				if (cursor === "successor-page") {
+					successorCursors.push(cursor);
+					secondCursorReached.resolve();
+				}
+			});
+			manager.setOnEventControl((_source, _key, control) => {
+				if (control.type === "gap" && control.cursor === "successor-page") {
+					successorGapCount++;
+					secondGapReached.resolve();
+				}
+			});
+			manager.setEventCursorProvider(() => "successor-resume");
+			releaseDetached.resolve();
+			await withinHandlerChange(detachedSettled.promise, "inactive descendant attempted all auxiliary writers");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(
+				Promise.all([secondCursorReached.promise, secondGapReached.promise]),
+				"new page cursor and gap handlers",
+			);
+			// Both stale and successor callbacks resolve the same observation
+			// gate; the assertions identify which owner actually handled it.
+			expect(staleCursorCount).toBe(0);
+			expect(staleGapCount).toBe(0);
+			expect(successorCursors).toEqual(["successor-page"]);
+			expect(successorGapCount).toBe(1);
+			expect(requestedCursors).toEqual(["original-resume", "successor-resume"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseDetached.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "detached-writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
 });
