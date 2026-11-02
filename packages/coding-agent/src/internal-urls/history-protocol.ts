@@ -109,9 +109,18 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		let ref = registry.get(agentId);
 		if (ref?.kind === "advisor") ref = undefined;
 		if (!ref) {
-			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
+			// Case-insensitive convenience is safe only for a UNIQUE registered
+			// identity. Two distinct names may differ solely by case; picking
+			// whichever was registered first can expose the wrong transcript.
 			const lower = agentId.toLowerCase();
-			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
+			const matches = visible.filter(candidate => candidate.id.toLowerCase() === lower);
+			if (matches.length > 1) {
+				throw new Error(
+					`Ambiguous registered agent: ${agentId}\n` +
+						"Multiple registered IDs match this spelling. Use the exact agent ID shown in history://.",
+				);
+			}
+			ref = matches[0];
 		}
 
 		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
@@ -223,10 +232,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	async complete(): Promise<UrlCompletion[]> {
 		if (liveConversationScopes().length > 1) return [];
 		const completions: UrlCompletion[] = [];
-		const seen = new Set<string>();
+		// A disk-only case alias resolves to the registered agent, not its own file.
+		const registeredFolded = new Set<string>();
 		for (const ref of AgentRegistry.global().list()) {
 			if (ref.kind === "advisor") continue;
-			seen.add(ref.id);
+			registeredFolded.add(ref.id.toLowerCase());
 			completions.push({
 				value: ref.id,
 				description: `${ref.status} · ${ref.kind}${ref.parentId ? ` · parent ${ref.parentId}` : ""}`,
@@ -234,8 +244,10 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		}
 		const disk = await sessionFilesFromDisk();
 		for (const id of disk.keys()) {
-			if (seen.has(id)) continue;
-			seen.add(id);
+			const foldedId = id.toLowerCase();
+			// Only a registry-owned name shadows a disk row. Preserve disk-only
+			// names according to the disk scanner (including its ambiguity policy).
+			if (registeredFolded.has(foldedId)) continue;
 			completions.push({ value: id, description: "on disk" });
 		}
 		return completions;
@@ -280,10 +292,12 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 		lastActivity: formatAgo(ref.lastActivity),
 	}));
 	// Merge on-disk transcripts for agents absent from the registry.
-	const registered = new Set(refs.map(ref => ref.id));
+	// Resolve and completions compare agent IDs case-insensitively, so an
+	// on-disk alias shadowed by any registered ID must not appear selectable.
+	const registeredFolded = new Set(refs.map(ref => ref.id.toLowerCase()));
 	const disk = await sessionFilesFromDisk();
 	for (const id of disk.keys()) {
-		if (registered.has(id)) continue;
+		if (registeredFolded.has(id.toLowerCase())) continue;
 		entries.push({ id, status: "on disk", kind: "—", parent: "—", lastActivity: "—" });
 	}
 
