@@ -572,7 +572,9 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		} catch (error) {
 			rethrowIfAborted(error, signal);
 			if (callAttempted && mcpFailureWarrantsReconnect(error)) {
-				if (this.reconnect) {
+				// A superseded invocation must not restart a connection that a
+				// later explicit invocation already recovered while arguments yielded.
+				if (this.reconnect && this.#reconnectGeneration === generation && this.connection === attemptedConnection) {
 					await reconnectForFutureCalls(this.reconnect, signal, newConn => {
 						// An older readiness result must not replace a connection
 						// selected by a newer explicitly authorized invocation.
