@@ -533,9 +533,7 @@ describe("executeJs", () => {
 		const controller = new AbortController();
 		const execution = executeJs(
 			[
-				"console.log('{');",
-				'console.log(\'  "ALPHA": "neutral-one",\');',
-				'console.log(\'  "BETA": "neutral-two"\');',
+				"console.log('inventory status\\n{\\n  \"ALPHA\": \"neutral-one\",\\n  \"BETA\": \"neutral-two\"');",
 				"await new Promise(() => {})",
 			].join("\n"),
 			{
@@ -544,17 +542,16 @@ describe("executeJs", () => {
 				sessionFile,
 				onChunk: chunk => {
 					chunks.push(chunk);
+					if (mode === "cancel" && chunk.includes("inventory status")) {
+						controller.abort(new Error("cancelled"));
+					}
 				},
 				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
 			},
 		);
-		if (mode === "cancel") {
-			// The executor cancellation contract is signal-driven, so this intentionally
-			// uses a real timer rather than advancing the worker's independent clock.
-			setTimeout(() => controller.abort(new Error("cancelled")), 100);
-		}
 		const result = await execution;
 		expect(result.cancelled).toBe(true);
+		if (mode === "cancel") expect(chunks.join("")).toContain("inventory status");
 		expect(chunks.join("")).not.toContain("ALPHA");
 		expect(chunks.join("")).not.toContain("BETA");
 		expect(result.output).not.toContain("ALPHA");
