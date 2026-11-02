@@ -1811,11 +1811,19 @@ export class MCPManager {
 		}
 		this.#subscribedResources.delete(name);
 
+		let failedClose: { error: unknown } | undefined;
 		if (connection) {
-			// Detach onClose to prevent spurious reconnect from close()
+			// Detach onClose to prevent spurious reconnect from close().
 			connection.transport.onClose = undefined;
-			await disconnectServer(connection);
-			this.#connections.delete(name);
+			try {
+				await disconnectServer(connection);
+			} catch (error) {
+				// A rejected DELETE is not permission to hand the closing
+				// transport to the next explicit connection request.
+				failedClose = { error };
+			} finally {
+				if (this.#connections.get(name) === connection) this.#connections.delete(name);
+			}
 		}
 
 		// Remove tools from this server and notify consumers
@@ -1829,6 +1837,9 @@ export class MCPManager {
 
 		// Notify prompt consumers so stale commands are cleared
 		if (connection?.prompts?.length) this.#onPromptsChanged?.(name);
+		// Surface the failed transport close to the caller after removing
+		// stale registry entries and sending tool-change notifications.
+		if (failedClose) throw failedClose.error;
 	}
 
 	/**
