@@ -31,7 +31,7 @@ import {
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
-import { ambiguousSessionFileIds, liveConversationScopes, sessionFilesFromDisk } from "./registry-helpers";
+import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
@@ -56,6 +56,23 @@ interface IndexEntry {
 }
 
 /**
+ * A parked root retains its conversation scope and may still expose its own
+ * archived agents through the global registry. Do not drop that scope from
+ * the history read boundary just because the root session was detached.
+ *
+ * This guards distinct KNOWN registered scopes only. Legacy unscoped refs
+ * and disk-only transcript provenance remain separate #885 policy work; this
+ * is not caller-authenticated multi-conversation routing.
+ */
+function registeredConversationScopes(): string[] {
+	const scopes = new Set<string>();
+	for (const ref of AgentRegistry.global().list()) {
+		if (ref.scope !== undefined) scopes.add(ref.scope);
+	}
+	return Array.from(scopes);
+}
+
+/**
  * Handler for history:// URLs.
  *
  * Resolves agent ids against the global AgentRegistry, then falls back to
@@ -75,15 +92,15 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// belonging to another conversation was served directly, and the bare index
 		// listed every conversation's agents in one table. Neither can be filtered
 		// here: `ProtocolHandler.resolve` is handed no agent id and no scope, so
-		// this handler genuinely does not know who is asking. Refuse while the
-		// process drives more than one conversation, and say why: a transcript is
-		// the fullest record an agent leaves, and handing over the wrong one
-		// silently is the failure this whole boundary exists to prevent. Single-
-		// conversation hosts, which is every interactive run, are unaffected.
-		const conversations = liveConversationScopes();
+		// this handler genuinely does not know who is asking. A parked root
+		// retains its scope and may expose archived agents, so refusing only
+		// while TWO ROOT SESSIONS ARE LIVE is insufficient. Refuse when more
+		// than one known registered conversation scope remains, live or parked.
+		// Single-scope archived access remains available as before.
+		const conversations = registeredConversationScopes();
 		if (conversations.length > 1) {
 			throw new Error(
-				`history:// is unavailable while this process drives ${conversations.length} conversations at once.\n` +
+				`history:// is unavailable while this process retains ${conversations.length} conversations at once (live or parked).\n` +
 					`Agent ids are per-conversation names and this URL carries no conversation, so serving one would ` +
 					`be a guess between them.\n` +
 					`Read the transcript from the session that spawned the agent, or open its session file directly.`,
@@ -222,7 +239,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	}
 
 	/**
-	 * Completions are silent-empty while the process drives several conversations,
+	 * Completions are silent-empty while multiple registered scopes survive,
 	 * for the reason `resolve` refuses: every id here is a name from SOME
 	 * conversation and the completer cannot say which is the caller's. Offering
 	 * them all would put another conversation's agent names in an operator's
@@ -230,7 +247,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	 * one of those completions resolves to a refusal anyway.
 	 */
 	async complete(): Promise<UrlCompletion[]> {
-		if (liveConversationScopes().length > 1) return [];
+		if (registeredConversationScopes().length > 1) return [];
 		const completions: UrlCompletion[] = [];
 		// A disk-only case alias resolves to the registered agent, not its own file.
 		const registeredFolded = new Set<string>();
