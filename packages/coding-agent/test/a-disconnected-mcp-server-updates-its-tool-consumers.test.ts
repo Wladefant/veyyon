@@ -282,6 +282,7 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 			return realRequest.call(transport, method, params, options) as Promise<T>;
 		};
 		try {
+			const beforeRefreshNotifications = changes.length;
 			firstRefresh = manager.refreshServerTools(name);
 			await bounded(firstRequestEntered.promise, "held first list response");
 			secondRefresh = manager.refreshServerTools(name);
@@ -291,6 +292,8 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 			releaseFirstResponse.resolve();
 			await bounded(Promise.all([firstRefresh, secondRefresh]), "coalesced second refresh");
 			expect(interceptedListRequests).toBe(2);
+			// A superseded first response must never reach a tool consumer.
+			expect(changes).toHaveLength(beforeRefreshNotifications + 1);
 			const latest = [createMCPToolName(name, "new_catalog")];
 			expect(manager.getTools().filter(tool => tool.mcpServerName === name).map(tool => tool.name)).toEqual(latest);
 			expect(connection.tools?.map(tool => tool.name)).toEqual(["new_catalog"]);
