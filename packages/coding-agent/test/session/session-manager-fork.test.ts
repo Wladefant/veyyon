@@ -1,3 +1,8 @@
+import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -757,6 +762,76 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       if (previousTerminalId === undefined) delete process.env.TERM_SESSION_ID;
       else process.env.TERM_SESSION_ID = previousTerminalId;
       restoreDirOverrides(overrides);
+    }
+  });
+});
+
+
+// An AgentSession must not keep its provider identity on the old transcript
+// while the underlying manager waits to retry publishing an unpublished fork.
+// Drive the real AgentSession and SessionManager; only the disk publication
+// failure and disposable local auth data are synthetic.
+describe("AgentSession fork after an unpublished JSONL refusal", () => {
+  it("restores the original transcript identity and can fork after storage recovers", async () => {
+    using temp = TempDir.createSync("@veyyon-agent-fork-publish-failure-");
+    const storage = new SyntheticForkJsonlRefusalStorage();
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"), storage);
+    const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
+    let session: AgentSession | undefined;
+    try {
+      manager.appendMessage({
+        role: "user", content: "Original recoverable conversation", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable source session");
+      const sourceId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+
+      const agent = new Agent({
+        initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
+      });
+      session = new AgentSession({
+        agent,
+        sessionManager: manager,
+        settings: Settings.isolated({ "async.enabled": false }),
+        modelRegistry: new ModelRegistry(authStorage, path.join(temp.path(), "models.yml")),
+      });
+      const providerSessionId = agent.sessionId;
+
+      storage.protectedSourceFile = sourceFile;
+      storage.rejectNewSession = true;
+      await expect(session.fork()).rejects.toThrow(/synthetic new fork JSONL publication refusal/i);
+
+      // The manager and provider must still describe the same old transcript.
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getHeader()?.id).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(agent.sessionId).toBe(providerSessionId);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+
+      storage.rejectNewSession = false;
+      await manager.flush();
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+
+      // Positive twin: a genuinely published fork still switches both identities
+      // and leaves the source's original recovery bytes intact.
+      expect(await session.fork()).toBe(true);
+      const nextFile = manager.getSessionFile();
+      if (!nextFile) throw new Error("expected committed fork file");
+      expect(nextFile).not.toBe(sourceFile);
+      expect((await fs.stat(nextFile)).isFile()).toBe(true);
+      expect(manager.getSessionId()).not.toBe(sourceId);
+      expect(agent.sessionId).toBe(manager.getSessionId());
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+    } finally {
+      storage.rejectNewSession = false;
+      try { await session?.dispose(); } finally {
+        authStorage.close();
+        if (!session) await manager.close();
+      }
     }
   });
 });
