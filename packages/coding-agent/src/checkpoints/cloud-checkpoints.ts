@@ -24,6 +24,11 @@ export interface CheckpointLease {
 	targetNode?: string;
 	transferId?: string;
 }
+function hasLiveLeaseFence(lease: CheckpointLease | null | undefined): lease is CheckpointLease {
+	if (!lease || !Number.isSafeInteger(lease.epoch) || lease.epoch < 0) return false;
+	const expiresAt = typeof lease.expiresAt === "string" ? Date.parse(lease.expiresAt) : Number.NaN;
+	return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
 export interface CheckpointClaim {
 	lease: CheckpointLease;
 	resumeToken: string;
@@ -87,6 +92,7 @@ export class CheckpointClient {
 	#leases = new Map<string, CheckpointLease>();
 	#lost = new Set<string>();
 	#pendingCommits = new Map<string, { ciphertext: Uint8Array; payloadHash: string; idempotencyKey: string }>();
+	#activeCommits = new Map<string, { payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }>();
 	constructor(readonly options: CheckpointClientOptions) {
 		this.enabled = Boolean(options.baseUrl && options.token && options.key?.byteLength === 32);
 		this.#fetch = options.fetch ?? fetch;
@@ -110,16 +116,17 @@ export class CheckpointClient {
 	}
 	async #request<T>(path: string, init: RequestInit = {}): Promise<T> {
 		if (!this.enabled) throw new Error("Cloud checkpoints are disabled or not configured");
-		const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
-			this.#fetch(new URL(path, this.options.baseUrl), {
+		return withScopedTimeoutSignal(this.#timeout, async signal => {
+			const response = await this.#fetch(new URL(path, this.options.baseUrl), {
 				...init,
 				signal,
 				headers: { authorization: `Bearer ${this.options.token}`, ...init.headers },
-			}),
-		);
-		if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
-		if (response.status === 204) return undefined as T;
-		return (await response.json()) as T;
+			});
+			if (!response.ok) throw new Error(`Checkpoint service returned HTTP ${response.status}`);
+			if (response.status === 204) return undefined as T;
+			// The response body is part of the same bounded authority request.
+			return (await response.json()) as T;
+		});
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
@@ -128,6 +135,14 @@ export class CheckpointClient {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ ownerNode }),
 		});
+		if (!lease || lease.ownerNode !== ownerNode) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease owner mismatch");
+		}
+		if (!hasLiveLeaseFence(lease)) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease fence invalid");
+		}
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
 		return lease;
@@ -142,6 +157,17 @@ export class CheckpointClient {
 	): Promise<CheckpointClaim> {
 		if (!isCheckpointNodeLabel(targetNode) || !isCheckpointNodeLabel(runtimeOwner))
 			throw new Error("A valid checkpoint node label is required");
+		// Match the authority's transfer-identity grammar before sending a
+		// potentially one-use claim or resume capability over the network.
+		if (
+			!Number.isSafeInteger(transferEpoch) ||
+			transferEpoch < 1 ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(transferId)
+		)
+			throw new Error("Invalid checkpoint transfer identity");
+		const capability = "claimToken" in credential ? credential.claimToken : credential.resumeToken;
+		if (typeof capability !== "string" || capability.length < 16 || capability.length > 128)
+			throw new Error("Invalid checkpoint transfer capability");
 		const result = await this.#request<CheckpointLease & { resumeToken: string }>(
 			`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
 			{
@@ -156,8 +182,31 @@ export class CheckpointClient {
 				}),
 			},
 		);
-		if (typeof result.resumeToken !== "string" || result.resumeToken.length < 16)
+		if (!result || result.ownerNode !== runtimeOwner) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease owner mismatch");
+		}
+		if (
+			typeof result.resumeToken !== "string" ||
+			result.resumeToken.length < 16 ||
+			result.resumeToken.length > 128
+		) {
+			this.loseLease(sessionId);
 			throw new Error("Checkpoint authority did not issue a valid resume capability");
+		}
+		// A transfer grant is written to durable ownership metadata before the
+		// first ordinary admission check. Refuse an expired/invalid authority
+		// fence here, before a one-time claim is replaced by a resume marker.
+		const expiresAt = typeof result.expiresAt === "string" ? Date.parse(result.expiresAt) : Number.NaN;
+		if (
+			!Number.isSafeInteger(result.epoch) ||
+			result.epoch < transferEpoch ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= Date.now()
+		) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority transfer grant has invalid lease fence");
+		}
 		const { resumeToken, ...lease } = result;
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
@@ -233,6 +282,11 @@ export class CheckpointClient {
 				transferId,
 			}),
 		};
+		// Once a handoff has been sent, its outcome may be uncertain even when
+		// the transport fails. Fence the old source lease before sending so no
+		// local prompt or checkpoint write can proceed under a possibly-spent
+		// epoch while the authority response (or its one retry) is outstanding.
+		this.loseLease(sessionId);
 		let next: CheckpointLease;
 		try {
 			next = await this.#request<CheckpointLease>(path, init);
@@ -243,7 +297,16 @@ export class CheckpointClient {
 				throw firstError;
 			}
 		}
-		this.loseLease(sessionId);
+		const expiresAt = next && typeof next.expiresAt === "string" ? Date.parse(next.expiresAt) : Number.NaN;
+		if (
+			!next ||
+			next.ownerNode !== targetNode ||
+			!Number.isSafeInteger(next.epoch) ||
+			next.epoch !== epoch + 1 ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= Date.now()
+		)
+			throw new Error("Checkpoint authority transfer receipt mismatch");
 		return next;
 	}
 	async head(sessionId: string): Promise<{
@@ -262,6 +325,12 @@ export class CheckpointClient {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
 			});
+			if (!next || next.ownerNode !== lease.ownerNode)
+				throw new Error("Checkpoint authority lease owner mismatch");
+			// Renewing an existing lease cannot invent or jump a fencing epoch.
+			if (!Number.isSafeInteger(next.epoch) || next.epoch !== lease.epoch)
+				throw new Error("Checkpoint authority lease epoch mismatch");
+			if (!hasLiveLeaseFence(next)) throw new Error("Checkpoint authority lease fence invalid");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {
@@ -272,14 +341,27 @@ export class CheckpointClient {
 	async releaseLease(sessionId: string): Promise<CheckpointLease | undefined> {
 		const lease = this.#leases.get(sessionId);
 		if (!lease) return undefined;
-		const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
-		});
-		this.#leases.delete(sessionId);
-		this.#lost.add(sessionId);
-		return released;
+		try {
+			const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
+			});
+			// A successful HTTP status cannot authorize an unverified resume-marker
+			// epoch. The authority contract releases the same owner at epoch + 1.
+			if (
+				!released ||
+				released.ownerNode !== lease.ownerNode ||
+				!Number.isSafeInteger(released.epoch) ||
+				released.epoch !== lease.epoch + 1
+			)
+				throw new Error("Checkpoint authority release fence mismatch");
+			return released;
+		} finally {
+			// An ambiguous/invalid release response must not leave this client
+			// locally writable or silently reissue the external release.
+			this.loseLease(sessionId);
+		}
 	}
 	loseLease(sessionId: string): void {
 		this.#leases.delete(sessionId);
@@ -287,7 +369,11 @@ export class CheckpointClient {
 	}
 	async assertWritable(sessionId: string, epoch: number): Promise<void> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease || this.#lost.has(sessionId) || lease.epoch !== epoch || Date.parse(lease.expiresAt) <= Date.now())
+		if (
+			!hasLiveLeaseFence(lease) ||
+			this.#lost.has(sessionId) ||
+			lease.epoch !== epoch
+		)
 			throw new Error("Checkpoint lease lost; synchronized writes are fenced");
 	}
 	async commit(sessionId: string, bundle: CheckpointBundle, expectedHead: number): Promise<unknown> {
@@ -296,6 +382,31 @@ export class CheckpointClient {
 		await this.assertWritable(sessionId, lease.epoch);
 		const operation = `${sessionId}:${expectedHead}`;
 		const payloadHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
+		const active = this.#activeCommits.get(operation);
+		if (active) {
+			if (active.payloadHash !== payloadHash) throw new Error("Pending checkpoint replay payload changed");
+			if (active.ownerNode !== lease.ownerNode || active.epoch !== lease.epoch)
+				throw new Error("Checkpoint lease changed during concurrent commit");
+			return await active.promise;
+		}
+		// Reserve the operation before the first awaited encryption step; otherwise
+		// two callers create different ciphertext/idempotency keys for one head.
+		const promise = this.#commitOnce(sessionId, bundle, expectedHead, lease, operation, payloadHash);
+		this.#activeCommits.set(operation, { payloadHash, ownerNode: lease.ownerNode, epoch: lease.epoch, promise });
+		try {
+			return await promise;
+		} finally {
+			if (this.#activeCommits.get(operation)?.promise === promise) this.#activeCommits.delete(operation);
+		}
+	}
+	async #commitOnce(
+		sessionId: string,
+		bundle: CheckpointBundle,
+		expectedHead: number,
+		lease: CheckpointLease,
+		operation: string,
+		payloadHash: string,
+	): Promise<unknown> {
 		let pending = this.#pendingCommits.get(operation);
 		if (pending && pending.payloadHash !== payloadHash) throw new Error("Pending checkpoint replay payload changed");
 		if (!pending) {
@@ -357,17 +468,39 @@ export class CheckpointClient {
 		const ciphertext = new Uint8Array(size);
 		let offset = 0;
 		for (const object of head.manifest.objects) {
-			const response = await withScopedTimeoutSignal(this.#timeout, async signal =>
-				this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
+			const bytes = await withScopedTimeoutSignal(this.#timeout, async signal => {
+				const response = await this.#fetch(new URL(`/v1/objects/${object.hash}`, this.options.baseUrl), {
 					signal,
 					headers: { authorization: `Bearer ${this.options.token}` },
-				}),
-			);
-			if (!response.ok) throw new Error(`Checkpoint object unavailable: HTTP ${response.status}`);
-			const bytes = new Uint8Array(await response.arrayBuffer());
+				});
+				if (!response.ok) throw new Error(`Checkpoint object unavailable: HTTP ${response.status}`);
+				if (!response.body) throw new Error("Checkpoint object integrity check failed");
+				const result = new Uint8Array(object.size);
+				const reader = response.body.getReader();
+				let received = 0;
+				let complete = false;
+				try {
+					while (true) {
+						const part = await reader.read();
+						if (part.done) {
+							complete = true;
+							break;
+						}
+						// Refuse an oversized body before buffering another chunk into the result.
+						if (part.value.byteLength > object.size - received)
+							throw new Error("Checkpoint object integrity check failed");
+						result.set(part.value, received);
+						received += part.value.byteLength;
+					}
+				} finally {
+					if (!complete) void reader.cancel().catch(() => {});
+					reader.releaseLock();
+				}
+				if (received !== object.size) throw new Error("Checkpoint object integrity check failed");
+				return result;
+			});
 			const hash = createHash("sha256").update(bytes).digest("hex");
-			if (hash !== object.hash || bytes.byteLength !== object.size)
-				throw new Error("Checkpoint object integrity check failed");
+			if (hash !== object.hash) throw new Error("Checkpoint object integrity check failed");
 			ciphertext.set(bytes, offset);
 			offset += bytes.byteLength;
 		}

@@ -34,7 +34,7 @@ test("server epoch loss blocks admission and does not reacquire silently", async
 		key: new Uint8Array(32),
 		fetch: fake,
 	});
-	const session = new SynchronizedSession("s", client);
+	const session = new SynchronizedSession("s", client, undefined, "node");
 	await session.admit();
 	owns = false;
 	await expect(session.admit()).rejects.toThrow(/409/);
@@ -189,3 +189,641 @@ test("a transfer claim is single-use across runtimes sharing the destination dev
 		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
 });
+// WHY: prompt/tool admissions can overlap before the initial remote lease is granted.
+// Without coalescing, the same process sends duplicate /lease (or one-time /claim)
+// requests and can race the authority's ownership handshake.
+test("concurrent admission shares one in-flight checkpoint lease acquisition", async () => {
+	const entered = Promise.withResolvers<void>();
+	const allowLease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const lease = {
+		ownerNode: "test-owner",
+		epoch: 1,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "lease") {
+			entered.resolve();
+			await allowLease.promise;
+		}
+		return Response.json(lease);
+	};
+	const session = new SynchronizedSession(
+		"concurrent-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	const first = session.admit();
+	const second = session.admit();
+	await entered.promise;
+	expect(actions).toEqual(["lease"]);
+	allowLease.resolve();
+	await Promise.all([first, second]);
+	expect(actions).toEqual(["lease", "renew"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+// WHY: two callers must not issue two /release mutations using the same
+// potentially spent epoch while the first close response is in flight.
+test("concurrent close calls share exactly one authority release and stay fenced", async () => {
+	const entered = Promise.withResolvers<void>();
+	const finishRelease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "release") {
+			entered.resolve();
+			await finishRelease.promise;
+		}
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: action === "release" ? 2 : 1,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"close-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await session.admit();
+	const first = session.close();
+	const second = session.close();
+	const deadline = setTimeout(() => entered.reject(new Error("close never issued /release")), 3000);
+	try {
+		await entered.promise;
+		expect(second).toBe(first);
+		expect(actions).toEqual(["lease", "renew", "release"]);
+		await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	} finally {
+		clearTimeout(deadline);
+		finishRelease.resolve();
+	}
+	await Promise.all([first, second]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+test("a failed close cannot replay an ambiguous authority release", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "release") return new Response(null, { status: 409 });
+		return Response.json({
+			ownerNode: "test-owner", epoch: 1,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"ambiguous-release-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await session.admit();
+	const first = session.close();
+	const second = session.close();
+	expect(first).toBe(second);
+	await expect(first).rejects.toThrow(/HTTP 409/);
+	await expect(second).rejects.toThrow(/HTTP 409/);
+	await expect(session.close()).rejects.toThrow(/HTTP 409/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+// WHY: a transferred resume-marker epoch is persisted once per actual lease release,
+// even if the host invokes shutdown twice before the authority responds.
+test("concurrent transferred-session close persists the resume epoch once", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const entered = Promise.withResolvers<void>();
+	const finishRelease = Promise.withResolvers<void>();
+	const token = "a-long-enough-resume-capability";
+	const actions: string[] = [];
+	const persisted: Array<{ token: string; epoch: number }> = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "finalize") return Response.json({ ok: true });
+		if (action === "release") {
+			entered.resolve();
+			await finishRelease.promise;
+		}
+		return Response.json({
+			ownerNode: "runtime-owner", epoch: action === "release" ? 6 : 5,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+			...(action === "claim" ? { resumeToken: token } : {}),
+		});
+	};
+	const session = new SynchronizedSession(
+		"transferred-close-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		{
+			version: 1, sessionId: "transferred-close-single-flight", targetNode: "destination-device",
+			transferId: "transfer-close", transferEpoch: 4, claimToken: "a-long-enough-claim-capability",
+			epoch: 4,
+		},
+		"runtime-owner",
+		async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+	);
+	const deadline = setTimeout(() => entered.reject(new Error("transferred close never issued /release")), 3000);
+	try {
+		await session.admit();
+		const first = session.close();
+		const second = session.close();
+		expect(first).toBe(second);
+		await entered.promise;
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+		finishRelease.resolve();
+		await Promise.all([first, second]);
+		expect(persisted).toEqual([{ token, epoch: 5 }, { token, epoch: 6 }]);
+		await session.close();
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+	} finally {
+		clearTimeout(deadline);
+		finishRelease.resolve();
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
+// WHY: a shutdown while /lease is unresolved used to release nothing and return,
+// then the late admission installed a timer and admitted work after close.
+test("close during checkpoint lease acquisition releases the late grant and refuses admission", async () => {
+	const entered = Promise.withResolvers<void>();
+	const allowLease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const lease = {
+		ownerNode: "test-owner",
+		epoch: 1,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "lease") {
+			entered.resolve();
+			await allowLease.promise;
+		}
+		return Response.json(lease);
+	};
+	const session = new SynchronizedSession(
+		"late-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	const admission = session.admit();
+	await entered.promise;
+	const closing = session.close();
+	allowLease.resolve();
+	await expect(admission).rejects.toThrow(/Synchronized ownership lost/);
+	await closing;
+	expect(actions).toEqual(["lease", "release"]);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "release"]);
+});
+
+// WHY: an expired authority grant is already a lost fence even if the remote
+// renew endpoint might succeed later. An unadmitted prompt cannot reacquire.
+test("an expired checkpoint lease permanently fences subsequent admissions", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: 1,
+			expiresAt: "2000-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"expired-admission",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "release"]);
+});
+
+// WHY: a single-use transfer claim is also asynchronous. Closing while it is
+// pending must not finalize a resume token or admit the transferred session.
+test("close during transfer claim releases the late grant without persisting a resume marker", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const entered = Promise.withResolvers<void>();
+	const allowClaim = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	let persisted = 0;
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "claim") {
+			entered.resolve();
+			await allowClaim.promise;
+		}
+		return Response.json({
+			ownerNode: "runtime-owner",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			resumeToken: "a-long-enough-pending-resume-capability",
+		});
+	};
+	const marker = {
+		version: 1 as const,
+		sessionId: "closing-transfer",
+		targetNode: "destination-device",
+		transferId: "transfer-closing",
+		transferEpoch: 4,
+		claimToken: "a-long-enough-claim-capability",
+		epoch: 4,
+	};
+	try {
+		const session = new SynchronizedSession(
+			"closing-transfer",
+			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+			marker,
+			"runtime-owner",
+			async () => { persisted++; },
+		);
+		const admission = session.admit();
+		await entered.promise;
+		const closing = session.close();
+		allowClaim.resolve();
+		await expect(admission).rejects.toThrow(/Synchronized ownership lost/);
+		await closing;
+		expect(persisted).toBe(0);
+		expect(actions).toEqual(["claim", "release"]);
+	} finally {
+		allowClaim.resolve();
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
+
+
+// WHY: an authority may return HTTP 200 but a lease with an expired deadline;
+// future work must not be admitted on that successful-but-unusable response.
+test("an expired renewal response fences the current admission", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: 1,
+			expiresAt: action === "renew" ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"expired-renewal-response",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "renew"]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+// WHY: rejected ownership must not keep renewing. A successful lease renews,
+// but an in-flight timer renewal must finish before close sends /release.
+test("lost admission never renews and close drains the periodic renewal before release", async () => {
+	const expiredActions: string[] = [];
+	const expiredFetch: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		expiredActions.push(action);
+		return Response.json({
+			ownerNode: "expired-owner",
+			epoch: 1,
+			expiresAt: "2000-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
+	};
+	const expired = new SynchronizedSession(
+		"expired-periodic",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: expiredFetch }),
+		undefined,
+		"expired-owner",
+		undefined,
+		8,
+	);
+	await expect(expired.admit()).rejects.toThrow(/Checkpoint lease lost/);
+
+	const started = Promise.withResolvers<void>();
+	const finishPeriodic = Promise.withResolvers<void>();
+	const controlActions: string[] = [];
+	let renewals = 0;
+	const validLease = {
+		ownerNode: "valid-owner",
+		epoch: 2,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
+	};
+	const controlFetch: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		controlActions.push(action);
+		if (action === "renew" && ++renewals === 2) {
+			started.resolve();
+			await finishPeriodic.promise;
+		}
+		return Response.json(validLease);
+	};
+	const live = new SynchronizedSession(
+		"valid-periodic",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: controlFetch }),
+		undefined,
+		"valid-owner",
+		undefined,
+		8,
+	);
+	let closing: Promise<void> | undefined;
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await live.admit();
+		deadline = setTimeout(() => started.reject(new Error("Periodic renewal never fired")), 3000);
+		await started.promise;
+		// The expired session had an earlier opportunity to schedule its tick.
+		expect(expiredActions).toEqual(["lease"]);
+		closing = live.close();
+		await new Promise<void>(resolve => setTimeout(resolve, 25));
+		expect(controlActions).not.toContain("release");
+		finishPeriodic.resolve();
+		await closing;
+		expect(controlActions).toEqual(["lease", "renew", "renew", "release"]);
+		expect(expiredActions).toEqual(["lease"]);
+	} finally {
+		clearTimeout(deadline);
+		finishPeriodic.resolve();
+		await (closing ?? live.close());
+		await expired.close();
+	}
+});
+
+// WHY: a malformed release acknowledgment must not become a persisted resume
+// epoch even when the remote server returned HTTP 200.
+test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoch", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const token = "a-long-enough-resume-capability";
+	const invalid = [
+		{ name: "foreign-owner", ownerNode: "foreign-owner", epoch: 6 },
+		{ name: "stale-epoch", ownerNode: "runtime-owner", epoch: 5 },
+		{ name: "fractional-epoch", ownerNode: "runtime-owner", epoch: 6.5 },
+	];
+	try {
+		for (const scenario of invalid) {
+			const actions: string[] = [];
+			const persisted: Array<{ token: string; epoch: number }> = [];
+			const fake: CheckpointFetch = async input => {
+				const action = new URL(String(input)).pathname.split("/").pop()!;
+				actions.push(action);
+				if (action === "finalize") return Response.json({ ok: true });
+				return Response.json({
+					ownerNode: action === "release" ? scenario.ownerNode : "runtime-owner",
+					epoch: action === "release" ? scenario.epoch : 5,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+					...(action === "claim" ? { resumeToken: token } : {}),
+				});
+			};
+			const sessionId = `invalid-release-${scenario.name}`;
+			const marker = {
+				version: 1 as const,
+				sessionId,
+				targetNode: "destination-device",
+				transferId: "transfer-invalid-release",
+				transferEpoch: 4,
+				claimToken: "a-long-enough-claim-capability",
+				epoch: 4,
+			};
+			const session = new SynchronizedSession(
+				sessionId,
+				new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+				marker,
+				"runtime-owner",
+				async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+			);
+			await session.admit();
+			await expect(session.close()).rejects.toThrow(/release fence mismatch/);
+			expect(persisted).toEqual([{ token, epoch: 5 }]);
+			expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+			await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+		}
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
+test("invalid periodic HTTP-200 lease renewals fence further admission and stop ticks", async () => {
+	const invalid = [
+		{ label: "expired", expiresAt: "2000-01-01T00:00:00Z", epoch: 1 },
+		{ label: "malformed-deadline", expiresAt: "not-a-date", epoch: 1 },
+		{ label: "changed-epoch", expiresAt: "2099-01-01T00:00:00Z", epoch: 2 },
+	];
+	for (const scenario of invalid) {
+		const actions: string[] = [];
+		const secondRenew = Promise.withResolvers<void>();
+		let renewCount = 0;
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop()!;
+			actions.push(action);
+			if (action === "renew") {
+				renewCount++;
+				if (renewCount === 2) secondRenew.resolve();
+			}
+			return Response.json({
+				ownerNode: "test-owner",
+				epoch: action === "release" ? 2 : action === "renew" && renewCount === 2 ? scenario.epoch : 1,
+				expiresAt: action === "renew" && renewCount === 2 ? scenario.expiresAt : "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			});
+		};
+		const session = new SynchronizedSession(
+			`periodic-${scenario.label}`,
+			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+			undefined,
+			"test-owner",
+			undefined,
+			5,
+		);
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		try {
+			// Time only the periodic tick, not unrelated initial admission or CI setup.
+			await session.admit();
+			deadline = setTimeout(() => secondRenew.reject(new Error("Periodic renewal was never issued")), 3000);
+			await secondRenew.promise;
+			// The second fake response has entered the normal renewal callback.
+			await new Promise(resolve => setTimeout(resolve, 30));
+			await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+			await new Promise(resolve => setTimeout(resolve, 25));
+			expect(renewCount).toBe(2);
+			expect(actions.filter(action => action === "renew")).toHaveLength(2);
+		} finally {
+			clearTimeout(deadline);
+			await session.close();
+		}
+	}
+});
+
+// WHY: after successful transfer finalization, close retains the previously
+// persisted resume capability and advances its epoch on authority release.
+test("successful transfer retains its persisted resume capability on release", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const actions: string[] = [];
+	const persisted: Array<{ token: string; epoch: number }> = [];
+	const token = "a-long-enough-resume-capability";
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "finalize") return Response.json({ ok: true });
+		return Response.json({
+			ownerNode: "runtime-owner",
+			epoch: action === "release" ? 6 : 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			...(action === "claim" ? { resumeToken: token } : {}),
+		});
+	};
+	const claim = {
+		version: 1 as const,
+		sessionId: "successful-transfer",
+		targetNode: "destination-device",
+		transferId: "transfer-success",
+		transferEpoch: 4,
+		claimToken: "a-long-enough-claim-capability",
+		epoch: 4,
+	};
+	const session = new SynchronizedSession(
+		"successful-transfer",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		claim,
+		"runtime-owner",
+		async (resumeToken, epoch) => {
+			persisted.push({ token: resumeToken, epoch });
+		},
+	);
+	try {
+		await session.admit();
+		await session.close();
+		expect(persisted).toEqual([{ token, epoch: 5 }, { token, epoch: 6 }]);
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
+test("foreign-owner lease response cannot admit a synchronized session or renew under another owner", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		return Response.json({
+			ownerNode: "owner-b", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const session = new SynchronizedSession("foreign-owner", client, undefined, "owner-a");
+	await expect(session.admit()).rejects.toThrow(/lease owner mismatch/);
+	expect(actions).toEqual(["lease"]);
+	await expect(client.assertWritable("foreign-owner", 1)).rejects.toThrow(/lease lost/);
+	await session.close();
+	expect(actions).toEqual(["lease"]);
+});
+// WHY: claim-transfer writes the returned resume capability to the persistent
+// marker before ordinary admission verifies writability. A malformed HTTP-200
+// authority grant must not replace the one-time claim with a dead resume token.
+test("invalid transfer grant cannot persist a resume capability before admission", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const scenarios: Array<{ name: string; epoch: number | undefined; expiresAt: string }> = [
+		{ name: "expired", epoch: 5, expiresAt: "2000-01-01T00:00:00Z" },
+		{ name: "malformed-expiry", epoch: 5, expiresAt: "not-a-date" },
+		{ name: "missing-epoch", epoch: undefined, expiresAt: "2099-01-01T00:00:00Z" },
+		{ name: "fractional-epoch", epoch: 5.5, expiresAt: "2099-01-01T00:00:00Z" },
+		{ name: "stale-epoch", epoch: 3, expiresAt: "2099-01-01T00:00:00Z" },
+	];
+	try {
+		for (const scenario of scenarios) {
+			const actions: string[] = [];
+			const persisted: Array<{ token: string; epoch: number }> = [];
+			const fake: CheckpointFetch = async input => {
+				const action = new URL(String(input)).pathname.split("/").pop()!;
+				actions.push(action);
+				if (action !== "claim") return Response.json({ ok: true });
+				return Response.json({
+					ownerNode: "runtime-owner",
+					epoch: scenario.epoch,
+					expiresAt: scenario.expiresAt,
+					headSequence: 0,
+					manifestHash: "",
+					resumeToken: "a-long-enough-resume-capability",
+				});
+			};
+			const sessionId = `invalid-grant-${scenario.name}`;
+			const client = new CheckpointClient({
+				baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake,
+			});
+			const session = new SynchronizedSession(
+				sessionId,
+				client,
+				{
+					version: 1,
+					sessionId,
+					targetNode: "destination-device",
+					transferId: "transfer-invalid-grant",
+					transferEpoch: 4,
+					claimToken: "a-long-enough-claim-capability",
+					epoch: 4,
+				},
+				"runtime-owner",
+				async (token, epoch) => { persisted.push({ token, epoch }); },
+			);
+			await expect(session.admit()).rejects.toThrow(/transfer grant has invalid lease fence/);
+			expect(persisted).toEqual([]);
+			expect(actions).toEqual(["claim"]);
+			await expect(client.assertWritable(sessionId, 5)).rejects.toThrow(/lease lost/);
+			await session.close();
+			expect(actions).toEqual(["claim"]);
+		}
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
