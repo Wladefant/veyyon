@@ -648,6 +648,24 @@ export class StdioTransport implements MCPTransport {
 			for (const m of message) this.#handleMessage(m);
 			return;
 		}
+		// Validate method-bearing peer frames before interpreting id:null errors:
+		// a request/error hybrid must not reject every pending client call.
+		// Correlated client replies have a separate validation path.
+		if (message !== null && typeof message === "object" && "method" in message) {
+			const params = message.params;
+			if (
+				message.jsonrpc !== "2.0" ||
+				typeof message.method !== "string" ||
+				(params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) ||
+				("id" in message && typeof message.id !== "string" && typeof message.id !== "number") ||
+				"result" in message ||
+				"error" in message
+			) {
+				logger.warn("Ignored invalid MCP stdio peer method envelope");
+				return;
+			}
+		}
+
 		// An error the server could not attribute to a request (`"id": null`), which the spec
 		// requires for a parse error. It used to fall past every branch below and be dropped, so
 		// each caller waited out its timeout and reported that the server had not answered. The
@@ -663,23 +681,6 @@ export class StdioTransport implements MCPTransport {
 			});
 			this.onError?.(new Error(describeJsonRpcError(error)));
 			return;
-		}
-
-		// A peer cannot turn a malformed JSON-RPC method frame into an MCP
-		// callback. Correlated client replies have a separate validation path.
-		if ("method" in message) {
-			const params = message.params;
-			if (
-				message.jsonrpc !== "2.0" ||
-				typeof message.method !== "string" ||
-				(params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) ||
-				("id" in message && typeof message.id !== "string" && typeof message.id !== "number") ||
-				"result" in message ||
-				"error" in message
-			) {
-				logger.warn("Ignored invalid MCP stdio peer method envelope");
-				return;
-			}
 		}
 
 		// Server-to-client request: has both method and id
