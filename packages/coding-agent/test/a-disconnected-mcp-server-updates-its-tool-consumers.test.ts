@@ -70,3 +70,67 @@ it("a sanitized MCP server disconnect updates consumers without removing sibling
 		await manager.disconnectAll();
 	}
 }, 30_000);
+
+
+// WHY: normalized MCP server names are not a prefix-free namespace.
+// "alpha" and "alpha_beta" have overlapping tool-name prefixes, so a
+// server-name prefix filter removes a healthy sibling during refresh or
+// disconnect. The real server identity on each MCPTool is unambiguous.
+// Gap: identical minted *full* tool names from distinct servers require
+// separate conflict handling and are not established by this fixture.
+it("overlapping MCP server name prefixes keep sibling tools on refresh and disconnect", async () => {
+	const ownerName = "alpha";
+	const siblingName = "alpha_beta";
+	const ownerTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
+		createMCPToolName(ownerName, manyToolName(i)),
+	);
+	const siblingTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
+		createMCPToolName(siblingName, manyToolName(i)),
+	);
+	const allTools = [...ownerTools, ...siblingTools].sort();
+	const manager = new MCPManager(process.cwd());
+	const notified: string[][] = [];
+	const initialToolLoads = Promise.withResolvers<void>();
+	let initialNotifications = 0;
+	manager.setOnToolsChanged(tools => {
+		notified.push(tools.map(tool => tool.name));
+		if (++initialNotifications === 2) initialToolLoads.resolve();
+	});
+	try {
+		const fixtureConfig = { type: "stdio" as const, command: process.execPath, args: [FIXTURE_PATH] };
+		await manager.connectServers({ [ownerName]: fixtureConfig, [siblingName]: fixtureConfig }, {});
+		const startupDeadline = Promise.withResolvers<never>();
+		const timer = setTimeout(() => startupDeadline.reject(new Error("Both real MCP server tool loads did not finish")), 15_000);
+		try {
+			await Promise.race([initialToolLoads.promise, startupDeadline.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+		await Promise.all([manager.waitForConnection(ownerName), manager.waitForConnection(siblingName)]);
+		// Restore the sibling's exact 45 tools after both initial loads: in the
+		// unfixed code, which connection finishes last can itself delete them.
+		// This makes the old-code negative fail on the ownership assertion below,
+		// not on nondeterministic connection ordering or a placeholder tool.
+		await manager.refreshServerTools(siblingName);
+		expect(manager.getTools().map(tool => tool.name)).toEqual(allTools);
+
+		await manager.refreshServerTools(ownerName);
+		// The old mcp__alpha_ filter also matches every mcp__alpha_beta_ tool.
+		expect(manager.getTools().map(tool => tool.name)).toEqual(allTools);
+		expect(notified.at(-1)).toEqual(allTools);
+
+		const beforeDisconnect = notified.length;
+		await manager.disconnectServer(ownerName);
+		expect(manager.getTools().map(tool => tool.name)).toEqual(siblingTools);
+		expect(notified).toHaveLength(beforeDisconnect + 1);
+		expect(notified.at(-1)).toEqual(siblingTools);
+
+		await manager.disconnectServer(ownerName);
+		expect(notified).toHaveLength(beforeDisconnect + 1);
+		await manager.disconnectServer(siblingName);
+		expect(manager.getTools()).toEqual([]);
+		expect(notified.at(-1)).toEqual([]);
+	} finally {
+		await manager.disconnectAll();
+	}
+}, 35_000);
