@@ -300,7 +300,10 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 			expect(changes.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
 		} finally {
 			releaseFirstResponse.resolve();
-			await bounded(Promise.allSettled([firstRefresh, secondRefresh].filter((p): p is Promise<void> => !!p)), "refresh drain");
+			await bounded(
+				Promise.allSettled([firstRefresh, secondRefresh].filter((p): p is Promise<void> => !!p)),
+				"refresh drain",
+			);
 			transport.request = originalRequest;
 		}
 	} finally {
@@ -328,8 +331,11 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
 		const expired = Promise.withResolvers<never>();
 		const timer = setTimeout(() => expired.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
-		try { return await Promise.race([work, expired.promise]); }
-		finally { clearTimeout(timer); }
+		try {
+			return await Promise.race([work, expired.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
 	};
 	const firstEntered = Promise.withResolvers<void>();
 	const releaseFailure = Promise.withResolvers<void>();
@@ -343,14 +349,20 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 		let calls = 0;
 		let first: Promise<void> | undefined;
 		let second: Promise<void> | undefined;
-		transport.request = async <T = unknown>(method: string, params?: Record<string, unknown>, options?: MCPRequestOptions): Promise<T> => {
+		transport.request = async <T = unknown>(
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		): Promise<T> => {
 			if (method === "tools/list") {
 				if (++calls === 1) {
 					firstEntered.resolve();
 					await releaseFailure.promise;
 					throw new Error("synthetic first list failure");
 				}
-				if (calls === 2) return { tools: [{ name: "recovered", inputSchema: { type: "object", properties: {} } }] } as T;
+				if (calls === 2) {
+					return { tools: [{ name: "recovered", inputSchema: { type: "object", properties: {} } }] } as T;
+				}
 				throw new Error("Unexpected repeated tool-list attempt");
 			}
 			return originalRequest.call(transport, method, params, options) as Promise<T>;
