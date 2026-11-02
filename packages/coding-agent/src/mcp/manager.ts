@@ -1434,7 +1434,42 @@ export class MCPManager {
 				.catch(error => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
-					if (this.#supersededInitialToolLoads.has(toolsPromise)) return;
+					if (this.#supersededInitialToolLoads.has(toolsPromise)) {
+						// The newer refresh owns the final tool list. If the initial
+						// request fails, keep its live handshake status pending until
+						// the queued replacement finishes instead of reporting stale
+						// failure or leaving the session stuck at "connecting".
+						void connectionPromise.then(connection => {
+							const settleRecovery = async (recoveryError?: unknown): Promise<void> => {
+								if (
+									this.#connections.get(name) !== connection ||
+									this.#retiredToolConnections.has(connection)
+								) return;
+								if (connection.tools !== undefined) {
+									this.#lastErrors.delete(name);
+									onStatus?.({ type: "connected", serverName: name });
+									await this.#loadServerResourcesAndPrompts(name, connection);
+								} else {
+									const message = errorMessage(recoveryError ?? error);
+									this.#lastErrors.set(name, message);
+									onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
+								}
+							};
+							const refresh = this.#pendingToolRefreshes.get(name);
+							const finished = refresh?.connection === connection
+								? refresh.promise.then(() => settleRecovery(), recoveryError => settleRecovery(recoveryError))
+								: settleRecovery();
+							void finished.catch(recoveryError => {
+								logger.warn("MCP superseded startup status recovery failed", {
+									path: `mcp:${name}`,
+									error: errorMessage(recoveryError),
+								});
+							});
+						}).catch(() => {
+							// No handshake to recover after connection failure.
+						});
+						return;
+					}
 					const message = errorMessage(error);
 					this.#lastErrors.set(name, message);
 					onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
