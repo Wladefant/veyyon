@@ -18,6 +18,8 @@ import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
 import { makeToolSession } from "../helpers/tool-session";
 
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import "@veyyon/coding-agent/tools/index";
 const CANARY = "synthetic-eval-\n\nregistered-value-6c84f1";
 const obfuscator = new SecretObfuscator([
 	{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" },
@@ -85,7 +87,7 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		expect(JSON.stringify(result.content)).toContain("true");
 		expect(artifact).not.toContain(CANARY);
 	});
-	it("withholds log and phase inventories from live status and result details", async () => {
+	it("withholds log and phase inventories from live status, result details, and session entries", async () => {
 		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-status-inventory-"));
 		const session = makeSession(path.join(directory, "eval-output.txt"));
 		const progress: AgentToolResult[] = [];
@@ -104,12 +106,29 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details)];
 		expect(retained).toHaveLength(3);
 		for (const sink of retained) expect(sink).not.toContain(inventory);
-		expect(JSON.stringify(result.details)).toContain("[credential output withheld]");
 		expect(result.details?.statusEvents).toEqual([
 			{ op: "log", message: "safe status" },
 			{ op: "phase", title: "safe phase" },
 			{ op: "log", message: "[credential output withheld]" },
 			{ op: "phase", title: "[credential output withheld]" },
 		]);
+
+		const manager = SessionManager.create(directory, path.join(directory, "sessions"));
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-eval-status-call",
+			toolName: "eval",
+			content: result.content,
+			details: result.details,
+			isError: result.isError ?? false,
+			timestamp: Date.now(),
+		});
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const persisted = fs.readFileSync(sessionFile!, "utf8");
+		expect(persisted).not.toContain(inventory);
+		const reopened = await SessionManager.open(sessionFile!);
+		expect(JSON.stringify(reopened.getBranch())).not.toContain(inventory);
 	});
 });
