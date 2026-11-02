@@ -10,6 +10,7 @@ import { TempDir } from "@veyyon/utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
 import { HistoryProtocolHandler } from "../history-protocol";
+import { parseInternalUrl } from "../parse";
 import { registerArtifactsDir, resetRegisteredArtifactDirsForTests, sessionFilesFromDisk } from "../registry-helpers";
 
 afterEach(() => {
@@ -119,4 +120,36 @@ describe("history:// case-folded disk roster", () => {
 		expect((await handler.complete()).map(item => item.value)
 			.filter(id => id.toLowerCase() === "reviewer")).toEqual(["Reviewer", "reviewer"]);
 	});
+	
+	it("refuses third-case registered aliases in overview, exact reads and search", async () => {
+		// WHY: registry names are exact-case identities, but an unqualified
+		// case-fold fallback used to choose the first of two matching agents.
+		register("Reviewer", true);
+		register("reviewer", true);
+		const handler = new HistoryProtocolHandler();
+		// parseInternalUrl retains the raw host spelling; new URL() may fold it.
+		for (const suffix of ["", "?q=needle", "?entry=entry-1&offset=0&limit=8000"]) {
+			await expect(handler.resolve(parseInternalUrl(`history://REVIEWER${suffix}`)))
+				.rejects.toThrow("Ambiguous registered agent: REVIEWER");
+		}
+		// Explicit exact spellings are still distinct selectable identities.
+		const upper = await handler.resolve(parseInternalUrl("history://Reviewer"));
+		const lower = await handler.resolve(parseInternalUrl("history://reviewer"));
+		expect(upper.content).toContain("# Reviewer (running)");
+		expect(lower.content).toContain("# reviewer (running)");
+		const names = (await handler.complete()).map(item => item.value)
+			.filter(id => id.toLowerCase() === "reviewer");
+		expect(names).toEqual(["Reviewer", "reviewer"]);
+	});
+
+	it("keeps single registered agent's case-insensitive convenience lookup", async () => {
+		register("Reviewer", true);
+		const handler = new HistoryProtocolHandler();
+		for (const alias of ["reviewer", "REVIEWER"]) {
+			const result = await handler.resolve(parseInternalUrl(`history://${alias}`));
+			expect(result.notes).toContain("Source: live session");
+			expect(result.content).toContain("# Reviewer (running)");
+		}
+	});
+
 });
