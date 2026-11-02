@@ -667,10 +667,15 @@ export class MCPManager {
 
 	async stopEvents(): Promise<void> {
 		const scope = this.#eventCallbackContext.getStore();
-		// An obsolete handler may still be awaiting an earlier event. Its late
-		// stop must not revoke a replacement consumer installed by another owner.
-		// External stops and stops from the current handler retain their behavior.
-		if (this.#eventCallbackIsObsolete()) return;
+		// An inactive detached callback must drain like an external caller when
+		// it still owns this consumer, but it cannot revoke a successor installed
+		// after its original callback ended. A genuinely external caller has no
+		// inherited scope; active current callbacks can still stop/restart.
+		if (
+			scope !== undefined &&
+			(scope.consumerRevision !== this.#eventConsumerRevision ||
+				scope.disconnectEpoch !== (this.#eventServerDisconnectEpochs.get(scope.serverName) ?? 0))
+		) return;
 		// An external stop invalidates callbacks already in flight. Otherwise
 		// they may re-enable a subscription while this stop drains only the old
 		// snapshot, leaving the replacement running after stopEvents settles.
