@@ -44,12 +44,24 @@ describe("terminal ownership failure diagnostics", () => {
 		});
 	}
 
-	it("names parse failures and keeps their original SyntaxError", async () => {
+	it("names malformed record paths and preserves the original SyntaxError", async () => {
 		const { root, sessionFile, record } = await claim();
-		vi.spyOn(utils, "readOwnerOnlyFiles").mockResolvedValue(["{"]);
-		const error = await assertNotTerminalOwned(sessionFile, root).then(() => undefined, error => error);
-		expect(error.cause).toBeInstanceOf(SyntaxError);
-		expect(error.message).toContain(`${record}; step=parse; code=SyntaxError;`);
+		await fs.writeFile(record, "{");
+		const error = await assertNotTerminalOwned(sessionFile, root, {
+			platform: "win32",
+			windowsAcl: {
+				run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+			},
+		}).then(() => undefined, error => error);
+		expect(error.message).toContain(`${record}; step=`);
+		expect(error.message).toContain("ACL deadline=15000ms per command;");
+		const causes: unknown[] = [];
+		let cause: unknown = error;
+		while (cause instanceof Error) {
+			causes.push(cause);
+			cause = cause.cause;
+		}
+		expect(causes.some(value => value instanceof SyntaxError)).toBe(true);
 	});
 
 	it("still treats an empty recovered batch as absent", async () => {
