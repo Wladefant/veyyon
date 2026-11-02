@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
@@ -1951,6 +1952,108 @@ export class SessionManager {
 	}
 
 	/**
+	 * Keep the original session's locally referenced artifact bytes available
+	 * before a fork publishes a new session. Both current-session forks and
+	 * imported historical forks must use the same identity and copy contract.
+	 */
+	static async #copyForkArtifactEvidence(
+		oldSessionFile: string,
+		nextSessionFile: string,
+		retainedEntries: readonly FileEntry[],
+		parentSessionId: string | undefined,
+	): Promise<void> {
+		const oldArtifactDir = artifactsDirectoryFor(oldSessionFile);
+		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
+		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
+
+		// Preserve the original referenced bytes before mutating the active
+		// session identity, entries or file. A best-effort post-switch copy can
+		// otherwise leave inherited artifact://0 pointing at unrelated new output.
+		const referencedIds = new Set<string>();
+		for (const entry of retainedEntries) {
+			// Artifact IDs are per session. An explicit foreign-session reference
+			// must not be checked or copied from this session's artifact store.
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
+				let id = match[1];
+				if (!id) continue;
+				// The internal URL parser percent-decodes rawHost before checking
+				// the *whole* numeric ID. A valid artifact://%30 is local artifact 0
+				// and must not evade copy-before-fork validation.
+				try {
+					id = decodeURIComponent(id);
+				} catch {
+					// Keep malformed escapes unchanged, as parseInternalUrl does.
+				}
+				if (!/^\d+$/.test(id)) continue;
+				const query = match[2];
+				if (query !== undefined) {
+					const sessions = new URLSearchParams(query).getAll("session");
+					if (
+						sessions.length === 1 &&
+						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
+						sessions[0] !== parentSessionId
+					) continue;
+				}
+				referencedIds.add(id);
+			}
+		}
+		let sourceNames: string[] | undefined;
+		try {
+			const stat = await fs.promises.lstat(oldArtifactDir);
+			if (!stat.isDirectory()) throw new Error("Cannot fork session: source artifact path is not a directory");
+			sourceNames = await fs.promises.readdir(oldArtifactDir);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// An absent directory is normal only if there is nothing to recover.
+			if (referencedIds.size > 0) throw new Error("Cannot fork session: referenced artifacts unavailable");
+		}
+		if (sourceNames) {
+			for (const id of referencedIds) {
+				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
+				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
+				const original = await fs.promises.lstat(path.join(oldArtifactDir, matches[0]!));
+				if (!original.isFile()) throw new Error("Cannot fork session: referenced artifact is not a regular file");
+			}
+			// A failed copy leaves the old session and its original evidence usable.
+			// Never overwrite a newly created destination with another fork's data.
+			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
+				recursive: true, force: false, errorOnExist: true,
+			});
+			const copiedNames = new Set(await fs.promises.readdir(nextArtifactDir));
+			if (sourceNames.some(name => !copiedNames.has(name))) {
+				throw new Error("Cannot fork session: artifact copy incomplete");
+			}
+			// Size equality does not establish that referenced recovery bytes survived
+			// the copy. Hash the two files as streams to keep memory bounded even for
+			// large saved tool output; do not read or import foreign-session artifacts.
+			const sha256File = async (filename: string): Promise<string> => {
+				const digest = createHash("sha256");
+				for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
+				return digest.digest("hex");
+			};
+			for (const id of referencedIds) {
+				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+				const originalPath = path.join(oldArtifactDir, filename);
+				const copiedPath = path.join(nextArtifactDir, filename);
+				const [original, copied] = await Promise.all([
+					fs.promises.lstat(originalPath),
+					fs.promises.lstat(copiedPath),
+				]);
+				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
+					throw new Error("Cannot fork session: referenced artifact copy incomplete");
+				}
+				const [originalHash, copiedHash] = await Promise.all([
+					sha256File(originalPath),
+					sha256File(copiedPath),
+				]);
+				if (originalHash !== copiedHash) {
+					throw new Error("Cannot fork session: referenced artifact bytes differ from source");
+				}
+			}
+		}
+	}
+
+	/**
 	 * Fork the current conversation into a new file with fresh lifecycle metadata.
 	 * @returns the old and new session file paths, or undefined when not persisting.
 	 */
@@ -1959,18 +2062,28 @@ export class SessionManager {
 
 		const oldSessionFile = this.#sessionFile;
 		const parentSessionId = this.#sessionId;
+		const timestamp = nowIso();
+		const nextSessionId = mintSessionId();
+		const nextSessionFile = path.join(
+			this.#sessionDir,
+			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
+		);
+		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		await SessionManager.#copyForkArtifactEvidence(
+			oldSessionFile,
+			nextSessionFile,
+			retainedEntries,
+			parentSessionId,
+		);
+
 		this.#endLifecycle("session_switched");
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
-		this.#entries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
 
-		const timestamp = nowIso();
-		this.#setSessionId(mintSessionId());
-		this.#sessionFile = path.join(
-			this.#sessionDir,
-			sessionFileName(`${fileSafeTimestamp(timestamp)}_${this.#sessionId}`),
-		);
+		this.#setSessionId(nextSessionId);
+		this.#sessionFile = nextSessionFile;
 		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -1996,11 +2109,14 @@ export class SessionManager {
 		this.#startLifecycle("created");
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
-		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		// A new file, so another writer's tail on the old one is not ours to carry,
 		// and the history we brought along is.
 		this.#forgetForeignWriter();
+		// Arm the existing publish-time breadcrumb hook. A failed new-file write
+		// keeps the old recovery pointer, while a later successful retry promotes
+		// the new one only after its JSONL is actually published.
+		this.#breadcrumbFresh = true;
 		await this.#rewriteAtomically();
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
@@ -3228,7 +3344,10 @@ export class SessionManager {
 			options?.operatorNotices,
 			options?.instrumentation,
 		);
-		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		// Do not point the terminal at a future fork while evidence validation or
+		// JSONL publication can still fail. Keep the caller's last valid breadcrumb.
+		const suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		manager.#suppressBreadcrumb = true;
 
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
@@ -3251,6 +3370,19 @@ export class SessionManager {
 			},
 			options?.sessionFile,
 		);
+		// Copy all required local evidence before the new JSONL can be written;
+		// forkFrom retains historic artifact://N links just like fork().
+		const nextSessionFile = manager.getSessionFile();
+		if (!nextSessionFile) throw new Error("Cannot fork session: destination unavailable");
+		if (path.resolve(nextSessionFile) === path.resolve(sourcePath)) {
+			throw new Error("Cannot fork session: destination must differ from source");
+		}
+		await SessionManager.#copyForkArtifactEvidence(
+			sourcePath,
+			nextSessionFile,
+			history,
+			sourceHeader?.id,
+		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;
@@ -3262,6 +3394,8 @@ export class SessionManager {
 		manager.#startLifecycle("created");
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
+		manager.#suppressBreadcrumb = suppressBreadcrumb;
+		manager.#rememberBreadcrumb(manager.#cwd, nextSessionFile);
 		return manager;
 	}
 

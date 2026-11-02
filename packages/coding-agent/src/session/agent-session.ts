@@ -6485,30 +6485,36 @@ export class AgentSession {
 		// Flush current session to ensure all entries are written
 		await this.sessionManager.flush();
 
-		// Fork the session (creates new session file with same entries)
-		const forkResult = await this.sessionManager.fork();
+		// Forking preflights artifacts and then publishes the new JSONL. If its
+		// final publish fails, SessionManager may already have switched its in-memory
+		// identity, while this agent still routes requests and memory on the old one.
+		// Restore the last durable transcript instead of leaving a split identity.
+		const beforeFork = this.sessionManager.captureState();
+		let forkResult: Awaited<ReturnType<SessionManager["fork"]>>;
+		try {
+			forkResult = await this.sessionManager.fork();
+		} catch (error) {
+			if (
+				this.sessionManager.getSessionId() !== beforeFork.sessionId ||
+				this.sessionManager.getSessionFile() !== beforeFork.sessionFile
+			) {
+				try {
+					// The failed fork abandoned its published-file layout. The next
+					// persistence operation must revalidate the original file, including
+					// any foreign writer's tail, before writing to it again.
+					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
+				} catch (restoreError) {
+					throw new AggregateError([error, restoreError], "Fork failed and could not restore its original session");
+				}
+			}
+			throw error;
+		}
 		if (!forkResult) {
 			return false;
 		}
 
-		// Copy artifacts directory if it exists
-		const oldArtifactDir = forkResult.oldSessionFile.slice(0, -6);
-		const newArtifactDir = forkResult.newSessionFile.slice(0, -6);
-
-		try {
-			const oldDirStat = await fs.promises.stat(oldArtifactDir);
-			if (oldDirStat.isDirectory()) {
-				await fs.promises.cp(oldArtifactDir, newArtifactDir, { recursive: true });
-			}
-		} catch (err) {
-			if (!isEnoent(err)) {
-				logger.warn("Failed to copy artifacts during fork", {
-					oldArtifactDir,
-					newArtifactDir,
-					error: errorMessage(err),
-				});
-			}
-		}
+		// SessionManager.fork already copied and checked inherited artifacts before
+		// switching the session; a best-effort copy here could hide missing evidence.
 
 		// Update agent session ID
 		this.#providerSessions.freshId = undefined;
