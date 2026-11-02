@@ -212,6 +212,10 @@ export class ProducerOutputGuard {
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
+		// An interrupted structured record has no closing delimiter to prove its contents
+		// are complete. Never publish that candidate at finalization: cancellation or
+		// timeout must not turn two neutral environment-map keys into visible output.
+		if (!this.#withholding && this.#structured && this.#candidate) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
 		return output;
