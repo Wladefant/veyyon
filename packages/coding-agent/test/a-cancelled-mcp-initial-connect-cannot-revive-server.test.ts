@@ -685,3 +685,108 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 		}
 	}
 }, 35_000);
+
+
+// WHY: a global disconnect must join a single-server shutdown already
+// retiring the same transport. Sending DELETE twice can overrun a session
+// protocol, and bulk completion must include the earlier pending close.
+it("bulk MCP teardown joins a concurrent per-server close without duplicate transport DELETE", async () => {
+	const names = { a: "joined-close-a", b: "joined-close-b" };
+	const aDeleteEntered = Promise.withResolvers<void>();
+	const bDeleteEntered = Promise.withResolvers<void>();
+	const releaseADelete = Promise.withResolvers<void>();
+	let aDeletes = 0;
+	let bDeletes = 0;
+	const server = createServer(async (request, response) => {
+		try {
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : undefined;
+			if (!route) {
+				response.writeHead(404).end();
+				return;
+			}
+			if (request.method === "DELETE") {
+				if (route === "a") {
+					aDeletes++;
+					aDeleteEntered.resolve();
+					if (aDeletes === 1) await releaseADelete.promise;
+				} else {
+					bDeletes++;
+					bDeleteEntered.resolve();
+				}
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { id?: number | string; method?: string };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			const result: Record<string, unknown> = message.method === "initialize"
+				? {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "joined-close", version: "1.0.0" },
+				}
+				: message.method === "tools/list"
+					? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
+					: {};
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": "joined-close-" + route } : {}),
+			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const ready = Promise.withResolvers<void>();
+	server.once("error", ready.reject);
+	server.listen(0, "127.0.0.1", () => ready.resolve());
+	await withinConnectBoundary(ready.promise, "joined-close HTTP listen");
+	server.off("error", ready.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected HTTP fixture address");
+	const manager = new MCPManager(process.cwd());
+	let single: Promise<void> | undefined;
+	let bulk: Promise<void> | undefined;
+	try {
+		const configs = {
+			[names.a]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/a" },
+			[names.b]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/b" },
+		};
+		const load = await withinConnectBoundary(manager.connectServers(configs, {}), "two live peer connects");
+		expect(load.connectedServers.sort()).toEqual([names.a, names.b].sort());
+		single = manager.disconnectServer(names.a);
+		await withinConnectBoundary(aDeleteEntered.promise, "single A DELETE held");
+		bulk = manager.disconnectAll();
+		// B's DELETE proves the bulk teardown has reached its connected-peer
+		// closing snapshot without releasing the independent A close.
+		await withinConnectBoundary(bDeleteEntered.promise, "bulk B DELETE");
+		releaseADelete.resolve();
+		await withinConnectBoundary(Promise.all([single, bulk]), "joined single/bulk teardown");
+		expect(aDeletes).toBe(1);
+		expect(bDeletes).toBe(1);
+		expect(manager.getConnectedServers()).toEqual([]);
+		expect(manager.getTools()).toEqual([]);
+	} finally {
+		releaseADelete.resolve();
+		try {
+			if (single) await withinConnectBoundary(single, "single close cleanup");
+			if (bulk) await withinConnectBoundary(bulk, "bulk close cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "joined-close final manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "joined-close server cleanup");
+			}
+		}
+	}
+}, 35_000);
