@@ -208,16 +208,20 @@ fi
 describe("bun-install composite action PATH serialization", () => {
 	it("reports only typed cache scalars from valid TOML and hides indented scope records", async () => {
 		const sentinel = "diagnostic-sentinel-token";
-		const result = await runDiagnosticStep(`[install.cache]
-"dir" = "/cache/selected"
-disable = false
-disableManifest = true
+		const result = await runDiagnosticStep(`install.verified = true
+[install.cache]
+"dir" = """
+/cache/selected"""
+"disable" = false
+"disableManifest" = true
+
   [install.scopes]
-  "dir" = "${sentinel}"
+  dir = { url = "https://registry.example/", token = "${sentinel}" }
 `);
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain('{"dir":"/cache/selected","disable":false,"disableManifest":true}');
 		expect(result.stdout).not.toContain(sentinel);
+		expect(result.stdout).not.toContain("token");
 	});
 
 	it("reports invalid and missing TOML without exposing parser details", async () => {
