@@ -690,7 +690,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       if (!sourceFile) throw new Error("expected durable original session");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
       const originalBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
-      expect(originalBreadcrumb.split(/\\r?\\n/)[1]).toBe(sourceFile);
+      expect(originalBreadcrumb.split(/\r?\n/)[1]).toBe(sourceFile);
 
       storage.protectedSourceFile = sourceFile;
       storage.rejectNewSession = true;
@@ -709,7 +709,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       await manager.flush();
       expect((await fs.stat(failedTarget)).isFile()).toBe(true);
       const recoveredBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
-      expect(recoveredBreadcrumb.split(/\\r?\\n/)[1]).toBe(failedTarget);
+      expect(recoveredBreadcrumb.split(/\r?\n/)[1]).toBe(failedTarget);
       expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
     } finally {
       try { await manager?.close(); } catch { /* injected failure may remain latched on an early assertion */ }
@@ -741,7 +741,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       if (!sourceFile) throw new Error("expected durable original session");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
       const originalBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
-      expect(originalBreadcrumb.split(/\\r?\\n/)[1]).toBe(sourceFile);
+      expect(originalBreadcrumb.split(/\r?\n/)[1]).toBe(sourceFile);
 
       const fork = await manager.fork();
       if (!fork) throw new Error("expected persisted fork");
@@ -749,7 +749,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       expect(fork.newSessionFile).not.toBe(sourceFile);
       expect((await fs.stat(fork.newSessionFile)).isFile()).toBe(true);
       const newBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
-      expect(newBreadcrumb.split(/\\r?\\n/)[1]).toBe(fork.newSessionFile);
+      expect(newBreadcrumb.split(/\r?\n/)[1]).toBe(fork.newSessionFile);
       expect(newBreadcrumb).not.toBe(originalBreadcrumb);
       expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
     } finally {
