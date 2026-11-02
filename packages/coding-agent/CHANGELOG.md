@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal writer ownership failures now report the owner record path, the failed verification step, the original error code and message, the elapsed time and the 15 s ACL deadline (#892, Refs #849).
+
 ## [1.7.4] - 2026-11-02
 
 ### Fixed
