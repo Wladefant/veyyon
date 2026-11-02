@@ -82,17 +82,19 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 	const bTool = createMCPToolName(names.b, "peer_read");
 	const seenA = Promise.withResolvers<void>();
 	const seenB = Promise.withResolvers<void>();
+	const restoredA = Promise.withResolvers<void>();
 	manager.setOnToolsChanged(tools => {
 		const current = tools.map(tool => tool.name);
 		if (current.includes(aTool)) seenA.resolve();
 		if (current.includes(bTool)) seenB.resolve();
+		if (initialized.a === 2 && current.includes(aTool) && current.includes(bTool)) restoredA.resolve();
 	});
 	const catalog = () => manager.getTools().map(tool => tool.name).sort();
 	const expected = [aTool, bTool].sort();
 	try {
-		const first = await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "connect A");
+		await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "connect A");
 		await within(seenA.promise, "A tools/list notification");
-		expect(first.connectedServers).toContain(names.a);
+		expect(manager.getConnectedServers()).toContain(names.a);
 		expect(catalog()).toEqual([aTool]);
 		const incremental = await within(
 			manager.connectServers({ [names.b]: configs[names.b]! }, {}),
@@ -102,7 +104,9 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 		expect(manager.getConnectedServers().sort()).toEqual([names.a, names.b].sort());
 		// The old source overwrote the whole registry with the new batch B.
 		expect(catalog()).toEqual(expected);
-		expect(incremental.tools.map(tool => tool.name).sort()).toEqual(expected);
+		// A slow B initialization can finish after the bounded startup wait.
+		// The returned catalog must still retain previously connected A.
+		expect(incremental.tools.map(tool => tool.name)).toContain(aTool);
 		const repeated = await within(
 			manager.connectServers({ [names.a]: configs[names.a]! }, {}),
 			"repeat already-connected A",
@@ -122,7 +126,8 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 		expect(noOp.tools.map(tool => tool.name)).toEqual([bTool]);
 		expect(catalog()).toEqual([bTool]);
 		const restored = await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "explicit A recovery");
-		expect(restored.tools.map(tool => tool.name).sort()).toEqual(expected);
+		expect(restored.tools.map(tool => tool.name)).toContain(bTool);
+		await within(restoredA.promise, "second A tools/list notification");
 		expect(catalog()).toEqual(expected);
 		expect(initialized).toEqual({ a: 2, b: 1 });
 		expect(listRequests).toEqual({ a: 2, b: 1 });
