@@ -3163,4 +3163,83 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
+
+	// A->B->C->A must use reachability, not merely a two-server inverse-edge
+	// check. All initial handler calls arrive before any cross-server teardown.
+	it("breaks a three-server callback disconnect cycle and leaves external recovery possible", async () => {
+		const names = ["three-cycle-A", "three-cycle-B", "three-cycle-C"] as const;
+		const entered = names.map(() => Promise.withResolvers<void>());
+		const finished = names.map(() => Promise.withResolvers<void>());
+		const release = Promise.withResolvers<void>();
+		const outcomes: Array<"done" | "cycle"> = [];
+		let settled = false;
+		const servers = names.map((_, index) => fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("three-cycle-" + index, "event-" + index)],
+				cursor: "page-" + index,
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		}));
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (serverName, occurrence) => {
+			const index = names.indexOf(serverName as (typeof names)[number]);
+			if (index < 0 || occurrence.eventId !== "three-cycle-" + index) return;
+			entered[index]?.resolve();
+			await release.promise;
+			try {
+				const next = names[(index + 1) % names.length];
+				if (!next) throw new Error("Missing three-server successor");
+				await manager.disconnectServer(next);
+				outcomes.push("done");
+			} catch (error) {
+				if (!(error instanceof Error) || !error.message.includes("cyclic MCP event disconnect")) {
+					throw error;
+				}
+				outcomes.push("cycle");
+			} finally {
+				finished[index]?.resolve();
+			}
+		});
+		try {
+			for (let i = 0; i < names.length; i++) {
+				const name = names[i];
+				const server = servers[i];
+				if (!name || !server) throw new Error("Missing three-server fixture");
+				await withinHandlerChange(connect(manager, name, managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				})), "three-server startup");
+				if (!entered[i]) throw new Error("Missing three-server entry");
+				await withinHandlerChange(entered[i].promise, "three-server callback entry");
+			}
+			release.resolve();
+			await withinHandlerChange(
+				Promise.all(finished.map(x => x.promise)),
+				"three-server callback disconnects settle",
+			);
+			settled = true;
+			expect(outcomes.filter(x => x === "cycle")).toHaveLength(1);
+			expect(outcomes.filter(x => x === "done")).toHaveLength(2);
+			const stillConnected = manager.getConnectedServers();
+			expect(stillConnected).toHaveLength(1);
+			if (!stillConnected[0]) throw new Error("Expected recoverable owner after cycle refusal");
+			await withinHandlerChange(manager.disconnectServer(stillConnected[0]), "external remaining owner cleanup");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			for (const server of servers) {
+				expect(server.requests.filter(request => request.method === "events/poll")).toHaveLength(1);
+			}
+		} finally {
+			release.resolve();
+			try {
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "three-server manager cleanup");
+			} finally {
+				for (const server of servers) server.stop();
+			}
+		}
+	}, 25_000);
+
 });
