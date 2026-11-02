@@ -194,6 +194,35 @@ test("a reservation cannot commit, renew, or release before its one-use claim is
  expect((await post("release",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
 });
 
+test("invalid lease expiry cannot authorize a commit before or after R2 verification",async()=>{
+ const {post,objects,data,beforeRead,objectAccess}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number;expiresAt:string};
+ const bytes=new Uint8Array([4,2,7]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ const body={ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"bad-expiry",manifest};
+ // NaN from an unreadable persisted date must not pass the preflight.
+ data.set("lease",{...lease,expiresAt:"invalid-expiry"});
+ expect((await post("commit",body)).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ // Also prove final in-transaction fencing if the expiry turns invalid while
+ // the previously authorized object retrieval is awaiting its result.
+ data.set("lease",lease);
+ beforeRead(()=>data.set("lease",{...lease,expiresAt:"invalid-expiry"}));
+ expect((await post("commit",body)).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(false);
+ expect(data.has("replay:bad-expiry")).toBe(false);
+ // A valid current lease still commits; the negative did not consume the key.
+ beforeRead(()=>{});
+ data.set("lease",lease);
+ expect((await post("commit",body)).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:2,buffers:2});
+ expect(data.has("head")).toBe(true);
+});
+
 test("fenced commit owners cannot spend R2 reads before lease and claim admission",async()=>{
  const {post,objects,objectAccess,data}=fixture();
  const bytes=new Uint8Array([1,2,3]);

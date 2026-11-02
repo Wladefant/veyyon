@@ -50,12 +50,12 @@ export class SessionAuthority {
  // Cheap advisory preflight avoids object reads by already-fenced writers.
  // The transaction below MUST recheck ownership after asynchronous R2 work.
  const preflightLease=await this.state.storage.get<Lease>("lease");
- if(!preflightLease || preflightLease.ownerNode!==body.ownerNode || preflightLease.epoch!==body.epoch || Date.parse(preflightLease.expiresAt)<=Date.now())return json({error:"stale writer"},409);
+ if(!preflightLease || preflightLease.ownerNode!==body.ownerNode || preflightLease.epoch!==body.epoch || !(Date.parse(preflightLease.expiresAt)>Date.now()))return json({error:"stale writer"},409);
  if(await isUnclaimedTransfer(this.state.storage,preflightLease))return json({error:"transfer claim required"},409);
  const manifestHash=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
  for(const ref of manifest.objects){const object=await this.env.OBJECTS.get(ref.hash);if(!object || object.size!==ref.size || await digest(await object.arrayBuffer())!==ref.hash)return json({error:"missing or corrupt object"},422);}
  const result=await this.state.storage.transaction(async store=>{
- const lease=await store.get<Lease>("lease");if(!lease || lease.ownerNode!==body.ownerNode || lease.epoch!==body.epoch || Date.parse(lease.expiresAt)<=Date.now())return json({error:"stale writer"},409);
+ const lease=await store.get<Lease>("lease");if(!lease || lease.ownerNode!==body.ownerNode || lease.epoch!==body.epoch || !(Date.parse(lease.expiresAt)>Date.now()))return json({error:"stale writer"},409);
  if(await isUnclaimedTransfer(store,lease))return json({error:"transfer claim required"},409);
  const replay=await store.get<Head>(`replay:${body.idempotencyKey}`);if(replay)return replay.manifestHash===manifestHash?json(replay):json({error:"idempotency mismatch"},409);
  const head=await store.get<Head>("head");if((head?.sequence??0)!==body.expectedHead || manifest.sequence>100 || (head && head.manifest.sessionId!==manifest.sessionId))return json({error:"head conflict or cap"},409);
