@@ -155,6 +155,39 @@ test("a finalized original transfer claim cannot disclose a later pending rotate
  expect((await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
 });
 
+test("an expired pending resume cannot carry a previously disclosed capability into another runtime",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination",transferId="pending-cross-owner-rotation";
+ const claimToken="synthetic-original-one-use-token";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const first=await (await post("claim",{ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,claimToken})).json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ // Runtime A received P2 but has not finalized it; a retry on the same
+ // live epoch must return the identical pending response.
+ const requestA={ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken};
+ const pendingA=await (await post("claim",requestA)).json() as {epoch:number;resumeToken:string};
+ const sameA=await (await post("claim",requestA)).json() as {epoch:number;resumeToken:string};
+ expect(sameA).toMatchObject({epoch:pendingA.epoch,resumeToken:pendingA.resumeToken});
+ // Expiry permits a legitimate replacement using only the last finalized
+ // credential P1, but never hands that new runtime the abandoned P2.
+ (data.get("lease") as {expiresAt:string}).expiresAt=new Date(0).toISOString();
+ const requestB={ownerNode:"runtime-b",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken};
+ const responseB=await post("claim",requestB);
+ expect(responseB.status).toBe(200);
+ const pendingB=await responseB.json() as {epoch:number;resumeToken:string};
+ expect(pendingB.epoch).toBeGreaterThan(pendingA.epoch);
+ expect(pendingB.resumeToken).not.toBe(pendingA.resumeToken);
+ const before=JSON.stringify(data.get(`claim:${transferId}`));
+ expect((await post("claim",{...requestB,resumeToken:pendingA.resumeToken})).status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(before);
+ const sameB=await (await post("claim",requestB)).json() as {epoch:number;resumeToken:string};
+ expect(sameB).toMatchObject({epoch:pendingB.epoch,resumeToken:pendingB.resumeToken});
+ expect((await post("finalize",{ownerNode:"runtime-b",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:pendingB.epoch,resumeToken:pendingB.resumeToken})).status).toBe(200);
+ (data.get("lease") as {expiresAt:string}).expiresAt=new Date(0).toISOString();
+ expect((await post("claim",{...requestA,resumeToken:pendingA.resumeToken})).status).toBe(409);
+});
+
 test("an expired rotated pending lease rejects the spent original transfer token",async()=>{
  const {post,data}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
@@ -179,7 +212,7 @@ test("an expired rotated pending lease rejects the spent original transfer token
  expect(recoveredReply.status).toBe(200);
  const recovered=await recoveredReply.json() as {epoch:number;resumeToken:string};
  expect(recovered.epoch).toBeGreaterThan(pending.epoch);
- expect(recovered.resumeToken).toBe(pending.resumeToken);
+ expect(recovered.resumeToken).not.toBe(pending.resumeToken); // a new epoch must rotate abandoned pending credentials
  expect((await post("finalize",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:recovered.epoch,resumeToken:recovered.resumeToken})).status).toBe(200);
 });
 
@@ -363,7 +396,7 @@ test("a crash after redemption reclaims the pending capability after expiry and 
  current.expiresAt=new Date(0).toISOString();
  const recovered=await post("claim",{targetNode:"destination",transferId,claimToken:token,epoch:transfer.epoch,ownerNode:"runtime-recovered"});
  expect(recovered.status).toBe(200);
- expect((await recovered.json() as {resumeToken:string}).resumeToken).toBe(first.resumeToken);
+ expect((await recovered.json() as {resumeToken:string}).resumeToken).not.toBe(first.resumeToken); // retry still succeeds, but expired pending token is revoked
  expect((await post("lease",{ownerNode:"copied-installation"})).status).toBe(409);
 });
 test("node labels reject path syntax at authority boundaries",async()=>{

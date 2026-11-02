@@ -130,12 +130,14 @@ export class SessionAuthority {
    // the caller chooses the same node label as the transfer target.
    const retrySameRuntime=claim?.spent===true && live && current.ownerNode===body.ownerNode;
    const epoch=retrySameRuntime?current.epoch:current.epoch+1;
-   const pendingToken=retrySameRuntime && claim?.pendingResumeToken
-    ? claim.pendingResumeToken
-    : claim?.pendingResumeToken ?? nextResumeToken;
-   const pendingHash=retrySameRuntime && claim?.pendingResumeHash
-    ? claim.pendingResumeHash
-    : claim?.pendingResumeHash ?? nextResumeHash;
+   // An unfinished response is idempotent only for the same live runtime.
+   // After expiry/takeover, rotate instead of sharing the prior owner's
+   // possibly disclosed pending resume capability with the new owner.
+   const reusePending=retrySameRuntime &&
+    claim?.pendingResumeToken!==undefined &&
+    claim?.pendingResumeHash!==undefined;
+   const pendingToken=reusePending ? claim!.pendingResumeToken! : nextResumeToken;
+   const pendingHash=reusePending ? claim!.pendingResumeHash! : nextResumeHash;
    const next:Lease={...current,ownerNode:body.ownerNode as string,epoch,expiresAt:new Date(Date.now()+60000).toISOString()};
    const nextClaim:Claim={
     targetNode,transferEpoch:transfer.targetEpoch,claimHash:transfer.claimHash,spent:true,
