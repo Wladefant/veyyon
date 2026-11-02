@@ -1967,30 +1967,31 @@ export class MCPManager {
 		return false;
 	}
 
-	async disconnectServer(name: string): Promise<void> {
+	async #withEventCrossServerWait<T>(name: string, operation: () => Promise<T>): Promise<T> {
 		const scope = this.#eventCallbackContext.getStore();
 		const origin = scope?.active ? scope.serverName : undefined;
-		if (origin === undefined || origin === name) {
-			await this.#disconnectServerWithDedup(name);
-			return;
-		}
-		// The existing one-direction B-awaits-A drain remains mandatory. Only
-		// an actual reciprocal path is rejected; otherwise both active callbacks
-		// may wait on each other's JavaScript streamProcessing indefinitely.
+		if (origin === undefined || origin === name) return operation();
+		// Both a disconnect and a reconnect drain the target's active event
+		// handler. Preserve one-direction B-awaits-A, but explicitly reject a
+		// reciprocal wait instead of indefinitely awaiting JavaScript callbacks.
 		if (this.#eventDisconnectCanReach(name, origin)) {
-			throw new Error("cyclic MCP event disconnect request rejected");
+			throw new Error("cyclic MCP event disconnect/reconnect request rejected");
 		}
 		const edges = this.#eventCrossDisconnectWaits.get(origin) ?? new Map<string, number>();
 		edges.set(name, (edges.get(name) ?? 0) + 1);
 		this.#eventCrossDisconnectWaits.set(origin, edges);
 		try {
-			await this.#disconnectServerWithDedup(name);
+			return await operation();
 		} finally {
 			const count = edges.get(name) ?? 0;
 			if (count <= 1) edges.delete(name);
 			else edges.set(name, count - 1);
 			if (edges.size === 0) this.#eventCrossDisconnectWaits.delete(origin);
 		}
+	}
+
+	async disconnectServer(name: string): Promise<void> {
+		await this.#withEventCrossServerWait(name, () => this.#disconnectServerWithDedup(name));
 	}
 
 	async #disconnectServerWithDedup(name: string): Promise<void> {
@@ -2098,6 +2099,10 @@ export class MCPManager {
 	 *   and the per-tool-call retry path in `tool-bridge` MUST NOT set it.
 	 */
 	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
+		return this.#withEventCrossServerWait(name, () => this.#reconnectServerWithDedup(name, options));
+	}
+
+	async #reconnectServerWithDedup(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
 			// An operator-driven reconnect is the recovery step after rotating a secret, so this
