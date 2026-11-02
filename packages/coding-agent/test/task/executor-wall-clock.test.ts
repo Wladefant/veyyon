@@ -277,9 +277,12 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			finalIdleStarted = resolve;
 		});
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
-		const handle = createMockSessionHandle(({ emit }) => {
-			emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
-		});
+		const handle = createMockSessionHandle(
+			({ emit }) => {
+				emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
+			},
+			{ onAbort: () => settleFinalIdle?.() },
+		);
 		handle.session.waitForIdle = async () => {
 			idleCalls++;
 			if (idleCalls === 1) return;
