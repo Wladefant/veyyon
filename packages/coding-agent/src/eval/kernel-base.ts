@@ -6,6 +6,7 @@ import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLine
 import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
+import { ProducerOutputGuard } from "../secrets/producer-output";
 import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./py/display";
 import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "./py/spawn-options";
@@ -980,18 +981,25 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
+		// Stderr may contain raw user/runtime output, not only trusted runner diagnostics.
+		// One guard for the entire stream must classify records across arbitrary OS chunks
+		// BEFORE logger persistence; a fresh per-chunk sanitizer would leak split rows.
+		const guard = new ProducerOutputGuard();
+		const publish = (visible: string): void => {
+			if (visible.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: visible });
+		};
 		const loop = async () => {
 			try {
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-					const text = decoder.decode(value, { stream: true });
-					if (text.trim()) {
-						logger.warn(`${this.#options.languageName} runner stderr`, { text });
-					}
+					publish(guard.push(decoder.decode(value, { stream: true })));
 				}
+				// TextDecoder can hold a split UTF-8 sequence; finish it and classify the
+				// last partial record before releasing any diagnostic to the logger.
+				publish(guard.push(decoder.decode()) + guard.finish());
 			} catch {
-				/* ignore */
+				// A failed stderr reader must never flush a potentially incomplete prefix.
 			} finally {
 				try {
 					reader.releaseLock();
@@ -1002,7 +1010,6 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		};
 		void loop();
 	}
-
 	async #handleLine(line: string): Promise<void> {
 		if (!line.trim()) return;
 		let frame: Frame;
