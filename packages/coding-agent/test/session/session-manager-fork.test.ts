@@ -1134,9 +1134,16 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       await manager.flush();
 
       const recovered = await fs.readFile(sourceFile, "utf8");
+      const recoveredEntries = await loadEntriesFromFile(sourceFile);
+      expect(recoveredEntries.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(recoveredEntries.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Foreign writer must survive recovery"
+      )).toBe(true);
       expect(recovered).toContain("Original active session");
-      expect(recovered).toContain("Foreign writer must survive recovery");
-      expect(recovered).not.toContain('"reason":"session_switched"');
       expect(recovered).not.toBe(initialBytes);
       expect(manager.getLifecycleState()).toBe("running");
 
