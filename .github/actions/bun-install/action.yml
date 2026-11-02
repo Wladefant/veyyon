@@ -24,6 +24,7 @@ runs:
              exit 1
            fi
            pin="bun-v${version}"
+           echo "BUN_INSTALL_CACHE_DIR=${HOME}/.bun/install/cache" >> "$GITHUB_ENV"
            installed=""
            if command -v bun >/dev/null 2>&1; then
              installed="$(bun --version)"
@@ -85,6 +86,8 @@ runs:
            # job runs; the save phase of a native build then fails the whole job with
            # "hashFiles('**/bun.lock') failed. Fail to hash files under directory".
            key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+           restore-keys: |
+             bun-${{ runner.os }}-
 
       - name: Bun cache diagnostic
         shell: ${{ inputs.shell }}
@@ -163,7 +166,32 @@ runs:
         shell: ${{ inputs.shell }}
         run: |
            start_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date 2>/dev/null || true)"
-           trap 'status=$?; elapsed=$SECONDS; echo "::notice title=Bun install timing::status=${status} elapsed=${elapsed}s (start=${start_date})"' EXIT
+           install_completed=false
+           on_signal() {
+             status=$1
+             elapsed=$SECONDS
+             echo "::notice title=Bun install timing::status=timeout/terminated (${status}) elapsed=${elapsed}s (start=${start_date})"
+             trap - HUP INT TERM EXIT
+             exit "$status"
+           }
+           trap 'on_signal 129' HUP
+           trap 'on_signal 130' INT
+           trap 'on_signal 143' TERM
+           on_exit() {
+             status=$?
+             elapsed=$SECONDS
+             trap - HUP INT TERM EXIT
+             if [ "$install_completed" != "true" ] && [ "$status" -eq 0 ]; then
+               status=143
+             fi
+             if [ "$status" -eq 124 ] || [ "$status" -eq 129 ] || [ "$status" -eq 130 ] || [ "$status" -eq 143 ]; then
+               echo "::notice title=Bun install timing::status=timeout/terminated (${status}) elapsed=${elapsed}s (start=${start_date})"
+             else
+               echo "::notice title=Bun install timing::status=${status} elapsed=${elapsed}s (start=${start_date})"
+             fi
+             exit "$status"
+           }
+           trap on_exit EXIT
            SECONDS=0
 
            # The shared bun store (actions/cache) can hand a job a corrupt or
@@ -177,11 +205,13 @@ runs:
            # only runs on the rare corruption (also covers a transient network
            # blip on attempt 1).
            if bun install --frozen-lockfile; then
+             install_completed=true
              exit 0
            fi
            echo "::warning title=bun install retry::shared bun store install failed; retrying with a clean job-local cache"
            retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bun-cache-retry.XXXXXX")"
            bun install --frozen-lockfile --cache-dir="$retry_cache"
+           install_completed=true
 
       - name: Generate source codegen
         shell: ${{ inputs.shell }}
