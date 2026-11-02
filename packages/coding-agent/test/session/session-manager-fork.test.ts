@@ -8,6 +8,7 @@ import {
 } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage, type SessionFileBody, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
@@ -644,6 +645,110 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       expect(manager.getEntries().some(e => e.type === "message" && e.message.role === "user")).toBe(true);
     } finally {
       await manager.close();
+    }
+  });
+});
+
+/** Inject a single synthetic new-JSONL publication refusal after fork preflight succeeds. */
+class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
+  protectedSourceFile: string | undefined;
+  rejectNewSession = false;
+
+  override async writeTextAtomic(
+    target: string,
+    body: SessionFileBody,
+    options?: WriteTextAtomicOptions,
+  ): Promise<void> {
+    if (this.rejectNewSession && target !== this.protectedSourceFile) {
+      throw new Error("synthetic new fork JSONL publication refusal");
+    }
+    await super.writeTextAtomic(target, body, options);
+  }
+}
+
+describe("SessionManager.fork terminal breadcrumb publication order", () => {
+  it("keeps the prior recoverable terminal pointer when the post-preflight JSONL publish fails", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-publish-fault-");
+    const overrides = captureDirOverrides();
+    const previousTerminalId = process.env.TERM_SESSION_ID;
+    const storage = new SyntheticForkJsonlRefusalStorage();
+    let manager: SessionManager | undefined;
+    try {
+      setAgentDir(path.join(temp.path(), "agent"));
+      process.env.TERM_SESSION_ID = "veyyon-fork-publish-refusal-test";
+      await fs.mkdir(getTerminalSessionsDir(), { recursive: true });
+      const terminalId = getTerminalId();
+      if (!terminalId) throw new Error("expected isolated test terminal ID");
+      const breadcrumbFile = path.join(getTerminalSessionsDir(), terminalId);
+
+      manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"), storage);
+      manager.appendMessage({
+        role: "user", content: "Original recovery entry", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable original session");
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const originalBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+      expect(originalBreadcrumb.split(/\\r?\\n/)[1]).toBe(sourceFile);
+
+      storage.protectedSourceFile = sourceFile;
+      storage.rejectNewSession = true;
+      await expect(manager.fork()).rejects.toThrow(/synthetic new fork JSONL publication refusal/i);
+      const failedTarget = manager.getSessionFile();
+      if (!failedTarget) throw new Error("expected attempted fork destination");
+      expect(failedTarget).not.toBe(sourceFile);
+      expect(await fs.stat(failedTarget).then(() => true, () => false)).toBe(false);
+      expect(await fs.readFile(breadcrumbFile, "utf8")).toBe(originalBreadcrumb);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+    } finally {
+      // The manager remains latched at the injected fault; do not recover it by
+      // publishing a synthetic destination during cleanup.
+      try { await manager?.close(); } catch { /* expected injected persistence fault */ }
+      if (previousTerminalId === undefined) delete process.env.TERM_SESSION_ID;
+      else process.env.TERM_SESSION_ID = previousTerminalId;
+      restoreDirOverrides(overrides);
+    }
+  });
+
+  it("updates the terminal pointer to an existing fork JSONL on successful publication", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-publish-success-");
+    const overrides = captureDirOverrides();
+    const previousTerminalId = process.env.TERM_SESSION_ID;
+    let manager: SessionManager | undefined;
+    try {
+      setAgentDir(path.join(temp.path(), "agent"));
+      process.env.TERM_SESSION_ID = "veyyon-fork-publish-success-test";
+      await fs.mkdir(getTerminalSessionsDir(), { recursive: true });
+      const terminalId = getTerminalId();
+      if (!terminalId) throw new Error("expected isolated test terminal ID");
+      const breadcrumbFile = path.join(getTerminalSessionsDir(), terminalId);
+
+      manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+      manager.appendMessage({
+        role: "user", content: "Preserved recovery entry", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable original session");
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const originalBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+      expect(originalBreadcrumb.split(/\\r?\\n/)[1]).toBe(sourceFile);
+
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected persisted fork");
+      expect(fork.oldSessionFile).toBe(sourceFile);
+      expect(fork.newSessionFile).not.toBe(sourceFile);
+      expect((await fs.stat(fork.newSessionFile)).isFile()).toBe(true);
+      const newBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+      expect(newBreadcrumb.split(/\\r?\\n/)[1]).toBe(fork.newSessionFile);
+      expect(newBreadcrumb).not.toBe(originalBreadcrumb);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+    } finally {
+      await manager?.close();
+      if (previousTerminalId === undefined) delete process.env.TERM_SESSION_ID;
+      else process.env.TERM_SESSION_ID = previousTerminalId;
+      restoreDirOverrides(overrides);
     }
   });
 });
