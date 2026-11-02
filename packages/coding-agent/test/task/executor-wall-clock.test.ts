@@ -283,6 +283,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const handle = createMockSessionHandle(({ emit }) => {
+			mark("session.prompt:entry");
 			emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
 		});
 		const originalAbort = handle.session.abort.bind(handle.session);
@@ -329,7 +330,12 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		}).then(
 			result => {
 				resultState = "resolved";
-				mark("result:resolve");
+				mark(`result:resolve:${JSON.stringify({
+					terminalOutcome: result.terminalOutcome,
+					aborted: result.aborted,
+					abortReason: result.abortReason,
+					promptCount: handle.prompts.length,
+				})}`);
 				return result;
 			},
 			error => {
