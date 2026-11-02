@@ -125,4 +125,38 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			},
 		);
 	}, 15_000);
+
+	// A JSON-RPC batch contains flat message objects, not recursively nested
+	// arrays. A malformed nested member must not reach callbacks, and ignoring
+	// it must not discard a valid flat sibling or the next SSE event.
+	it("rejects nested SSE batch envelopes without dropping valid later frames", async () => {
+		const method = "notifications/tools/list_changed";
+		await withLiveSSE(
+			[
+				[
+					[[[{ jsonrpc: "2.0", method, params: { source: "nested-invalid" } }]]],
+					{ jsonrpc: "2.0", method, params: { source: "flat-valid" } },
+				],
+				{ jsonrpc: "2.0", method, params: { source: "next-event" } },
+			],
+			async transport => {
+				const received: Array<{ method: string; params: unknown }> = [];
+				const errors: string[] = [];
+				const nextEventReceived = Promise.withResolvers<void>();
+				transport.onError = error => errors.push(error.message);
+				transport.onNotification = (name, params) => {
+					received.push({ method: name, params });
+					if ((params as { source?: string })?.source === "next-event") nextEventReceived.resolve();
+				};
+				await bounded(transport.startSSEListener(), "SSE GET nested-batch connection");
+				await bounded(nextEventReceived.promise, "notification after malformed nested batch");
+				expect(received).toEqual([
+					{ method, params: { source: "flat-valid" } },
+					{ method, params: { source: "next-event" } },
+				]);
+				expect(errors).toEqual([]);
+			},
+		);
+	}, 15_000);
+
 });
