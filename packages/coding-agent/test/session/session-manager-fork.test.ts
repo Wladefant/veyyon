@@ -14,7 +14,7 @@ import {
 } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { FileSessionStorage, type SessionFileBody, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
+import { FileSessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
@@ -871,6 +871,34 @@ class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
   }
 }
 
+
+/** Fail a real source-writer close *after* the source lifecycle event was written. */
+class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
+  protectedSourceFile: string | undefined;
+  rejectNextSourceClose = false;
+
+  override openWriter(
+    target: string,
+    options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+  ): SessionStorageWriter {
+    const writer = super.openWriter(target, options);
+    return {
+      append: line => writer.append(line),
+      flush: () => writer.flush(),
+      sync: () => writer.sync(),
+      isOpen: () => writer.isOpen(),
+      getError: () => writer.getError(),
+      close: async () => {
+        await writer.close();
+        if (this.rejectNextSourceClose && target === this.protectedSourceFile) {
+          this.rejectNextSourceClose = false;
+          throw new Error("synthetic source writer-close refusal");
+        }
+      },
+    };
+  }
+}
+
 describe("SessionManager.fork terminal breadcrumb publication order", () => {
   it("keeps the prior recoverable terminal pointer when the post-preflight JSONL publish fails", async () => {
     using temp = TempDir.createSync("@veyyon-fork-publish-fault-");
@@ -1039,6 +1067,91 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(await fs.readFile(sourceFile, "utf8")).toBe(recoveredSource);
     } finally {
       storage.rejectNewSession = false;
+      try { await session?.dispose(); } finally {
+        authStorage.close();
+        if (!session) await manager.close();
+      }
+    }
+  });
+});
+
+describe("AgentSession fork pre-switch writer-close failure", () => {
+  it("restores the still-running source lifecycle and preserves a foreign writer tail", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-source-writer-close-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
+    let session: AgentSession | undefined;
+    try {
+      manager.appendMessage({
+        role: "user", content: "Original active session", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persisted original session");
+      const sourceId = manager.getSessionId();
+      expect(manager.getLifecycleState()).toBe("running");
+      const initialBytes = await fs.readFile(sourceFile, "utf8");
+
+      const agent = new Agent({
+        initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
+      });
+      session = new AgentSession({
+        agent,
+        sessionManager: manager,
+        settings: Settings.isolated({ "async.enabled": false }),
+        modelRegistry: new ModelRegistry(authStorage, path.join(temp.path(), "models.yml")),
+      });
+      const providerSessionId = agent.sessionId;
+
+      storage.protectedSourceFile = sourceFile;
+      storage.rejectNextSourceClose = true;
+      await expect(session.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+      expect(storage.rejectNextSourceClose).toBe(false);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getLifecycleState()).toBe("running");
+      expect(agent.sessionId).toBe(providerSessionId);
+      expect(manager.getEntries().some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+
+      // Simulate a different, legitimate writer while this manager repairs
+      // only its own aborted switch marker. The foreign line must survive.
+      const foreignEntry: JsonlMessageEntry = {
+        type: "message",
+        id: "synthetic-foreign-tail",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user", content: "Foreign writer must survive recovery", timestamp: Date.now(),
+        },
+      };
+      await fs.appendFile(sourceFile, `${JSON.stringify(foreignEntry)}\n`);
+      await manager.flush();
+
+      const recovered = await fs.readFile(sourceFile, "utf8");
+      expect(recovered).toContain("Original active session");
+      expect(recovered).toContain("Foreign writer must survive recovery");
+      expect(recovered).not.toContain('"reason":"session_switched"');
+      expect(recovered).not.toBe(initialBytes);
+      expect(manager.getLifecycleState()).toBe("running");
+
+      // Successful retry ends the old session legitimately and publishes a
+      // distinct new one, without changing the old provider identity first.
+      expect(await session.fork()).toBe(true);
+      const forkedFile = manager.getSessionFile();
+      if (!forkedFile) throw new Error("expected committed fork file");
+      expect(forkedFile).not.toBe(sourceFile);
+      expect((await fs.stat(forkedFile)).isFile()).toBe(true);
+      expect(manager.getSessionId()).not.toBe(sourceId);
+      expect(agent.sessionId).toBe(manager.getSessionId());
+      expect(await fs.readFile(sourceFile, "utf8")).toContain("Foreign writer must survive recovery");
+    } finally {
+      storage.rejectNextSourceClose = false;
       try { await session?.dispose(); } finally {
         authStorage.close();
         if (!session) await manager.close();
