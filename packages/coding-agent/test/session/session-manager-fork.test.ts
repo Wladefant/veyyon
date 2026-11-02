@@ -487,6 +487,54 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("rejects an unreferenced link injected into the fork destination after copying", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-copy-link-injection-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      expect(await manager.saveArtifact("synthetic retained output", "bash")).toBe("0");
+      manager.appendMessage({ role: "user", content: "Retain artifact://0", timestamp: Date.now() });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected source session");
+      const oldSessionId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected source artifact");
+      const outside = path.join(temp.path(), "synthetic-only-target.txt");
+      const outsideBytes = "SYNTHETIC OUTSIDE SOURCE DATA";
+      await fs.writeFile(outside, outsideBytes);
+
+      // Exercise destination validation, not merely pre-copy source validation.
+      const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+      const cpSpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
+        await originalCp(source, destination, options);
+        if (source === path.dirname(sourceArtifact)) {
+          await fs.symlink(outside, path.join(destination, "88.unreferenced.log"), "file");
+        }
+      });
+      try {
+        await expect(manager.fork()).rejects.toThrow(/unsafe artifact (entry|tree)/i);
+      } finally {
+        cpSpy.mockRestore();
+      }
+      expect(manager.getSessionId()).toBe(oldSessionId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe("synthetic retained output");
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+
+      const goodFork = await manager.fork();
+      if (!goodFork) throw new Error("expected clean retry");
+      const destinationDir = goodFork.newSessionFile.slice(0, -".jsonl".length);
+      expect(await fs.readFile(path.join(destinationDir, "0.bash.log"), "utf8")).toBe("synthetic retained output");
+      expect((await fs.readdir(destinationDir)).some(name => name.startsWith("88."))).toBe(false);
+      expect(await manager.saveArtifact("later distinct output", "bash")).toBe("1");
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("rejects a referenced symlink in forkFrom before publishing its new session", async () => {
     using temp = TempDir.createSync("@veyyon-forkfrom-referenced-symlink-");
     const cwd = path.join(temp.path(), "project");
