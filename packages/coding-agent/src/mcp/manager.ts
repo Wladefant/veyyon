@@ -425,6 +425,10 @@ export class MCPManager {
 	// A callback's server can be disconnected independently of the global
 	// event consumer. A new connection reuses the name but never its authority.
 	#eventServerDisconnectEpochs = new Map<string, number>();
+	// During active event callbacks, track only awaited cross-server disconnect
+	// edges. Two callbacks can otherwise await each other's streamProcessing
+	// forever. Per-edge refcounts preserve independent same-server callbacks.
+	#eventCrossDisconnectWaits = new Map<string, Map<string, number>>();
 	// Callback function equality is insufficient across clear/re-enable cycles.
 	#eventConsumerRevision = 0;
 	// Auxiliary writers have independent custody: a cursor/control/provider
@@ -1953,7 +1957,43 @@ export class MCPManager {
 	/**
 	 * Disconnect from a specific server.
 	 */
+	#eventDisconnectCanReach(from: string, target: string, visited = new Set<string>()): boolean {
+		if (from === target) return true;
+		if (visited.has(from)) return false;
+		visited.add(from);
+		for (const [next, count] of this.#eventCrossDisconnectWaits.get(from) ?? []) {
+			if (count > 0 && this.#eventDisconnectCanReach(next, target, visited)) return true;
+		}
+		return false;
+	}
+
 	async disconnectServer(name: string): Promise<void> {
+		const scope = this.#eventCallbackContext.getStore();
+		const origin = scope?.active ? scope.serverName : undefined;
+		if (origin === undefined || origin === name) {
+			await this.#disconnectServerWithDedup(name);
+			return;
+		}
+		// The existing one-direction B-awaits-A drain remains mandatory. Only
+		// an actual reciprocal path is rejected; otherwise both active callbacks
+		// may wait on each other's JavaScript streamProcessing indefinitely.
+		if (this.#eventDisconnectCanReach(name, origin)) {
+			throw new Error("cyclic MCP event disconnect request rejected");
+		}
+		const edges = this.#eventCrossDisconnectWaits.get(origin) ?? new Map<string, number>();
+		edges.set(name, (edges.get(name) ?? 0) + 1);
+		this.#eventCrossDisconnectWaits.set(origin, edges);
+		try {
+			await this.#disconnectServerWithDedup(name);
+		} finally {
+			const count = edges.get(name) ?? 0;
+			if (count <= 1) edges.delete(name);
+			else edges.set(name, count - 1);
+			if (edges.size === 0) this.#eventCrossDisconnectWaits.delete(origin);
+		}
+	}
+
+	async #disconnectServerWithDedup(name: string): Promise<void> {
 		const existing = this.#eventServerDisconnects.get(name);
 		if (existing) {
 			const scope = this.#eventCallbackContext.getStore();
