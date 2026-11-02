@@ -2660,6 +2660,7 @@ describe("ACP agent", () => {
 			abortBlocked.resolve();
 			await releaseAbortPromise;
 		};
+		const promptStarted = Promise.withResolvers<void>();
 		const finishPrompt = holdPromptStreaming(session, () => promptStarted.resolve());
 
 		const firstPrompt = harness.agent.prompt({

@@ -758,18 +758,18 @@ export class AcpAgent implements Agent {
 					throwIfRecordClosed(record);
 					await this.#replayNewlyAdoptedHistory(record);
 				}
-				if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
-				throwIfRecordClosed(record);
-				await this.#runPromptOrCommand(record, converted.text, converted.images);
-			})().catch((error: unknown) => {
-				if (record.promptTurn === promptTurn && !promptTurn.settled) {
-					finishPrompt(record, undefined, error);
-				}
-				throw error;
-			});
-			// Preparation failure is delivered through pendingPrompt; retain the rejection
-			// for cancel cleanup without creating an unhandled rejection.
-			void promptTurn.preparation.catch(() => undefined);
+			})();
+			void promptTurn.preparation
+				.then(async () => {
+					if (record.promptTurn !== promptTurn || promptTurn.cancelRequested || promptTurn.settled) return;
+					throwIfRecordClosed(record);
+					await this.#runPromptOrCommand(record, converted.text, converted.images);
+				})
+				.catch((error: unknown) => {
+					if (record.promptTurn === promptTurn && !promptTurn.settled) {
+						finishPrompt(record, undefined, error);
+					}
+				});
 			return await pendingPrompt.promise;
 		});
 	}
