@@ -816,6 +816,17 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(manager.getSessionId()).toBe(sourceId);
       expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
 
+      // A subsequent ordinary append must persist on the recovered source,
+      // not the abandoned fork path, and must keep the old history readable.
+      manager.appendMessage({
+        role: "user", content: "Entry after rejected fork", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const recoveredSource = await fs.readFile(sourceFile, "utf8");
+      expect(recoveredSource).toContain("Original recoverable conversation");
+      expect(recoveredSource).toContain("Entry after rejected fork");
+      expect(recoveredSource).not.toBe(sourceBytes);
+
       // Positive twin: a genuinely published fork still switches both identities
       // and leaves the source's original recovery bytes intact.
       expect(await session.fork()).toBe(true);
@@ -825,7 +836,7 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect((await fs.stat(nextFile)).isFile()).toBe(true);
       expect(manager.getSessionId()).not.toBe(sourceId);
       expect(agent.sessionId).toBe(manager.getSessionId());
-      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(recoveredSource);
     } finally {
       storage.rejectNewSession = false;
       try { await session?.dispose(); } finally {
