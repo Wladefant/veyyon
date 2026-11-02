@@ -1847,9 +1847,15 @@ export class MCPManager {
 
 		// Notify prompt consumers so stale commands are cleared
 		if (connection?.prompts?.length) this.#onPromptsChanged?.(name);
-		// Surface the failed transport close to the caller after removing
-		// stale registry entries and sending tool-change notifications.
-		if (failedClose) throw failedClose.error;
+		// A rejected transport close can leave an SSE listener or child process
+		// running even after the registry is drained. Keep a per-name, sanitized
+		// diagnostic for an operator querying a disconnected server; never keep
+		// the peer's potentially private exception text in persistent state.
+		// The explicit caller still receives its original exception.
+		if (failedClose) {
+			this.#lastErrors.set(name, "MCP transport close unconfirmed; verify the server before reconnecting");
+			throw failedClose.error;
+		}
 	}
 
 	/**
