@@ -109,9 +109,18 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		let ref = registry.get(agentId);
 		if (ref?.kind === "advisor") ref = undefined;
 		if (!ref) {
-			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
+			// Case-insensitive convenience is safe only for a UNIQUE registered
+			// identity. Two distinct names may differ solely by case; picking
+			// whichever was registered first can expose the wrong transcript.
 			const lower = agentId.toLowerCase();
-			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
+			const matches = visible.filter(candidate => candidate.id.toLowerCase() === lower);
+			if (matches.length > 1) {
+				throw new Error(
+					`Ambiguous registered agent: ${agentId}\n` +
+						"Multiple registered IDs match this spelling. Use the exact agent ID shown in history://.",
+				);
+			}
+			ref = matches[0];
 		}
 
 		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
