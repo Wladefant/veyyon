@@ -551,6 +551,60 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("rejects same-length corruption of unreferenced nested evidence before publishing a fork", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-unreferenced-nested-copy-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original referenced evidence: artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persisted original session");
+      const sourceId = manager.getSessionId();
+      const sourceJsonl = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original artifact");
+      const sourceDir = path.dirname(sourceArtifact);
+      const nestedDir = path.join(sourceDir, "unreferenced-notes");
+      const nestedOriginal = "SYNTHETIC NESTED EVIDENCE";
+      await fs.mkdir(nestedDir);
+      const nestedPath = path.join(nestedDir, "audit.log");
+      await fs.writeFile(nestedPath, nestedOriginal);
+      const alteredBytes = "x".repeat(Buffer.byteLength(nestedOriginal, "utf8"));
+      expect(Buffer.byteLength(alteredBytes, "utf8")).toBe(Buffer.byteLength(nestedOriginal, "utf8"));
+
+      const genuineCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+      const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
+        await genuineCopy(source, destination, options);
+        if (source === sourceDir) {
+          await fs.writeFile(path.join(destination, "unreferenced-notes", "audit.log"), alteredBytes);
+        }
+      });
+      try {
+        await expect(manager.fork()).rejects.toThrow(/unreferenced artifact bytes differ from source/i);
+      } finally {
+        copySpy.mockRestore();
+      }
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
+      expect(await fs.readFile(nestedPath, "utf8")).toBe(nestedOriginal);
+
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected successful clean retry");
+      const copiedDir = fork.newSessionFile.slice(0, -".jsonl".length);
+      expect(await fs.readFile(path.join(copiedDir, "unreferenced-notes", "audit.log"), "utf8")).toBe(nestedOriginal);
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+      expect(await manager.saveArtifact("later independent output", "bash")).toBe("1");
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("refuses to propagate unrelated artifact symlinks before a fork publishes history", async () => {
     using temp = TempDir.createSync("@veyyon-fork-symlink-boundary-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));

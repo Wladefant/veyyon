@@ -2076,8 +2076,9 @@ export class SessionManager {
 				}
 				return stat.isDirectory();
 			};
-			const assertRegularTree = async (directory: string): Promise<void> => {
+			const assertRegularTree = async (directory: string): Promise<string[]> => {
 				const pending = [directory];
+				const entries: string[] = [];
 				while (pending.length > 0) {
 					const current = pending.pop()!;
 					if (!(await assertSafeEntry(current))) {
@@ -2085,19 +2086,24 @@ export class SessionManager {
 					}
 					for (const name of await fs.promises.readdir(current)) {
 						const child = path.join(current, name);
-						if (await assertSafeEntry(child)) pending.push(child);
+						const isDirectory = await assertSafeEntry(child);
+						entries.push(`${isDirectory ? "dir" : "file"}:${path.relative(directory, child)}`);
+						if (isDirectory) pending.push(child);
 					}
 				}
+				return entries.sort();
 			};
 			// Check before copying to avoid publishing even a temporary linked
 			// destination on a known-bad input. The copy filter and destination
 			// check also reject links introduced during the copy itself.
-			await assertRegularTree(oldArtifactDir);
+			const sourceTree = await assertRegularTree(oldArtifactDir);
+			const referencedNames = new Set<string>();
 			for (const id of referencedIds) {
 				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
 				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
 				const original = await fs.promises.lstat(path.join(oldArtifactDir, matches[0]!));
 				if (!original.isFile()) throw new Error("Cannot fork session: referenced artifact is not a regular file");
+				referencedNames.add(matches[0]!);
 			}
 			// A failed copy leaves the old session and its original evidence usable.
 			// Never overwrite a newly created destination with another fork's data.
@@ -2109,36 +2115,52 @@ export class SessionManager {
 					return true;
 				},
 			});
-			await assertRegularTree(nextArtifactDir);
-			const copiedNames = new Set(await fs.promises.readdir(nextArtifactDir));
-			if (sourceNames.some(name => !copiedNames.has(name))) {
+			const copiedTree = await assertRegularTree(nextArtifactDir);
+			if (
+				sourceTree.length !== copiedTree.length ||
+				sourceTree.some((entry, index) => entry !== copiedTree[index])
+			) {
 				throw new Error("Cannot fork session: artifact copy incomplete");
 			}
-			// Size equality does not establish that referenced recovery bytes survived
-			// the copy. Hash the two files as streams to keep memory bounded even for
-			// large saved tool output; do not read or import foreign-session artifacts.
+			// A full-tree fork must preserve all regular evidence bytes, including
+			// unreferenced nested output. Stream each comparison to bound memory;
+			// a type/size-only check cannot detect equal-length corruption.
 			const sha256File = async (filename: string): Promise<string> => {
 				const digest = createHash("sha256");
 				for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
 				return digest.digest("hex");
 			};
-			for (const id of referencedIds) {
-				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+			for (const entry of sourceTree) {
+				if (!entry.startsWith("file:")) continue;
+				const filename = entry.slice("file:".length);
+				const referenced = referencedNames.has(filename);
 				const originalPath = path.join(oldArtifactDir, filename);
 				const copiedPath = path.join(nextArtifactDir, filename);
 				const [original, copied] = await Promise.all([
 					fs.promises.lstat(originalPath),
 					fs.promises.lstat(copiedPath),
 				]);
-				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
-					throw new Error("Cannot fork session: referenced artifact copy incomplete");
+				if (
+					!original.isFile() || !copied.isFile() ||
+					original.nlink > 1 || copied.nlink > 1 ||
+					original.size !== copied.size
+				) {
+					throw new Error(
+						referenced
+							? "Cannot fork session: referenced artifact copy incomplete"
+							: "Cannot fork session: artifact copy incomplete",
+					);
 				}
 				const [originalHash, copiedHash] = await Promise.all([
 					sha256File(originalPath),
 					sha256File(copiedPath),
 				]);
 				if (originalHash !== copiedHash) {
-					throw new Error("Cannot fork session: referenced artifact bytes differ from source");
+					throw new Error(
+						referenced
+							? "Cannot fork session: referenced artifact bytes differ from source"
+							: "Cannot fork session: unreferenced artifact bytes differ from source",
+					);
 				}
 			}
 		}
