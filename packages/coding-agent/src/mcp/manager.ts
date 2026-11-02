@@ -690,17 +690,34 @@ export class MCPManager {
 		// caller's own stream can still deadlock while each awaits the other.
 		const fromEventCallback = this.#eventCallbackContext.getStore()?.active === true;
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
-		await Promise.allSettled(
-			active.flatMap(([, subscription]) => [
+		// A newer external consumer can start while this stop awaits remote
+		// webhook unsubscribe. Keep each retired key's cleanup as an enrollment
+		// barrier: otherwise its late tuple-unsubscribe can delete the successor.
+		const stopBarriers = active.map(([key, subscription]) => {
+			const previousStop = this.#eventConsumerStopBarriers.get(key);
+			const stopBarrier = Promise.allSettled([
+				previousStop,
 				subscription.stream?.done,
 				fromEventCallback ? undefined : subscription.streamProcessing,
 				fromEventCallback ? undefined : subscription.lifecycle,
 				subscription.unsubscribe,
-			]).filter(Boolean),
-		);
-		for (const [port, host] of this.#webhookHosts) {
-			this.#webhookHosts.delete(port);
-			await host.close();
+			].filter(Boolean)).then(results => {
+				const failed = results.filter(result => result.status === "rejected").length;
+				if (failed > 0) logger.warn("MCP event stop cleanup failed", { failed });
+			});
+			this.#eventConsumerStopBarriers.set(key, stopBarrier);
+			void stopBarrier.then(() => {
+				if (this.#eventConsumerStopBarriers.get(key) === stopBarrier) {
+					this.#eventConsumerStopBarriers.delete(key);
+				}
+			});
+			return stopBarrier;
+		});
+		await Promise.allSettled(stopBarriers);
+		// Do not close a newly enrolled consumer's shared local webhook listener
+		// just because the earlier stop has now finished draining its snapshot.
+		for (const [port] of this.#webhookHosts) {
+			await this.#closeUnusedWebhookHost(port);
 		}
 	}
 
