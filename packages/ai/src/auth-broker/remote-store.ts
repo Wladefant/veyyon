@@ -47,6 +47,8 @@ const MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS = 3;
 const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
+// Reconcile an idle but still-open SSE transport against the canonical broker.
+const SNAPSHOT_STREAM_IDLE_VERIFY_MS = 60_000;
 const BACKGROUND_BACKOFF = { baseMs: 500, maxMs: 30_000, jitter: 0 };
 
 function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: CredentialBlockSnapshot): number {
@@ -263,6 +265,8 @@ export interface RemoteAuthCredentialStoreOptions {
 	 * to long-poll permanently when the broker returns 404. Default `true`.
 	 */
 	streamSnapshots?: boolean;
+	/** Internal synthetic-test seam; production verifies idle SSE once per minute. */
+	snapshotStreamVerifyIntervalMs?: number;
 	/**
 	 * Called after broker-sourced full snapshots are applied. The constructor's
 	 * initial snapshot intentionally does not trigger this hook.
@@ -273,6 +277,7 @@ export interface RemoteAuthCredentialStoreOptions {
 export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #client: AuthBrokerClient;
 	readonly #streamSnapshots: boolean;
+	readonly #snapshotStreamVerifyIntervalMs: number;
 	readonly #onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
 	#snapshot: SnapshotResponse = emptySnapshot();
 	#snapshotReceivedAt = Date.now();
@@ -307,6 +312,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
 		this.#client = opts.client;
 		this.#streamSnapshots = opts.streamSnapshots ?? true;
+		const intervalMs = opts.snapshotStreamVerifyIntervalMs ?? SNAPSHOT_STREAM_IDLE_VERIFY_MS;
+		if (!Number.isSafeInteger(intervalMs) || intervalMs < 1) {
+			throw new RangeError("Auth broker idle snapshot verification interval must be a positive integer");
+		}
+		this.#snapshotStreamVerifyIntervalMs = intervalMs;
 		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0);
 		this.#onSnapshot = opts.onSnapshot;
 		void this.#runBackground();
@@ -459,10 +469,44 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return true;
 	}
 
+	/**
+	 * Heartbeat comments are filtered by the SSE parser, and a half-open proxy
+	 * can hold a stream forever. An idle canonical GET bounds stale views while
+	 * retaining the existing applied-revision fence and pending safety blocks.
+	 */
+	async #verifyIdleSnapshotStream(signal: AbortSignal): Promise<void> {
+		while (!this.#closed && !signal.aborted) {
+			try {
+				await scheduler.wait(this.#snapshotStreamVerifyIntervalMs, { signal });
+			} catch {
+				return; // Stream closed or store shutdown; never leave an orphan timer.
+			}
+			if (this.#closed || signal.aborted) return;
+			if (Date.now() - this.#snapshotReceivedAt < this.#snapshotStreamVerifyIntervalMs) continue;
+			const revisionAtRequest = this.#appliedSnapshotRevision;
+			try {
+				const result = await this.#client.fetchSnapshot({ signal });
+				if (result.status === 200) {
+					this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				} else {
+					this.#reportStaleSnapshot(
+						"snapshot-stream-idle-verify",
+						new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot"),
+					);
+				}
+			} catch (error) {
+				if (!signal.aborted) this.#reportStaleSnapshot("snapshot-stream-idle-verify", error);
+			}
+		}
+	}
+
 	async #consumeSnapshotStream(): Promise<void> {
 		const revisionAtConnect = this.#appliedSnapshotRevision;
 		let firstFrame = true;
 		const iterator = this.#client.openSnapshotStream({ signal: this.#backgroundAbort.signal });
+		const watchdogAbort = new AbortController();
+		const watchdogSignal = AbortSignal.any([this.#backgroundAbort.signal, watchdogAbort.signal]);
+		let watchdog: Promise<void> | undefined;
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
@@ -480,9 +524,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				}
 				firstFrame = false;
 				this.#streamingActive = true;
+				watchdog ??= this.#verifyIdleSnapshotStream(watchdogSignal);
 			}
 		} finally {
 			this.#streamingActive = false;
+			watchdogAbort.abort();
+			await watchdog;
 		}
 	}
 
