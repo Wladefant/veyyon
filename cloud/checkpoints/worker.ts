@@ -25,6 +25,15 @@ function manifestOf(value:unknown):Manifest | null {
  for(const item of m.objects){if(!item || typeof item!=="object")return null;const o=item as Record<string,unknown>;if(typeof o.hash!=="string" || !hashPattern.test(o.hash) || typeof o.size!=="number" || !Number.isSafeInteger(o.size) || o.size<1 || o.size>8388608)return null;total+=o.size;objects.push({hash:o.hash,size:o.size});}
  return total>67108864 ? null : {version:1,sessionId:m.sessionId,sequence:m.sequence as number,objects};
 }
+// A transfer reservation is not a writable runtime. Until a one-use
+// claim is redeemed, the destination label and epoch must not grant ordinary
+// commit, renewal, or release capabilities.
+async function isUnclaimedTransfer(store: Storage, lease: Lease): Promise<boolean> {
+ if (!lease.claimHash) return false;
+ if (!lease.transferId) return true;
+ const claim=await store.get<Claim>(`claim:${lease.transferId}`);
+ return claim?.spent!==true;
+}
 export class SessionAuthority {
  constructor(readonly state:{storage:Storage},readonly env:Pick<Env,"OBJECTS"|"INDEX">){}
  async repair(head:Head):Promise<void>{await this.env.INDEX.prepare("INSERT INTO sessions (id, sequence, manifest_hash) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET sequence=excluded.sequence, manifest_hash=excluded.manifest_hash WHERE excluded.sequence >= sessions.sequence").bind(head.manifest.sessionId,head.sequence,head.manifestHash).run();await this.state.storage.put("indexed",head.sequence);}
@@ -42,6 +51,7 @@ export class SessionAuthority {
  for(const ref of manifest.objects){const object=await this.env.OBJECTS.get(ref.hash);if(!object || object.size!==ref.size || await digest(await object.arrayBuffer())!==ref.hash)return json({error:"missing or corrupt object"},422);}
  const result=await this.state.storage.transaction(async store=>{
  const lease=await store.get<Lease>("lease");if(!lease || lease.ownerNode!==body.ownerNode || lease.epoch!==body.epoch || Date.parse(lease.expiresAt)<=Date.now())return json({error:"stale writer"},409);
+ if(await isUnclaimedTransfer(store,lease))return json({error:"transfer claim required"},409);
  const replay=await store.get<Head>(`replay:${body.idempotencyKey}`);if(replay)return replay.manifestHash===manifestHash?json(replay):json({error:"idempotency mismatch"},409);
  const head=await store.get<Head>("head");if((head?.sequence??0)!==body.expectedHead || manifest.sequence>100 || (head && head.manifest.sessionId!==manifest.sessionId))return json({error:"head conflict or cap"},409);
  const next={sequence:manifest.sequence,manifestHash,manifest};await store.put("head",next);await store.put(`replay:${body.idempotencyKey}`,next);await store.put("outbox",next);return json(next);
@@ -143,6 +153,7 @@ export class SessionAuthority {
    return json({ok:true});
   }
   if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
+  if((action==="renew" || action==="release") && await isUnclaimedTransfer(store,current))return json({error:"transfer claim required"},409);
   if(action==="renew"){const next={...current,expiresAt:new Date(Date.now()+60000).toISOString()};await store.put("lease",next);return json(next);}
   if(action==="release"){
    const next={...current,epoch:current.epoch+1,expiresAt:new Date(0).toISOString()};

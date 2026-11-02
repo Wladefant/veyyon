@@ -81,6 +81,36 @@ test("the first claim advances its fence even when the runtime label equals the 
  expect((await post("claim",body)).status).toBe(409);
 });
 
+test("a reservation cannot commit, renew, or release before its one-use claim is redeemed",async()=>{
+ const {post,objects,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="reservation-not-runtime";
+ const claimToken="synthetic-reservation-capability";
+ const reservedResponse=await post("transfer",{...source,targetNode,transferId,claimToken});
+ expect(reservedResponse.status).toBe(200);
+ const reservation=await reservedResponse.json() as {epoch:number};
+ const reservedLease={ownerNode:targetNode,epoch:reservation.epoch};
+ // Labels/epoch are returned with the transfer, but ownership is not live
+ // until the authority spends the one-use destination claim.
+ expect((await post("renew",reservedLease)).status).toBe(409);
+ expect((await post("release",reservedLease)).status).toBe(409);
+ const bytes=new Uint8Array([1,2,3]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ expect((await post("commit",{...reservedLease,expectedHead:0,idempotencyKey:"before-claim",manifest})).status).toBe(409);
+ expect(data.has("head")).toBe(false);
+ const claimedResponse=await post("claim",{targetNode,transferId,claimToken,epoch:reservation.epoch,ownerNode:"runtime"});
+ expect(claimedResponse.status).toBe(200);
+ const claimed=await claimedResponse.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect(claimed.epoch).toBe(reservation.epoch+1);
+ expect((await post("finalize",{ownerNode:claimed.ownerNode,targetNode,transferId,epoch:reservation.epoch,leaseEpoch:claimed.epoch,resumeToken:claimed.resumeToken})).status).toBe(200);
+ expect((await post("commit",{ownerNode:claimed.ownerNode,epoch:claimed.epoch,expectedHead:0,idempotencyKey:"after-claim",manifest})).status).toBe(200);
+ expect((await post("renew",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+ expect((await post("release",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+});
+
 test("concurrent claim redemption grants one runtime and denies the other",async()=>{
  const {post}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
