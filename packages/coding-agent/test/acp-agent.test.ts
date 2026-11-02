@@ -1330,15 +1330,20 @@ describe("ACP agent", () => {
 			await external.flush();
 			await external.close();
 		};
-		const visibleText = (): string[] =>
-			harness.updates
-				.filter(
-					update =>
-						update.sessionId === created.sessionId &&
-						(update.update.sessionUpdate === "user_message_chunk" ||
-							update.update.sessionUpdate === "agent_message_chunk"),
-				)
-				.map(update => (update.update.content.type === "text" ? update.update.content.text : ""));
+		const visibleText = (): string[] => {
+			const text: string[] = [];
+			for (const update of harness.updates) {
+				if (
+					update.sessionId !== created.sessionId ||
+					(update.update.sessionUpdate !== "user_message_chunk" &&
+						update.update.sessionUpdate !== "agent_message_chunk")
+				) {
+					continue;
+				}
+				text.push(update.update.content.type === "text" ? update.update.content.text : "");
+			}
+			return text;
+		};
 		const clearUpdates = (): void => {
 			harness.updates.length = 0;
 		};
