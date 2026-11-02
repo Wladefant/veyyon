@@ -2032,20 +2032,23 @@ export class SessionManager {
 				return digest.digest("hex");
 			};
 			for (const id of referencedIds) {
-					const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
-					const originalPath = path.join(oldArtifactDir, filename);
-					const copiedPath = path.join(nextArtifactDir, filename);
-					const [original, copied] = await Promise.all([
-						fs.promises.lstat(originalPath),
-						fs.promises.lstat(copiedPath),
-					]);
-					if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
-						throw new Error("Cannot fork session: referenced artifact copy incomplete");
-					}
-					const [originalHash, copiedHash] = await Promise.all([sha256File(originalPath), sha256File(copiedPath)]);
-					if (originalHash !== copiedHash) {
-						throw new Error("Cannot fork session: referenced artifact bytes differ from source");
-					}
+				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+				const originalPath = path.join(oldArtifactDir, filename);
+				const copiedPath = path.join(nextArtifactDir, filename);
+				const [original, copied] = await Promise.all([
+					fs.promises.lstat(originalPath),
+					fs.promises.lstat(copiedPath),
+				]);
+				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
+					throw new Error("Cannot fork session: referenced artifact copy incomplete");
+				}
+				const [originalHash, copiedHash] = await Promise.all([
+					sha256File(originalPath),
+					sha256File(copiedPath),
+				]);
+				if (originalHash !== copiedHash) {
+					throw new Error("Cannot fork session: referenced artifact bytes differ from source");
+				}
 			}
 		}
 	}
