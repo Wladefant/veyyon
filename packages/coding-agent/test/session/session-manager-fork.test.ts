@@ -868,6 +868,66 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("refuses a post-check symlink swap at the copied artifact digest open", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-hash-symlink-race-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const original = "SYNTHETIC SOURCE EVIDENCE";
+      expect(await manager.saveArtifact(original, "bash")).toBe("0");
+      manager.appendMessage({ role: "user", content: "Retain artifact://0", timestamp: Date.now() });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable source");
+      const sourceId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected local source artifact");
+      const outside = path.join(temp.path(), "unrelated-synthetic.txt");
+      const outsideBytes = "UNRELATED SYNTHETIC DATA";
+      await fs.writeFile(outside, outsideBytes);
+
+      const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+      const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+      let copiedPath: string | undefined;
+      let swapped = false;
+      const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
+        await realCopy(src, dst, options);
+        if (src === path.dirname(sourceArtifact)) copiedPath = path.join(dst, "0.bash.log");
+      });
+      // The source and destination have both passed inventory/size checks.
+      // Replace only the copied file just before its hash-open, not the real
+      // source file or the unrelated synthetic target.
+      const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+        if (copiedPath && String(file) === copiedPath && !swapped) {
+          swapped = true;
+          await fs.rename(copiedPath, copiedPath + ".parked");
+          await fs.symlink(outside, copiedPath, "file");
+        }
+        return realOpen(file, flags, mode);
+      });
+      try {
+        await expect(manager.fork()).rejects.toThrow();
+      } finally {
+        openSpy.mockRestore();
+        copySpy.mockRestore();
+      }
+      expect(swapped).toBe(true);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+
+      const goodFork = await manager.fork();
+      if (!goodFork) throw new Error("expected a clean retry");
+      const copied = path.join(goodFork.newSessionFile.slice(0, -".jsonl".length), "0.bash.log");
+      expect(await fs.readFile(copied, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("rejects an unreferenced link injected into the fork destination after copying", async () => {
     using temp = TempDir.createSync("@veyyon-fork-copy-link-injection-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
