@@ -98,11 +98,13 @@ export class SynchronizedSession {
 			this.#assertOpen();
 		}
 		try {
-			await this.client.assertWritable(this.sessionId, this.#lease.epoch);
+			await this.client.assertWritable(this.sessionId, this.#lease.epoch, this.#lease.ownerNode);
 			this.#assertOpen();
-			const renewed = await this.client.renewLease(this.sessionId);
+			const renewed = await this.client.renewLease(this.sessionId, {
+				ownerNode: this.#lease.ownerNode, epoch: this.#lease.epoch,
+			});
 			// A successful HTTP renewal can still return an already-expired fence.
-			await this.client.assertWritable(this.sessionId, renewed.epoch);
+			await this.client.assertWritable(this.sessionId, renewed.epoch, this.ownerNode);
 			this.#assertOpen();
 			this.#lease = renewed;
 		} catch (error) {
@@ -113,11 +115,15 @@ export class SynchronizedSession {
 		if (!this.#timer) {
 			this.#timer = setInterval(() => {
 				if (this.#lost || this.#renewal) return;
-				const renewal = this.client.renewLease(this.sessionId)
+				const prior = this.#lease;
+				if (!prior) { this.#loseOwnership(); return; }
+				const renewal = this.client.renewLease(this.sessionId, {
+					ownerNode: prior.ownerNode, epoch: prior.epoch,
+				})
 					.then(async lease => {
 						// HTTP 200 is not an admission proof when the returned deadline
 						// is expired or cannot be parsed. Fence even without a new admit().
-						await this.client.assertWritable(this.sessionId, lease.epoch);
+						await this.client.assertWritable(this.sessionId, lease.epoch, prior.ownerNode);
 						if (!this.#lost) this.#lease = lease;
 					})
 					.catch(() => this.#loseOwnership());

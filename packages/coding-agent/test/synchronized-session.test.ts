@@ -924,6 +924,11 @@ test("a stale guard cannot release a newer owner through a shared checkpoint cli
 		await expect(client.renewLease("s")).rejects.toThrow(/409/);
 		await current.admit();
 		expect(epoch).toBe(2);
+		// A's periodic renewer must not adopt B's newer session-keyed cache.
+		await expect(client.renewLease("s", { ownerNode: "owner-a", epoch: 1 }))
+			.rejects.toThrow(/Checkpoint lease lost/);
+		await expect(client.assertWritable("s", 2, "owner-a")).rejects.toThrow(/lease lost/);
+		await client.assertWritable("s", 2, "owner-b");
 		await stale.close();
 		expect(releases).toEqual([]);
 		await client.assertWritable("s", 2);
@@ -931,6 +936,76 @@ test("a stale guard cannot release a newer owner through a shared checkpoint cli
 		expect(releases).toEqual(["owner-b:2"]);
 	} finally {
 		await Promise.allSettled([stale.close(), current.close()]);
+	}
+});
+
+test("a late stale renewal reply cannot overwrite a replacement guard's lease", async () => {
+	let activeOwner: string | undefined;
+	let epoch = 0;
+	let deferOldRenewal = false;
+	let oldRenewEntered!: () => void;
+	let allowOldReply!: () => void;
+	const entered = new Promise<void>(resolve => { oldRenewEntered = resolve; });
+	const replyGate = new Promise<void>(resolve => { allowOldReply = resolve; });
+	const fake: CheckpointFetch = async (input, init) => {
+		const action = new URL(String(input)).pathname.split("/").pop();
+		const body = JSON.parse(String(init?.body)) as { ownerNode: string; epoch?: number };
+		if (action === "lease") {
+			if (activeOwner && activeOwner !== body.ownerNode)
+				return Response.json({ error: "owned" }, { status: 409 });
+			if (!activeOwner) epoch++;
+			activeOwner = body.ownerNode;
+		} else if (action === "renew") {
+			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (deferOldRenewal && body.ownerNode === "owner-a") {
+				const oldReceipt = {
+					ownerNode: body.ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				};
+				activeOwner = undefined; // Simulate expiry while the reply is lost in transit.
+				oldRenewEntered();
+				await replyGate;
+				return Response.json(oldReceipt);
+			}
+		} else if (action === "release") {
+			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			epoch++;
+			activeOwner = undefined;
+			return Response.json({
+				ownerNode: body.ownerNode, epoch, expiresAt: "1970-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			});
+		} else {
+			throw new Error("Unexpected checkpoint action");
+		}
+		return Response.json({
+			ownerNode: body.ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const oldGuard = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
+	const newGuard = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	try {
+		await oldGuard.admit();
+		deferOldRenewal = true;
+		const pending = client.renewLease("s", { ownerNode: "owner-a", epoch: 1 });
+		try {
+			await entered;
+			await newGuard.admit();
+		} finally {
+			allowOldReply();
+		}
+		await expect(pending).rejects.toThrow(/lease changed during renewal/);
+		await client.assertWritable("s", 2, "owner-b");
+		await newGuard.close();
+	} finally {
+		allowOldReply();
+		await Promise.allSettled([oldGuard.close(), newGuard.close()]);
 	}
 });
 

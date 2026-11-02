@@ -368,9 +368,16 @@ export class CheckpointClient {
 	} | null> {
 		return this.#request(`/v1/sessions/${encodeURIComponent(sessionId)}/head`);
 	}
-	async renewLease(sessionId: string): Promise<CheckpointLease> {
+	async renewLease(
+		sessionId: string,
+		expected?: Pick<CheckpointLease, "ownerNode" | "epoch">,
+	): Promise<CheckpointLease> {
 		const lease = this.#leases.get(sessionId);
-		if (!lease || this.#lost.has(sessionId)) throw new Error("Checkpoint lease lost");
+		if (
+			!lease ||
+			this.#lost.has(sessionId) ||
+			(expected && (lease.ownerNode !== expected.ownerNode || lease.epoch !== expected.epoch))
+		) throw new Error("Checkpoint lease lost");
 		try {
 			const next = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/renew`, {
 				method: "POST",
@@ -383,10 +390,22 @@ export class CheckpointClient {
 			if (!Number.isSafeInteger(next.epoch) || next.epoch !== lease.epoch)
 				throw new Error("Checkpoint authority lease epoch mismatch");
 			if (!hasLiveLeaseFence(next)) throw new Error("Checkpoint authority lease fence invalid");
+			// A late reply from a previous owner must not overwrite the lease
+			// a second guard acquired while the renewal was in flight.
+			const current = this.#leases.get(sessionId);
+			if (
+				this.#lost.has(sessionId) ||
+				current?.ownerNode !== lease.ownerNode ||
+				current?.epoch !== lease.epoch
+			) throw new Error("Checkpoint lease changed during renewal");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {
-			this.loseLease(sessionId);
+			// Revoke only our original fence. Another owner may have acquired a
+			// later one while this authority response was pending.
+			const current = this.#leases.get(sessionId);
+			if (current?.ownerNode === lease.ownerNode && current.epoch === lease.epoch)
+				this.loseLease(sessionId);
 			throw error;
 		}
 	}
@@ -430,12 +449,13 @@ export class CheckpointClient {
 		this.#leases.delete(sessionId);
 		this.#lost.add(sessionId);
 	}
-	async assertWritable(sessionId: string, epoch: number): Promise<void> {
+	async assertWritable(sessionId: string, epoch: number, expectedOwner?: string): Promise<void> {
 		const lease = this.#leases.get(sessionId);
 		if (
 			!hasLiveLeaseFence(lease) ||
 			this.#lost.has(sessionId) ||
-			lease.epoch !== epoch
+			lease.epoch !== epoch ||
+			(expectedOwner !== undefined && lease.ownerNode !== expectedOwner)
 		)
 			throw new Error("Checkpoint lease lost; synchronized writes are fenced");
 	}
