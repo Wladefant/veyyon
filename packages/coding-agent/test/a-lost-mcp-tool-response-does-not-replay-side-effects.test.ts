@@ -98,6 +98,39 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		});
 	}
 
+	// WHY: a real JSON-RPC application error can *mention* HTTP 503 or a
+	// socket reset without being a failed transport. A returned protocol error
+	// is a definite failed tool result, not an ambiguous lost response.
+	for (const failureText of [
+		"MCP error -32603: HTTP 503 was returned by the application",
+		"MCP error -32603: ECONNRESET was returned by the application",
+	]) {
+		it(`preserves a correlated application error instead of reconnecting: ${failureText}`, async () => {
+			let dispatches = 0;
+			let reconnects = 0;
+			const old = connection(fakeTransport(async () => {
+				dispatches++;
+				throw new Error(failureText);
+			}));
+			const reconnect = async () => {
+				reconnects++;
+				return old;
+			};
+			const direct = new MCPTool(old, writeTool, reconnect);
+			const deferred = new DeferredMCPTool("write-fixture", writeTool, async () => old, undefined, reconnect);
+			for (const tool of [direct, deferred]) {
+				const result = await boundedUnknownOutcome(
+					tool.execute("synthetic-application-error", { value: "safe" }, undefined, context),
+				);
+				expect(result.isError).toBe(true);
+				expect(JSON.stringify(result)).toContain("MCP error -32603");
+				expect(JSON.stringify(result)).not.toContain("outcome unknown");
+			}
+			expect(dispatches).toBe(2);
+			expect(reconnects).toBe(0);
+		});
+	}
+
 	it("returns an unknown outcome without a reconnect callback rather than recommending blind retry", async () => {
 		let effects = 0;
 		const tool = new MCPTool(
