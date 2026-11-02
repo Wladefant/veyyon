@@ -883,7 +883,9 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       const sourceArtifact = await manager.getArtifactPath("0");
       if (!sourceArtifact) throw new Error("expected local source artifact");
       const outside = path.join(temp.path(), "unrelated-synthetic.txt");
-      // Matching bytes make a pathname-following pre-fix hasher succeed: the\n      // violation is following an unrelated symlink, not a digest mismatch.\n      const outsideBytes = original;
+      // Matching bytes make a pathname-following pre-fix hasher succeed: the
+      // violation is following an unrelated symlink, not a digest mismatch.
+      const outsideBytes = original;
       await fs.writeFile(outside, outsideBytes);
 
       const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
