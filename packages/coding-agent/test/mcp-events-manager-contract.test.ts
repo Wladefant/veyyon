@@ -184,6 +184,150 @@ async function connect(manager: MCPManager, name: string, config: MCPServerConfi
 }
 
 describe("MCPManager event subscription contracts", () => {
+
+	it("preserves the successor's pending webhook verifier when a retired same-path subscribe finishes", async () => {
+		for (const formerOutcome of ["success", "error"] as const) {
+			const retiringStarted = Promise.withResolvers<void>();
+			const releaseRetiring = Promise.withResolvers<Record<string, unknown>>();
+			const successorStarted = Promise.withResolvers<void>();
+			const releaseSuccessor = Promise.withResolvers<Record<string, unknown>>();
+			const successorCursor = Promise.withResolvers<void>();
+			const serverA = fakeMcpServer({ delivery: "webhook" });
+			const serverB = fakeMcpServer({
+				delivery: "webhook",
+				webhookSubscribe: async () => {
+					successorStarted.resolve();
+					return releaseSuccessor.promise;
+				},
+			});
+			const probeA = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+			const portA = probeA.port ?? 0;
+			await probeA.stop(true);
+			const probeB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+			const portB = probeB.port ?? 0;
+			await probeB.stop(true);
+			expect(portA).toBeGreaterThan(0);
+			expect(portB).toBeGreaterThan(0);
+			const retiredEnvName = "MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET";
+			const successorEnvName = "MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET";
+			const oldRetiredEnv = process.env[retiredEnvName];
+			const oldSuccessorEnv = process.env[successorEnvName];
+			const retiredSecret = `whsec_${Buffer.alloc(32, 43).toString("base64")}`;
+			const successorSecret = `whsec_${Buffer.alloc(32, 61).toString("base64")}`;
+			process.env[retiredEnvName] = retiredSecret;
+			process.env[successorEnvName] = successorSecret;
+			const manager = new MCPManager(process.cwd());
+			const sharedPath = "/events/reused-pending-challenge";
+			const makeEvents = (name: string, port: number, secretRef: string) => ({
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME,
+					mode: "webhook" as const,
+					webhook: {
+						callbackUrl: `https://callback.example.test${sharedPath}`,
+						secretRef,
+						listenPort: port,
+					},
+				}],
+			});
+			let stoppingA: Promise<void> | undefined;
+			try {
+				// Start A without an event listener so its transport can be given a
+				// deterministic delayed RPC; the real manager and receiver still run.
+				await withinHandlerChange(connect(manager, "retiring-webhook", managerConfig(serverA, makeEvents(
+					"retiring-webhook", portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET",
+				))), "connect retiring server");
+				const retiringConnection = manager.getConnection("retiring-webhook");
+				if (!retiringConnection) throw new Error("Retiring MCP server did not connect");
+				const actualRequest = retiringConnection.transport.request.bind(retiringConnection.transport);
+				retiringConnection.transport.request = ((method, params, options) => {
+					if (method === "events/subscribe") {
+						retiringStarted.resolve();
+						// This synthetic transport intentionally ignores cancellation
+						// so the old RPC can settle after a successor has enrolled.
+						return releaseRetiring.promise;
+					}
+					return actualRequest(method, params, options);
+				}) as typeof retiringConnection.transport.request;
+				manager.setOnEvent(() => {});
+				manager.setOnEventCursor((_name, _key, cursor) => {
+					if (cursor === "successor-cursor") successorCursor.resolve();
+				});
+				await withinHandlerChange(retiringStarted.promise, "retiring pending webhook subscribe");
+				stoppingA = manager.disconnectServer("retiring-webhook");
+				for (let attempt = 0; attempt < 50 && manager.getActiveEventSubscriptionCount("retiring-webhook") !== 0; attempt++) {
+					await delay(1);
+				}
+				expect(manager.getActiveEventSubscriptionCount("retiring-webhook")).toBe(0);
+				// Different owner key, deliberately reusing the retired callback path.
+				await withinHandlerChange(connect(manager, "successor-webhook", managerConfig(serverB, makeEvents(
+					"successor-webhook", portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET",
+				))), "connect successor server");
+				await withinHandlerChange(successorStarted.promise, "successor pending webhook subscribe");
+				// The old operation settles only AFTER B has reserved its HMAC key.
+				if (formerOutcome === "success") {
+					releaseRetiring.resolve({ id: "old-id", cursor: "old-cursor", refreshBefore: null });
+				} else {
+					releaseRetiring.reject(new Error("synthetic canceled subscribe failure"));
+				}
+				await withinHandlerChange(stoppingA, "retiring webhook cleanup after successor starts");
+				const messageId = `successor-verify-${formerOutcome}`;
+				const timestamp = String(Math.floor(Date.now() / 1_000));
+				const challenge = `challenge-${formerOutcome}`;
+				const body = JSON.stringify({ type: "verification", challenge });
+				const signature = createHmac("sha256", Buffer.alloc(32, 61))
+					.update(`${messageId}.${timestamp}.${body}`)
+					.digest("base64");
+				const response = await withinHandlerChange(fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "successor-pending-id",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${signature}`,
+					},
+					body,
+				}), "successor HMAC challenge");
+				expect(response.status).toBe(200);
+				expect(await response.json()).toEqual({ challenge });
+				// A rotated/retired signer must not verify the new owner.
+				const oldSignature = createHmac("sha256", Buffer.alloc(32, 43))
+					.update(`${messageId}.${timestamp}.${body}`)
+					.digest("base64");
+				const oldSigned = await fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "successor-pending-id",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${oldSignature}`,
+					},
+					body,
+				});
+				expect(oldSigned.status).toBe(401);
+				releaseSuccessor.resolve({ id: "successor-id", cursor: "successor-cursor", refreshBefore: null });
+				await withinHandlerChange(successorCursor.promise, "successor webhook cursor");
+				expect(manager.getActiveEventSubscriptionCount("successor-webhook")).toBe(1);
+			} finally {
+				releaseRetiring.resolve({ id: "cleanup-id", cursor: "cleanup", refreshBefore: null });
+				releaseSuccessor.resolve({ id: "cleanup-id", cursor: "cleanup", refreshBefore: null });
+				try {
+					if (stoppingA) await withinHandlerChange(stoppingA, "retiring pending stop cleanup");
+					await withinHandlerChange(manager.disconnectAll(), "same-path ownership cleanup");
+				} finally {
+					serverA.stop();
+					serverB.stop();
+					if (oldRetiredEnv === undefined) delete process.env[retiredEnvName];
+					else process.env[retiredEnvName] = oldRetiredEnv;
+					if (oldSuccessorEnv === undefined) delete process.env[successorEnvName];
+					else process.env[successorEnvName] = oldSuccessorEnv;
+				}
+			}
+		}
+	}, 35_000);
+
 	it("uses hasMore for immediate polling, resumes with cursors, and enforces the one-second poll floor", async () => {
 		const pollRequests: Array<Record<string, unknown>> = [];
 		const firstDelivered = Promise.withResolvers<void>();
