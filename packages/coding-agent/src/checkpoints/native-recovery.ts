@@ -59,28 +59,28 @@ async function assertNoSymlink(path: string): Promise<void> {
 	if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in checkpoints: ${path}`);
 }
 interface WalkBudget { remainingEntries: number; remainingPathBytes: number }
-async function walkFiles(root: string, base = root, budget?: WalkBudget): Promise<string[]> {
-	// Stream traversal entries instead of materializing an unbounded readdir
-	// array. A cloud budget is shared across nested directories and fails before
-	// opening file contents; local forks retain their historical policy.
+async function walkFiles(root: string, base = root, budget?: WalkBudget, depth = 0): Promise<string[]> {
+	// Stream traversal entries; charge both directories and files against the
+	// same capture-wide budget. Empty-directory fanout and excessive nesting
+	// must not bypass file-only admission. Local forks retain prior policy.
+	if (budget && depth > MAX_CLOUD_CAPTURE_DEPTH)
+		throw new Error("Checkpoint capture exceeds metadata budget");
 	await assertNoSymlink(root);
 	const found: string[] = [];
 	for await (const entry of await opendir(root)) {
 		const path = join(root, entry.name);
 		await assertNoSymlink(path);
 		const info = await lstat(path);
-		if (info.isDirectory()) found.push(...(await walkFiles(path, base, budget)));
-		else if (info.isFile()) {
-			const rel = safeRelative(relative(base, path).split(sep).join("/"));
-			if (budget) {
-				const size = Buffer.byteLength(rel, "utf8");
-				if (budget.remainingEntries < 1 || size > budget.remainingPathBytes)
-					throw new Error("Checkpoint capture exceeds metadata budget");
-				budget.remainingEntries--;
-				budget.remainingPathBytes -= size;
-			}
-			found.push(rel);
+		const rel = safeRelative(relative(base, path).split(sep).join("/"));
+		if (budget) {
+			const size = Buffer.byteLength(rel, "utf8");
+			if (budget.remainingEntries < 1 || size > budget.remainingPathBytes)
+				throw new Error("Checkpoint capture exceeds metadata budget");
+			budget.remainingEntries--;
+			budget.remainingPathBytes -= size;
 		}
+		if (info.isDirectory()) found.push(...(await walkFiles(path, base, budget, depth + 1)));
+		else if (info.isFile()) found.push(rel);
 	}
 	return found;
 }
@@ -91,6 +91,7 @@ const MAX_CAPTURE_RAW_BYTES = 48 * 1024 * 1024;
 // Bound cloud metadata and pre-encryption allocation even for zero-byte files.
 // Local forks do not inherit these Cloudflare-envelope limits.
 const MAX_CLOUD_CAPTURE_ENTRIES = 2048;
+const MAX_CLOUD_CAPTURE_DEPTH = 32;
 const MAX_CLOUD_CAPTURE_PATH_BYTES = 256 * 1024;
 const MAX_CLOUD_CAPTURE_ESTIMATED_JSON_BYTES = 60 * 1024 * 1024;
 const CAPTURE_READ_CHUNK_BYTES = 64 * 1024;
@@ -323,15 +324,18 @@ export async function captureNativeCheckpoint(
 	await assertNoSymlink(journalPath);
 	await assertNotTerminalOwned(journalPath);
 	if (!journalPath.endsWith(".jsonl")) throw new Error("Native session path must end with .jsonl");
+	if (mode === "cloud" && workspacePaths.length > MAX_CLOUD_CAPTURE_ENTRIES)
+		throw new Error("Checkpoint capture exceeds metadata budget");
 	let remainingBytes = nativeCaptureByteBudget(mode);
 	let capturedEntries = 0;
 	let capturedPathBytes = 0;
 	let estimatedJsonBytes = 64 * 1024;
-	const remainingListingBudget = (): WalkBudget | undefined =>
-		mode === "cloud" ? {
-			remainingEntries: MAX_CLOUD_CAPTURE_ENTRIES - capturedEntries,
-			remainingPathBytes: MAX_CLOUD_CAPTURE_PATH_BYTES - capturedPathBytes,
-		} : undefined;
+	// One shared traversal budget spans artifacts and all selected workspace roots.
+	// Content-byte and encoded-envelope budgets remain separate admissions.
+	const listingBudget: WalkBudget | undefined = mode === "cloud" ? {
+		remainingEntries: MAX_CLOUD_CAPTURE_ENTRIES,
+		remainingPathBytes: MAX_CLOUD_CAPTURE_PATH_BYTES,
+	} : undefined;
 	const readIncluded = async (
 		filePath: string,
 		approvedRoot?: string,
@@ -377,7 +381,7 @@ export async function captureNativeCheckpoint(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	if (artifactRootExists) {
-		for (const rel of await walkFiles(artifactRoot, artifactRoot, remainingListingBudget())) {
+		for (const rel of await walkFiles(artifactRoot, artifactRoot, listingBudget)) {
 			// Artifacts are automatic captures, not an explicit selection of
 			// sensitive workspace paths. Apply the same exclusion policy first.
 			if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
@@ -423,7 +427,7 @@ export async function captureNativeCheckpoint(
 			throw new Error(`Workspace path escapes its root: ${input}`);
 		const info = await lstat(path);
 		if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in workspace capture: ${path}`);
-		const data = info.isDirectory() ? await walkFiles(path, path, remainingListingBudget()) : [safeRelative(basename(path))];
+		const data = info.isDirectory() ? await walkFiles(path, path, listingBudget) : [safeRelative(basename(path))];
 		for (const rel of data) {
 			const full = info.isDirectory() ? join(path, ...rel.split("/")) : path;
 			// Validate the complete workspace-relative path before reading any bytes:

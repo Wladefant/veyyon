@@ -129,6 +129,36 @@ describe("native recovery", () => {
 		await truncate(dirty, 48 * 1024 * 1024);
 		await expect(captureNativeCheckpoint(file, [dirty])).rejects.toThrow(/capture exceeds raw-byte budget/);
 	});
+	test("cloud metadata admission includes empty-directory fanout and limits traversal depth", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "empty-fanout", cwd: root }) + "\n");
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		for (let start = 0; start < 2049; start += 64) {
+			await Promise.all(Array.from({ length: Math.min(64, 2049 - start) }, (_, index) =>
+				mkdir(join(artifacts, `empty-${start + index}`))));
+		}
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
+		const local = await captureNativeCheckpoint(file, [], "local");
+		expect(local.artifacts).toEqual({});
+		await rm(artifacts, { recursive: true });
+		let nested = artifacts;
+		for (let index = 0; index < 34; index++) {
+			nested = join(nested, `d${index}`);
+			await mkdir(nested);
+		}
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
+		expect((await captureNativeCheckpoint(file, [], "local")).artifacts).toEqual({});
+	});
+	test("cloud capture rejects excessive selected roots without enumerating them", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "selected-roots", cwd: root }) + "\n");
+		const empty = join(root, "empty");
+		await mkdir(empty);
+		await expect(captureNativeCheckpoint(file, Array(2049).fill(empty))).rejects.toThrow(/metadata budget/);
+	});
 	test("cloud capture caps zero-byte artifact fanout while local forks retain their policy", async () => {
 		const root = await scratch();
 		const file = join(root, "session.jsonl");
