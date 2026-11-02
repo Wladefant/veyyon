@@ -338,10 +338,11 @@ export async function captureNativeCheckpoint(
 				blobs[hash] = encode(await readIncluded(join(blobRoot, hash), blobRoot, "blob"));
 		}
 	}
-	const workspaceRoot = await realpath(header.cwd as string);
+	const workspaceRoot = workspacePaths.length > 0 ? await realpath(header.cwd as string) : undefined;
 	const files: CheckpointFile[] = [];
 	const dirty: string[] = [];
 	for (const input of workspacePaths) {
+		if (!workspaceRoot) throw new Error("Workspace root unavailable for selected checkpoint files");
 		if (input.replaceAll("\\", "/").split("/").includes("..")) throw new Error("Unsafe workspace path");
 		const path = resolve(input);
 		const lexicalRelative = relative(workspaceRoot, path);

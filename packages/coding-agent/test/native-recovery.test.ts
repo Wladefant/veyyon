@@ -93,6 +93,17 @@ describe("native recovery", () => {
 		await expect(captureNativeCheckpoint(journal, [])).rejects.toThrow(/Checkpoint blob source changed or escaped approved root/);
 	});
 
+	test("captures stopped journals without a surviving cwd when no workspace files are selected", async () => {
+		const root = await scratch();
+		const gone = join(root, "removed-original-workspace");
+		const session = join(root, "archived.jsonl");
+		const original = JSON.stringify({ type: "session", id: "archived", cwd: gone }) + "\n";
+		await writeFile(session, original);
+		const bundle = await captureNativeCheckpoint(session, []);
+		expect(Buffer.from(bundle.journal.bytes, "base64").toString("utf8")).toBe(original);
+		expect(bundle.workspace.files).toEqual([]);
+		await expect(captureNativeCheckpoint(session, [join(gone, "note.md")])).rejects.toThrow();
+	});
 	test("rejects an oversized journal before decoding or allocating its body", async () => {
 		const root = await scratch();
 		const file = join(root, "oversized.jsonl");
