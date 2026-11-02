@@ -42,6 +42,12 @@ function mockCreateAgentSession(session: AgentSession) {
 	return vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 }
 
+async function advanceTimersAndFlush(durationMs: number): Promise<void> {
+	vi.advanceTimersByTime(durationMs);
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
 describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -123,9 +129,9 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			signal: controller.signal,
 		});
 		try {
-			await vi.advanceTimersByTimeAsync(120_001);
+			await advanceTimersAndFlush(120_001);
 			expect(handle.abortCalls()).toBe(1);
-			await vi.advanceTimersByTimeAsync(120_001);
+			await advanceTimersAndFlush(120_001);
 			expect(handle.abortCalls()).toBe(2);
 			expect(handle.prompts).toHaveLength(2);
 			expect(handle.prompts[1]?.text).toContain("Continue the same assignment from your existing session state.");
@@ -184,8 +190,8 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			signal: controller.signal,
 		});
 		try {
-			await vi.advanceTimersByTimeAsync(120_001);
-			await vi.advanceTimersByTimeAsync(5_001);
+			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(5_001);
 			const result = await resultPromise;
 
 			expect(abortCalls).toBe(1);
@@ -196,7 +202,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		} finally {
 			controller.abort();
 			settleAbort?.();
-			await vi.advanceTimersByTimeAsync(5_001);
+			await advanceTimersAndFlush(5_001);
 			await resultPromise;
 		}
 	});
@@ -230,7 +236,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await started;
-			await vi.advanceTimersByTimeAsync(180_001);
+			await advanceTimersAndFlush(180_001);
 			await Promise.resolve();
 			await Promise.resolve();
 			const finishedWithoutManualIdleRelease = await Promise.race([

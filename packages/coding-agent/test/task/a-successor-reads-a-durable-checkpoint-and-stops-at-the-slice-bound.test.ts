@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -174,8 +175,8 @@ describe("explicit bounded lane successors", () => {
 			kind: "sub",
 			session: {} as AgentSession,
 			sessionFile: null,
-			terminalOutcome: "completed",
 		});
+		AgentRegistry.global().recordTerminalOutcome(predecessor, "completed");
 		const refused = await dispatch("Still live", predecessor);
 		expect(refused.isError).toBe(true);
 		expect(JSON.stringify(refused.content)).toContain("successor-predecessor-active");
