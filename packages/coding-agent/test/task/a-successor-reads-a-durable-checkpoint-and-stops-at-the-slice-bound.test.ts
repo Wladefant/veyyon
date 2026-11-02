@@ -504,7 +504,6 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(1);
 	});
 
-
 	it("completes concurrent claims and the third-successor refusal within a deadline", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;

@@ -79,7 +79,6 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 
 		expect(result.terminalOutcome).toBe("completed");
-
 	});
 
 	it("records a failed terminal outcome", async () => {
@@ -109,7 +108,6 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 
 		expect(result.terminalOutcome).toBe("startup-failed");
 	});
-
 
 	it("records a stalled terminal outcome after recovery fails", async () => {
 		vi.useFakeTimers();
