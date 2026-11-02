@@ -128,4 +128,25 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 		expect(parallelCalls[1]?.thoughtSignature).toBe(SENTINEL);
 		expect(parallelCalls[2]?.thoughtSignature).toBe(SENTINEL);
 	});
+
+	it("emits the skip sentinel for foreign tool calls on Antigravity/CCA but keeps Gemini signatures (#844)", () => {
+		const model = buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.8-flash");
+
+		// Foreign (e.g. openai-codex) assistant turn: tool calls must carry the skip sentinel
+		// so Cloud Code Assist / Antigravity does not 400 with 'Function call is missing a thought_signature'.
+		const foreignTurn = assistantTurn("openai-completions" as GoogleApi, "openai-codex", "gpt-6-luna", [
+			{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "src/index.ts" } },
+		]);
+		const foreignCalls = toolCallParts(model, foreignTurn);
+		expect(foreignCalls).toHaveLength(1);
+		expect(foreignCalls[0]?.thoughtSignature).toBe(SENTINEL);
+
+		// Gemini-produced turn: keeps its own real thought signature untouched.
+		const geminiTurn = assistantTurn("google-gemini-cli", "google-antigravity", "gemini-3.8-flash", [
+			{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "git status" }, thoughtSignature: VALID_SIGNATURE },
+		]);
+		const geminiCalls = toolCallParts(model, geminiTurn);
+		expect(geminiCalls).toHaveLength(1);
+		expect(geminiCalls[0]?.thoughtSignature).toBe(VALID_SIGNATURE);
+	});
 });
