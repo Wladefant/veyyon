@@ -1,4 +1,6 @@
 import { expect, it } from "bun:test";
+import type { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import { MCPToolCache } from "@veyyon/coding-agent/mcp/tool-cache";
 import type { MCPRequestOptions, MCPToolsListResult } from "../src/mcp/types";
 import { createServer } from "node:http";
 import * as path from "node:path";
@@ -401,7 +403,20 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 	const name = "initial-refresh-order";
 	const firstListEntered = Promise.withResolvers<void>();
 	const releaseInitialList = Promise.withResolvers<void>();
-	const manager = new MCPManager(process.cwd());
+	const persisted = new Map<string, string>();
+	const cacheWrites: string[][] = [];
+	const freshCacheWritten = Promise.withResolvers<void>();
+	const storage = {
+		getCache: (key: string) => persisted.get(key) ?? null,
+		setCache: (key: string, raw: string, _expiresAtSec: number) => {
+			persisted.set(key, raw);
+			const parsed = JSON.parse(raw) as { tools: Array<{ name: string }> };
+			const names = parsed.tools.map(tool => tool.name);
+			cacheWrites.push(names);
+			if (names.includes("fresh_notification")) freshCacheWritten.resolve();
+		},
+	} as unknown as AgentStorage;
+	const manager = new MCPManager(process.cwd(), new MCPToolCache(storage));
 	const observed: string[][] = [];
 	manager.setOnToolsChanged(tools => observed.push(tools.map(tool => tool.name)));
 	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
@@ -496,6 +511,8 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 		expect(startup.connectedServers).toContain(name);
 		expect(connectedStatuses).toContain(name);
 		expect(refreshRequests).toBe(1);
+		await bounded(freshCacheWritten.promise, "latest persistent tool cache");
+		expect(cacheWrites).toEqual([["fresh_notification"]]);
 		const newest = [createMCPToolName(name, "fresh_notification")];
 		const obsolete = createMCPToolName(name, "stale_initial");
 		expect(manager.getTools().map(tool => tool.name)).toEqual(newest);
