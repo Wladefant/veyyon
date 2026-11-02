@@ -104,6 +104,7 @@ describe("BashTool ACP terminal routing", () => {
 		// The final result text must contain the stub output
 		const text = result.content.find(c => c.type === "text");
 		expect(text?.text).toContain("hello from terminal");
+		expect(text?.text).not.toContain("[credential output withheld]");
 
 		// The result details must carry terminalId for the ACP event mapper
 		expect(result.details?.terminalId).toBe("term-xyz");
@@ -261,6 +262,7 @@ describe("BashTool ACP terminal routing", () => {
 			}, 600);
 			const result = await driveFakeTime(running);
 			expect(updates.length).toBeGreaterThan(0);
+			expect(updates.slice(0, 2)).toEqual(["", ""]);
 			const text = result.content.find(item => item.type === "text")?.text ?? "";
 			expect(text).toContain("ordinary inventory row");
 			expect(text).toContain("artifact://bash-original-output");
