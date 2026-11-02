@@ -124,3 +124,141 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 		}
 	}
 }, 30_000);
+
+
+// WHY: bulk shutdown closes a snapshot of connected servers, while another
+// server's initial initialize response may arrive after that snapshot. The
+// pending promise must be fenced by the same global teardown epoch that
+// already fences reconnects, or it can publish an untracked transport.
+it("bulk MCP disconnect retires a pending initialize before closing its connected peer", async () => {
+	const aToolsListed = Promise.withResolvers<void>();
+	const bInitializeEntered = Promise.withResolvers<void>();
+	const releaseBInitialize = Promise.withResolvers<void>();
+	const aDeleteEntered = Promise.withResolvers<void>();
+	const releaseADelete = Promise.withResolvers<void>();
+	const bDeleteObserved = Promise.withResolvers<void>();
+	let bInitializations = 0;
+	const server = createServer(async (request, response) => {
+		try {
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : undefined;
+			if (!route) {
+				response.writeHead(404).end();
+				return;
+			}
+			if (request.method === "DELETE") {
+				if (route === "a") {
+					aDeleteEntered.resolve();
+					await releaseADelete.promise;
+				} else if (request.headers["mcp-session-id"] === "test-bulk-b") {
+					bDeleteObserved.resolve();
+				}
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { method?: string; id?: string | number };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				if (route === "b" && ++bInitializations === 1) {
+					bInitializeEntered.resolve();
+					await releaseBInitialize.promise;
+				}
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "bulk-shutdown-fixture", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				if (route === "a") aToolsListed.resolve();
+				result = { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] };
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": `test-bulk-${route}` } : {}),
+			});
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await withinConnectBoundary(listening.promise, "bulk test HTTP listen");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
+	const names = { a: "bulk-peer-a", b: "bulk-peer-b" };
+	const configs = {
+		[names.a]: { type: "http" as const, url: `http://127.0.0.1:${address.port}/a` },
+		[names.b]: { type: "http" as const, url: `http://127.0.0.1:${address.port}/b` },
+	};
+	const manager = new MCPManager(process.cwd());
+	const notifications: string[][] = [];
+	manager.setOnToolsChanged(tools => notifications.push(tools.map(tool => tool.name)));
+	let originalConnect: Promise<unknown> | undefined;
+	let bulkShutdown: Promise<void> | undefined;
+	try {
+		originalConnect = manager.connectServers(configs, {});
+		// The other server A must already be registered before disconnectAll
+		// snapshots connected transports; B is held inside initialize.
+		await withinConnectBoundary(
+			Promise.all([aToolsListed.promise, bInitializeEntered.promise]),
+			"bulk fixture A tools and B initialize",
+		);
+		expect(manager.getConnectedServers()).toContain(names.a);
+		expect(manager.getConnectedServers()).not.toContain(names.b);
+		bulkShutdown = manager.disconnectAll();
+		await withinConnectBoundary(aDeleteEntered.promise, "bulk shutdown closing connected A");
+		// B finishes while A's DELETE is still blocked. On the original code,
+		// B is admitted after the snapshot and never receives its own DELETE.
+		releaseBInitialize.resolve();
+		await withinConnectBoundary(bDeleteObserved.promise, "obsolete B session disposal");
+		releaseADelete.resolve();
+		await withinConnectBoundary(bulkShutdown, "bulk shutdown completion");
+		await withinConnectBoundary(originalConnect, "original parallel connections");
+		expect(manager.getConnectedServers()).toEqual([]);
+		expect(manager.getServerConfig(names.b)).toBeUndefined();
+		expect(manager.getTools().filter(tool => tool.mcpServerName === names.b)).toEqual([]);
+		expect(notifications.some(tools => tools.includes(createMCPToolName(names.b, "read_fixture")))).toBe(false);
+
+		// A new explicit connection after teardown is a separate authorized
+		// handshake, not the obsolete B attempt returning late.
+		await withinConnectBoundary(
+			manager.connectServers({ [names.b]: configs[names.b]! }, {}),
+			"fresh B connect after bulk teardown",
+		);
+		expect(bInitializations).toBe(2);
+		expect(manager.getConnectedServers()).toContain(names.b);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === names.b).map(tool => tool.name)).toEqual([
+			createMCPToolName(names.b, "read_fixture"),
+		]);
+	} finally {
+		releaseBInitialize.resolve();
+		releaseADelete.resolve();
+		try {
+			if (originalConnect) await withinConnectBoundary(originalConnect, "bulk fixture original connection cleanup");
+			if (bulkShutdown) await withinConnectBoundary(bulkShutdown, "bulk fixture shutdown cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "bulk fixture manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "bulk fixture server shutdown");
+			}
+		}
+	}
+}, 35_000);
