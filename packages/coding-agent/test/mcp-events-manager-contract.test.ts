@@ -3070,4 +3070,97 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 30_000);
 
+
+	// A callback cannot await B's stream drain while B's callback awaits A's:
+	// the two awaited handler promises form a genuine cycle. Reject one edge
+	// explicitly; never pretend the rejected disconnect already completed.
+	// A later external owner can finish closing the remaining live server.
+	it("rejects reciprocal cross-server callback disconnects without breaking independent drains", async () => {
+		const aName = "reciprocal-disconnect-A";
+		const bName = "reciprocal-disconnect-B";
+		const aEntered = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const releaseBoth = Promise.withResolvers<void>();
+		const aFinished = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const results: Array<{ server: string; outcome: "done" | "cycle"; error?: string }> = [];
+		let settled = false;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("A-recursive", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("B-recursive", "B-cursor")],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			const fromA = name === aName && occurrence.eventId === "A-recursive";
+			const fromB = name === bName && occurrence.eventId === "B-recursive";
+			if (!fromA && !fromB) return;
+			(fromA ? aEntered : bEntered).resolve();
+			await releaseBoth.promise;
+			try {
+				await manager.disconnectServer(fromA ? bName : aName);
+				results.push({ server: name, outcome: "done" });
+			} catch (error) {
+				results.push({
+					server: name,
+					outcome: "cycle",
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				(fromA ? aFinished : bFinished).resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reciprocal A connection");
+			await withinHandlerChange(aEntered.promise, "reciprocal A callback entered");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reciprocal B connection");
+			await withinHandlerChange(bEntered.promise, "reciprocal B callback entered");
+			releaseBoth.resolve();
+			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "reciprocal callbacks settle");
+			settled = true;
+			expect(results.filter(x => x.outcome === "done")).toHaveLength(1);
+			const rejected = results.filter(x => x.outcome === "cycle");
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0]?.error).toContain("cyclic MCP event disconnect");
+			const remaining = manager.getConnectedServers();
+			expect(remaining).toHaveLength(1);
+			if (!remaining[0]) throw new Error("Expected one explicitly recoverable live MCP server");
+			await withinHandlerChange(manager.disconnectServer(remaining[0]), "external remaining server disconnect");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			expect(serverA.requests.filter(x => x.method === "events/poll")).toHaveLength(1);
+			expect(serverB.requests.filter(x => x.method === "events/poll")).toHaveLength(1);
+		} finally {
+			releaseBoth.resolve();
+			try {
+				// On the old code the two JavaScript handler promises deadlock;
+				// avoid making teardown itself await that same cycle in the RED fixture.
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "reciprocal cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
 });
