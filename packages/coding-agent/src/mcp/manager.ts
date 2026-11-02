@@ -428,7 +428,7 @@ export class MCPManager {
 	// During active event callbacks, track only awaited cross-server disconnect
 	// edges. Two callbacks can otherwise await each other's streamProcessing
 	// forever. Per-edge refcounts preserve independent same-server callbacks.
-	#eventCrossDisconnectWaits = new Map<string, Map<string, number>>();
+	#eventCrossDisconnectWaits = new Map<string, Map<string, Map<{ active: boolean }, number>>>();
 	// Callback function equality is insufficient across clear/re-enable cycles.
 	#eventConsumerRevision = 0;
 	// Auxiliary writers have independent custody: a cursor/control/provider
@@ -1961,31 +1961,38 @@ export class MCPManager {
 		if (from === target) return true;
 		if (visited.has(from)) return false;
 		visited.add(from);
-		for (const [next, count] of this.#eventCrossDisconnectWaits.get(from) ?? []) {
-			if (count > 0 && this.#eventDisconnectCanReach(next, target, visited)) return true;
+		for (const [next, callbackCounts] of this.#eventCrossDisconnectWaits.get(from) ?? []) {
+			// A detached child's asynchronous disconnect may still be pending
+			// after its original callback returned. It is no longer a live
+			// streamProcessing wait edge and cannot cause a reciprocal deadlock.
+			const isLiveWait = Array.from(callbackCounts).some(([callback, count]) => callback.active && count > 0);
+			if (isLiveWait && this.#eventDisconnectCanReach(next, target, visited)) return true;
 		}
 		return false;
 	}
 
 	async #withEventCrossServerWait<T>(name: string, operation: () => Promise<T>): Promise<T> {
 		const scope = this.#eventCallbackContext.getStore();
-		const origin = scope?.active ? scope.serverName : undefined;
-		if (origin === undefined || origin === name) return operation();
+		if (!scope?.active || scope.serverName === name) return operation();
+		const origin = scope.serverName;
 		// Both a disconnect and a reconnect drain the target's active event
 		// handler. Preserve one-direction B-awaits-A, but explicitly reject a
 		// reciprocal wait instead of indefinitely awaiting JavaScript callbacks.
 		if (this.#eventDisconnectCanReach(name, origin)) {
 			throw new Error("cyclic MCP event disconnect/reconnect request rejected");
 		}
-		const edges = this.#eventCrossDisconnectWaits.get(origin) ?? new Map<string, number>();
-		edges.set(name, (edges.get(name) ?? 0) + 1);
+		const edges = this.#eventCrossDisconnectWaits.get(origin) ?? new Map<string, Map<{ active: boolean }, number>>();
+		const callbackCounts = edges.get(name) ?? new Map<{ active: boolean }, number>();
+		callbackCounts.set(scope, (callbackCounts.get(scope) ?? 0) + 1);
+		edges.set(name, callbackCounts);
 		this.#eventCrossDisconnectWaits.set(origin, edges);
 		try {
 			return await operation();
 		} finally {
-			const count = edges.get(name) ?? 0;
-			if (count <= 1) edges.delete(name);
-			else edges.set(name, count - 1);
+			const count = callbackCounts.get(scope) ?? 0;
+			if (count <= 1) callbackCounts.delete(scope);
+			else callbackCounts.set(scope, count - 1);
+			if (callbackCounts.size === 0) edges.delete(name);
 			if (edges.size === 0) this.#eventCrossDisconnectWaits.delete(origin);
 		}
 	}
