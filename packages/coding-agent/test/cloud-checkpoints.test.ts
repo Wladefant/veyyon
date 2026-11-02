@@ -65,6 +65,106 @@ describe("cloud checkpoints", () => {
 		expect(objects.size).toBe(2);
 		expect(await client.restore("s")).toEqual(large);
 	});
+	test("same-head concurrent commits share one encrypted operation and authority receipt", async () => {
+		let uploads = 0;
+		let commits = 0;
+		let releaseReply!: () => void;
+		let commitEntered!: () => void;
+		const replyGate = new Promise<void>(resolve => { releaseReply = resolve; });
+		const entered = new Promise<void>(resolve => { commitEntered = resolve; });
+		const fake: CheckpointFetch = async input => {
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith("/lease"))
+				return Response.json({
+					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (path.includes("/objects/")) {
+				uploads++;
+				return new Response(null, { status: 201 });
+			}
+			if (path.endsWith("/commit")) {
+				commits++;
+				commitEntered();
+				await replyGate;
+				return Response.json({ receipt: "shared" });
+			}
+			throw new Error(`Unexpected fake authority path: ${path}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		await client.acquireLease("s", "node-a");
+		const first = client.commit("s", bundle, 0);
+		const second = client.commit("s", bundle, 0);
+		try {
+			await entered;
+		} finally {
+			releaseReply();
+		}
+		expect(await Promise.all([first, second])).toEqual([{ receipt: "shared" }, { receipt: "shared" }]);
+		expect(uploads).toBe(1);
+		expect(commits).toBe(1);
+	});
+	test("a different concurrent same-head payload cannot replace the pending replay", async () => {
+		let uploads = 0;
+		let commits = 0;
+		const fake: CheckpointFetch = async input => {
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith("/lease"))
+				return Response.json({
+					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (path.includes("/objects/")) {
+				uploads++;
+				return new Response(null, { status: 201 });
+			}
+			if (path.endsWith("/commit")) {
+				commits++;
+				return Response.json({ receipt: "first" });
+			}
+			throw new Error(`Unexpected fake authority path: ${path}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		await client.acquireLease("s", "node-a");
+		const first = client.commit("s", bundle, 0);
+		const conflicting = client.commit("s", { ...bundle, artifacts: { different: "AA==" } }, 0);
+		await expect(conflicting).rejects.toThrow(/Pending checkpoint replay payload changed/);
+		expect(await first).toEqual({ receipt: "first" });
+		expect(uploads).toBe(1);
+		expect(commits).toBe(1);
+	});
+	test("an ambiguous same-head commit retries with the original idempotency key", async () => {
+		const keys: string[] = [];
+		const fake: CheckpointFetch = async (input, init) => {
+			const path = new URL(String(input)).pathname;
+			if (path.endsWith("/lease"))
+				return Response.json({
+					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (path.includes("/objects/")) return new Response(null, { status: 201 });
+			if (path.endsWith("/commit")) {
+				keys.push(JSON.parse(String(init?.body)).idempotencyKey);
+				if (keys.length === 1) throw new Error("synthetic ambiguous commit response");
+				return Response.json({ receipt: "reconciled" });
+			}
+			throw new Error(`Unexpected fake authority path: ${path}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		await client.acquireLease("s", "node-a");
+		const first = client.commit("s", bundle, 0);
+		const second = client.commit("s", bundle, 0);
+		await expect(Promise.all([first, second])).rejects.toThrow(/synthetic ambiguous commit response/);
+		expect(await client.commit("s", bundle, 0)).toEqual({ receipt: "reconciled" });
+		expect(keys).toHaveLength(2);
+		expect(new Set(keys).size).toBe(1);
+	});
 	test("is disabled by default and excludes credentials and caches", () => {
 		expect(CheckpointClient.fromEnv({}).enabled).toBe(false);
 		const files = ["src/a.ts", ".env", "node_modules/x", ".git/index", "package-lock.json"].map(path => ({
