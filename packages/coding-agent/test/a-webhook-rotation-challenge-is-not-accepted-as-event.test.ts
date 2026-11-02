@@ -22,7 +22,7 @@ function signedRequest(secret: Buffer, messageId: string, message: Record<string
 			"webhook-timestamp": timestamp,
 			"webhook-signature": `v1,${signature}`,
 		},
-		body,
+		body: body.toString("utf8"),
 	});
 }
 
