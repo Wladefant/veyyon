@@ -2008,6 +2008,34 @@ export class SessionManager {
 			if (referencedIds.size > 0) throw new Error("Cannot fork session: referenced artifacts unavailable");
 		}
 		if (sourceNames) {
+			// The full artifact tree is copied, not just files linked by retained
+			// messages. Refuse even an unrelated symlink (including a nested one):
+			// the ordinary artifact reader can otherwise follow the inherited link
+			// to bytes outside this session's evidence directory.
+			const assertSafeEntry = async (filename: string): Promise<boolean> => {
+				const stat = await fs.promises.lstat(filename);
+				if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+					throw new Error("Cannot fork session: unsafe artifact entry");
+				}
+				return stat.isDirectory();
+			};
+			const assertRegularTree = async (directory: string): Promise<void> => {
+				const pending = [directory];
+				while (pending.length > 0) {
+					const current = pending.pop()!;
+					if (!(await assertSafeEntry(current))) {
+						throw new Error("Cannot fork session: unsafe artifact tree");
+					}
+					for (const name of await fs.promises.readdir(current)) {
+						const child = path.join(current, name);
+						if (await assertSafeEntry(child)) pending.push(child);
+					}
+				}
+			};
+			// Check before copying to avoid publishing even a temporary linked
+			// destination on a known-bad input. The copy filter and destination
+			// check also reject links introduced during the copy itself.
+			await assertRegularTree(oldArtifactDir);
 			for (const id of referencedIds) {
 				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
 				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
@@ -2018,7 +2046,12 @@ export class SessionManager {
 			// Never overwrite a newly created destination with another fork's data.
 			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
 				recursive: true, force: false, errorOnExist: true,
+				filter: async source => {
+					await assertSafeEntry(source);
+					return true;
+				},
 			});
+			await assertRegularTree(nextArtifactDir);
 			const copiedNames = new Set(await fs.promises.readdir(nextArtifactDir));
 			if (sourceNames.some(name => !copiedNames.has(name))) {
 				throw new Error("Cannot fork session: artifact copy incomplete");
