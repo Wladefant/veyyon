@@ -198,7 +198,7 @@ describe("terminal ownership claims", () => {
 });
 
 describe("terminal ownership Windows ACL scan", () => {
-	it("checks the parent once and does not batch ACLs for seven unrelated records", async () => {
+	it("checks the parent once and verifies all seven unrelated records in one ACL batch", async () => {
 		const root = await tempRoot();
 		const sessionFile = path.join(root, "wanted.jsonl");
 		const directory = path.join(root, "run", "terminals");
@@ -225,7 +225,12 @@ describe("terminal ownership Windows ACL scan", () => {
 
 		await assertNotTerminalOwned(sessionFile, root, options);
 
-		expect(calls).toEqual([directory]);
+		// Unverified sessionFile bytes cannot prove non-ownership and admit a second writer.
+		expect(calls).toHaveLength(2);
+		expect(calls[0]).toBe(directory);
+		expect(JSON.parse(calls[1]!)).toEqual(
+			Array.from({ length: 7 }, (_, index) => path.join(directory, `unrelated-${index}.json`)),
+		);
 	});
 
 	it("refuses a matching loose ACL and reports the ACL cause", async () => {
