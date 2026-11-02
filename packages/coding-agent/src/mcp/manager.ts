@@ -442,6 +442,8 @@ export class MCPManager {
 	#reconnectHistory = new Map<string, number[]>();
 	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
 	#epoch = 0;
+	/** Active bulk teardowns gate NEW starts until every closing snapshot is settled. */
+	#bulkDisconnectCount = 0;
 
 	constructor(
 		private cwd: string,
@@ -1270,6 +1272,12 @@ export class MCPManager {
 		sources: Record<string, SourceMeta>,
 		onStatus?: (event: McpConnectionStatusEvent) => void,
 	): Promise<MCPLoadResult> {
+		// A NEW connection started after teardown increments #epoch would capture
+		// that new epoch and escape the stale-start guard. Refuse admission until
+		// every overlapping bulk teardown has finished closing its snapshot.
+		if (this.#bulkDisconnectCount > 0) {
+			throw new Error("MCP connect refused: bulk disconnect is in progress");
+		}
 		// A startup batch captures the teardown epoch before asynchronous
 		// initialization and optional cached-tool reads may yield.
 		const startupEpoch = this.#epoch;
@@ -1792,27 +1800,32 @@ export class MCPManager {
 	 * Disconnect from all servers.
 	 */
 	async disconnectAll(): Promise<void> {
-		// Invalidate any in-flight reconnection attempts that outlive this call.
-		// They captured the old epoch; after increment they'll detect staleness.
-		this.#epoch++;
-		await this.stopEvents();
-		// Detach onClose before closing to prevent spurious reconnect attempts
-		for (const conn of this.#connections.values()) {
-			conn.transport.onClose = undefined;
-		}
-		const promises = Array.from(this.#connections.values()).map(conn => disconnectServer(conn));
-		await Promise.allSettled(promises);
+		this.#bulkDisconnectCount++;
+		try {
+			// Invalidate any in-flight reconnection attempts that outlive this call.
+			// They captured the old epoch; after increment they'll detect staleness.
+			this.#epoch++;
+			await this.stopEvents();
+			// Detach onClose before closing to prevent spurious reconnect attempts
+			for (const conn of this.#connections.values()) {
+				conn.transport.onClose = undefined;
+			}
+			const promises = Array.from(this.#connections.values()).map(conn => disconnectServer(conn));
+			await Promise.allSettled(promises);
 
-		this.#pendingConnections.clear();
-		this.#pendingToolLoads.clear();
-		this.#pendingReconnections.clear();
-		this.#pendingResourceRefresh.clear();
-		this.#sources.clear();
-		this.#serverConfigs.clear();
-		this.#connections.clear();
-		this.#tools = [];
-		this.#subscribedResources.clear();
-		this.#reconnectHistory.clear();
+			this.#pendingConnections.clear();
+			this.#pendingToolLoads.clear();
+			this.#pendingReconnections.clear();
+			this.#pendingResourceRefresh.clear();
+			this.#sources.clear();
+			this.#serverConfigs.clear();
+			this.#connections.clear();
+			this.#tools = [];
+			this.#subscribedResources.clear();
+			this.#reconnectHistory.clear();
+		} finally {
+			this.#bulkDisconnectCount--;
+		}
 	}
 
 	/**
@@ -1830,6 +1843,9 @@ export class MCPManager {
 	 *   and the per-tool-call retry path in `tool-bridge` MUST NOT set it.
 	 */
 	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
+		// A reconnect beginning mid-shutdown would also capture its new epoch.
+		// Do not revive a server while disconnectAll is still closing transports.
+		if (this.#bulkDisconnectCount > 0) return null;
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
 			// An operator-driven reconnect is the recovery step after rotating a secret, so this
