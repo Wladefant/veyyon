@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+
 ## [1.7.7] - 2026-11-02
 
 - OVH CI now builds and verifies one native addon for selected test shards, then shares it with those shards; no user-facing change ([PR #900](https://github.com/Wladefant/veyyon/pull/900)).

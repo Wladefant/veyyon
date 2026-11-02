@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
@@ -5,12 +8,15 @@ import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/se
 import { driveFakeTime, installFakeTime } from "./helpers/fake-time";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
-
-// `executeBash` initializes the GLOBAL Settings singleton itself, so a session
 // stub alone leaves it loading the developer's real ~/.veyyon agent.db.
 useIsolatedGlobalSettings();
 
-function makeSession(bridge: ClientBridge): ToolSession {
+
+// `executeBash` initializes the GLOBAL Settings singleton itself, so a session
+function makeSession(
+	bridge: ClientBridge,
+	options: { artifactThreshold?: number; artifactDirectory?: string } = {},
+): ToolSession {
 	return makeToolSession({
 		cwd: "/tmp",
 		hasUI: false,
@@ -18,6 +24,7 @@ function makeSession(bridge: ClientBridge): ToolSession {
 		getSessionFile: () => null,
 		settings: {
 			get(key: string) {
+				if (key === "tools.artifactSpillThreshold") return options.artifactThreshold;
 				if (key === "async.enabled") return false;
 				if (key === "bash.autoBackground.enabled") return false;
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
@@ -37,6 +44,14 @@ function makeSession(bridge: ClientBridge): ToolSession {
 				return { shell: "/bin/bash", args: ["-l", "-c"], env: {}, prefix: undefined };
 			},
 		},
+		...(options.artifactDirectory
+			? {
+					allocateOutputArtifact: async (toolType: string) => ({
+						id: `${toolType}-output`,
+						path: join(options.artifactDirectory!, `${toolType}-output.txt`),
+					}),
+				}
+			: {}),
 		getClientBridge: () => bridge,
 	});
 }
@@ -199,14 +214,110 @@ describe("BashTool ACP terminal routing", () => {
 			() => undefined,
 			(error: unknown) => error,
 		);
-
 		expect(failure).toBeInstanceOf(Error);
 		expect((failure as Error).message).toMatch(/Command timed out after 1 seconds/);
-
 		expect(killSpy).toHaveBeenCalledTimes(1);
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
 		pendingExit.resolve({ exitCode: null, signal: "TERM" });
 	});
+	// ACP's cumulative snapshots can split an inventory assignment across previews.
+	// This covers previews, final reads, and spill data; output absent from terminal snapshots remains untested.
+	it("withholds inventory values from cumulative previews, final output, and spilled artifacts", async () => {
+		const inventory = "ALPHA=classified-alpha\nBETA=classified-beta\nGAMMA=classified-gamma\n";
+		const benignPrefix = "ordinary inventory row\n".repeat(4_000);
+		const rows = benignPrefix + inventory.repeat(100);
+		const snapshots = ["ALPHA=classified-", "ALPHA=classified-alpha\nBETA=classified-beta\n", rows];
+		let finalRead = false;
+		let snapshotIndex = 0;
+		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-inventory",
+			waitForExit: async () => pendingExit.promise,
+			currentOutput: async () => ({
+				output: finalRead ? rows : snapshots[Math.min(snapshotIndex++, snapshots.length - 1)]!,
+				truncated: false,
+			}),
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		const artifactDirectory = await mkdtemp(join(tmpdir(), "bash-acp-inventory-"));
+		try {
+			const tool = new BashTool(makeSession(bridge, { artifactThreshold: 1, artifactDirectory }));
+			const updates: string[] = [];
+			const running = tool.execute(
+				"call-inventory",
+				{ command: "printf '%s\\n' 'ALPHA=classified-alpha' 'BETA=classified-beta' 'GAMMA=classified-gamma'" },
+				undefined,
+				update => updates.push(update.content.map(item => (item.type === "text" ? item.text : "")).join("")),
+			);
+			installFakeTime();
+			setTimeout(() => {
+				finalRead = true;
+				pendingExit.resolve({ exitCode: 0, signal: null });
+			}, 600);
+			const result = await driveFakeTime(running);
+			expect(updates.length).toBeGreaterThan(0);
+			const text = result.content.find(item => item.type === "text")?.text ?? "";
+			expect(text).toContain("ordinary inventory row");
+			expect(text).toContain("artifact://bash-original-output");
+			const files = await readdir(artifactDirectory);
+			expect(files.length).toBeGreaterThan(0);
+			for (const file of files) {
+				const artifact = await readFile(join(artifactDirectory, file), "utf8");
+				expect(artifact).toContain("[credential output withheld]");
+				expect(artifact).not.toContain("ALPHA=classified-alpha");
+				expect(artifact).not.toContain("BETA=classified-beta");
+				expect(artifact).not.toContain("GAMMA=classified-gamma");
+			}
+			expect(text).toContain("[credential output withheld]");
+			for (const output of [...updates, text]) {
+				expect(output).not.toContain("ALPHA=classified-alpha");
+				expect(output).not.toContain("BETA=classified-beta");
+				expect(output).not.toContain("GAMMA=classified-gamma");
+			}
+		} finally {
+			await rm(artifactDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("withholds inventory values from the timeout final-read branch", async () => {
+		const inventory =
+			"ordinary inventory row\nALPHA=classified-alpha\nBETA=classified-beta\nGAMMA=classified-gamma\n";
+		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-timeout-inventory",
+			waitForExit: () => pendingExit.promise,
+			currentOutput: async () => ({ output: inventory, truncated: false }),
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		installFakeTime();
+		const tool = new BashTool(makeSession(bridge));
+		const failure = await driveFakeTime(
+			tool.execute("call-timeout-inventory", {
+				command: "printf '%s\\n' 'ALPHA=classified-alpha' 'BETA=classified-beta' 'GAMMA=classified-gamma'",
+				timeout: 1,
+			}),
+		).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toContain("ordinary inventory row");
+		expect((failure as Error).message).toContain("[credential output withheld]");
+		expect((failure as Error).message).not.toContain("ALPHA=classified-alpha");
+		expect((failure as Error).message).not.toContain("BETA=classified-beta");
+		expect((failure as Error).message).not.toContain("GAMMA=classified-gamma");
+	});
+
 
 	// The command deadline and the poll tick used to be `Bun.sleep` promises raced against the exit:
 	// a command that finished first left both armed, the deadline for the rest of its timeout, holding
