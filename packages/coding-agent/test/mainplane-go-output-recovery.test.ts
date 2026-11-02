@@ -108,9 +108,15 @@ function outputContext(file: string | undefined) {
 
 describe("registered Mainplane output recovery without execution", () => {
 	test("the actual opt-in tool reads owned Unicode pages, preserves failed-run exit and never POSTs", async () => {
-		const methods: string[] = [];
+		const requests: Array<{ url: string; method: string; redirect: string | undefined; authorization: string | null }> = [];
 		const bytesText = "a😀éz";
-		await withRegisteredOutputFixture(transportFor(bytesText, {}, method => methods.push(method)), async tool => {
+		const fixtureTransport = transportFor(bytesText);
+		const auditedTransport = (async (url: string, init: RequestInit) => {
+			requests.push({ url: String(url), method: init.method ?? "", redirect: init.redirect,
+				authorization: new Headers(init.headers).get("Authorization") });
+			return fixtureTransport(url, init);
+		}) as typeof fetch;
+		await withRegisteredOutputFixture(auditedTransport, async tool => {
 			const first = await tool.execute("display-one", { runId: input.runId, limit: 2 },
 				undefined, undefined, outputContext(input.sessionFile));
 			expect(first.isError).not.toBe(true);
@@ -129,7 +135,10 @@ describe("registered Mainplane output recovery without execution", () => {
 			});
 			expect(page2.output_sha256).toBe(page1.output_sha256);
 		});
-		expect(methods).toEqual(["GET", "GET", "GET", "GET"]);
+		const receiptRead = { url: "https://fleet.example/fleet/runs/run-fixture", method: "GET",
+			redirect: "error", authorization: "Bearer fixture-key" };
+		const artifactRead = { ...receiptRead, url: "https://fleet.example/fleet/runs/run-fixture/output" };
+		expect(requests).toEqual([receiptRead, artifactRead, receiptRead, artifactRead]);
 	});
 
 	test("a missing session, a foreign receipt and an uncertain receipt refuse before output fetch", async () => {
