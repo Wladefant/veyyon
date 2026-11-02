@@ -318,14 +318,17 @@ describe("MCPManager event subscription contracts", () => {
 				releaseSuccessor.resolve({ id: "cleanup-id", cursor: "cleanup", refreshBefore: null });
 				try {
 					if (stoppingA) await withinHandlerChange(stoppingA, "retiring pending stop cleanup");
-					await withinHandlerChange(manager.disconnectAll(), "same-path ownership cleanup");
 				} finally {
-					serverA.stop();
-					serverB.stop();
-					if (oldRetiredEnv === undefined) delete process.env[retiredEnvName];
-					else process.env[retiredEnvName] = oldRetiredEnv;
-					if (oldSuccessorEnv === undefined) delete process.env[successorEnvName];
-					else process.env[successorEnvName] = oldSuccessorEnv;
+					try {
+						await withinHandlerChange(manager.disconnectAll(), "same-path ownership cleanup");
+					} finally {
+						serverA.stop();
+						serverB.stop();
+						if (oldRetiredEnv === undefined) delete process.env[retiredEnvName];
+						else process.env[retiredEnvName] = oldRetiredEnv;
+						if (oldSuccessorEnv === undefined) delete process.env[successorEnvName];
+						else process.env[successorEnvName] = oldSuccessorEnv;
+					}
 				}
 			}
 		}
