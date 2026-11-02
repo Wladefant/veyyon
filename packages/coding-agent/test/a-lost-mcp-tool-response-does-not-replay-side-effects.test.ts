@@ -310,7 +310,17 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 			recoveredCalls++;
 			return completedResult("explicit third call");
 		}));
-		const tool = new MCPTool(original, writeTool, async () => {
+		const tool = new MCPTool(original, {
+			...writeTool,
+			inputSchema: {
+				type: "object",
+				properties: {
+					value: { type: "string" },
+					additional: { type: "array", items: { type: "string" } },
+				},
+				required: ["value"],
+			},
+		}, async () => {
 			reconnects++;
 			return recovered;
 		});
@@ -337,7 +347,8 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		// to the replacement selected by the later explicit invocation.
 		expect(originalCalls).toBe(2);
 		expect(recoveredCalls).toBe(0);
-		expect(reconnects).toBe(2);
+		// A's superseded failure may not restart or replace B's live transport.
+		expect(reconnects).toBe(1);
 
 		const third = await boundedUnknownOutcome(
 			tool.execute("third-explicit", { value: "third" }, undefined, context),
