@@ -382,6 +382,12 @@ export class SessionManager {
 	#nextSequence = 1;
 	#lifecycleStarted = false;
 	#lifecycleEnded = false;
+	/**
+	 * A rejected source-writer close can leave this fork's own terminal marker
+	 * appended to the old JSONL. Exclude only those exact IDs from foreign-writer
+	 * preservation until the original file is successfully republished.
+	 */
+	#abortedForkLifecycleIdsByFile = new Map<string, Set<string>>();
 
 	/** File reflects all current entries; appends can go incrementally. */
 	#fileIsCurrent = false;
@@ -983,6 +989,9 @@ export class SessionManager {
 	 */
 	#adoptForeignLines(text: string): void {
 		const foreign: string[] = [];
+		const abortedForkIds = this.#sessionFile
+			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
+			: undefined;
 		let liveWriterEntries = 0;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
@@ -1003,7 +1012,7 @@ export class SessionManager {
 			// and a header belongs to whoever owns the file's identity.
 			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
-			if (!id || this.#isOwnId(id)) continue;
+			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
 		}
@@ -1317,6 +1326,9 @@ export class SessionManager {
 			identity = undefined;
 		}
 		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+		// The old file has now been durably republished without our cancelled
+		// lifecycle marker; later genuine foreign entries still remain intact.
+		this.#abortedForkLifecycleIdsByFile.delete(this.#sessionFile);
 	}
 
 	/**
@@ -2094,6 +2106,9 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;
+		// A direct caller may retry fork without an AgentSession-level flush.
+		// Repair its still-active original JSONL before leaving that file behind.
+		if (this.#abortedForkLifecycleIdsByFile.has(oldSessionFile)) await this.flush();
 		const parentSessionId = this.#sessionId;
 		const timestamp = nowIso();
 		const nextSessionId = mintSessionId();
@@ -2109,8 +2124,32 @@ export class SessionManager {
 			parentSessionId,
 		);
 
-		this.#endLifecycle("session_switched");
-		await this.#drainAndCloseWriter();
+		const beforeSwitch = this.captureState();
+		try {
+			this.#endLifecycle("session_switched");
+			await this.#drainAndCloseWriter();
+		} catch (error) {
+			// A close error may occur after the end marker has reached the old file,
+			// but before either identity or path changes. Ordinary AgentSession
+			// identity guards cannot detect that abandoned lifecycle transition.
+			const appended = this.#entries.at(-1);
+			if (
+				this.#entries.length > beforeSwitch.entries.length &&
+				appended?.type === "session_lifecycle" &&
+				appended.state === "ended" &&
+				appended.reason === "session_switched"
+			) {
+				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
+				aborted.add(appended.id);
+				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+			}
+			try {
+				this.restoreState({ ...beforeSwitch, needsRewrite: true });
+			} catch (restoreError) {
+				throw new AggregateError([error, restoreError], "Fork failed and could not restore the active source");
+			}
+			throw error;
+		}
 		this.#clearDiskError();
 		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
