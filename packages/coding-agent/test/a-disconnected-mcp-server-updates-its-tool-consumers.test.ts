@@ -1,4 +1,5 @@
 import { expect, it } from "bun:test";
+import type { MCPRequestOptions, MCPToolsListResult } from "../src/mcp/types";
 import * as path from "node:path";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import { createMCPToolName } from "@veyyon/coding-agent/mcp/tool-bridge";
@@ -134,3 +135,72 @@ it("overlapping MCP server name prefixes keep sibling tools on refresh and disco
 		await manager.disconnectAll();
 	}
 }, 35_000);
+
+
+// WHY: refreshServerTools awaits the external tools/list reply after taking a
+// connection snapshot. A late successful reply after disconnect must not
+// resurrect that server's tools. Only the transport's response-completion
+// boundary is delayed; real manager/stdio connection/cleanup paths are used.
+// This synthetic fixture is not evidence of a live T3 transport doing this.
+it("does not republish tools from a refresh completed after server disconnect", async () => {
+	const name = "late-refresh-owner";
+	const loaded = Promise.withResolvers<void>();
+	const refreshEntered = Promise.withResolvers<void>();
+	const lateReply = Promise.withResolvers<MCPToolsListResult>();
+	const observed: string[][] = [];
+	const expected = Array.from({ length: MANY_TOOL_COUNT }, (_, i) => createMCPToolName(name, manyToolName(i)));
+	const manager = new MCPManager(process.cwd());
+	manager.setOnToolsChanged(tools => {
+		const names = tools.map(tool => tool.name);
+		observed.push(names);
+		if (expected.every(toolName => names.includes(toolName))) loaded.resolve();
+	});
+	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
+		const deadline = Promise.withResolvers<never>();
+		const timer = setTimeout(() => deadline.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
+		try {
+			return await Promise.race([work, deadline.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+	try {
+		const fixture = { type: "stdio" as const, command: process.execPath, args: [FIXTURE_PATH] };
+		await bounded(manager.connectServers({ [name]: fixture }, {}), "initial connection");
+		await bounded(loaded.promise, "initial registry load");
+		const connection = await bounded(manager.waitForConnection(name), "active stdio connection");
+		const transport = connection.transport;
+		const realRequest = transport.request;
+		transport.request = async <T = unknown>(
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		): Promise<T> => {
+			if (method === "tools/list") {
+				refreshEntered.resolve();
+				return (await lateReply.promise) as T;
+			}
+			return realRequest.call(transport, method, params, options) as Promise<T>;
+		};
+		try {
+			const refresh = manager.refreshServerTools(name);
+			await bounded(refreshEntered.promise, "delayed tools/list");
+			await bounded(manager.disconnectServer(name), "disconnect before delayed reply");
+			expect(manager.getTools()).toEqual([]);
+			const notificationsAfterDisconnect = observed.length;
+			lateReply.resolve({
+				tools: [{ name: "late_tool", inputSchema: { type: "object", properties: {} } }],
+			});
+			await bounded(refresh, "late response");
+			expect(manager.getTools()).toEqual([]);
+			expect(observed).toHaveLength(notificationsAfterDisconnect);
+			expect(manager.getConnectedServers()).not.toContain(name);
+		} finally {
+			lateReply.resolve({ tools: [] });
+			transport.request = realRequest;
+		}
+	} finally {
+		lateReply.resolve({ tools: [] });
+		await bounded(manager.disconnectAll(), "manager cleanup");
+	}
+}, 30_000);
