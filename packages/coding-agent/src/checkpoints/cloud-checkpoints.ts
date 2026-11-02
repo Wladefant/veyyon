@@ -461,7 +461,9 @@ export class CheckpointClient {
 			objects.push({ hash, size: chunk.byteLength });
 		}
 		await this.assertWritable(sessionId, lease.epoch);
-		const result = await this.#request(`/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
+		const manifest = { version: 1 as const, sessionId, sequence: expectedHead + 1, objects };
+		const expectedManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+		const result = await this.#request<unknown>(`/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -469,9 +471,22 @@ export class CheckpointClient {
 				epoch: lease.epoch,
 				expectedHead,
 				idempotencyKey: pending.idempotencyKey,
-				manifest: { version: 1, sessionId, sequence: expectedHead + 1, objects },
+				manifest,
 			}),
 		});
+		// A 2xx response alone cannot prove that the requested journal was committed.
+		// Preserve the original idempotency key on a malformed/uncertain receipt.
+		if (
+			!result ||
+			typeof result !== "object" ||
+			!("sequence" in result) ||
+			!("manifestHash" in result) ||
+			!("manifest" in result) ||
+			result.sequence !== manifest.sequence ||
+			result.manifestHash !== expectedManifestHash ||
+			JSON.stringify(result.manifest) !== JSON.stringify(manifest)
+		)
+			throw new Error("Checkpoint authority commit receipt mismatch");
 		this.#pendingCommits.delete(operation);
 		return result;
 	}

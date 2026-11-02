@@ -17,6 +17,18 @@ const bundle: CheckpointBundle = {
 	workspace: { dirty: ["src/a.ts"], files: [] },
 	pins: { bun: "1", commit: "a".repeat(40), runtime: "v1" },
 };
+// Mirror the pinned authority Worker commit response, not a generic HTTP 200.
+function commitHeadForRequest(init?: RequestInit) {
+	const { manifest } = JSON.parse(String(init?.body)) as {
+		manifest: { version: 1; sessionId: string; sequence: number; objects: { hash: string; size: number }[] };
+	};
+	return {
+		sequence: manifest.sequence,
+		manifestHash: new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex"),
+		manifest,
+	};
+}
+
 describe("cloud checkpoints", () => {
 	test("round trips ciphertext larger than the service object cap", async () => {
 		const objects = new Map<string, Uint8Array>();
@@ -72,7 +84,7 @@ describe("cloud checkpoints", () => {
 		let commitEntered!: () => void;
 		const replyGate = new Promise<void>(resolve => { releaseReply = resolve; });
 		const entered = new Promise<void>(resolve => { commitEntered = resolve; });
-		const fake: CheckpointFetch = async input => {
+		const fake: CheckpointFetch = async (input, init) => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
@@ -87,7 +99,7 @@ describe("cloud checkpoints", () => {
 				commits++;
 				commitEntered();
 				await replyGate;
-				return Response.json({ receipt: "shared" });
+				return Response.json(commitHeadForRequest(init));
 			}
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
@@ -102,14 +114,16 @@ describe("cloud checkpoints", () => {
 		} finally {
 			releaseReply();
 		}
-		expect(await Promise.all([first, second])).toEqual([{ receipt: "shared" }, { receipt: "shared" }]);
+		const outcomes = await Promise.all([first, second]);
+		expect(outcomes).toEqual([outcomes[0], outcomes[0]]);
+		expect(outcomes[0]).toMatchObject({ sequence: 1 });
 		expect(uploads).toBe(1);
 		expect(commits).toBe(1);
 	});
 	test("a different concurrent same-head payload cannot replace the pending replay", async () => {
 		let uploads = 0;
 		let commits = 0;
-		const fake: CheckpointFetch = async input => {
+		const fake: CheckpointFetch = async (input, init) => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
@@ -122,7 +136,7 @@ describe("cloud checkpoints", () => {
 			}
 			if (path.endsWith("/commit")) {
 				commits++;
-				return Response.json({ receipt: "first" });
+				return Response.json(commitHeadForRequest(init));
 			}
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
@@ -133,7 +147,7 @@ describe("cloud checkpoints", () => {
 		const first = client.commit("s", bundle, 0);
 		const conflicting = client.commit("s", { ...bundle, artifacts: { different: "AA==" } }, 0);
 		await expect(conflicting).rejects.toThrow(/Pending checkpoint replay payload changed/);
-		expect(await first).toEqual({ receipt: "first" });
+		expect(await first).toMatchObject({ sequence: 1 });
 		expect(uploads).toBe(1);
 		expect(commits).toBe(1);
 	});
@@ -150,7 +164,7 @@ describe("cloud checkpoints", () => {
 			if (path.endsWith("/commit")) {
 				keys.push(JSON.parse(String(init?.body)).idempotencyKey);
 				if (keys.length === 1) throw new Error("synthetic ambiguous commit response");
-				return Response.json({ receipt: "reconciled" });
+				return Response.json(commitHeadForRequest(init));
 			}
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
@@ -161,10 +175,46 @@ describe("cloud checkpoints", () => {
 		const first = client.commit("s", bundle, 0);
 		const second = client.commit("s", bundle, 0);
 		await expect(Promise.all([first, second])).rejects.toThrow(/synthetic ambiguous commit response/);
-		expect(await client.commit("s", bundle, 0)).toEqual({ receipt: "reconciled" });
+		expect(await client.commit("s", bundle, 0)).toMatchObject({ sequence: 1 });
 		expect(keys).toHaveLength(2);
 		expect(new Set(keys).size).toBe(1);
 	});
+
+	test("an unverified 200 commit receipt retains the original idempotency key for reconciliation", async () => {
+		const corruptions = [
+			{ name: "missing receipt", change: (_head: ReturnType<typeof commitHeadForRequest>) => null },
+			{ name: "wrong sequence", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, sequence: head.sequence + 1 }) },
+			{ name: "wrong manifest hash", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, manifestHash: "0".repeat(64) }) },
+			{ name: "wrong manifest", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, manifest: { ...head.manifest, sessionId: "other-session" } }) },
+		];
+		for (const corruption of corruptions) {
+			let commitCalls = 0;
+			const keys: string[] = [];
+			const fake: CheckpointFetch = async (input, init) => {
+				const path = new URL(String(input)).pathname;
+				if (path.endsWith("/lease")) return Response.json({
+					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+				if (path.includes("/objects/")) return new Response(null, { status: 201 });
+				if (path.endsWith("/commit")) {
+					keys.push(JSON.parse(String(init?.body)).idempotencyKey);
+					const head = commitHeadForRequest(init);
+					return Response.json(++commitCalls === 1 ? corruption.change(head) : head);
+				}
+				throw new Error(`Unexpected authority call in ${corruption.name}: ${path}`);
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			});
+			await client.acquireLease("s", "node-a");
+			await expect(client.commit("s", bundle, 0)).rejects.toThrow(/commit receipt mismatch/);
+			expect(await client.commit("s", bundle, 0)).toMatchObject({ sequence: 1 });
+			expect(commitCalls).toBe(2);
+			expect(new Set(keys).size).toBe(1);
+		}
+	});
+
 	test("is disabled by default and excludes credentials and caches", () => {
 		expect(CheckpointClient.fromEnv({}).enabled).toBe(false);
 		const files = ["src/a.ts", ".env", "node_modules/x", ".git/index", "package-lock.json"].map(path => ({
