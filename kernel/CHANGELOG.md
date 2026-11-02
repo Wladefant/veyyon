@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Terminal ownership failures name the record, verification step, original error code and message, elapsed time, and Windows ACL command deadline. Ownership checks still fail closed without retries ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
 ## [1.6.0] - 2026-10-28
 
 ### Added
