@@ -701,10 +701,18 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       expect(await fs.stat(failedTarget).then(() => true, () => false)).toBe(false);
       expect(await fs.readFile(breadcrumbFile, "utf8")).toBe(originalBreadcrumb);
       expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+
+      // A later ordinary durable retry must advance the pointer ONLY after the
+      // previously refused fork has finally published, rather than stranding
+      // recovery at the parent forever after a transient storage outage.
+      storage.rejectNewSession = false;
+      await manager.flush();
+      expect((await fs.stat(failedTarget)).isFile()).toBe(true);
+      const recoveredBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
+      expect(recoveredBreadcrumb.split(/\\r?\\n/)[1]).toBe(failedTarget);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
     } finally {
-      // The manager remains latched at the injected fault; do not recover it by
-      // publishing a synthetic destination during cleanup.
-      try { await manager?.close(); } catch { /* expected injected persistence fault */ }
+      try { await manager?.close(); } catch { /* injected failure may remain latched on an early assertion */ }
       if (previousTerminalId === undefined) delete process.env.TERM_SESSION_ID;
       else process.env.TERM_SESSION_ID = previousTerminalId;
       restoreDirOverrides(overrides);
