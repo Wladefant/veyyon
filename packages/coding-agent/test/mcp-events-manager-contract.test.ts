@@ -3016,7 +3016,10 @@ describe("MCPManager event subscription contracts", () => {
 			await withinHandlerChange(connect(manager, "independent-stop-webhooks", managerConfig(server, {
 				enabled: true, subscriptions: subs,
 			})), "initial two webhook registrations");
-			await withinHandlerChange(Promise.all([firstSlow.promise, firstIndependent.promise]), "both initial webhook cursors");
+			await withinHandlerChange(
+				Promise.all([firstSlow.promise, firstIndependent.promise]),
+				"both initial webhook cursors",
+			);
 			expect(manager.getActiveEventSubscriptionCount("independent-stop-webhooks")).toBe(2);
 			stopping = manager.stopEvents();
 			await withinHandlerChange(slowUnsubscribeEntered.promise, "slow old webhook unsubscribe");
