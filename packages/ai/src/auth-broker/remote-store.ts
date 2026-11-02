@@ -1059,19 +1059,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#appliedSnapshotRevision += 1;
 	}
 
-	#deleteSnapshotBlocks(credentialId: number): void {
-		const index = this.#snapshot.credentials.findIndex(entry => entry.id === credentialId);
-		if (index === -1) return;
-		const entry = this.#snapshot.credentials[index]!;
-		if (!entry.blocks || entry.blocks.length === 0) return;
-		const next: SnapshotEntry = { ...entry };
-		delete next.blocks;
-		const credentials = this.#snapshot.credentials.slice();
-		credentials[index] = next;
-		this.#snapshot = { ...this.#snapshot, credentials };
-		this.#appliedSnapshotRevision += 1;
-	}
-
 	#pruneExpiredCredentialBlocks(nowMs: number): void {
 		let changed = false;
 		const credentials = this.#snapshot.credentials.map(entry => {
