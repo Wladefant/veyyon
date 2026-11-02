@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { errorMessage, getConfigRootDir, logger, type OwnerOnlyReadOptions, readOwnerOnlyFiles } from "@veyyon/utils";
+import { errorMessage, getConfigRootDir, logger, type OwnerOnlyReadOptions, readOwnerOnlyFiles, WINDOWS_ACL_TIMEOUT_MS } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -39,6 +39,9 @@ export async function assertNotTerminalOwned(
 	const target = process.platform === "win32" ? resolved.toLowerCase() : resolved;
 	const recordPaths = files.filter(file => file.endsWith(".json")).map(file => path.join(directory, file));
 	let records: string[];
+	const record = recordPaths.join(", ");
+	const started = performance.now();
+	let step = "open";
 	try {
 		records = await readOwnerOnlyFiles(
 			recordPaths,
@@ -52,11 +55,16 @@ export async function assertNotTerminalOwned(
 					return true;
 				}
 			},
-			options,
+			{ ...options, onStep: current => { step = current; options.onStep?.(current); } },
 		);
 	} catch (error) {
 		logger.warn("Cannot establish terminal writer ownership", { path: directory, reason: errorMessage(error) });
-		throw new Error("Cannot establish terminal writer ownership", { cause: error });
+		const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "unknown");
+		const detail = errorMessage(error);
+		throw new Error(
+			`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${detail}`,
+			{ cause: error },
+		);
 	}
 	for (const record of records) {
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
@@ -67,7 +75,11 @@ export async function assertNotTerminalOwned(
 				path: directory,
 				reason: "Invalid discovery JSON",
 			});
-			throw new Error("Cannot establish terminal writer ownership", { cause: error });
+			const code = error instanceof Error ? error.name : "unknown";
+			throw new Error(
+				`Cannot establish terminal writer ownership: ${recordPaths.join(", ")}; step=parse; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${errorMessage(error)}`,
+				{ cause: error },
+			);
 		}
 		if (
 			owner?.version !== 1 ||
