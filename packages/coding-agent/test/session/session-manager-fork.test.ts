@@ -295,6 +295,71 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 		}
 	});
 
+
+  it("refuses occupied named transcript or artifact destinations without overwriting their evidence", async () => {
+    using temp = TempDir.createSync("@veyyon-forkfrom-occupied-target-");
+    const cwd = path.join(temp.path(), "project");
+    const sessions = path.join(temp.path(), "sessions");
+    const source = SessionManager.create(cwd, sessions);
+    let forked: SessionManager | undefined;
+    try {
+      source.appendMessage({
+        role: "user", content: "Original synthetic source history", timestamp: Date.now(),
+      });
+      await source.flush();
+      const sourceFile = source.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable source transcript");
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+
+      // Distinct existing destination JSONL: an unnamed new manager must not
+      // silently replace another session simply because its path is pinned.
+      const occupiedFile = path.join(sessions, "occupied-history.jsonl");
+      const occupiedHeader: SessionHeader = {
+        type: "session", version: CURRENT_SESSION_VERSION,
+        id: "synthetic-other-session", timestamp: new Date().toISOString(), cwd,
+      };
+      const occupiedBytes = `${JSON.stringify(occupiedHeader)}\n${JSON.stringify({
+        type: "message", id: "other-message", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Other history must survive", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(occupiedFile, occupiedBytes);
+      await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+        sessionFile: occupiedFile, suppressBreadcrumb: true,
+      })).rejects.toThrow(/destination.*already exists/i);
+      expect(await fs.readFile(occupiedFile, "utf8")).toBe(occupiedBytes);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+
+      // A destination without JSONL may already own a different session's
+      // artifact sidecar. Do not publish a fork that adopts those old bytes.
+      const sidecarFile = path.join(sessions, "occupied-evidence.jsonl");
+      const sidecarDir = sidecarFile.slice(0, -".jsonl".length);
+      await fs.mkdir(sidecarDir);
+      const otherArtifact = path.join(sidecarDir, "0.bash.log");
+      await fs.writeFile(otherArtifact, "unrelated synthetic output");
+      await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+        sessionFile: sidecarFile, suppressBreadcrumb: true,
+      })).rejects.toThrow(/destination.*already exists/i);
+      expect(await Bun.file(sidecarFile).exists()).toBe(false);
+      expect(await fs.readFile(otherArtifact, "utf8")).toBe("unrelated synthetic output");
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+
+      // Positive twin: a clean pinned destination remains supported.
+      const cleanFile = path.join(sessions, "clean-fork.jsonl");
+      forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+        sessionFile: cleanFile, suppressBreadcrumb: true,
+      });
+      expect(forked.getSessionFile()).toBe(cleanFile);
+      expect((await fs.stat(cleanFile)).isFile()).toBe(true);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(occupiedFile, "utf8")).toBe(occupiedBytes);
+      expect(await fs.readFile(otherArtifact, "utf8")).toBe("unrelated synthetic output");
+    } finally {
+      await forked?.close();
+      await source.close();
+    }
+  });
+
 });
 
 describe("SessionManager.fork preserves inherited artifact evidence", () => {
