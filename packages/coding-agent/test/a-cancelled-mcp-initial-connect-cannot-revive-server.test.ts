@@ -812,7 +812,9 @@ it("bulk MCP teardown joins a concurrent per-server close without a duplicate cl
 it("a single-server MCP disconnect joins bulk-owned close without another transport close attempt", async () => {
 	const names = { a: "bulk-first-close-a", b: "bulk-first-close-b" };
 	const aCloseEntered = Promise.withResolvers<void>();
+	const bCloseEntered = Promise.withResolvers<void>();
 	const releaseAClose = Promise.withResolvers<void>();
+	const releaseBClose = Promise.withResolvers<void>();
 	let aCloseCalls = 0;
 	let bCloseCalls = 0;
 	let aDeletes = 0;
@@ -887,11 +889,13 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		};
 		b.transport.close = async () => {
 			bCloseCalls++;
+			bCloseEntered.resolve();
+			await releaseBClose.promise;
 			await closeB();
 		};
 
 		bulk = manager.disconnectAll();
-		await withinConnectBoundary(aCloseEntered.promise, "bulk first A close entered");
+		await withinConnectBoundary(Promise.all([aCloseEntered.promise, bCloseEntered.promise]), "bulk peer closes entered");
 		// Reverse of the existing single-first test: this second public API
 		// call must join the bulk-owned A close, not call transport.close again.
 		single = manager.disconnectServer(names.a);
@@ -901,7 +905,15 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		await new Promise<void>(resolve => setImmediate(resolve));
 		expect(aCloseCalls).toBe(1);
 		releaseAClose.resolve();
-		await withinConnectBoundary(Promise.all([bulk, single]), "bulk-first joined disconnect");
+		// B is still closing. Awaiting the PUBLIC A disconnect must mean its
+		// registry/config/tool teardown has completed, not only transport.close().
+		await withinConnectBoundary(single, "public A disconnect before B release");
+		expect(manager.getServerConfig(names.a)).toBeUndefined();
+		expect(manager.getTools().filter(tool => tool.mcpServerName === names.a)).toEqual([]);
+		// This deliberate intermediate-state assertion is what the old raw
+		// bulk-owned close promise violates while B remains held.
+		releaseBClose.resolve();
+		await withinConnectBoundary(bulk, "bulk-first joined disconnect");
 		expect(aCloseCalls).toBe(1);
 		expect(bCloseCalls).toBe(1);
 		expect(aDeletes).toBe(1);
@@ -919,6 +931,7 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		expect(manager.getTools().filter(tool => tool.mcpServerName === names.a)).toHaveLength(1);
 	} finally {
 		releaseAClose.resolve();
+		releaseBClose.resolve();
 		try {
 			if (single) await withinConnectBoundary(single, "bulk-first single cleanup");
 			if (bulk) await withinConnectBoundary(bulk, "bulk-first bulk cleanup");
