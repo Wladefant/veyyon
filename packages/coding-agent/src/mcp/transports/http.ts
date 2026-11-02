@@ -37,6 +37,10 @@ import {
 } from "./transport-failure";
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
+// A single untrusted SSE event must not fan out unbounded work or log volume.
+const MAX_HTTP_SSE_BATCH_MEMBERS = 256;
+// Count request handling AND its HTTP response delivery in the same budget.
+const MAX_PENDING_HTTP_SSE_SERVER_REQUESTS = 32;
 
 
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
@@ -119,6 +123,7 @@ export class HttpTransport implements MCPTransport {
 	#sseConnection: AbortController | null = null;
 	#streamRequests = new Map<string | number, AbortController>();
 	#requestController = new AbortController();
+	#pendingSSEServerRequests = 0;
 
 	onClose?: () => void;
 	onError?: (error: Error) => void;
@@ -243,37 +248,48 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
-	/** Validate each untrusted SSE message (including every batch member) before routing it. */
+	/** Validate and admit an untrusted SSE event using bounded per-frame work. */
 	#dispatchSSEMessage(message: unknown): void {
-		if (Array.isArray(message)) {
-			for (const m of message) {
-				// JSON-RPC batches are flat. Never recursively traverse untrusted
-				// nested arrays: deep nesting could terminate the whole SSE listener.
-				if (Array.isArray(m)) {
-					logger.warn("Skipping invalid nested MCP HTTP SSE batch member");
+		const members = Array.isArray(message) ? message : [message];
+		if (members.length > MAX_HTTP_SSE_BATCH_MEMBERS) {
+			// Reject the complete oversized batch: partial execution could leave
+			// other batch requests awaiting replies after a truncated dispatch.
+			logger.warn("Skipping oversized MCP HTTP SSE message batch");
+			return;
+		}
+		let invalidMember = false;
+		let requestCapacityExceeded = false;
+		for (const member of members) {
+			// JSON-RPC batches are flat; nested arrays and malformed envelopes
+			// must never reach callbacks or recurse into untrusted structures.
+			if (Array.isArray(member) || !isStreamMessage(member)) {
+				invalidMember = true;
+				continue;
+			}
+			// Server-to-client request: has both method and id.
+			if ("method" in member && "id" in member && member.id != null) {
+				if (this.#pendingSSEServerRequests >= MAX_PENDING_HTTP_SSE_SERVER_REQUESTS) {
+					requestCapacityExceeded = true;
 					continue;
 				}
-				this.#dispatchSSEMessage(m);
+				this.#pendingSSEServerRequests++;
+				void answerServerRequest(this.onRequest, member as JsonRpcRequest)
+					.then(body => this.#sendServerResponse(body))
+					.catch(() => logger.warn("MCP HTTP SSE server request could not be completed"))
+					.finally(() => {
+						this.#pendingSSEServerRequests--;
+					});
+				continue;
 			}
-			return;
+			// Notification: has method but no id.
+			if ("method" in member && !("id" in member)) {
+				this.onNotification?.(member.method, member.params);
+			}
 		}
-		// A malformed GET-listener frame must not terminate its stream or
-		// reach the tool-consumer or server-to-client request callbacks.
-		if (!isStreamMessage(message)) {
-			logger.warn("Skipping invalid MCP HTTP SSE stream frame");
-			return;
-		}
-		// Server-to-client request: has both method and id
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(body =>
-				this.#sendServerResponse(body),
-			);
-			return;
-		}
-		// Notification: has method but no id
-		if ("method" in message && !("id" in message)) {
-			this.onNotification?.(message.method, message.params);
-		}
+		// At most one static warning of each kind per SSE frame, regardless of
+		// how many invalid or over-capacity members the peer supplied.
+		if (invalidMember) logger.warn("Skipping invalid MCP HTTP SSE batch member");
+		if (requestCapacityExceeded) logger.warn("MCP HTTP SSE server request capacity exceeded");
 	}
 
 	streamRequest(
