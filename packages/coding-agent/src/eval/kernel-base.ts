@@ -6,9 +6,9 @@ import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLine
 import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
+import { ProducerOutputGuard } from "../secrets/producer-output";
 import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
 import { type KernelDisplayOutput, renderKernelDisplay } from "./py/display";
-import { ProducerOutputGuard } from "../secrets/producer-output";
 import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "./py/spawn-options";
 
 export type KernelRuntimeEnv = Record<string, string | null>;
@@ -983,7 +983,10 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		// fd 2 is process-scoped and unframed, so it cannot inherit a request's owner.
 		// Use the inventory/credential guard without capturing whichever producer starts
 		// the long-lived kernel first.
-		const guard = new ProducerOutputGuard(text => text, () => 0);
+		const guard = new ProducerOutputGuard(
+			text => text,
+			() => 0,
+		);
 		const log = (text: string): void => {
 			const guarded = guard.push(text);
 			if (guarded.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: guarded });
