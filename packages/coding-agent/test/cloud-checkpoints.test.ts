@@ -7,6 +7,7 @@ import {
 	encryptCheckpointBundle,
 	filterCheckpointFiles,
 } from "../src/checkpoints/cloud-checkpoints";
+import { SynchronizedSession } from "../src/checkpoints/synchronized-session";
 
 const bundle: CheckpointBundle = {
 	version: 1,
@@ -661,5 +662,92 @@ test("definite transfer refusals are not replayed while ambiguous statuses retry
 		).rejects.toThrow(new RegExp(`HTTP ${status}`));
 		expect(transfers).toBe(expectedCalls);
 		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
+	}
+});
+
+
+// WHY: HTTP 200 from /finalize does not prove the one-use resume capability
+// was promoted. A false-success receipt must not unlock the transferred session.
+test("checkpoint finalization accepts only affirmative authority receipts", async () => {
+	const cases = [
+		{ name: "missing", receipt: null, valid: false },
+		{ name: "negative", receipt: { ok: false }, valid: false },
+		{ name: "wrong-type", receipt: { ok: "true" }, valid: false },
+		{ name: "no-ok-field", receipt: {}, valid: false },
+		{ name: "confirmed", receipt: { ok: true }, valid: true },
+	] as const;
+	for (const scenario of cases) {
+		const actions: string[] = [];
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop()!;
+			actions.push(action);
+			if (action === "claim") return Response.json({
+				ownerNode: "runtime-owner", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+				resumeToken: "a-long-enough-pending-resume-capability",
+			});
+			if (action === "finalize") return Response.json(scenario.receipt);
+			throw new Error(`Unexpected fake authority call: ${action}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		const sessionId = `confirm-${scenario.name}`;
+		const grant = await client.claimTransfer(
+			sessionId, "destination-device", "transfer-1",
+			"a-long-enough-claim-capability", 4, "runtime-owner",
+		);
+		const request = client.finalizeTransfer(
+			sessionId, "destination-device", "transfer-1",
+			4, grant.lease.epoch, grant.resumeToken,
+		);
+		if (scenario.valid) await expect(request).resolves.toBeUndefined();
+		else await expect(request).rejects.toThrow(/finalization receipt mismatch/);
+		expect(actions).toEqual(["claim", "finalize"]);
+	}
+});
+
+test("nonconfirming transfer finalization fences session admission but permits one cleanup release", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const actions: string[] = [];
+	let persisted = 0;
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "finalize") return Response.json({ ok: false });
+		if (action === "claim") return Response.json({
+			ownerNode: "runtime-owner", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+			resumeToken: "a-long-enough-pending-resume-capability",
+		});
+		if (action === "release") return Response.json({
+			ownerNode: "runtime-owner", epoch: 6, expiresAt: "1970-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+		throw new Error(`Unexpected fake authority call: ${action}`);
+	};
+	const session = new SynchronizedSession(
+		"nonconfirming-finalize",
+		new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		}),
+		{
+			version: 1, sessionId: "nonconfirming-finalize", targetNode: "destination-device",
+			transferId: "transfer-1", transferEpoch: 4,
+			claimToken: "a-long-enough-claim-capability", epoch: 4,
+		},
+		"runtime-owner",
+		async () => { persisted++; },
+	);
+	try {
+		await expect(session.admit()).rejects.toThrow(/finalization receipt mismatch/);
+		await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+		await session.close();
+		expect(actions).toEqual(["claim", "finalize", "release"]);
+		expect(persisted).toBe(1);
+	} finally {
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
 	}
 });

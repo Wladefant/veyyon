@@ -266,7 +266,7 @@ export class CheckpointClient {
 		const lease = this.#leases.get(sessionId);
 		if (!lease || this.#lost.has(sessionId) || lease.epoch !== leaseEpoch)
 			throw new Error("Checkpoint lease required to finalize resume capability");
-		await this.#request(`/v1/sessions/${encodeURIComponent(sessionId)}/finalize`, {
+		const confirmation = await this.#request<{ ok?: unknown }>(`/v1/sessions/${encodeURIComponent(sessionId)}/finalize`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -278,6 +278,10 @@ export class CheckpointClient {
 				resumeToken,
 			}),
 		});
+		// The pinned authority returns {ok:true} only after persisting the
+		// rotated resume capability. A 2xx status alone is not confirmation.
+		if (!confirmation || confirmation.ok !== true)
+			throw new Error("Checkpoint authority finalization receipt mismatch");
 	}
 	async transferLease(
 		sessionId: string,
