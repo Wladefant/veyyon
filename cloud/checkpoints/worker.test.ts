@@ -54,6 +54,33 @@ test("a transfer fences the source and allows only one runtime on the named dest
  expect((await post("claim",{targetNode:"destination",transferId:"transfer-1",claimToken:token,epoch:destination.epoch,ownerNode:"runtime-b"})).status).toBe(409);
  expect((await post("lease",{ownerNode:"runtime-b"})).status).toBe(409);
 });
+test("the first claim advances its fence even when the runtime label equals the transfer target",async()=>{
+ const {post}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="same-label-first-claim";
+ const claimToken="synthetic-same-label-claim";
+ const reservationResponse=await post("transfer",{...source,targetNode,transferId,claimToken});
+ expect(reservationResponse.status).toBe(200);
+ const reservation=await reservationResponse.json() as {epoch:number};
+ const body={targetNode,transferId,claimToken,epoch:reservation.epoch,ownerNode:targetNode};
+ const firstResponse=await post("claim",body);
+ expect(firstResponse.status).toBe(200);
+ const first=await firstResponse.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect(first.ownerNode).toBe(targetNode);
+ expect(first.epoch).toBe(reservation.epoch+1);
+ expect(typeof first.resumeToken).toBe("string");
+ // A retry by the same runtime while the receipt is pending must not
+ // mint a second epoch or consume a different resume capability.
+ const pendingResponse=await post("claim",body);
+ expect(pendingResponse.status).toBe(200);
+ const pending=await pendingResponse.json() as {epoch:number;resumeToken:string};
+ expect(pending.epoch).toBe(first.epoch);
+ expect(pending.resumeToken).toBe(first.resumeToken);
+ expect((await post("finalize",{ownerNode:targetNode,targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ expect((await post("claim",body)).status).toBe(409);
+});
+
 test("concurrent claim redemption grants one runtime and denies the other",async()=>{
  const {post}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};

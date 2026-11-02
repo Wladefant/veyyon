@@ -106,7 +106,10 @@ export class SessionAuthority {
    if(!claim?.spent && claimHash===undefined)return json({error:"resume capability required"},409);
    if(!claim?.spent && (current.ownerNode!==targetNode || current.epoch!==transfer.targetEpoch || current.claimHash!==transfer.claimHash))
     return json({error:"transfer claim is stale"},409);
-   const retrySameRuntime=live && current.ownerNode===body.ownerNode;
+   // A reserved destination label is not a previously redeemed runtime.
+   // The first successful claim must advance the fencing epoch even when
+   // the caller chooses the same node label as the transfer target.
+   const retrySameRuntime=claim?.spent===true && live && current.ownerNode===body.ownerNode;
    const epoch=retrySameRuntime?current.epoch:current.epoch+1;
    const pendingToken=retrySameRuntime && claim?.pendingResumeToken
     ? claim.pendingResumeToken
