@@ -822,14 +822,39 @@ test("restoration rejects malformed and foreign heads before any object GET", as
 		headSequence: number;
 		expectedError: RegExp;
 	}> = [
-		{ name: "foreign-session", manifest: { ...good, sessionId: "other-session" }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{
+			name: "foreign-session",
+			manifest: { ...good, sessionId: "other-session" },
+			headSequence: 1,
+			expectedError: /Invalid checkpoint head/,
+		},
 		{ name: "wrong-sequence", manifest: good, headSequence: 2, expectedError: /Invalid checkpoint head/ },
-		{ name: "unsupported-version", manifest: { ...good, version: 2 }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
+		{
+			name: "unsupported-version",
+			manifest: { ...good, version: 2 },
+			headSequence: 1,
+			expectedError: /Invalid checkpoint head/,
+		},
 		{ name: "zero-sequence", manifest: { ...good, sequence: 0 }, headSequence: 0, expectedError: /Invalid checkpoint head/ },
-		{ name: "sequence-over-limit", manifest: { ...good, sequence: 101 }, headSequence: 101, expectedError: /Invalid checkpoint head/ },
+		{
+			name: "sequence-over-limit",
+			manifest: { ...good, sequence: 101 },
+			headSequence: 101,
+			expectedError: /Invalid checkpoint head/,
+		},
 		{ name: "empty-objects", manifest: { ...good, objects: [] }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
-		{ name: "too-many-objects", manifest: { ...good, objects: Array.from({ length: 1025 }, () => good.objects[0]) }, headSequence: 1, expectedError: /Invalid checkpoint head/ },
-		{ name: "null-object", manifest: { ...good, objects: [null] }, headSequence: 1, expectedError: /Invalid checkpoint object reference/ },
+		{
+			name: "too-many-objects",
+			manifest: { ...good, objects: Array.from({ length: 1025 }, () => good.objects[0]) },
+			headSequence: 1,
+			expectedError: /Invalid checkpoint head/,
+		},
+		{
+			name: "null-object",
+			manifest: { ...good, objects: [null] },
+			headSequence: 1,
+			expectedError: /Invalid checkpoint object reference/,
+		},
 	];
 	for (const scenario of cases) {
 		let objectRequests = 0;
