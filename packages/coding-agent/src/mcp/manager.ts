@@ -303,6 +303,10 @@ export class MCPManager {
 	}
 
 	#connections = new Map<string, MCPServerConnection>();
+	// A single-server disconnect can await event drain and transport close while
+	// its connection is still indexed. Retired transport identity must never
+	// publish a late tools/list reply, even if close subsequently rejects.
+	#retiredToolConnections = new WeakSet<MCPServerConnection>();
 	/** Session CPU budget hook, set by the owning session: spawned stdio server pids join the session's budget group. */
 	#adoptSpawnedPid: ((pid: number) => void) | undefined;
 	/** Session CPU budget gate: refuse a new stdio server while the group is saturated or uncreated. */
@@ -1720,6 +1724,10 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
+		// Fence any in-flight tools/list response before the first asynchronous
+		// drain or close. A name can later be reused with a *new* connection.
+		const connection = this.#connections.get(name);
+		if (connection) this.#retiredToolConnections.add(connection);
 		await this.#stopServerEvents(name);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
@@ -1728,8 +1736,6 @@ export class MCPManager {
 		this.#serverConfigs.delete(name);
 		this.#pendingResourceRefresh.delete(name);
 		this.#reconnectHistory.delete(name);
-
-		const connection = this.#connections.get(name);
 
 		const subscribedUris = this.#subscribedResources.get(name);
 		if (subscribedUris && subscribedUris.size > 0 && connection) {
@@ -2097,7 +2103,7 @@ export class MCPManager {
 	 */
 	async refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
-		if (!connection) return;
+		if (!connection || this.#retiredToolConnections.has(connection)) return;
 		const epoch = this.#epoch;
 
 		// Clear cached tools
@@ -2108,7 +2114,11 @@ export class MCPManager {
 		// A request already in flight may settle even after its transport is
 		// retired. Never publish or cache stale tools after disconnect,
 		// reconnect or a whole-manager reset.
-		if (this.#connections.get(name) !== connection || this.#epoch !== epoch) return;
+		if (
+			this.#retiredToolConnections.has(connection) ||
+			this.#connections.get(name) !== connection ||
+			this.#epoch !== epoch
+		) return;
 		const reconnect = () => this.reconnectServer(name);
 		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 		void this.toolCache?.set(name, connection.config, serverTools);
