@@ -2657,6 +2657,9 @@ function wrapReplayContent(
 
 function extractReplayContent(content: unknown, errorMessage: string | undefined): PromptRequest["prompt"] {
 	const replay: PromptRequest["prompt"] = [];
+	if (typeof content === "string" && content.length > 0) {
+		replay.push({ type: "text", text: content });
+	}
 	if (Array.isArray(content)) {
 		for (const item of content) {
 			if (typeof item !== "object" || item === null || !("type" in item)) {
