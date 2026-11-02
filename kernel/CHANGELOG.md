@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Session forks reject referenced local artifact copies whose contents differ from their source, including same-byte-length corruption, before publishing a new session ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - `SessionManager.fork()` and `forkFrom()` verify inherited local recovery artifacts and copy them before publishing a new session, refuse missing or nonregular evidence, keep later artifact IDs distinct, and preserve explicit foreign-session links without local lookup ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.6.0] - 2026-10-28
