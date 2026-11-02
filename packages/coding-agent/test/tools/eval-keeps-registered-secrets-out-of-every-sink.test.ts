@@ -114,6 +114,7 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		]);
 
 		const manager = SessionManager.create(directory, path.join(directory, "sessions"));
+		await manager.ensureOnDisk();
 		manager.appendMessage({
 			role: "toolResult",
 			toolCallId: "synthetic-eval-status-call",
