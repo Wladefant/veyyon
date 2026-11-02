@@ -2098,12 +2098,17 @@ export class MCPManager {
 	async refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
 		if (!connection) return;
+		const epoch = this.#epoch;
 
 		// Clear cached tools
 		connection.tools = undefined;
 
 		// Reload tools
 		const serverTools = await listTools(connection);
+		// A request already in flight may settle even after its transport is
+		// retired. Never publish or cache stale tools after disconnect,
+		// reconnect or a whole-manager reset.
+		if (this.#connections.get(name) !== connection || this.#epoch !== epoch) return;
 		const reconnect = () => this.reconnectServer(name);
 		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 		void this.toolCache?.set(name, connection.config, serverTools);
