@@ -128,12 +128,48 @@ describe("cloud checkpoints", () => {
 		for (const [index, invalid] of ["not-a-date", "", "2026-99-99T00:00:00Z"].entries()) {
 			expiresAt = invalid;
 			const id = `invalid-expiry-${index}`;
-			const lease = await client.acquireLease(id, "node-a");
-			await expect(client.assertWritable(id, lease.epoch)).rejects.toThrow(/Checkpoint lease lost/);
+			await expect(client.acquireLease(id, "node-a")).rejects.toThrow(/lease fence invalid/);
+			await expect(client.assertWritable(id, 4)).rejects.toThrow(/Checkpoint lease lost/);
 		}
 		expiresAt = "2099-01-01T00:00:00Z";
 		const valid = await client.acquireLease("valid-expiry", "node-a");
 		await expect(client.assertWritable("valid-expiry", valid.epoch)).resolves.toBeUndefined();
+	});
+	test("rejects invalid authority lease epochs before opening a writable lease", async () => {
+		let epoch: unknown = 4;
+		const fake: CheckpointFetch = async () => Response.json({
+			ownerNode: "node-a", epoch, expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		for (const [index, invalid] of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "4", null].entries()) {
+			epoch = invalid;
+			const id = `invalid-epoch-${index}`;
+			await expect(client.acquireLease(id, "node-a")).rejects.toThrow(/lease fence invalid/);
+			await expect(client.assertWritable(id, typeof invalid === "number" ? invalid : 4)).rejects.toThrow(/lease lost/);
+		}
+		for (const valid of [0, 4]) {
+			epoch = valid;
+			const id = `valid-epoch-${valid}`;
+			const acquired = await client.acquireLease(id, "node-a");
+			await expect(client.assertWritable(id, acquired.epoch)).resolves.toBeUndefined();
+		}
+	});
+	test("renewal rejects an expired authority fence and immediately loses local writability", async () => {
+		let expiresAt = "2099-01-01T00:00:00Z";
+		const fake: CheckpointFetch = async () => Response.json({
+			ownerNode: "node-a", epoch: 4, expiresAt, headSequence: 0, manifestHash: "",
+		});
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		const acquired = await client.acquireLease("s", "node-a");
+		await expect(client.assertWritable("s", acquired.epoch)).resolves.toBeUndefined();
+		expiresAt = "2000-01-01T00:00:00Z";
+		await expect(client.renewLease("s")).rejects.toThrow(/lease fence invalid/);
+		await expect(client.assertWritable("s", acquired.epoch)).rejects.toThrow(/lease lost/);
 	});
 
 });
