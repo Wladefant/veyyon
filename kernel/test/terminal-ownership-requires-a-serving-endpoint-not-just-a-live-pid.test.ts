@@ -479,3 +479,4 @@ describe("terminal ownership Windows ACL scan", () => {
 			cause: expect.objectContaining({ message: expect.stringContaining("replaced while it was checked") }),
 		});
 	});
+});
