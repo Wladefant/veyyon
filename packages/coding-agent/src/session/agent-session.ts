@@ -6485,8 +6485,30 @@ export class AgentSession {
 		// Flush current session to ensure all entries are written
 		await this.sessionManager.flush();
 
-		// Fork the session (creates new session file with same entries)
-		const forkResult = await this.sessionManager.fork();
+		// Forking preflights artifacts and then publishes the new JSONL. If its
+		// final publish fails, SessionManager may already have switched its in-memory
+		// identity, while this agent still routes requests and memory on the old one.
+		// Restore the last durable transcript instead of leaving a split identity.
+		const beforeFork = this.sessionManager.captureState();
+		let forkResult: Awaited<ReturnType<SessionManager["fork"]>>;
+		try {
+			forkResult = await this.sessionManager.fork();
+		} catch (error) {
+			if (
+				this.sessionManager.getSessionId() !== beforeFork.sessionId ||
+				this.sessionManager.getSessionFile() !== beforeFork.sessionFile
+			) {
+				try {
+					// The failed fork abandoned its published-file layout. The next
+					// persistence operation must revalidate the original file, including
+					// any foreign writer's tail, before writing to it again.
+					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
+				} catch (restoreError) {
+					throw new AggregateError([error, restoreError], "Fork failed and could not restore its original session");
+				}
+			}
+			throw error;
+		}
 		if (!forkResult) {
 			return false;
 		}
