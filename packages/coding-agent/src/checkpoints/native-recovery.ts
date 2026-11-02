@@ -464,6 +464,14 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 				journalText.slice(0, headerStart) + headerLine + (headerEnd < 0 ? "" : journalText.slice(headerEnd)),
 			)
 		: journalBytes;
+	// Capture applies the shared exclusion policy before reading workspace
+	// bytes. A restored (possibly older or tampered) bundle must enforce the
+	// same path policy before publishing any workspace files.
+	for (const file of bundle.workspace.files) {
+		const rel = safeRelative(file.path);
+		if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
+			throw new Error("Workspace paths include excluded checkpoint files");
+	}
 	const staging = `${out}.checkpoint-${randomUUID()}`;
 	await mkdir(staging, { recursive: false });
 	try {

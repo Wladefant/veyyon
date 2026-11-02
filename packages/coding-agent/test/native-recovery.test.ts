@@ -312,6 +312,19 @@ describe("native recovery", () => {
 		await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
 		await expect(captureNativeCheckpoint(session, [join(escape, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
 	});
+	test("restore rejects workspace paths excluded by the capture policy", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "policy", cwd: root }) + "\n");
+		const bundle = await captureNativeCheckpoint(session, []);
+		for (const [index, path] of ["shared-auth/token.txt", "credentials/secret.json", "__pycache__/state.pyc"].entries()) {
+			bundle.workspace.dirty = [path];
+			bundle.workspace.files = [{ path, bytes: Buffer.from("SYNTHETIC; no secrets").toString("base64") }];
+			const destination = join(root, "excluded-" + index);
+			await expect(restoreNativeCheckpoint(bundle, destination)).rejects.toThrow(/excluded checkpoint files/);
+			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+		}
+	});
 	test("restore refuses overwrite and explicit fork writes a different native session id", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");
