@@ -103,7 +103,7 @@ function isStreamMessage(value: unknown): value is JsonRpcMessage {
 	if ("error" in value) {
 		return (
 			isRecord(value.error) &&
-			typeof value.error.code === "number" &&
+			Number.isSafeInteger(value.error.code) &&
 			typeof value.error.message === "string"
 		);
 	}
