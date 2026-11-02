@@ -929,6 +929,30 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		);
 		expect(reconnected.connectedServers).toContain(names.a);
 		expect(manager.getTools().filter(tool => tool.mcpServerName === names.a)).toHaveLength(1);
+
+		// If A's transport.close rejects, best-effort bulk teardown must still
+		// close healthy peer B, preserve A's safe per-name failure diagnostic,
+		// and never leak the synthetic peer-supplied private detail.
+		const nextB = await withinConnectBoundary(manager.connectServers({ [names.b]: configs[names.b] }, {}), "reconnect B for failed-close control");
+		expect(nextB.connectedServers).toContain(names.b);
+		const newA = await withinConnectBoundary(manager.waitForConnection(names.a), "failed-close control A");
+		const reallyCloseA = newA.transport.close.bind(newA.transport);
+		newA.transport.close = async () => {
+			throw new Error("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
+		};
+		try {
+			await withinConnectBoundary(manager.disconnectAll(), "best-effort bulk cleanup after A close rejection");
+			expect(bDeletes).toBe(2);
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getTools()).toEqual([]);
+			expect(manager.getLastError(names.a)).toBe("MCP transport close unconfirmed; verify the server before reconnecting");
+			expect(manager.getLastError(names.a)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
+			expect(manager.getLastError(names.b)).toBeUndefined();
+		} finally {
+			// The deliberately failed A close remains fixture-owned. Close it
+			// explicitly rather than leaving a synthetic orphan in the test.
+			await withinConnectBoundary(reallyCloseA(), "failed-close fixture release");
+		}
 	} finally {
 		releaseAClose.resolve();
 		releaseBClose.resolve();
