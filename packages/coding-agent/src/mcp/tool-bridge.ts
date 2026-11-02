@@ -651,10 +651,14 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 			if (this.reconnect) {
 				const newConn = await reconnectWithAbort(this.reconnect, signal);
 				if (newConn) {
+					// The original connection lookup failed *before* dispatch, so
+					// this is the first safe tools/call attempt, not a replay.
+					let firstCallAttempted = false;
 					try {
-						const retryArgs = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
+						const firstArgs = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
 						throwIfAborted(signal);
-						const result = await callTool(newConn, this.tool.name, retryArgs, { signal });
+						firstCallAttempted = true;
+						const result = await callTool(newConn, this.tool.name, firstArgs, { signal });
 						return buildResult(
 							result,
 							this.serverName,
@@ -663,10 +667,18 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 							newConn._source?.providerName ?? providerName,
 							rawParams,
 						);
-					} catch (retryError) {
-						rethrowIfAborted(retryError, signal);
+					} catch (firstError) {
+						rethrowIfAborted(firstError, signal);
+						if (firstCallAttempted && mcpFailureWarrantsReconnect(firstError)) {
+							return buildUnknownOutcomeResult(
+								this.serverName,
+								this.tool.name,
+								newConn._source?.provider ?? provider,
+								newConn._source?.providerName ?? providerName,
+							);
+						}
 						return buildErrorResult(
-							retryError,
+							firstError,
 							this.serverName,
 							this.tool.name,
 							provider,
