@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { createServer, type Server, type ServerResponse } from "node:http";
+import { logger } from "@veyyon/utils";
 import { HttpTransport } from "../src/mcp/transports/http";
 
 type SSEFrame = unknown;
@@ -294,7 +295,10 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			method: "notifications/tools/list_changed",
 			params: { source },
 		});
-		await withLiveSSE(
+		const warnings: string[] = [];
+		const warnSpy = spyOn(logger, "warn").mockImplementation(message => warnings.push(String(message)));
+		try {
+			await withLiveSSE(
 			[
 				[...Array.from({ length: 255 }, () => null), notification("at-limit")],
 				[...Array.from({ length: 256 }, () => null), notification("over-limit")],
@@ -315,6 +319,13 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 				expect(received).toEqual(["at-limit", "later"]);
 				expect(errors).toEqual([]);
 			},
-		);
+			);
+		} finally {
+			warnSpy.mockRestore();
+		}
+		expect(warnings).toEqual([
+			"Skipping invalid MCP HTTP SSE batch member",
+			"Skipping oversized MCP HTTP SSE message batch",
+		]);
 	}, 15_000);
 });
