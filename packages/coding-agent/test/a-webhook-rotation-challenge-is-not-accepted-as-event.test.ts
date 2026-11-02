@@ -122,3 +122,62 @@ it("accepts first-time challenge authorization without early occurrence delivery
 	}))).status).toBe(401);
 	expect(accepted).toHaveLength(0);
 });
+
+it("rejects a paused old-key event after a same-route renewal commits", async () => {
+	const key = webhookRegistrationKey(CALLBACK_PATH, REMOTE_ID);
+	const registrations = new Map([[key, {
+		secret: asSecret(OLD_SECRET_BYTES),
+		name: "orders/changed",
+		callbackPath: CALLBACK_PATH,
+	}]]);
+	const accepted: MCPWebhookMessage[] = [];
+	const receiver = createWebhookReceiver({
+		registrations,
+		verificationRoutes: new Map(),
+		registrationKey: webhookRegistrationKey,
+		accept: async (_key, event) => {
+			accepted.push(event);
+			return "queued";
+		},
+	});
+	const messageId = "old-key-held-body";
+	const timestamp = String(Math.floor(Date.now() / 1_000));
+	const bytes = Buffer.from(JSON.stringify(occurrence(messageId)));
+	const signature = createHmac("sha256", OLD_SECRET_BYTES)
+		.update(Buffer.concat([Buffer.from(`${messageId}.${timestamp}.`), bytes]))
+		.digest("base64");
+	let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+	const heldBody = new ReadableStream<Uint8Array>({
+		start(controller) {
+			bodyController = controller;
+		},
+	});
+	const heldRequest = new Request(`https://receiver.test${CALLBACK_PATH}`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"X-MCP-Subscription-Id": REMOTE_ID,
+			"webhook-id": messageId,
+			"webhook-timestamp": timestamp,
+			"webhook-signature": `v1,${signature}`,
+		},
+		body: heldBody,
+		duplex: "half",
+	} as RequestInit & { duplex: "half" });
+	// handle() resolves the route before its first awaited body read.
+	const oldInFlight = receiver.handle(heldRequest);
+	// Replace the registration while the original OLD-signed body is unread.
+	registrations.set(key, {
+		secret: asSecret(NEXT_SECRET_BYTES),
+		name: "orders/changed",
+		callbackPath: CALLBACK_PATH,
+	});
+	bodyController.enqueue(bytes);
+	bodyController.close();
+	expect((await oldInFlight).status).toBe(503);
+	expect(accepted).toHaveLength(0);
+	// A fresh body signed with the current generation remains authorized.
+	expect((await receiver.handle(signedRequest(NEXT_SECRET_BYTES, "current-key-event", occurrence("current-key-event")))).status).toBe(202);
+	expect(accepted).toHaveLength(1);
+	expect((accepted[0] as { eventId?: string }).eventId).toBe("current-key-event");
+});
