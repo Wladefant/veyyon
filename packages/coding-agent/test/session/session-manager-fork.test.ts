@@ -113,7 +113,9 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			expect(await source.saveArtifact(original, "bash")).toBe("0");
 			const message = "Recover exact original output: artifact://0";
 			source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-			await source.flush();
+			// User-only sessions stay lazy: flush() alone does not create their JSONL.
+			// Materialize source evidence before exercising fork preservation.
+			await source.ensureOnDisk();
 			const sourceFile = source.getSessionFile();
 			if (!sourceFile) throw new Error("expected persisted source");
 			const sourceBefore = await fs.readFile(sourceFile, "utf8");
@@ -154,7 +156,7 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			const original = "source evidence must survive";
 			expect(await source.saveArtifact(original, "bash")).toBe("0");
 			source.appendMessage({ role: "user", content: "original: artifact://0", timestamp: Date.now() });
-			await source.flush();
+			await source.ensureOnDisk();
 			const sourceFile = source.getSessionFile();
 			if (!sourceFile) throw new Error("expected persisted source");
 			const sourceBefore = await fs.readFile(sourceFile, "utf8");
@@ -186,7 +188,7 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 		try {
 			const message = "External output: artifact://0?session=another-execution-session";
 			source.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-			await source.flush();
+			await source.ensureOnDisk();
 			const sourceFile = source.getSessionFile();
 			if (!sourceFile) throw new Error("expected persisted source");
 			const sourceBefore = await fs.readFile(sourceFile, "utf8");
@@ -228,7 +230,7 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			source.appendMessage({
 				role: "user", content: "Local evidence artifact://0", timestamp: Date.now(),
 			});
-			await source.flush();
+			await source.ensureOnDisk();
 			const sourceFile = source.getSessionFile();
 			if (!sourceFile) throw new Error("expected persisted source");
 			const beforeBreadcrumb = await fs.readFile(breadcrumbFile, "utf8");
@@ -277,7 +279,7 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			source.appendMessage({
 				role: "user", content: "Original transcript must never be replaced", timestamp: Date.now(),
 			});
-			await source.flush();
+			await source.ensureOnDisk();
 			const sourceFile = source.getSessionFile();
 			if (!sourceFile) throw new Error("expected persistent source");
 			const originalBytes = await fs.readFile(sourceFile, "utf8");
@@ -306,7 +308,7 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
       source.appendMessage({
         role: "user", content: "Original synthetic source history", timestamp: Date.now(),
       });
-      await source.flush();
+      await source.ensureOnDisk();
       const sourceFile = source.getSessionFile();
       if (!sourceFile) throw new Error("expected durable source transcript");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
@@ -379,7 +381,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       manager.appendMessage({
         role: "user", content: "Restore the recorded [full output](artifact://0)", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected persistent source file");
       const sourceArtifact = await manager.getArtifactPath("0");
@@ -412,7 +414,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       manager.appendMessage({
         role: "user", content: "Recorded evidence: artifact://0", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sessionFile = manager.getSessionFile();
       if (!sessionFile) throw new Error("expected persistent source file");
       const sessionId = manager.getSessionId();
@@ -442,7 +444,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
       const message = "Inherited audit evidence: artifact://0";
       manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected original session file");
       const sourceId = manager.getSessionId();
@@ -498,7 +500,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       manager.appendMessage({
         role: "user", content: "Keep evidence artifact://0", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected original source session");
       const sourceId = manager.getSessionId();
@@ -558,7 +560,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     try {
       expect(await manager.saveArtifact("synthetic retained output", "bash")).toBe("0");
       manager.appendMessage({ role: "user", content: "Retain artifact://0", timestamp: Date.now() });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected source session");
       const oldSessionId = manager.getSessionId();
@@ -608,7 +610,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     try {
       expect(await source.saveArtifact("synthetic referenced bytes", "bash")).toBe("0");
       source.appendMessage({ role: "user", content: "Required artifact://0", timestamp: Date.now() });
-      await source.flush();
+      await source.ensureOnDisk();
       const sourceFile = source.getSessionFile();
       if (!sourceFile) throw new Error("expected original source session");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
@@ -643,7 +645,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       manager.appendMessage({
         role: "user", content: "Recorded evidence: artifact://0", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected persistent source file");
       const oldSessionId = manager.getSessionId();
@@ -679,7 +681,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       const foreignLink = `artifact://0?view=metadata&session=${foreignId}`;
       const message = `Inspect the original evidence: ${foreignLink}`;
       manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected persistent source file");
       const sourceText = await fs.readFile(sourceFile, "utf8");
@@ -710,7 +712,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       const sourceId = manager.getSessionId();
       const localLink = `artifact://0?session=${sourceId}`;
       manager.appendMessage({ role: "user", content: `Retain ${localLink}`, timestamp: Date.now() });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected persistent source file");
       const sourceText = await fs.readFile(sourceFile, "utf8");
@@ -743,7 +745,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       try {
         const message = `Example of an invalid URL: ${malformed}`;
         manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
-        await manager.flush();
+        await manager.ensureOnDisk();
         const sourceFile = manager.getSessionFile();
         if (!sourceFile) throw new Error("expected source session file");
         const sourceId = manager.getSessionId();
@@ -774,7 +776,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
           : variant;
         expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
         manager.appendMessage({ role: "user", content: `Original evidence: ${link}`, timestamp: Date.now() });
-        await manager.flush();
+        await manager.ensureOnDisk();
         const sourceFile = manager.getSessionFile();
         if (!sourceFile) throw new Error("expected persisted source session");
         const sourceId = manager.getSessionId();
@@ -816,7 +818,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       expect(await source.saveArtifact(originalBytes, "bash")).toBe("0");
       const link = `artifact://%30?session=${source.getSessionId()}`;
       source.appendMessage({ role: "user", content: `Original evidence: ${link}`, timestamp: Date.now() });
-      await source.flush();
+      await source.ensureOnDisk();
       const sourceFile = source.getSessionFile();
       if (!sourceFile) throw new Error("expected persisted source session");
       const sourceBefore = await fs.readFile(sourceFile, "utf8");
@@ -857,7 +859,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
       try {
         manager.appendMessage({ role: "user", content: `Keep source URL: ${link}`, timestamp: Date.now() });
-        await manager.flush();
+        await manager.ensureOnDisk();
         const sourceFile = manager.getSessionFile();
         if (!sourceFile) throw new Error("expected persisted source session");
         const sourceBefore = await fs.readFile(sourceFile, "utf8");
@@ -884,7 +886,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         manager.appendMessage({
           role: "user", content: `Preserve the recorded ${scheme}://0 evidence`, timestamp: Date.now(),
         });
-        await manager.flush();
+        await manager.ensureOnDisk();
         const sourceFile = manager.getSessionFile();
         if (!sourceFile) throw new Error("expected source session file");
         const sourceId = manager.getSessionId();
@@ -905,7 +907,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
     try {
       manager.appendMessage({ role: "user", content: "No archived artifacts", timestamp: Date.now() });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const oldFile = manager.getSessionFile();
       if (!oldFile) throw new Error("expected persistent source file");
       const fork = await manager.fork();
@@ -983,7 +985,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       manager.appendMessage({
         role: "user", content: "Original recovery entry", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected durable original session");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
@@ -1034,7 +1036,7 @@ describe("SessionManager.fork terminal breadcrumb publication order", () => {
       manager.appendMessage({
         role: "user", content: "Preserved recovery entry", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected durable original session");
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
@@ -1075,7 +1077,7 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       manager.appendMessage({
         role: "user", content: "Original recoverable conversation", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected durable source session");
       const sourceId = manager.getSessionId();
@@ -1153,7 +1155,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       manager.appendMessage({
         role: "user", content: "Original active session", timestamp: Date.now(),
       });
-      await manager.flush();
+      await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected persisted original session");
       const sourceId = manager.getSessionId();
