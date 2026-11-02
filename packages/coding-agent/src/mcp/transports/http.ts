@@ -246,7 +246,15 @@ export class HttpTransport implements MCPTransport {
 	/** Validate each untrusted SSE message (including every batch member) before routing it. */
 	#dispatchSSEMessage(message: unknown): void {
 		if (Array.isArray(message)) {
-			for (const m of message) this.#dispatchSSEMessage(m);
+			for (const m of message) {
+				// JSON-RPC batches are flat. Never recursively traverse untrusted
+				// nested arrays: deep nesting could terminate the whole SSE listener.
+				if (Array.isArray(m)) {
+					logger.warn("Skipping invalid nested MCP HTTP SSE batch member");
+					continue;
+				}
+				this.#dispatchSSEMessage(m);
+			}
 			return;
 		}
 		// A malformed GET-listener frame must not terminate its stream or
