@@ -2071,7 +2071,7 @@ export class SessionManager {
 			// to bytes outside this session's evidence directory.
 			const assertSafeEntry = async (filename: string): Promise<boolean> => {
 				const stat = await fs.promises.lstat(filename);
-				if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+				if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1) || (!stat.isFile() && !stat.isDirectory())) {
 					throw new Error("Cannot fork session: unsafe artifact entry");
 				}
 				return stat.isDirectory();

@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Session forks refuse multiply-linked artifact files in the source or copied tree before publication, preventing unrelated hard-linked bytes from being inherited ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Named session forks atomically reserve their destination artifact directory before copying or publishing, refusing concurrent forks targeting the same session path ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A named session fork refuses pre-existing destination JSONL or artifact sidecar paths before publication, protecting unrelated history and evidence from replacement or adoption ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 

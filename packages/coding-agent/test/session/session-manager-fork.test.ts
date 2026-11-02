@@ -614,6 +614,77 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+
+  it("refuses unreferenced hard links in source and destination without changing the original session", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-hardlink-boundary-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const original = "synthetic inherited evidence";
+      expect(await manager.saveArtifact(original, "bash")).toBe("0");
+      manager.appendMessage({ role: "user", content: "Keep artifact://0", timestamp: Date.now() });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected durable source session");
+      const sourceId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected source artifact");
+      const artifactDir = path.dirname(sourceArtifact);
+      const outside = path.join(temp.path(), "outside-synthetic.txt");
+      const outsideBytes = "unrelated synthetic bytes";
+      await fs.writeFile(outside, outsideBytes);
+      const nestedDir = path.join(artifactDir, "unreferenced");
+      await fs.mkdir(nestedDir);
+
+      for (const link of [
+        path.join(artifactDir, "77.unreferenced.log"),
+        path.join(nestedDir, "78.unreferenced.log"),
+      ]) {
+        await fs.link(outside, link);
+        try {
+          const stat = await fs.lstat(link);
+          expect(stat.isFile()).toBe(true);
+          expect(stat.isSymbolicLink()).toBe(false);
+          expect(stat.nlink).toBeGreaterThan(1);
+          await expect(manager.fork()).rejects.toThrow(/unsafe artifact entry/i);
+          expect(manager.getSessionId()).toBe(sourceId);
+          expect(manager.getSessionFile()).toBe(sourceFile);
+          expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+          expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+          expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+        } finally {
+          await fs.unlink(link);
+        }
+      }
+
+      // A hard link added after the genuine copy must fail destination validation too.
+      const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+      const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
+        await originalCp(src, dst, options);
+        if (src === artifactDir) await fs.link(outside, path.join(dst, "79.unreferenced.log"));
+      });
+      try {
+        await expect(manager.fork()).rejects.toThrow(/unsafe artifact entry/i);
+      } finally {
+        copySpy.mockRestore();
+      }
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(outside, "utf8")).toBe(outsideBytes);
+
+      const fork = await manager.fork();
+      if (!fork) throw new Error("expected clean successful retry");
+      const copied = path.join(fork.newSessionFile.slice(0, -".jsonl".length), path.basename(sourceArtifact));
+      expect(await fs.readFile(copied, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("rejects an unreferenced link injected into the fork destination after copying", async () => {
     using temp = TempDir.createSync("@veyyon-fork-copy-link-injection-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
