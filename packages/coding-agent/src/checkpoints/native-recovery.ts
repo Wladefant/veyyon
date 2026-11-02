@@ -552,10 +552,10 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 			throw new Error("Workspace paths include excluded checkpoint files");
 	}
 	const staging = `${out}.checkpoint-${randomUUID()}`;
-	await mkdir(staging, { recursive: false });
+	await mkdir(staging, { recursive: false, mode: 0o700 });
 	try {
-		await mkdir(join(staging, "sessions"));
-		await mkdir(join(staging, "blobs"));
+		await mkdir(join(staging, "sessions"), { mode: 0o700 });
+		await mkdir(join(staging, "blobs"), { mode: 0o700 });
 		await writeFile(join(staging, "sessions", "session.jsonl"), materializedJournal, { flag: "wx", mode: 0o600 });
 		for (const [hash, content] of Object.entries(bundle.blobs)) {
 			if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Invalid blob hash");
@@ -566,13 +566,13 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 		for (const [name, content] of Object.entries(bundle.artifacts)) {
 			const rel = safeRelative(name);
 			const target = join(staging, "sessions", "session", ...rel.split("/"));
-			await mkdir(dirname(target), { recursive: true });
+			await mkdir(dirname(target), { recursive: true, mode: 0o700 });
 			await writeFile(target, decodeBase64(content), { flag: "wx", mode: 0o600 });
 		}
 		for (const file of bundle.workspace.files) {
 			const rel = safeRelative(file.path);
 			const target = join(staging, "workspace", ...rel.split("/"));
-			await mkdir(dirname(target), { recursive: true });
+			await mkdir(dirname(target), { recursive: true, mode: 0o700 });
 			await writeFile(target, decodeBase64(file.bytes), { flag: "wx", mode: 0o600 });
 		}
 		if (!fork && handoff)

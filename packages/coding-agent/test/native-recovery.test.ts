@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serializeTitleSlot } from "../../../kernel/src/session/session-title-slot";
@@ -349,6 +349,51 @@ describe("native recovery", () => {
 		await restoreNativeCheckpoint(bundle, target);
 		expect(await readFile(join(target, "sessions", "session.jsonl"))).toEqual(journal);
 		expect(await readFile(join(target, "sessions", "session", "blob.bin"))).toEqual(blob);
+	});
+	test("restores checkpoint bytes privately on POSIX with a permissive umask", async () => {
+		if (process.platform === "win32") return;
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "private-restore", cwd: root }) + "\n");
+		const bundle = await captureNativeCheckpoint(session, []);
+		const privateBytes = Buffer.from("synthetic private checkpoint contents");
+		const hash = new Bun.SHA256().update(privateBytes).digest("hex");
+		const encoded = privateBytes.toString("base64");
+		bundle.blobs[hash] = encoded;
+		bundle.artifacts["trace.txt"] = encoded;
+		bundle.workspace.files = [{ path: "src/private.md", bytes: encoded }];
+		bundle.workspace.dirty = ["src/private.md"];
+		const previousUmask = process.umask(0o022);
+		try {
+			const destination = join(root, "private-restore-output");
+			await restoreNativeCheckpoint(bundle, destination);
+			const fork = await forkNativeCheckpoint(bundle);
+			roots.push(fork.directory);
+			for (const output of [destination, fork.directory]) {
+				const dirs = [
+					output,
+					join(output, "sessions"),
+					join(output, "sessions", "session"),
+					join(output, "blobs"),
+					join(output, "workspace"),
+					join(output, "workspace", "src"),
+				];
+				for (const dir of dirs) expect((await stat(dir)).mode & 0o777).toBe(0o700);
+				const files = [
+					join(output, "sessions", "session.jsonl"),
+					join(output, "sessions", "session", "trace.txt"),
+					join(output, "blobs", hash),
+					join(output, "workspace", "src", "private.md"),
+					join(output, "recovery.json"),
+				];
+				for (const file of files) {
+					expect((await stat(file)).mode & 0o777).toBe(0o600);
+					expect((await readFile(file)).byteLength).toBeGreaterThan(0);
+				}
+			}
+		} finally {
+			process.umask(previousUmask);
+		}
 	});
 	test("includes explicitly approved dirty files and rejects excluded and symlink paths", async () => {
 		const root = await scratch();
