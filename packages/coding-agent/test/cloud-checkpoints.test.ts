@@ -392,6 +392,75 @@ test("checkpoint authority JSON accepts a valid response split across streaming 
 	await expect(client.assertWritable("s", receipt.epoch)).resolves.toBeUndefined();
 });
 
+test("checkpoint control headers fail closed when custom fetch ignores abort", async () => {
+	let calls = 0;
+	const observed: { signal?: AbortSignal } = {};
+	const fake: CheckpointFetch = async (_input, init) => {
+		calls++;
+		observed.signal = init?.signal ?? undefined;
+		return new Promise<Response>(() => {});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 30,
+	});
+	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/timed out/);
+	expect(calls).toBe(1);
+	expect(observed.signal?.aborted).toBe(true);
+	await expect(client.assertWritable("s", 1)).rejects.toThrow(/lease lost/);
+});
+
+test("checkpoint object GET headers have a deadline when custom fetch ignores abort", async () => {
+	const manifest = {
+		version: 1, sessionId: "s", sequence: 1,
+		objects: [{ hash: "a".repeat(64), size: 32 }],
+	};
+	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
+	let objectGets = 0;
+	const fake: CheckpointFetch = async input => {
+		const path = new URL(String(input)).pathname;
+		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
+		if (path.includes("/objects/")) {
+			objectGets++;
+			return new Promise<Response>(() => {});
+		}
+		throw new Error("Unexpected checkpoint request");
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 30,
+	});
+	await expect(client.restore("s")).rejects.toThrow(/timed out/);
+	expect(objectGets).toBe(1);
+});
+
+test("checkpoint object PUT headers have a deadline without acknowledging a commit", async () => {
+	let uploads = 0;
+	let commits = 0;
+	const fake: CheckpointFetch = async (input, init) => {
+		const path = new URL(String(input)).pathname;
+		if (path.endsWith("/lease"))
+			return Response.json({
+				ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			});
+		if (path.includes("/objects/") && init?.method === "PUT") {
+			uploads++;
+			return new Promise<Response>(() => {});
+		}
+		if (path.endsWith("/commit")) commits++;
+		throw new Error("Unexpected checkpoint request");
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 30,
+	});
+	await client.acquireLease("s", "node-a");
+	await expect(client.commit("s", bundle, 0)).rejects.toThrow(/timed out/);
+	expect(uploads).toBe(1);
+	expect(commits).toBe(0);
+});
+
 test("checkpoint JSON reader fails on deadline when fake stream ignores abort", async () => {
 	let cancelled = 0;
 	let pulls = 0;
