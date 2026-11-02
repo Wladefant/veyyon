@@ -63,6 +63,11 @@ it("renews a webhook with a rotated challenge secret without granting early even
 	expect(rotatedChallenge.status).toBe(200);
 	expect(await rotatedChallenge.json()).toEqual({ challenge: "new-key-proven" });
 	expect(accepted).toHaveLength(0);
+	// An old key may deliver existing events but must not verify its replacement.
+	expect((await receiver.handle(signedRequest(OLD_SECRET_BYTES, "stale-proof", {
+		type: "verification",
+		challenge: "old-key-must-not-verify",
+	}))).status).toBe(401);
 
 	// The retiring key must still authorize its existing occurrence route.
 	expect((await receiver.handle(signedRequest(OLD_SECRET_BYTES, "old-event", occurrence("old-event")))).status).toBe(202);
@@ -88,4 +93,32 @@ it("renews a webhook with a rotated challenge secret without granting early even
 	expect((await receiver.handle(signedRequest(NEXT_SECRET_BYTES, "new-event", occurrence("new-event")))).status).toBe(202);
 	expect((await receiver.handle(signedRequest(OLD_SECRET_BYTES, "stale-event", occurrence("stale-event")))).status).toBe(401);
 	expect(accepted.map(item => (item.event as { eventId?: string }).eventId)).toEqual(["old-event", "new-event"]);
+});
+
+it("accepts first-time challenge authorization without early occurrence delivery", async () => {
+	const verificationRoutes = new Map([[CALLBACK_PATH, { secret: asSecret(NEXT_SECRET_BYTES) }]]);
+	const accepted: MCPWebhookMessage[] = [];
+	const receiver = createWebhookReceiver({
+		registrations: new Map(),
+		verificationRoutes,
+		registrationKey: webhookRegistrationKey,
+		accept: async (_key, event) => {
+			accepted.push(event);
+			return "queued";
+		},
+	});
+
+	const challenge = await receiver.handle(signedRequest(NEXT_SECRET_BYTES, "initial-verify", {
+		type: "verification",
+		challenge: "first-time-verified",
+	}));
+	expect(challenge.status).toBe(200);
+	expect(await challenge.json()).toEqual({ challenge: "first-time-verified" });
+	// No active registration exists until the remote subscribe succeeds.
+	expect((await receiver.handle(signedRequest(NEXT_SECRET_BYTES, "premature-event", occurrence("premature-event")))).status).toBe(503);
+	expect((await receiver.handle(signedRequest(OLD_SECRET_BYTES, "wrong-key", {
+		type: "verification",
+		challenge: "incorrect",
+	}))).status).toBe(401);
+	expect(accepted).toHaveLength(0);
 });
