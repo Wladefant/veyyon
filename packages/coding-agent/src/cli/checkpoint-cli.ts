@@ -15,7 +15,8 @@ export interface CheckpointCommandArgs {
 }
 export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise<void> {
 	if (args.action === "fork" && args.sessionFile) {
-		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
+		// A local-only fork is not an encrypted Cloudflare object.
+		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? [], "local");
 		console.log(JSON.stringify(await forkNativeCheckpoint(bundle)));
 		return;
 	}

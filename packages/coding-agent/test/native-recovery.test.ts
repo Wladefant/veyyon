@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serializeTitleSlot } from "../../../kernel/src/session/session-title-slot";
 import {
 	captureNativeCheckpoint,
 	forkNativeCheckpoint,
+	nativeCaptureByteBudget,
+	readOpenedCheckpointFile,
 	persistNativeHandoffIdentity,
 	restoreNativeCheckpoint,
 } from "../src/checkpoints/native-recovery";
@@ -40,6 +42,213 @@ describe("native recovery", () => {
 		const bundle = await captureNativeCheckpoint(file, []);
 		expect(Buffer.from(bundle.blobs[hash] ?? "", "base64")).toEqual(bytes);
 	});
+	test("rejects a symlinked artifact root before capturing unrelated sibling bytes", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const journal = join(root, "session.jsonl");
+		await writeFile(journal, JSON.stringify({ type: "session", id: "s", cwd: root }) + "\n");
+		await writeFile(join(outside, "child.jsonl"), "SYNTHETIC OUTSIDE; no private content");
+		await symlink(outside, join(root, "session"), process.platform === "win32" ? "junction" : "dir");
+		await expect(captureNativeCheckpoint(journal, [])).rejects.toThrow(/Symbolic links are not allowed in checkpoints/);
+		// The synthetic outside data is never an approved capture artifact.
+		expect(await readFile(join(outside, "child.jsonl"), "utf8")).toBe("SYNTHETIC OUTSIDE; no private content");
+	});
+
+	test("artifact reader refuses a redirected nested directory even when the leaf descriptor matches", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const artifactRoot = join(root, "session");
+		const nested = join(artifactRoot, "child");
+		const renamed = join(artifactRoot, "child.original");
+		await mkdir(nested, { recursive: true });
+		await writeFile(join(nested, "evidence.txt"), "APPROVED");
+		await writeFile(join(outside, "evidence.txt"), "SYNTHETIC OUTSIDE");
+		expect((await lstat(nested)).isDirectory()).toBe(true);
+		await rename(nested, renamed);
+		await symlink(outside, nested, process.platform === "win32" ? "junction" : "dir");
+		const redirected = join(nested, "evidence.txt");
+		const preliminary = await lstat(redirected);
+		const handle = await open(redirected, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(redirected, 4096, preliminary, handle, before, artifactRoot, "artifact"))
+				.rejects.toThrow(/Checkpoint artifact source changed or escaped approved root/);
+		} finally {
+			await handle.close();
+		}
+	});
+
+	test("rejects a linked blob store root even when a journal references a valid hash", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const sessions = join(root, "sessions");
+		await mkdir(sessions);
+		const bytes = Buffer.from("SYNTHETIC OUTSIDE BLOB");
+		const hash = new Bun.SHA256().update(bytes).digest("hex");
+		await writeFile(join(outside, hash), bytes);
+		await symlink(outside, join(root, "blobs"), process.platform === "win32" ? "junction" : "dir");
+		const journal = join(sessions, "session.jsonl");
+		await writeFile(journal, JSON.stringify({ type: "session", id: "s", cwd: root }) + "\n" +
+			JSON.stringify({ type: "message", data: `blobtext:sha256:${hash}` }) + "\n");
+		await expect(captureNativeCheckpoint(journal, [])).rejects.toThrow(/Checkpoint blob source changed or escaped approved root/);
+	});
+
+	test("captures stopped journals without a surviving cwd when no workspace files are selected", async () => {
+		const root = await scratch();
+		const gone = join(root, "removed-original-workspace");
+		const session = join(root, "archived.jsonl");
+		const original = JSON.stringify({ type: "session", id: "archived", cwd: gone }) + "\n";
+		await writeFile(session, original);
+		const bundle = await captureNativeCheckpoint(session, []);
+		expect(Buffer.from(bundle.journal.bytes, "base64").toString("utf8")).toBe(original);
+		expect(bundle.workspace.files).toEqual([]);
+		await expect(captureNativeCheckpoint(session, [join(gone, "note.md")])).rejects.toThrow();
+	});
+	test("rejects an oversized journal before decoding or allocating its body", async () => {
+		const root = await scratch();
+		const file = join(root, "oversized.jsonl");
+		await writeFile(file, `${JSON.stringify({ type: "session", id: "oversized", cwd: root })}\n`);
+		// Sparse fixture: cross the raw-byte cap without a huge JS allocation.
+		await truncate(file, 48 * 1024 * 1024 + 1);
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/capture exceeds raw-byte budget/);
+	});
+	test("rejects oversized artifact and approved dirty inputs against the aggregate cap", async () => {
+		const root = await scratch();
+		const file = join(root, "session.jsonl");
+		await writeFile(file, `${JSON.stringify({ type: "session", id: "bounded", cwd: root })}\n`);
+		const artifacts = join(root, "session");
+		await mkdir(artifacts);
+		const large = join(artifacts, "large.bin");
+		await writeFile(large, "");
+		// Each file equals the per-file cap, but the journal already spent bytes.
+		await truncate(large, 48 * 1024 * 1024);
+		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/capture exceeds raw-byte budget/);
+		await rm(large);
+		const dirty = join(root, "approved.txt");
+		await writeFile(dirty, "");
+		await truncate(dirty, 48 * 1024 * 1024);
+		await expect(captureNativeCheckpoint(file, [dirty])).rejects.toThrow(/capture exceeds raw-byte budget/);
+	});
+	test("local forks do not inherit the Cloudflare ciphertext byte ceiling", async () => {
+		const root = await scratch();
+		const file = join(root, "local.jsonl");
+		await writeFile(file, JSON.stringify({ type: "session", id: "local", cwd: root }) + "\n");
+		expect(nativeCaptureByteBudget("cloud")).toBe(48 * 1024 * 1024);
+		expect(nativeCaptureByteBudget("local")).toBe(Number.MAX_SAFE_INTEGER);
+		const local = await captureNativeCheckpoint(file, [], "local");
+		expect(local.native.sessionId).toBe("local");
+	});
+
+	test("read-time budget fails on deterministic growth after the initial descriptor stat", async () => {
+		const root = await scratch();
+		const file = join(root, "growing.bin");
+		await writeFile(file, Buffer.from("first approved bytes"));
+		const preliminary = await lstat(file);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await appendFile(file, Buffer.alloc(1024, 0x78));
+			// Exact production descriptor-reader, not a copied loop or timing race.
+			// Without the inner overrun check, the later signature failure would
+			// have a different error, so this assertion catches that mutation.
+			await expect(readOpenedCheckpointFile(file, before.size, preliminary, handle, before))
+				.rejects.toThrow(/exceeds raw-byte budget/);
+		} finally {
+			await handle.close();
+		}
+	});
+
+	test("pre-open symlink substitution cannot inherit a regular-file capture approval", async () => {
+		const root = await scratch();
+		const file = join(root, "approved.txt");
+		const moved = join(root, "moved.txt");
+		const other = join(root, "other.txt");
+		await writeFile(file, "APPROVED");
+		await writeFile(other, "synthetic UNAPPROVED; no private files");
+		const preliminary = await lstat(file);
+		await rename(file, moved);
+		await symlink(other, file, "file");
+		// Model the Windows fallback where open can follow a link. The production
+		// descriptor reader must reject against the preliminary no-follow stat.
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(file, 4096, preliminary, handle, before))
+				.rejects.toThrow(/Checkpoint source changed during capture/);
+		} finally {
+			await handle.close();
+		}
+		expect(await readFile(other, "utf8")).toBe("synthetic UNAPPROVED; no private files");
+	});
+
+	// POSIX can rename an opened source. A final path stat that *follows*
+	// a symlink to the same inode would falsely accept the replacement; lstat
+	// must reject the path even though the opened bytes themselves are stable.
+	if (process.platform !== "win32") {
+		test("post-open symlink alias is rejected by the final no-follow identity check", async () => {
+			const root = await scratch();
+			const source = join(root, "approved.txt");
+			const moved = join(root, "moved.txt");
+			await writeFile(source, "unchanged approved bytes");
+			const preliminary = await lstat(source);
+			const handle = await open(source, "r");
+			try {
+				const before = await handle.stat();
+				await rename(source, moved);
+				await symlink(moved, source, "file");
+				await expect(readOpenedCheckpointFile(source, 4096, preliminary, handle, before))
+					.rejects.toThrow(/Checkpoint source changed during capture/);
+			} finally {
+				await handle.close();
+			}
+			expect(await readFile(moved, "utf8")).toBe("unchanged approved bytes");
+		});
+	}
+
+	test("workspace capture rejects an ancestor redirected outside after initial approval", async () => {
+		const root = await scratch();
+		const outside = await scratch();
+		const folder = join(root, "approved");
+		const originalFolder = join(root, "original-approved");
+		const file = join(folder, "evidence.txt");
+		await mkdir(folder);
+		await writeFile(file, "APPROVED ONLY");
+		await writeFile(join(outside, "evidence.txt"), "SYNTHETIC OUTSIDE; no private data");
+		// The initial approval sees a legitimate directory and ordinary leaf.
+		expect((await lstat(folder)).isDirectory()).toBe(true);
+		expect((await lstat(file)).isFile()).toBe(true);
+		await rename(folder, originalFolder);
+		await symlink(outside, folder, process.platform === "win32" ? "junction" : "dir");
+		// A leaf-only check still sees a regular file, and the opened handle and
+		// the final path can agree on the outside inode. Guard the actual reader.
+		const preliminary = await lstat(file);
+		expect(preliminary.isFile()).toBe(true);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			await expect(readOpenedCheckpointFile(file, 4096, preliminary, handle, before, root))
+				.rejects.toThrow(/workspace source changed or escaped approved root/);
+		} finally {
+			await handle.close();
+		}
+		expect(await readFile(join(outside, "evidence.txt"), "utf8")).toBe("SYNTHETIC OUTSIDE; no private data");
+	});
+
+	test("unchanged opened checkpoint descriptor still reads exact bytes", async () => {
+		const root = await scratch();
+		const file = join(root, "stable.txt");
+		await writeFile(file, "stable bytes");
+		const preliminary = await lstat(file);
+		const handle = await open(file, "r");
+		try {
+			const before = await handle.stat();
+			expect(Buffer.from(await readOpenedCheckpointFile(file, 4096, preliminary, handle, before, root)).toString())
+				.toBe("stable bytes");
+		} finally {
+			await handle.close();
+		}
+	});
+
 	test("preserves the native first-line title slot and forks the second-line header", async () => {
 		const root = await scratch();
 		const file = join(root, "session.jsonl");
@@ -83,6 +292,23 @@ describe("native recovery", () => {
 		await writeFile(code, "dirty");
 		const bundle = await captureNativeCheckpoint(session, [code]);
 		expect(bundle.workspace.dirty).toEqual(["src/dirty.ts"]);
+		const excludedDir = join(root, "node_modules");
+		await mkdir(excludedDir);
+		const excluded = join(excludedDir, "large.bin");
+		await writeFile(excluded, "");
+		// Sparse excluded path: the old order read the file and hit the byte
+		// budget before validating its forbidden ancestor.
+		await truncate(excluded, 48 * 1024 * 1024 + 1);
+		await expect(captureNativeCheckpoint(session, [excluded])).rejects.toThrow(/Unsafe checkpoint path/);
+		const policyDir = join(root, "shared-auth");
+		await mkdir(policyDir);
+		const policyExcluded = join(policyDir, "private.bin");
+		await writeFile(policyExcluded, "");
+		await truncate(policyExcluded, 48 * 1024 * 1024 + 1);
+		// Local safeRelative permits shared-auth but the cloud policy rejects it.
+		// Capture must reject policy metadata *before* reading the large file.
+		await expect(captureNativeCheckpoint(session, [policyExcluded]))
+			.rejects.toThrow(/Workspace paths include excluded checkpoint files/);
 		const secret = join(root, ".env");
 		await writeFile(secret, "secret");
 		await expect(captureNativeCheckpoint(session, [secret])).rejects.toThrow(/unsafe|excluded/i);
@@ -97,6 +323,71 @@ describe("native recovery", () => {
 		await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
 		await expect(captureNativeCheckpoint(session, [join(escape, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
 	});
+	test("restore rejects workspace paths excluded by the capture policy", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "policy", cwd: root }) + "\n");
+		const bundle = await captureNativeCheckpoint(session, []);
+		for (const [index, path] of ["shared-auth/token.txt", "credentials/secret.json", "__pycache__/state.pyc"].entries()) {
+			bundle.workspace.dirty = [path];
+			bundle.workspace.files = [{ path, bytes: Buffer.from("SYNTHETIC; no secrets").toString("base64") }];
+			const destination = join(root, "excluded-" + index);
+			await expect(restoreNativeCheckpoint(bundle, destination)).rejects.toThrow(/excluded checkpoint files/);
+			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+		}
+	});
+	test("restore refuses Windows device aliases, ADS and invalid portable names before publication", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "portable", cwd: root }) + "\n");
+		const bundle = await captureNativeCheckpoint(session, []);
+		const contents = Buffer.from("synthetic checkpoint data").toString("base64");
+		const invalid = [
+			"NUL",
+			"nested/CON.txt",
+			"nested/COM¹.md",
+			"LPT²",
+			"nested/file.txt:stream",
+			"trailing. ",
+			"notes?.md",
+			"a/\u0001.md",
+		];
+		for (const [index, path] of invalid.entries()) {
+			const candidate = {
+				...bundle,
+				workspace: { dirty: [path], files: [{ path, bytes: contents }] },
+			};
+			const destination = join(root, "denied-" + index);
+			await expect(restoreNativeCheckpoint(candidate, destination)).rejects.toThrow(/Unsafe checkpoint path/);
+			await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+		}
+
+		// Artifact names pass through the same path grammar and must also fail.
+		const unsafeArtifact = { ...bundle, artifacts: { "CON.txt": contents } };
+		const artifactDestination = join(root, "denied-artifact");
+		await expect(restoreNativeCheckpoint(unsafeArtifact, artifactDestination)).rejects.toThrow(
+			/Unsafe checkpoint path/,
+		);
+		await expect(lstat(artifactDestination)).rejects.toMatchObject({ code: "ENOENT" });
+
+		const allowed = {
+			...bundle,
+			workspace: {
+				dirty: ["portable/notes.md", "COM10.txt"],
+				files: [
+					{ path: "portable/notes.md", bytes: contents },
+					{ path: "COM10.txt", bytes: contents },
+				],
+			},
+		};
+		const destination = join(root, "portable-restore");
+		await restoreNativeCheckpoint(allowed, destination);
+		expect(await readFile(join(destination, "workspace", "portable", "notes.md"), "utf8"))
+			.toBe("synthetic checkpoint data");
+		expect(await readFile(join(destination, "workspace", "COM10.txt"), "utf8"))
+			.toBe("synthetic checkpoint data");
+	});
+
 	test("restore refuses overwrite and explicit fork writes a different native session id", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");
