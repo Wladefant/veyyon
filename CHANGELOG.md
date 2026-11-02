@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-11-02
+
+### Fixed
+
+- IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
