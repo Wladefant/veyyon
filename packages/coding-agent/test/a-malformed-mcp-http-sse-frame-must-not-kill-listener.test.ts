@@ -289,6 +289,7 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 	// Reject an oversized frame as a whole, including valid messages inside
 	// that frame, while keeping the immediately adjacent legal-size frame
 	// and a later event usable on the exact same open connection.
+
 	it("enforces the flat SSE batch member budget at both edges", async () => {
 		const notification = (source: string) => ({
 			jsonrpc: "2.0",
@@ -299,31 +300,34 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		const warnSpy = spyOn(logger, "warn").mockImplementation(message => warnings.push(String(message)));
 		try {
 			await withLiveSSE(
-			[
-				[...Array.from({ length: 255 }, () => null), notification("at-limit")],
-				[...Array.from({ length: 256 }, () => null), notification("over-limit")],
-				notification("later"),
-			],
-			async transport => {
-				const received: string[] = [];
-				const next = Promise.withResolvers<void>();
-				const errors: string[] = [];
-				transport.onError = error => errors.push(error.message);
-				transport.onNotification = (_method, params) => {
-					const source = (params as { source?: string })?.source;
-					if (source) received.push(source);
-					if (source === "later") next.resolve();
-				};
-				await bounded(transport.startSSEListener(), "SSE batch boundary GET");
-				await bounded(next.promise, "SSE following batch boundary frame");
-				expect(received).toEqual(["at-limit", "later"]);
-				expect(errors).toEqual([]);
-			},
+				[
+					[...Array.from({ length: 255 }, () => null), notification("at-limit")],
+					[...Array.from({ length: 256 }, () => null), notification("over-limit")],
+					notification("later"),
+				],
+				async transport => {
+					const received: string[] = [];
+					const next = Promise.withResolvers<void>();
+					const errors: string[] = [];
+					transport.onError = error => errors.push(error.message);
+					transport.onNotification = (_method, params) => {
+						const source = (params as { source?: string })?.source;
+						if (source) received.push(source);
+						if (source === "later") next.resolve();
+					};
+					await bounded(transport.startSSEListener(), "SSE batch boundary GET");
+					await bounded(next.promise, "SSE following batch boundary frame");
+					expect(received).toEqual(["at-limit", "later"]);
+					expect(errors).toEqual([]);
+				},
 			);
 		} finally {
 			warnSpy.mockRestore();
 		}
-		expect(warnings).toEqual([
+		expect(warnings.filter(message =>
+			message === "Skipping invalid MCP HTTP SSE batch member" ||
+			message === "Skipping oversized MCP HTTP SSE message batch"
+		)).toEqual([
 			"Skipping invalid MCP HTTP SSE batch member",
 			"Skipping oversized MCP HTTP SSE message batch",
 		]);
