@@ -829,6 +829,56 @@ test("invalid transfer grant cannot persist a resume capability before admission
 	}
 });
 
+test("failed guard close cannot release a winner sharing its CheckpointClient", async () => {
+	let activeOwner: string | undefined;
+	let epoch = 1;
+	let releases = 0;
+	const fake: CheckpointFetch = async (input, init) => {
+		const action = new URL(String(input)).pathname.split("/").pop();
+		const body = init?.body
+			? JSON.parse(String(init.body)) as { ownerNode: string; epoch?: number }
+			: undefined;
+		if (action === "lease") {
+			if (activeOwner && body?.ownerNode !== activeOwner)
+				return Response.json({ error: "owned" }, { status: 409 });
+			activeOwner = body?.ownerNode;
+		} else if (action === "renew" || action === "release") {
+			if (body?.ownerNode !== activeOwner || body?.epoch !== epoch)
+				return Response.json({ error: "stale writer" }, { status: 409 });
+			if (action === "release") {
+				releases++;
+				epoch++;
+				activeOwner = undefined;
+			}
+		} else {
+			throw new Error("Unexpected authority action");
+		}
+		return Response.json({
+			ownerNode: body?.ownerNode, epoch,
+			expiresAt: action === "release" ? "1970-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+			headSequence: 0, manifestHash: "",
+		});
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const winner = new SynchronizedSession("shared-client-session", client);
+	const denied = new SynchronizedSession("shared-client-session", client);
+	try {
+		expect(winner.ownerNode).not.toBe(denied.ownerNode);
+		await winner.admit();
+		await expect(denied.admit()).rejects.toThrow(/409/);
+		await denied.close();
+		expect(releases).toBe(0);
+		await client.assertWritable("shared-client-session", 1);
+		await winner.admit();
+		await winner.close();
+		expect(releases).toBe(1);
+	} finally {
+		await Promise.allSettled([winner.close(), denied.close()]);
+	}
+});
+
 test("two default guards in one process cannot share a live cloud checkpoint lease", async () => {
 	let ownerNode: string | undefined;
 	let epoch = 1;
