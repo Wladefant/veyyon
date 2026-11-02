@@ -8,10 +8,10 @@
 import { expect, it } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
+import { disposeKernelSessionsByOwner, executePython } from "@veyyon/coding-agent/eval/py/executor";
 import { TempDir } from "@veyyon/utils";
 import { setTransports } from "@veyyon/utils/logger";
 import { describeRequiringTool } from "../../../utils/test/helpers/requires-tool";
-import { disposeKernelSessionsByOwner, executePython } from "../../src/eval/py/executor";
 
 const OWNER = "kernel-stderr-inventory-test";
 
