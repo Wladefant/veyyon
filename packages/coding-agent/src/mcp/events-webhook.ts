@@ -97,18 +97,24 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 				body.set(chunk, offset);
 				offset += chunk.byteLength;
 			}
-			const secretValue = registration?.secret ?? verification?.secret;
-			const secret = secretValue ? decodeSecret(secretValue) : undefined;
-			if (!secret || secret.length < 24 || secret.length > 64) return new Response(null, { status: 401 });
 			const signed = Buffer.concat([Buffer.from(messageId), Buffer.from("."), Buffer.from(timestamp), Buffer.from("."), Buffer.from(body)]);
-			const expected = createHmac("sha256", secret).update(signed).digest();
-			const valid = signatures.split(/\s+/).some((entry) => {
-				const match = /^v1,([A-Za-z0-9+/]+={0,2})$/.exec(entry);
-				if (!match) return false;
-				const supplied = Buffer.from(match[1], "base64");
-				return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-			});
-			if (!valid) return new Response(null, { status: 401 });
+			// A subscription refresh can verify a NEW signing key while the live
+			// registration must continue accepting ordinary events under its OLD key.
+			// Never promote the candidate key to event-delivery authority early.
+			const signatureMatches = (encoded: string | undefined): boolean => {
+				const secret = encoded ? decodeSecret(encoded) : undefined;
+				if (!secret || secret.length < 24 || secret.length > 64) return false;
+				const expected = createHmac("sha256", secret).update(signed).digest();
+				return signatures.split(/\s+/).some(entry => {
+					const match = /^v1,([A-Za-z0-9+/]+={0,2})$/.exec(entry);
+					if (!match) return false;
+					const supplied = Buffer.from(match[1], "base64");
+					return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+				});
+			};
+			const signedByRegistration = signatureMatches(registration?.secret);
+			const signedByVerification = verification !== undefined && signatureMatches(verification.secret);
+			if (!signedByRegistration && !signedByVerification) return new Response(null, { status: 401 });
 			let event: unknown;
 			try {
 				event = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
@@ -116,10 +122,14 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 				return new Response(null, { status: 400 });
 			}
 			if (isVerificationChallenge(event)) {
+				// When renewal is pending, only the newly resolved key proves
+				// possession; the old active key cannot approve its replacement.
+				if (verification !== undefined && !signedByVerification) return new Response(null, { status: 401 });
 				return new Response(JSON.stringify({ challenge: event.challenge }), { status: 200, headers: { "content-type": "application/json" } });
 			}
 			if (pendingVerification) return new Response(null, { status: 503 });
 			if (!registration) return new Response(null, { status: 503 });
+			if (!signedByRegistration) return new Response(null, { status: 401 });
 			let message: MCPWebhookMessage | undefined;
 			if (isWebhookControl(event)) {
 				message = { ...event, messageId };
