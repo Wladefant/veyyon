@@ -139,9 +139,10 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 	const releaseADelete = Promise.withResolvers<void>();
 	const bDeleteObserved = Promise.withResolvers<void>();
 	let bInitializations = 0;
+	let cInitializations = 0;
 	const server = createServer(async (request, response) => {
 		try {
-			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : undefined;
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : request.url === "/c" ? "c" : undefined;
 			if (!route) {
 				response.writeHead(404).end();
 				return;
@@ -169,6 +170,7 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 			}
 			let result: Record<string, unknown>;
 			if (message.method === "initialize") {
+				if (route === "c") cInitializations++;
 				if (route === "b" && ++bInitializations === 1) {
 					bInitializeEntered.resolve();
 					await releaseBInitialize.promise;
@@ -200,10 +202,11 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 	server.off("error", listening.reject);
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
-	const names = { a: "bulk-peer-a", b: "bulk-peer-b" };
+	const names = { a: "bulk-peer-a", b: "bulk-peer-b", c: "bulk-peer-c" };
 	const configs = {
 		[names.a]: { type: "http" as const, url: `http://127.0.0.1:${address.port}/a` },
 		[names.b]: { type: "http" as const, url: `http://127.0.0.1:${address.port}/b` },
+		[names.c]: { type: "http" as const, url: `http://127.0.0.1:${address.port}/c` },
 	};
 	const manager = new MCPManager(process.cwd());
 	const notifications: string[][] = [];
@@ -226,6 +229,14 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 		// B is admitted after the snapshot and never receives its own DELETE.
 		releaseBInitialize.resolve();
 		await withinConnectBoundary(bDeleteObserved.promise, "obsolete B session disposal");
+		// C starts for the first time AFTER bulk shutdown snapshots active transports.
+		// A held DELETE leaves the manager inside teardown; C must be refused
+		// before launching any transport, rather than succeeding and becoming orphaned.
+		await expect(
+			withinConnectBoundary(manager.connectServers({ [names.c]: configs[names.c]! }, {}), "new C while bulk disconnect runs"),
+		).rejects.toThrow(/bulk disconnect.*in progress/i);
+		expect(cInitializations).toBe(0);
+		expect(manager.getServerConfig(names.c)).toBeUndefined();
 		releaseADelete.resolve();
 		await withinConnectBoundary(bulkShutdown, "bulk shutdown completion");
 		await withinConnectBoundary(originalConnect, "original parallel connections");
@@ -241,6 +252,13 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 			"fresh B connect after bulk teardown",
 		);
 		expect(bInitializations).toBe(2);
+		await withinConnectBoundary(
+			manager.connectServers({ [names.c]: configs[names.c]! }, {}),
+			"fresh C connect after bulk teardown",
+		);
+		expect(cInitializations).toBe(1);
+		expect(manager.getConnectedServers()).toContain(names.c);
+		expect(manager.getTools().some(tool => tool.mcpServerName === names.c)).toBe(true);
 		expect(manager.getConnectedServers()).toContain(names.b);
 		expect(manager.getTools().filter(tool => tool.mcpServerName === names.b).map(tool => tool.name)).toEqual([
 			createMCPToolName(names.b, "read_fixture"),
