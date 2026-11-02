@@ -413,3 +413,113 @@ it("a stale MCP startup batch cannot publish tools after bulk teardown completes
 		}
 	}
 }, 35_000);
+
+
+// WHY: a single-server disconnect keeps the old transport mapped while
+// waiting for its DELETE to settle. A new connect or tool waiter must not
+// treat that retiring transport as a newly available live connection.
+// This is a real manager and private HTTP MCP server with a held DELETE.
+it("single-server teardown blocks same-name connect and reconnect until close settles", async () => {
+	const name = "single-disconnect-gate";
+	const deleteEntered = Promise.withResolvers<void>();
+	const releaseDelete = Promise.withResolvers<void>();
+	let initializeCalls = 0;
+	let deleteCalls = 0;
+	const server = createServer(async (request, response) => {
+		try {
+			if (request.method === "DELETE") {
+				deleteCalls++;
+				deleteEntered.resolve();
+				await releaseDelete.promise;
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { method?: string; id?: number | string };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				initializeCalls++;
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "single-disconnect-gate", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				result = { tools: [{ name: "fixture_read", inputSchema: { type: "object", properties: {} } }] };
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": `single-disconnect-${initializeCalls}` } : {}),
+			});
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await withinConnectBoundary(listening.promise, "single-disconnect HTTP listen");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected private fixture address");
+	const config = { type: "http" as const, url: `http://127.0.0.1:${address.port}/mcp` };
+	const manager = new MCPManager(process.cwd());
+	let disconnecting: Promise<void> | undefined;
+	try {
+		const initial = await withinConnectBoundary(manager.connectServers({ [name]: config }, {}), "initial live connection");
+		expect(initial.connectedServers).toContain(name);
+		expect(manager.getConnectedServers()).toContain(name);
+		disconnecting = manager.disconnectServer(name);
+		await withinConnectBoundary(deleteEntered.promise, "held single-server DELETE");
+		// A simultaneous disconnect must join the first teardown, not return
+		// an independent success while the transport is still closing.
+		expect(manager.disconnectServer(name)).toBe(disconnecting);
+		const blocked = await withinConnectBoundary(
+			manager.connectServers({ [name]: config }, {}),
+			"same-name connect during explicit disconnect",
+		);
+		expect(blocked.connectedServers).not.toContain(name);
+		expect(blocked.errors.get(name)).toMatch(/disconnect.*in progress/i);
+		expect(initializeCalls).toBe(1);
+		expect(
+			await withinConnectBoundary(manager.reconnectServer(name, { manual: true }), "reconnect while closing"),
+		).toBeNull();
+		await expect(
+			withinConnectBoundary(manager.waitForConnection(name), "wait for retiring connection"),
+		).rejects.toThrow(/disconnect/i);
+		releaseDelete.resolve();
+		await withinConnectBoundary(disconnecting, "held disconnect completion");
+		expect(deleteCalls).toBe(1);
+		expect(manager.getConnectedServers()).not.toContain(name);
+		const fresh = await withinConnectBoundary(manager.connectServers({ [name]: config }, {}), "fresh post-close connection");
+		expect(fresh.connectedServers).toContain(name);
+		expect(initializeCalls).toBe(2);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === name)).toHaveLength(1);
+	} finally {
+		releaseDelete.resolve();
+		try {
+			if (disconnecting) await withinConnectBoundary(disconnecting, "single disconnect cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "single fixture manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "single fixture HTTP shutdown");
+			}
+		}
+	}
+}, 30_000);
