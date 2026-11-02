@@ -558,3 +558,130 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		}
 	}
 }, 30_000);
+
+
+// WHY: bulk disconnect has an epoch fence, but a single-server disconnect
+// must also revoke A's historical fulfilled task before a held B cache lookup
+// allows the old parallel startup result to publish tools again.
+it("does not republish a removed MCP peer when another server stalls startup cache discovery", async () => {
+	const nameA = "batch-retired-peer-a";
+	const nameB = "batch-pending-peer-b";
+	const aToolsServed = Promise.withResolvers<void>();
+	const bInitializeEntered = Promise.withResolvers<void>();
+	const releaseBInitialize = Promise.withResolvers<void>();
+	const cacheReadEntered = Promise.withResolvers<void>();
+	const releaseCacheRead = Promise.withResolvers<void>();
+	let aCloseRequests = 0;
+	const server = createServer(async (request, response) => {
+		try {
+			const route = request.url === "/a" ? "a" : request.url === "/b" ? "b" : null;
+			if (!route) {
+				response.writeHead(404).end();
+				return;
+			}
+			if (request.method === "DELETE") {
+				if (route === "a") aCloseRequests++;
+				response.writeHead(204).end();
+				return;
+			}
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += String(chunk);
+			const message = JSON.parse(body) as { method?: string; id?: string | number };
+			if (message.id === undefined) {
+				response.writeHead(202).end();
+				return;
+			}
+			let result: Record<string, unknown>;
+			if (message.method === "initialize") {
+				if (route === "b") {
+					bInitializeEntered.resolve();
+					await releaseBInitialize.promise;
+				}
+				result = {
+					protocolVersion: "2025-03-26",
+					capabilities: { tools: {} },
+					serverInfo: { name: "single-peer-retirement", version: "1.0.0" },
+				};
+			} else if (message.method === "tools/list") {
+				if (route === "a") aToolsServed.resolve();
+				result = { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] };
+			} else {
+				result = {};
+			}
+			response.writeHead(200, {
+				"content-type": "application/json",
+				...(message.method === "initialize" ? { "Mcp-Session-Id": "retired-peer-" + route } : {}),
+			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+		} catch {
+			if (!response.headersSent) response.writeHead(500).end();
+		}
+	});
+	const listening = Promise.withResolvers<void>();
+	server.once("error", listening.reject);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await withinConnectBoundary(listening.promise, "retired-peer fixture listen");
+	server.off("error", listening.reject);
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
+	const configs = {
+		[nameA]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/a" },
+		[nameB]: { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/b" },
+	};
+	const cache = {
+		async get(name: string): Promise<null> {
+			if (name === nameB) {
+				cacheReadEntered.resolve();
+				await releaseCacheRead.promise;
+			}
+			return null;
+		},
+		async set(): Promise<void> {},
+	} as unknown as MCPToolCache;
+	const manager = new MCPManager(process.cwd(), cache);
+	let original: Promise<unknown> | undefined;
+	try {
+		original = manager.connectServers(configs, {});
+		await withinConnectBoundary(
+			Promise.all([aToolsServed.promise, bInitializeEntered.promise, cacheReadEntered.promise]),
+			"fulfilled A with held B cache",
+		);
+		expect(manager.getConnectedServers()).toContain(nameA);
+		expect(manager.getTools().some(tool => tool.mcpServerName === nameA)).toBe(true);
+		await withinConnectBoundary(manager.disconnectServer(nameA), "retire A while B cache lookup is held");
+		expect(aCloseRequests).toBe(1);
+		expect(manager.getConnectedServers()).not.toContain(nameA);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === nameA)).toEqual([]);
+		releaseCacheRead.resolve();
+		const oldResult = await withinConnectBoundary(original, "held startup batch completion") as {
+			connectedServers: string[];
+			tools: Array<{ mcpServerName?: string }>;
+		};
+		expect(oldResult.connectedServers).not.toContain(nameA);
+		expect(oldResult.tools.some(tool => tool.mcpServerName === nameA)).toBe(false);
+		expect(manager.getTools().filter(tool => tool.mcpServerName === nameA)).toEqual([]);
+		expect(manager.getConnectedServers()).not.toContain(nameA);
+		// The unrelated B startup can still complete normally; only A was retired.
+		releaseBInitialize.resolve();
+		await withinConnectBoundary(manager.waitForConnection(nameB), "unrelated B connection");
+		expect(manager.getConnectedServers()).toContain(nameB);
+	} finally {
+		releaseBInitialize.resolve();
+		releaseCacheRead.resolve();
+		try {
+			if (original) await withinConnectBoundary(original, "retired-peer original batch cleanup");
+		} finally {
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "retired-peer manager cleanup");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "retired-peer HTTP cleanup");
+			}
+		}
+	}
+}, 35_000);
