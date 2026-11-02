@@ -2935,4 +2935,136 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 30_000);
 
+
+	// The old global stop used to close *every* loopback host after awaiting a
+	// slow unsubscribe, including a separate newly enrolled webhook owner.
+	// This is independent of the same-key re-enrollment barrier.
+	it("preserves an independently renewed webhook host through another key's slow stop", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		expect(listenPort).toBeGreaterThan(0);
+		await probe.stop(true);
+		const slowName = EVENT_NAME;
+		const independentName = "inventory/changed";
+		const slowUnsubscribeEntered = Promise.withResolvers<void>();
+		const releaseSlowUnsubscribe = Promise.withResolvers<void>();
+		const firstSlow = Promise.withResolvers<void>();
+		const firstIndependent = Promise.withResolvers<void>();
+		const renewedIndependent = Promise.withResolvers<void>();
+		const deliveredIndependent = Promise.withResolvers<void>();
+		let listCalls = 0;
+		let slowReleased = false;
+		const counts = new Map<string, number>();
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: () => {
+				listCalls++;
+				// The replacement consumer requests only the independent key.
+				// No delayed A re-enrollment may mask an accidentally closed host.
+				const names = listCalls === 1 ? [slowName, independentName] : [independentName];
+				return {
+					events: names.map(name => ({
+						name,
+						description: "private callback fixture",
+						inputSchema: { type: "object" },
+						delivery: ["webhook"],
+					})),
+				};
+			},
+			webhookSubscribe: async params => {
+				const name = String(params.name);
+				const count = (counts.get(name) ?? 0) + 1;
+				counts.set(name, count);
+				return {
+					id: name === independentName ? "independent-" + count : "slow-" + count,
+					cursor: name + ":" + count,
+					refreshBefore: null,
+				};
+			},
+			webhookUnsubscribe: async params => {
+				if (params.name === slowName && !slowReleased) {
+					slowUnsubscribeEntered.resolve();
+					await releaseSlowUnsubscribe.promise;
+					slowReleased = true;
+				}
+				return {};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET;
+		process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === slowName + ":1") firstSlow.resolve();
+			if (cursor === independentName + ":1") firstIndependent.resolve();
+			if (cursor === independentName + ":2") renewedIndependent.resolve();
+		});
+		const subs = [
+			{ name: slowName, path: "/events/slow-stop" },
+			{ name: independentName, path: "/events/independent-stop" },
+		].map(({ name, path }) => ({
+			name,
+			mode: "webhook" as const,
+			webhook: {
+				callbackUrl: "https://callback.example.test" + path,
+				secretRef: "$MCP_EVENTS_INDEPENDENT_STOP_SECRET",
+				listenPort,
+			},
+		}));
+		let stopping: Promise<void> | undefined;
+		try {
+			await withinHandlerChange(connect(manager, "independent-stop-webhooks", managerConfig(server, {
+				enabled: true, subscriptions: subs,
+			})), "initial two webhook registrations");
+			await withinHandlerChange(Promise.all([firstSlow.promise, firstIndependent.promise]), "both initial webhook cursors");
+			expect(manager.getActiveEventSubscriptionCount("independent-stop-webhooks")).toBe(2);
+			stopping = manager.stopEvents();
+			await withinHandlerChange(slowUnsubscribeEntered.promise, "slow old webhook unsubscribe");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "independent-after-stop") deliveredIndependent.resolve();
+			});
+			// Only the unrelated key is permitted to re-enroll while A's
+			// different remote key is still waiting to unsubscribe.
+			await withinHandlerChange(renewedIndependent.promise, "independent key registered while A is held");
+			expect(slowReleased).toBe(false);
+			expect(counts.get(independentName)).toBe(2);
+			releaseSlowUnsubscribe.resolve();
+			await withinHandlerChange(stopping, "old global stop settles");
+			expect(slowReleased).toBe(true);
+			expect(manager.getActiveEventSubscriptionCount("independent-stop-webhooks")).toBe(1);
+			const messageId = "independent-after-stop";
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify({
+				...event(messageId, "independent-after-stop-cursor"),
+				name: independentName,
+			});
+			const signature = createHmac("sha256", Buffer.from(CALLBACK_SECRET.slice("whsec_".length), "base64"))
+				.update(messageId + "." + timestamp + "." + body)
+				.digest("base64");
+			const response = await withinHandlerChange(fetch("http://127.0.0.1:" + listenPort + "/events/independent-stop", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"X-MCP-Subscription-Id": "independent-2",
+					"webhook-id": messageId,
+					"webhook-timestamp": timestamp,
+					"webhook-signature": "v1," + signature,
+				},
+				body,
+			}), "independent callback after earlier global stop");
+			expect(response.status).toBe(202);
+			await withinHandlerChange(deliveredIndependent.promise, "surviving independent webhook owner receives event");
+		} finally {
+			releaseSlowUnsubscribe.resolve();
+			try {
+				if (stopping) await withinHandlerChange(stopping, "old independent stop cleanup");
+				await withinHandlerChange(manager.disconnectAll(), "independent webhook cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET;
+				else process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
 });
