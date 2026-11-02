@@ -362,6 +362,66 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
     }
   });
 
+	it("exclusively reserves a named fork before copying so a competing fork cannot replace its evidence", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-concurrent-destination-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		let forked: SessionManager | undefined;
+		let competing: SessionManager | undefined;
+		try {
+			expect(await source.saveArtifact("synthetic original archive", "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Keep local recovery artifact://0", timestamp: Date.now(),
+			});
+			await source.ensureOnDisk();
+			const sourceFile = source.getSessionFile();
+			const sourceArtifact = await source.getArtifactPath("0");
+			if (!sourceFile || !sourceArtifact) throw new Error("expected original persisted evidence");
+			const sourceBefore = await fs.readFile(sourceFile, "utf8");
+			const artifactBefore = await fs.readFile(sourceArtifact, "utf8");
+			const destinationFile = path.join(sessions, "named-concurrent-fork.jsonl");
+			const destinationArtifacts = destinationFile.slice(0, -".jsonl".length);
+			const copyOriginal = nodeFs.promises.cp.bind(nodeFs.promises);
+			let competitorAttempted = false;
+			let competitorFailure: unknown;
+			// A second independent manager arrives exactly after the first has
+			// reached its real artifact-copy boundary. Without an atomic
+			// reservation it can publish the same named destination first.
+			const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+				if (from === path.dirname(sourceArtifact) && to === destinationArtifacts && !competitorAttempted) {
+					competitorAttempted = true;
+					try {
+						competing = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+							sessionFile: destinationFile, suppressBreadcrumb: true,
+						});
+					} catch (error) {
+						competitorFailure = error;
+					}
+				}
+				await copyOriginal(from, to, options);
+			});
+			try {
+				forked = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+					sessionFile: destinationFile, suppressBreadcrumb: true,
+				});
+			} finally {
+				copySpy.mockRestore();
+			}
+			expect(competitorAttempted).toBe(true);
+			expect(competing).toBeUndefined();
+			expect(String(competitorFailure)).toMatch(/destination.*already exists/i);
+			expect(forked.getSessionFile()).toBe(destinationFile);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBefore);
+			expect(await fs.readFile(sourceArtifact, "utf8")).toBe(artifactBefore);
+			expect(await fs.readFile(path.join(destinationArtifacts, path.basename(sourceArtifact)), "utf8")).toBe(artifactBefore);
+		} finally {
+			await competing?.close();
+			await forked?.close();
+			await source.close();
+		}
+	});
+
 });
 
 describe("SessionManager.fork preserves inherited artifact evidence", () => {

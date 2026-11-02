@@ -2035,6 +2035,35 @@ export class SessionManager {
 			// An absent directory is normal only if there is nothing to recover.
 			if (referencedIds.size > 0) throw new Error("Cannot fork session: referenced artifacts unavailable");
 		}
+		// The initial lstat checks are not an exclusive reservation: two
+		// forkFrom callers naming one empty target can otherwise publish over
+		// each other. Reserve its sidecar atomically before copying *or* publishing
+		// a JSONL, including when the source has no artifact directory.
+		// Keep the sidecar private; a failed later publication leaves the
+		// reservation/evidence in place for explicit owner recovery, not deletion.
+		const reserveDestination = async (): Promise<void> => {
+			try {
+				await fs.promises.mkdir(nextArtifactDir, { mode: 0o700 });
+			} catch (error) {
+				if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+					throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+				}
+				throw error;
+			}
+			// A non-cooperating writer may have created the JSONL since preflight;
+			// never overwrite it even after winning the sidecar reservation.
+			try {
+				await fs.promises.lstat(nextSessionFile);
+			} catch (error) {
+				if (isEnoent(error)) return;
+				throw error;
+			}
+			throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+		};
+		if (!sourceNames) {
+			await reserveDestination();
+			return;
+		}
 		if (sourceNames) {
 			// The full artifact tree is copied, not just files linked by retained
 			// messages. Refuse even an unrelated symlink (including a nested one):
@@ -2072,6 +2101,7 @@ export class SessionManager {
 			}
 			// A failed copy leaves the old session and its original evidence usable.
 			// Never overwrite a newly created destination with another fork's data.
+			await reserveDestination();
 			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
 				recursive: true, force: false, errorOnExist: true,
 				filter: async source => {

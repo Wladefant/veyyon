@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Named session forks atomically reserve their destination artifact directory before copying or publishing, refusing concurrent forks targeting the same session path ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A named session fork refuses pre-existing destination JSONL or artifact sidecar paths before publication, protecting unrelated history and evidence from replacement or adoption ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - A refused source-writer close during session fork restores the active session lifecycle and prevents its abandoned terminal marker from overwriting separately appended history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
