@@ -85,4 +85,31 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		expect(JSON.stringify(result.content)).toContain("true");
 		expect(artifact).not.toContain(CANARY);
 	});
+	it("withholds log and phase inventories from live status and result details", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-status-inventory-"));
+		const session = makeSession(path.join(directory, "eval-output.txt"));
+		const progress: AgentToolResult[] = [];
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const inventory = "ALPHA=fake-a\nBETA=fake-b\nGAMMA=fake-c";
+		const result = await tool.execute(
+			"synthetic-eval-status-call",
+			{
+				language: "js",
+				code: `log("safe status"); phase("safe phase"); log(${JSON.stringify(inventory)}); phase(${JSON.stringify(inventory)});`,
+				reset: true,
+			},
+			undefined,
+			update => progress.push(update),
+		);
+		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details)];
+		expect(retained).toHaveLength(3);
+		for (const sink of retained) expect(sink).not.toContain(inventory);
+		expect(JSON.stringify(result.details)).toContain("[credential output withheld]");
+		expect(result.details?.statusEvents).toEqual([
+			{ op: "log", message: "safe status" },
+			{ op: "phase", title: "safe phase" },
+			{ op: "log", message: "[credential output withheld]" },
+			{ op: "phase", title: "[credential output withheld]" },
+		]);
+	});
 });

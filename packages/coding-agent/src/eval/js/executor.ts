@@ -79,8 +79,9 @@ function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
+	const outputGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
 	const outputSink = new OutputSink({
-		outputGuard: new ProducerOutputGuard(options.session.obfuscateProviderText),
+		outputGuard,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
@@ -137,13 +138,24 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 					if (output.type === "json") {
 						try {
 							const serialized = JSON.stringify(output.data);
-							const filtered = new ProducerOutputGuard(options.session.obfuscateProviderText).sanitize(serialized);
+							const filtered = outputGuard.sanitize(serialized);
 							output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };
 						}
 					}
 					if (output.type === "status") {
+						const { event } = output;
+						if (typeof event.message === "string" || typeof event.title === "string") {
+							output = {
+								...output,
+								event: {
+									...event,
+									...(typeof event.message === "string" ? { message: outputGuard.sanitize(event.message) } : {}),
+									...(typeof event.title === "string" ? { title: outputGuard.sanitize(event.title) } : {}),
+								},
+							};
+						}
 						// Timeout-control events drive the eval watchdog only; never
 						// store or render them as cell output.
 						options.onStatus?.(output.event);
