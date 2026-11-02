@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
@@ -2022,14 +2023,28 @@ export class SessionManager {
 			if (sourceNames.some(name => !copiedNames.has(name))) {
 				throw new Error("Cannot fork session: artifact copy incomplete");
 			}
-			for (const id of referencedIds) {
+			// Size equality does not establish that referenced recovery bytes survived
+		// the copy. Hash the two files as streams to keep memory bounded even for
+		// large saved tool output; do not read or import foreign-session artifacts.
+		const sha256File = async (filename: string): Promise<string> => {
+			const digest = createHash("sha256");
+			for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
+			return digest.digest("hex");
+		};
+		for (const id of referencedIds) {
 				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+				const originalPath = path.join(oldArtifactDir, filename);
+				const copiedPath = path.join(nextArtifactDir, filename);
 				const [original, copied] = await Promise.all([
-					fs.promises.lstat(path.join(oldArtifactDir, filename)),
-					fs.promises.lstat(path.join(nextArtifactDir, filename)),
+					fs.promises.lstat(originalPath),
+					fs.promises.lstat(copiedPath),
 				]);
 				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
 					throw new Error("Cannot fork session: referenced artifact copy incomplete");
+				}
+				const [originalHash, copiedHash] = await Promise.all([sha256File(originalPath), sha256File(copiedPath)]);
+				if (originalHash !== copiedHash) {
+					throw new Error("Cannot fork session: referenced artifact bytes differ from source");
 				}
 			}
 		}
