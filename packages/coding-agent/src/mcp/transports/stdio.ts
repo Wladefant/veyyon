@@ -665,6 +665,23 @@ export class StdioTransport implements MCPTransport {
 			return;
 		}
 
+		// A peer cannot turn a malformed JSON-RPC method frame into an MCP
+		// callback. Correlated client replies have a separate validation path.
+		if ("method" in message) {
+			const params = message.params;
+			if (
+				message.jsonrpc !== "2.0" ||
+				typeof message.method !== "string" ||
+				(params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) ||
+				("id" in message && typeof message.id !== "string" && typeof message.id !== "number") ||
+				"result" in message ||
+				"error" in message
+			) {
+				logger.warn("Ignored invalid MCP stdio peer method envelope");
+				return;
+			}
+		}
+
 		// Server-to-client request: has both method and id
 		if ("method" in message && "id" in message && message.id != null) {
 			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(response =>
