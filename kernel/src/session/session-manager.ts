@@ -2139,12 +2139,15 @@ export class SessionManager {
 				const before = await fs.promises.lstat(filename);
 				if (!matches(before)) throw changed();
 				// NOFOLLOW prevents POSIX symlink substitution; NONBLOCK avoids
-				// hanging if a writer swaps in a FIFO. fstat/lstat guard platforms
-				// where these flags do not establish the same guarantees.
+				// hanging on a replaced FIFO where these flags are supported.
+				// Windows does not accept these open flags: retain its supported
+				// read-only open and refuse a descriptor/path identity mismatch.
+				// This does not prove safety against all Windows reparse races.
 				const flags =
 					fs.constants.O_RDONLY |
-					(fs.constants.O_NOFOLLOW ?? 0) |
-					(fs.constants.O_NONBLOCK ?? 0);
+					(process.platform === "win32"
+						? 0
+						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
 				const file = await fs.promises.open(filename, flags);
 				try {
 					const opened = await file.stat();
