@@ -461,12 +461,15 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Expected loopback fixture address");
 	const config = { type: "http" as const, url: "http://127.0.0.1:" + address.port + "/mcp" };
-	let connecting: Promise<unknown> | undefined;
+	let connecting: ReturnType<MCPManager["connectServers"]> | undefined;
 	let refreshing: Promise<void> | undefined;
 	let restoreRequest: (() => void) | undefined;
 	let refreshRequests = 0;
+	const connectedStatuses: string[] = [];
 	try {
-		connecting = manager.connectServers({ [name]: config }, {});
+		connecting = manager.connectServers({ [name]: config }, {}, event => {
+			if (event.type === "connected") connectedStatuses.push(event.serverName);
+		});
 		await bounded(firstListEntered.promise, "first initial tools/list request");
 		const connection = await bounded(manager.waitForConnection(name), "initialized HTTP connection");
 		const transport = connection.transport;
@@ -489,7 +492,9 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 		// Old code starts request 2 before the initial request settles.
 		expect(refreshRequests).toBe(0);
 		releaseInitialList.resolve();
-		await bounded(Promise.all([connecting, refreshing]), "startup and queued refresh");
+		const [startup] = await bounded(Promise.all([connecting, refreshing]), "startup and queued refresh");
+		expect(startup.connectedServers).toContain(name);
+		expect(connectedStatuses).toContain(name);
 		expect(refreshRequests).toBe(1);
 		const newest = [createMCPToolName(name, "fresh_notification")];
 		const obsolete = createMCPToolName(name, "stale_initial");
