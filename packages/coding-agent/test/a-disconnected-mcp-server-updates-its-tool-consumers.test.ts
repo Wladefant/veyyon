@@ -399,7 +399,7 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 // WHY: initial discovery's tools/list can settle after a newer live refresh.
 // A single connection/cache must never publish the superseded initial catalog.
 // Real HTTP MCP handshake and MCPManager; only the newer list reply is faked.
-it("a notification refresh cannot be overtaken by the still-pending initial tool discovery", async () => {
+async function exerciseInitialRefreshRace(initialRejects: boolean): Promise<void> {
 	const name = "initial-refresh-order";
 	const firstListEntered = Promise.withResolvers<void>();
 	const releaseInitialList = Promise.withResolvers<void>();
@@ -455,6 +455,17 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 			} else if (message.method === "tools/list") {
 				firstListEntered.resolve();
 				await releaseInitialList.promise;
+				if (initialRejects) {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({
+							jsonrpc: "2.0",
+							id: message.id,
+							error: { code: -32000, message: "synthetic initial tool-list failure" },
+						}),
+					);
+					return;
+				}
 				result = { tools: [{ name: "stale_initial", inputSchema: { type: "object", properties: {} } }] };
 			} else {
 				result = {};
@@ -537,4 +548,7 @@ it("a notification refresh cannot be overtaken by the still-pending initial tool
 			}
 		}
 	}
-}, 30_000);
+}
+
+it("a newer refresh supersedes a successful pending initial tool discovery", () => exerciseInitialRefreshRace(false), 30_000);
+it("a queued refresh recovers initial list failure and reports healthy startup", () => exerciseInitialRefreshRace(true), 30_000);
