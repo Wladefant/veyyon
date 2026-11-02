@@ -924,6 +924,27 @@ test("checkpoint transfer grants reject an authority response for a different ru
 // WHY: a successful /claim JSON response can carry a different transfer's
 // runtime lease. The requested one-use transfer identity must match before
 // admission for both initial claims and later resume-capability redemption.
+test("claim and resume refuse the unredeemed transfer epoch under HTTP 200", async () => {
+	for (const action of ["claim", "resume"] as const) {
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test",
+			key: new Uint8Array(32),
+			fetch: async () => Response.json({
+				ownerNode: "runtime-owner", targetNode: "destination-device",
+				transferId: "transfer-id", resumeToken: "r".repeat(16),
+				// Reservation epoch 4 is not the claimed runtime lease (>= 5).
+			epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			}),
+		});
+		const grant = action === "claim"
+			? client.claimTransfer("s", "destination-device", "transfer-id", "c".repeat(16), 4, "runtime-owner")
+			: client.resumeTransfer("s", "destination-device", "transfer-id", "r".repeat(16), 4, "runtime-owner");
+		await expect(grant).rejects.toThrow(/invalid lease fence/);
+		await expect(client.assertWritable("s", 4, "runtime-owner")).rejects.toThrow(/lease lost/);
+	}
+});
+
 test("claim and resume receipts bind the requested target and transfer identity", async () => {
 	const scenarios = [
 		{ name: "valid", targetNode: "destination-device", transferId: "transfer-1", valid: true },

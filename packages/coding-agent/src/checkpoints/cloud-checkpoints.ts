@@ -274,7 +274,8 @@ export class CheckpointClient {
 			const expiresAt = typeof result.expiresAt === "string" ? Date.parse(result.expiresAt) : Number.NaN;
 			if (
 				!Number.isSafeInteger(result.epoch) ||
-				result.epoch < transferEpoch ||
+				// A target reservation at transferEpoch is not a redeemed runtime lease.
+				result.epoch <= transferEpoch ||
 				!Number.isFinite(expiresAt) ||
 				expiresAt <= Date.now()
 			) {
