@@ -1,4 +1,5 @@
-import { expect, it } from "bun:test";
+import { expect, it, vi } from "bun:test";
+import { logger } from "@veyyon/utils";
 import { createServer } from "node:http";
 import { MCPManager } from "../src/mcp/manager";
 import { createMCPToolName } from "../src/mcp/tool-bridge";
@@ -940,6 +941,7 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		newA.transport.close = async () => {
 			throw new Error("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 		};
+		const warnings = vi.spyOn(logger, "warn").mockImplementation(() => {});
 		try {
 			await withinConnectBoundary(manager.disconnectAll(), "best-effort bulk cleanup after A close rejection");
 			expect(bDeletes).toBe(2);
@@ -948,7 +950,13 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 			expect(manager.getLastError(names.a)).toBe("MCP transport close unconfirmed; verify the server before reconnecting");
 			expect(manager.getLastError(names.a)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 			expect(manager.getLastError(names.b)).toBeUndefined();
+			expect(warnings).toHaveBeenCalledWith(
+				"MCP bulk disconnect did not close every server cleanly",
+				{ path: "mcp:disconnectAll", failedCloses: 1 },
+			);
+			expect(JSON.stringify(warnings.mock.calls)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 		} finally {
+			warnings.mockRestore();
 			// The deliberately failed A close remains fixture-owned. Close it
 			// explicitly rather than leaving a synthetic orphan in the test.
 			await withinConnectBoundary(reallyCloseA(), "failed-close fixture release");
