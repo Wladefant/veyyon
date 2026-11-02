@@ -308,3 +308,74 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 		await bounded(manager.disconnectAll(), "fixture teardown");
 	}
 }, 30_000);
+
+
+// WHY: a pending list can fail just as a newer tools-changed notification
+// arrives. The queued notification must get a fresh request instead of
+// inheriting the failed stale request and leaving an old catalog active.
+// This exercises real manager/disposable stdio with an external response seam;
+// it does not claim first-party network or installed T3 execution.
+it("recovers a queued tool-change refresh after the first list fails", async () => {
+	const name = "refresh-after-error";
+	const manager = new MCPManager(process.cwd());
+	const loaded = Promise.withResolvers<void>();
+	const notices: string[][] = [];
+	manager.setOnToolsChanged(tools => {
+		const names = tools.map(tool => tool.name);
+		notices.push(names);
+		if (names.filter(toolName => toolName.startsWith(`mcp__${name}_`)).length === MANY_TOOL_COUNT) loaded.resolve();
+	});
+	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
+		const expired = Promise.withResolvers<never>();
+		const timer = setTimeout(() => expired.reject(new Error(`MCP ${phase} did not settle`)), 8_000);
+		try { return await Promise.race([work, expired.promise]); }
+		finally { clearTimeout(timer); }
+	};
+	const firstEntered = Promise.withResolvers<void>();
+	const releaseFailure = Promise.withResolvers<void>();
+	try {
+		const fixture = { type: "stdio" as const, command: process.execPath, args: [FIXTURE_PATH] };
+		await bounded(manager.connectServers({ [name]: fixture }, {}), "initial connection");
+		await bounded(loaded.promise, "complete initial catalog");
+		const connection = await bounded(manager.waitForConnection(name), "connected fixture");
+		const transport = connection.transport;
+		const originalRequest = transport.request;
+		let calls = 0;
+		let first: Promise<void> | undefined;
+		let second: Promise<void> | undefined;
+		transport.request = async <T = unknown>(method: string, params?: Record<string, unknown>, options?: MCPRequestOptions): Promise<T> => {
+			if (method === "tools/list") {
+				if (++calls === 1) {
+					firstEntered.resolve();
+					await releaseFailure.promise;
+					throw new Error("synthetic first list failure");
+				}
+				if (calls === 2) return { tools: [{ name: "recovered", inputSchema: { type: "object", properties: {} } }] } as T;
+				throw new Error("Unexpected repeated tool-list attempt");
+			}
+			return originalRequest.call(transport, method, params, options) as Promise<T>;
+		};
+		try {
+			first = manager.refreshServerTools(name);
+			await bounded(firstEntered.promise, "first request");
+			second = manager.refreshServerTools(name);
+			expect(calls).toBe(1);
+			expect(first).toBe(second);
+			const before = notices.length;
+			releaseFailure.resolve();
+			await bounded(Promise.all([first, second]), "queued newer refresh after failure");
+			expect(calls).toBe(2);
+			expect(manager.getTools().map(tool => tool.name)).toEqual([createMCPToolName(name, "recovered")]);
+			expect(connection.tools?.map(tool => tool.name)).toEqual(["recovered"]);
+			expect(notices).toHaveLength(before + 1);
+			expect(notices.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
+		} finally {
+			releaseFailure.resolve();
+			await bounded(Promise.allSettled([first, second].filter((p): p is Promise<void> => !!p)), "refresh settlement");
+			transport.request = originalRequest;
+		}
+	} finally {
+		releaseFailure.resolve();
+		await bounded(manager.disconnectAll(), "fixture teardown");
+	}
+}, 30_000);
