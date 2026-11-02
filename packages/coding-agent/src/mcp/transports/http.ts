@@ -243,10 +243,16 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
-	/** Route an SSE message (or batch) to the appropriate handler. */
-	#dispatchSSEMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
+	/** Validate each untrusted SSE message (including every batch member) before routing it. */
+	#dispatchSSEMessage(message: unknown): void {
 		if (Array.isArray(message)) {
 			for (const m of message) this.#dispatchSSEMessage(m);
+			return;
+		}
+		// A malformed GET-listener frame must not terminate its stream or
+		// reach the tool-consumer or server-to-client request callbacks.
+		if (!isStreamMessage(message)) {
+			logger.warn("Skipping invalid MCP HTTP SSE stream frame");
 			return;
 		}
 		// Server-to-client request: has both method and id
