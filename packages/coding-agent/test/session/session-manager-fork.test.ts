@@ -3,7 +3,8 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -364,6 +365,60 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         await fs.rename(parkedDir, oldDir);
       }
       expect(await readSaved(manager, "0")).toBe(originalBytes);
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("refuses a same-length but byte-corrupted copied artifact and retries without losing source evidence", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-copy-content-mismatch-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
+      const message = "Inherited audit evidence: artifact://0";
+      manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+      await manager.flush();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected original session file");
+      const sourceId = manager.getSessionId();
+      const sourceJsonl = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original artifact file");
+      const originalCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+      const changedBytes = "x".repeat(Buffer.byteLength(originalBytes, "utf8"));
+      expect(Buffer.byteLength(changedBytes, "utf8")).toBe(Buffer.byteLength(originalBytes, "utf8"));
+      expect(changedBytes).not.toBe(originalBytes);
+
+      // Model a storage-side same-size corruption after the genuine directory
+      // copy: length and regular-file checks alone cannot detect this.
+      const cpSpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
+        await originalCopy(source, destination, options);
+        if (source === path.dirname(sourceArtifact)) {
+          await fs.writeFile(path.join(destination, path.basename(sourceArtifact)), changedBytes);
+        }
+      });
+      try {
+        await expect(manager.fork()).rejects.toThrow(/referenced artifact.*(bytes|content).*differ/i);
+      } finally {
+        cpSpy.mockRestore();
+      }
+
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
+
+      // Clean retry must still preserve the complete original output, and
+      // the next new output must never reuse inherited artifact ID zero.
+      const result = await manager.fork();
+      if (!result) throw new Error("expected successful retry");
+      expect(result.oldSessionFile).toBe(sourceFile);
+      expect(result.newSessionFile).not.toBe(sourceFile);
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+      expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
+      expect(await readSaved(manager, "0")).toBe(originalBytes);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
     } finally {
       await manager.close();
     }
