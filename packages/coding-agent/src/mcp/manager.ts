@@ -383,6 +383,7 @@ export class MCPManager {
 	#webhookHosts = new Map<number, { close(): void | Promise<void> }>();
 	#webhookPortById = new Map<string, number>();
 	#webhookReceiver = createWebhookReceiver({
+		registrationKey: webhookRegistrationKey,
 		registrations: this.#webhookRegistrations,
 		verificationRoutes: this.#webhookVerificationRoutes,
 		accept: async (subscriptionId, message) => {

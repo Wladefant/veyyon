@@ -13,6 +13,8 @@ export interface MCPWebhookReceiverOptions {
 	registrations: ReadonlyMap<string, MCPWebhookRegistration>;
 	verificationRoutes: ReadonlyMap<string, { secret: string }>;
 	accept: (subscriptionId: string, event: MCPWebhookMessage) => Promise<"queued" | "duplicate">;
+	/** Resolve a route-scoped internal id when a manager multiplexes independent servers. */
+	registrationKey?: (callbackPath: string, remoteId: string) => string;
 	now?: () => number;
 }
 
@@ -51,10 +53,10 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			const path = new URL(request.url).pathname;
 			const subscriptionId = request.headers.get("X-MCP-Subscription-Id");
 			if (!subscriptionId) return new Response(null, { status: 400 });
-			const scopedKey = webhookRegistrationKey(path, subscriptionId);
-			// Standalone callers may still use raw-id maps; MCPManager always
-			// registers scoped keys and resolves collisions by the verified path.
-			const routeKey = options.registrations.has(scopedKey) ? scopedKey : subscriptionId;
+			// Standalone receivers keep their existing raw-id contract. Shared
+			// MCPManager routing explicitly requires a path-scoped internal key;
+			// never fall back to an arbitrary raw id after a scoped miss.
+			const routeKey = options.registrationKey?.(path, subscriptionId) ?? subscriptionId;
 			const registration = options.registrations.get(routeKey);
 			const verification = options.verificationRoutes.get(path);
 			const pendingVerification = verification !== undefined && registration === undefined;
