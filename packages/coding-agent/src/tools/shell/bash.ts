@@ -24,6 +24,7 @@ import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
+import { ProducerOutputGuard } from "../../secrets/producer-output";
 import { type SessionCpuLimit, sessionBudgetLimits, sessionCpuLimit } from "../../session/cpu-limit";
 import {
 	artifactFooter,
@@ -1271,7 +1272,7 @@ export class BashTool
 				} catch (error) {
 					logger.warn("ACP terminal final output read failed", { terminalId: handle.terminalId, error });
 				}
-				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(current, {
+				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(guardClientTerminalOutput(current, true), {
 					exitCode: undefined,
 					cancelled: false,
 					timedOut: true,
@@ -1284,7 +1285,7 @@ export class BashTool
 			}
 
 			// Fetch final output; the terminal is released in the finally.
-			const finalOutput = await handle.currentOutput();
+			const finalOutput = guardClientTerminalOutput(await handle.currentOutput(), true);
 			const { exitCode, signal: exitSignal } = clientTerminalExit(exitStatus);
 			const bridgeResult: BashResult = {
 				...summarizeBridgeOutput(finalOutput, { exitCode, cancelled: false }),
@@ -1482,6 +1483,19 @@ function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
 }
 
 /**
+ * ACP returns cumulative snapshots, not chunks. Classify each snapshot from its start,
+ * holding incomplete records and assignment prefixes until the command's final read.
+ */
+function guardClientTerminalOutput(
+	output: ClientBridgeTerminalOutput,
+	completed = false,
+): ClientBridgeTerminalOutput {
+	const guard = new ProducerOutputGuard();
+	const filtered = guard.push(output.output);
+	return { ...output, output: filtered + (completed ? guard.finish() : "") };
+}
+
+/**
  * Poll the client's terminal until the process exits, the timeout elapses, or the caller
  * aborts, pushing its output on every tick. A timeout kills the command before returning, so
  * a slow `terminal/output` RPC cannot let it keep running past the enforced deadline; the
@@ -1564,7 +1578,7 @@ async function waitForClientTerminal(
 			// `signal?.aborted` and exits via the abort branch.
 			if (pollOutput === undefined) continue;
 			onUpdate?.({
-				content: [{ type: "text", text: pollOutput.output }],
+				content: [{ type: "text", text: guardClientTerminalOutput(pollOutput).output }],
 				details: { terminalId: handle.terminalId },
 			});
 		}
