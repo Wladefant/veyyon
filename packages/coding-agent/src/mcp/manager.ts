@@ -1326,6 +1326,9 @@ export class MCPManager {
 			// Save config early so reconnection works even if the initial connect times out
 			// and falls back to cached/deferred tools.
 			this.#serverConfigs.set(name, config);
+			// Bulk disconnect invalidates every pending initial handshake, even
+			// while another connected server's close is still being awaited.
+			const initialConnectionEpoch = this.#epoch;
 
 			// Resolve auth config before connecting, but do so per-server in parallel.
 			const connectionPromise = (async () => {
@@ -1347,7 +1350,8 @@ export class MCPManager {
 					// starts events and leaves the transport untracked/unclosable.
 					if (
 						this.#pendingConnections.get(name) !== connectionPromise ||
-						!this.#serverConfigs.has(name)
+						!this.#serverConfigs.has(name) ||
+						this.#epoch !== initialConnectionEpoch
 					) {
 						closeTransportDetached(connection.transport, name, "initial-connect-revoked");
 						throw new Error("MCP initial connection was withdrawn before completion");
