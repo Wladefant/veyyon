@@ -467,6 +467,35 @@ describe("native recovery", () => {
 		expect(await readFile(join(target, "sessions", "session", "__proto__"), "utf8"))
 			.toBe("synthetic artifact with a safe filename");
 	});
+	test("rejects excluded nested artifact and workspace directories before descending", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "early-subtree-policy", cwd: root }) + "\n");
+		const artifactRoot = join(root, "session");
+		const artifactSecretDir = join(artifactRoot, "shared-auth");
+		await mkdir(artifactSecretDir, { recursive: true });
+		await writeFile(join(artifactSecretDir, ".env"), "synthetic name-only policy sentinel");
+		// The old walker reached the child and rejected its .env name; the
+		// corrected walker rejects the excluded parent *before* descending.
+		await expect(captureNativeCheckpoint(session, [])).rejects.toThrow(
+			/Artifact paths include excluded checkpoint files/,
+		);
+		await rm(artifactSecretDir, { recursive: true });
+		await writeFile(join(artifactRoot, "ordinary.txt"), "approved artifact");
+
+		const workspaceDir = join(root, "src");
+		const workspaceSecretDir = join(workspaceDir, "credentials");
+		await mkdir(workspaceSecretDir, { recursive: true });
+		await writeFile(join(workspaceSecretDir, ".env"), "synthetic name-only policy sentinel");
+		await expect(captureNativeCheckpoint(session, [workspaceDir])).rejects.toThrow(
+			/Workspace paths include excluded checkpoint files/,
+		);
+		await rm(workspaceSecretDir, { recursive: true });
+		await writeFile(join(workspaceDir, "clean.ts"), "export const harmless = true;");
+		const accepted = await captureNativeCheckpoint(session, [workspaceDir]);
+		expect(Object.keys(accepted.artifacts)).toEqual(["ordinary.txt"]);
+		expect(accepted.workspace.dirty).toEqual(["src/clean.ts"]);
+	});
 	test("artifact capture and restore reject private shared-policy paths before publication", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");

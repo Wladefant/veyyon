@@ -59,7 +59,13 @@ async function assertNoSymlink(path: string): Promise<void> {
 	if (info.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in checkpoints: ${path}`);
 }
 interface WalkBudget { remainingEntries: number; remainingPathBytes: number }
-async function walkFiles(root: string, base = root, budget?: WalkBudget, depth = 0): Promise<string[]> {
+async function walkFiles(
+	root: string,
+	base = root,
+	budget?: WalkBudget,
+	depth = 0,
+	scope: "artifact" | "workspace" = "workspace",
+): Promise<string[]> {
 	// Stream traversal entries; charge both directories and files against the
 	// same capture-wide budget. Empty-directory fanout and excessive nesting
 	// must not bypass file-only admission. Local forks retain prior policy.
@@ -72,6 +78,11 @@ async function walkFiles(root: string, base = root, budget?: WalkBudget, depth =
 		await assertNoSymlink(path);
 		const info = await lstat(path);
 		const rel = safeRelative(relative(base, path).split(sep).join("/"));
+		// Reject excluded parent directories before exploring their children.
+		// Otherwise an excluded tree can still consume unbounded local-fork
+		// directory traversal (or cloud listing budget) before leaf admission.
+		if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
+			throw new Error(`${scope === "artifact" ? "Artifact" : "Workspace"} paths include excluded checkpoint files`);
 		if (budget) {
 			const size = Buffer.byteLength(rel, "utf8");
 			if (budget.remainingEntries < 1 || size > budget.remainingPathBytes)
@@ -79,7 +90,7 @@ async function walkFiles(root: string, base = root, budget?: WalkBudget, depth =
 			budget.remainingEntries--;
 			budget.remainingPathBytes -= size;
 		}
-		if (info.isDirectory()) found.push(...(await walkFiles(path, base, budget, depth + 1)));
+		if (info.isDirectory()) found.push(...(await walkFiles(path, base, budget, depth + 1, scope)));
 		else if (info.isFile()) found.push(rel);
 	}
 	return found;
@@ -387,7 +398,7 @@ export async function captureNativeCheckpoint(
 		const artifactRootName = safeRelative(basename(artifactRoot));
 		if (filterCheckpointFiles([{ path: artifactRootName, content: new Uint8Array(0) }]).length !== 1)
 			throw new Error("Artifact root includes excluded checkpoint files");
-		for (const rel of await walkFiles(artifactRoot, artifactRoot, listingBudget)) {
+		for (const rel of await walkFiles(artifactRoot, artifactRoot, listingBudget, 0, "artifact")) {
 			// Artifacts are automatic captures, not an explicit selection of
 			// sensitive workspace paths. Apply the same exclusion policy first.
 			if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
