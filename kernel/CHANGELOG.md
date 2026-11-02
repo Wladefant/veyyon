@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Session forks pin a non-following, nonblocking file descriptor for artifact hashing and reject substituted or nonregular evidence before publishing a fork ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks verify every copied artifact's bytes and complete nested tree structure before publication, refusing corruption of unreferenced recovery evidence ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks refuse multiply-linked artifact files in the source or copied tree before publication, preventing unrelated hard-linked bytes from being inherited ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Named session forks atomically reserve their destination artifact directory before copying or publishing, refusing concurrent forks targeting the same session path ([#774](https://github.com/Wladefant/veyyon/issues/774)).

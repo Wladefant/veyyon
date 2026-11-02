@@ -2125,10 +2125,59 @@ export class SessionManager {
 			// A full-tree fork must preserve all regular evidence bytes, including
 			// unreferenced nested output. Stream each comparison to bound memory;
 			// a type/size-only check cannot detect equal-length corruption.
-			const sha256File = async (filename: string): Promise<string> => {
-				const digest = createHash("sha256");
-				for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
-				return digest.digest("hex");
+			// A pathname checked by lstat can be replaced before createReadStream()
+			// opens it. Hash through one pinned descriptor, refusing a symlink,
+			// special file, hard link or substituted inode before reading bytes.
+			const sha256File = async (filename: string, expected: fs.Stats): Promise<string> => {
+				const changed = () => new Error("Cannot fork session: artifact changed during digest read");
+				const matches = (actual: fs.Stats): boolean =>
+					actual.isFile() &&
+					actual.nlink === 1 &&
+					actual.dev === expected.dev &&
+					actual.ino === expected.ino &&
+					actual.size === expected.size;
+				const before = await fs.promises.lstat(filename);
+				if (!matches(before)) throw changed();
+				// NOFOLLOW prevents POSIX symlink substitution; NONBLOCK avoids
+				// hanging if a writer swaps in a FIFO. fstat/lstat guard platforms
+				// where these flags do not establish the same guarantees.
+				const flags =
+					fs.constants.O_RDONLY |
+					(fs.constants.O_NOFOLLOW ?? 0) |
+					(fs.constants.O_NONBLOCK ?? 0);
+				const file = await fs.promises.open(filename, flags);
+				try {
+					const opened = await file.stat();
+					const afterOpen = await fs.promises.lstat(filename);
+					if (!matches(opened) || !matches(afterOpen)) throw changed();
+					const digest = createHash("sha256");
+					const buffer = Buffer.alloc(64 * 1024);
+					let position = 0;
+					while (position < opened.size) {
+						const { bytesRead } = await file.read(
+							buffer,
+							0,
+							Math.min(buffer.length, opened.size - position),
+							position,
+						);
+						if (bytesRead === 0) throw changed();
+						digest.update(buffer.subarray(0, bytesRead));
+						position += bytesRead;
+					}
+					const afterRead = await file.stat();
+					const pathAfterRead = await fs.promises.lstat(filename);
+					if (
+						!matches(afterRead) ||
+						!matches(pathAfterRead) ||
+						afterRead.mtimeMs !== opened.mtimeMs ||
+						afterRead.ctimeMs !== opened.ctimeMs ||
+						pathAfterRead.mtimeMs !== before.mtimeMs ||
+						pathAfterRead.ctimeMs !== before.ctimeMs
+					) throw changed();
+					return digest.digest("hex");
+				} finally {
+					await file.close();
+				}
 			};
 			for (const entry of sourceTree) {
 				if (!entry.startsWith("file:")) continue;
@@ -2152,8 +2201,8 @@ export class SessionManager {
 					);
 				}
 				const [originalHash, copiedHash] = await Promise.all([
-					sha256File(originalPath),
-					sha256File(copiedPath),
+					sha256File(originalPath, original),
+					sha256File(copiedPath, copied),
 				]);
 				if (originalHash !== copiedHash) {
 					throw new Error(

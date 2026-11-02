@@ -794,6 +794,80 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
+  it("refuses a substituted file descriptor at the fork artifact hash boundary", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-digest-open-");
+    const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+    try {
+      const original = "SYNTHETIC PRESERVED RECOVERY OUTPUT";
+      expect(await manager.saveArtifact(original, "bash")).toBe("0");
+      manager.appendMessage({ role: "user", content: "Retain artifact://0", timestamp: Date.now() });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected persistent source");
+      const sourceId = manager.getSessionId();
+      const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected source artifact");
+
+      const unrelatedSingle = path.join(temp.path(), "other-regular.txt");
+      const unrelatedLinked = path.join(temp.path(), "other-linked.txt");
+      await fs.writeFile(unrelatedSingle, "X".repeat(original.length));
+      await fs.writeFile(unrelatedLinked, "Y".repeat(original.length));
+      await fs.link(unrelatedLinked, path.join(temp.path(), "other-linked-alias.txt"));
+      const sourceStat = await fs.stat(sourceArtifact);
+      const singleStat = await fs.stat(unrelatedSingle);
+      // Some Windows filesystems report no stable inode; still run the
+      // multiply-linked case, whose open-time nlink must be rejected.
+      const candidates = [
+        ...(sourceStat.dev !== singleStat.dev || sourceStat.ino !== singleStat.ino
+          ? [unrelatedSingle] : []),
+        unrelatedLinked,
+      ];
+      for (const unrelated of candidates) {
+        const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+        const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+        let copied = false;
+        let substituted = false;
+        const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
+          await realCopy(src, dst, options);
+          if (src === path.dirname(sourceArtifact)) copied = true;
+        });
+        const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+          if (copied && String(file) === sourceArtifact && !substituted) {
+            substituted = true;
+            return realOpen(unrelated, flags, mode);
+          }
+          return realOpen(file, flags, mode);
+        });
+        try {
+          await expect(manager.fork()).rejects.toThrow(/artifact changed during digest read/i);
+        } finally {
+          openSpy.mockRestore();
+          copySpy.mockRestore();
+        }
+        expect(copied).toBe(true);
+        expect(substituted).toBe(true);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+        expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+        expect(await fs.readFile(unrelated, "utf8")).toBe(
+          unrelated === unrelatedSingle ? "X".repeat(original.length) : "Y".repeat(original.length)
+        );
+      }
+
+      const clean = await manager.fork();
+      if (!clean) throw new Error("expected successful clean retry");
+      const clonedArtifact = path.join(clean.newSessionFile.slice(0, -".jsonl".length), "0.bash.log");
+      expect(await fs.readFile(clonedArtifact, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("rejects an unreferenced link injected into the fork destination after copying", async () => {
     using temp = TempDir.createSync("@veyyon-fork-copy-link-injection-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
