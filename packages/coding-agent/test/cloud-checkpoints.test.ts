@@ -366,6 +366,36 @@ test("restoration aborts a stalled object body before its eventual bytes", async
 	expect(aborted).toBe(true);
 });
 
+test("malformed transfer identities and capabilities fail before a claim request", async () => {
+	let calls = 0;
+	const fake: CheckpointFetch = async () => {
+		calls++;
+		throw new Error("Invalid transfer must never reach the authority");
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+	});
+	const claim = "a-long-enough-claim-token";
+	const resume = "a-long-enough-resume-capability";
+	for (const epoch of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+		await expect(client.claimTransfer("s", "destination", "transfer-1", claim, epoch, "owner-a"))
+			.rejects.toThrow(/Invalid checkpoint transfer identity/);
+		await expect(client.resumeTransfer("s", "destination", "transfer-1", resume, epoch, "owner-a"))
+			.rejects.toThrow(/Invalid checkpoint transfer identity/);
+	}
+	for (const transferId of ["", "path/escape", "space id", "x".repeat(129)]) {
+		await expect(client.claimTransfer("s", "destination", transferId, claim, 2, "owner-a"))
+			.rejects.toThrow(/Invalid checkpoint transfer identity/);
+	}
+	for (const capability of ["", "short", "x".repeat(129)]) {
+		await expect(client.claimTransfer("s", "destination", "transfer-1", capability, 2, "owner-a"))
+			.rejects.toThrow(/Invalid checkpoint transfer capability/);
+		await expect(client.resumeTransfer("s", "destination", "transfer-1", capability, 2, "owner-a"))
+			.rejects.toThrow(/Invalid checkpoint transfer capability/);
+	}
+	expect(calls).toBe(0);
+});
+
 test("checkpoint transfer grants reject an authority response for a different runtime owner", async () => {
 	const actions: string[] = [];
 	const fake: CheckpointFetch = async input => {

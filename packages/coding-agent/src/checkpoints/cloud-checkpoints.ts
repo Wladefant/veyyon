@@ -157,6 +157,17 @@ export class CheckpointClient {
 	): Promise<CheckpointClaim> {
 		if (!isCheckpointNodeLabel(targetNode) || !isCheckpointNodeLabel(runtimeOwner))
 			throw new Error("A valid checkpoint node label is required");
+		// Match the authority's transfer-identity grammar before sending a
+		// potentially one-use claim or resume capability over the network.
+		if (
+			!Number.isSafeInteger(transferEpoch) ||
+			transferEpoch < 1 ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(transferId)
+		)
+			throw new Error("Invalid checkpoint transfer identity");
+		const capability = "claimToken" in credential ? credential.claimToken : credential.resumeToken;
+		if (typeof capability !== "string" || capability.length < 16 || capability.length > 128)
+			throw new Error("Invalid checkpoint transfer capability");
 		const result = await this.#request<CheckpointLease & { resumeToken: string }>(
 			`/v1/sessions/${encodeURIComponent(sessionId)}/claim`,
 			{
