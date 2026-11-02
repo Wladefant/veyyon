@@ -138,8 +138,8 @@ it("overlapping MCP server name prefixes keep sibling tools on refresh and disco
 
 
 // WHY: refreshServerTools awaits the external tools/list reply after taking a
-// connection snapshot. A late successful reply after disconnect must not
-// resurrect that server's tools. Only the transport's response-completion
+// connection snapshot. A late successful reply during OR after disconnect
+// must not resurrect that server's tools. Only the transport's response-completion
 // boundary is delayed; real manager/stdio connection/cleanup paths are used.
 // This synthetic fixture is not evidence of a live T3 transport doing this.
 it("does not republish tools from a refresh completed after server disconnect", async () => {
@@ -182,21 +182,39 @@ it("does not republish tools from a refresh completed after server disconnect", 
 			}
 			return realRequest.call(transport, method, params, options) as Promise<T>;
 		};
+		const disconnectEntered = Promise.withResolvers<void>();
+		const releaseClose = Promise.withResolvers<void>();
+		const realClose = transport.close;
+		transport.close = async () => {
+			disconnectEntered.resolve();
+			await releaseClose.promise;
+			await realClose.call(transport);
+		};
 		try {
 			const refresh = manager.refreshServerTools(name);
 			await bounded(refreshEntered.promise, "delayed tools/list");
-			await bounded(manager.disconnectServer(name), "disconnect before delayed reply");
-			expect(manager.getTools()).toEqual([]);
-			const notificationsAfterDisconnect = observed.length;
+			const beforeDisconnect = observed.length;
+			const disconnect = manager.disconnectServer(name);
+			// During the real disconnect, delay only its external transport
+			// close acknowledgement: the old connection remains in #connections.
+			await bounded(disconnectEntered.promise, "disconnect entered transport close");
 			lateReply.resolve({
 				tools: [{ name: "late_tool", inputSchema: { type: "object", properties: {} } }],
 			});
-			await bounded(refresh, "late response");
+			await bounded(refresh, "late reply while disconnect is still pending");
+			// A post-await connection-identity check alone is insufficient:
+			// the same connection is still mapped until close settles.
+			expect(manager.getTools().map(tool => tool.name)).toEqual(expected);
+			expect(observed).toHaveLength(beforeDisconnect);
+			releaseClose.resolve();
+			await bounded(disconnect, "disconnect after late tool response");
 			expect(manager.getTools()).toEqual([]);
-			expect(observed).toHaveLength(notificationsAfterDisconnect);
+			expect(observed).toHaveLength(beforeDisconnect + 1);
 			expect(manager.getConnectedServers()).not.toContain(name);
 		} finally {
 			lateReply.resolve({ tools: [] });
+			releaseClose.resolve();
+			transport.close = realClose;
 			transport.request = realRequest;
 		}
 	} finally {
