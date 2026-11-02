@@ -3414,4 +3414,104 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
+
+	// WHY: events/subscribe ids are issued by independent MCP servers and are
+	// not globally namespaced. Sharing an opaque id must never overwrite another
+	// server's signed callback route or let one stop revoke its peer.
+	// Real manager + two private HTTP MCP fixtures; no installed relay/device.
+	it("does not conflate identical opaque webhook ids from separate MCP servers", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const remoteId = "same-opaque-id";
+		const secretA = CALLBACK_SECRET;
+		const secretB = `whsec_${Buffer.from("independent-manager-test-webhook-secret").toString("base64")}`;
+		const oldA = process.env.MCP_EVENTS_ID_COLLISION_A;
+		const oldB = process.env.MCP_EVENTS_ID_COLLISION_B;
+		process.env.MCP_EVENTS_ID_COLLISION_A = secretA;
+		process.env.MCP_EVENTS_ID_COLLISION_B = secretB;
+		const serverA = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => ({ id: remoteId, cursor: "cursor-A", refreshBefore: null }),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => ({ id: remoteId, cursor: "cursor-B", refreshBefore: null }),
+		});
+		const manager = new MCPManager(process.cwd());
+		const readyA = Promise.withResolvers<void>();
+		const readyB = Promise.withResolvers<void>();
+		const received: string[] = [];
+		manager.setOnEvent((serverName, occurrence) => { received.push(`${serverName}:${occurrence.eventId}`); });
+		manager.setOnEventCursor((serverName, _key, cursor) => {
+			if (serverName === "collision-server-A" && cursor === "cursor-A") readyA.resolve();
+			if (serverName === "collision-server-B" && cursor === "cursor-B") readyB.resolve();
+		});
+		const subscription = (callbackPath: string, secretRef: string): MCPServerEventSubscriptionConfig => ({
+			name: EVENT_NAME,
+			mode: "webhook",
+			webhook: {
+				callbackUrl: `https://callback.example.test${callbackPath}`,
+				secretRef,
+				listenPort,
+			},
+		});
+		const send = async (callbackPath: string, secret: string, eventId: string): Promise<number> => {
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify(event(eventId));
+			const signature = createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64"))
+				.update(`${eventId}.${timestamp}.${body}`)
+				.digest("base64");
+			const response = await withinHandlerChange(fetch(`http://127.0.0.1:${listenPort}${callbackPath}`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"X-MCP-Subscription-Id": remoteId,
+					"webhook-id": eventId,
+					"webhook-timestamp": timestamp,
+					"webhook-signature": `v1,${signature}`,
+				},
+				body,
+			}), `signed webhook ${eventId}`);
+			return response.status;
+		};
+		try {
+			await withinHandlerChange(manager.connectServers({
+				"collision-server-A": managerConfig(serverA, {
+					enabled: true,
+					subscriptions: [subscription("/events/opaque-A", "$MCP_EVENTS_ID_COLLISION_A")],
+				}),
+				"collision-server-B": managerConfig(serverB, {
+					enabled: true,
+					subscriptions: [subscription("/events/opaque-B", "$MCP_EVENTS_ID_COLLISION_B")],
+				}),
+			}, {}), "two independent webhook servers with same remote id");
+			await withinHandlerChange(Promise.all([readyA.promise, readyB.promise]), "both independent callback registrations");
+			expect(manager.getActiveEventSubscriptionCount()).toBe(2);
+			expect(await send("/events/opaque-A", secretA, "collision-A-1")).toBe(202);
+			expect(await send("/events/opaque-B", secretB, "collision-B-1")).toBe(202);
+			expect(received).toEqual(["collision-server-A:collision-A-1", "collision-server-B:collision-B-1"]);
+			await withinHandlerChange(manager.disconnectServer("collision-server-A"), "A disconnect without revoking B");
+			expect(manager.getActiveEventSubscriptionCount("collision-server-B")).toBe(1);
+			expect(await send("/events/opaque-B", secretB, "collision-B-2")).toBe(202);
+			expect(await send("/events/opaque-A", secretA, "collision-A-after-stop")).toBe(503);
+			expect(received).toEqual([
+				"collision-server-A:collision-A-1",
+				"collision-server-B:collision-B-1",
+				"collision-server-B:collision-B-2",
+			]);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "subscription-id collision cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+				if (oldA === undefined) delete process.env.MCP_EVENTS_ID_COLLISION_A;
+				else process.env.MCP_EVENTS_ID_COLLISION_A = oldA;
+				if (oldB === undefined) delete process.env.MCP_EVENTS_ID_COLLISION_B;
+				else process.env.MCP_EVENTS_ID_COLLISION_B = oldB;
+			}
+		}
+	}, 25_000);
+
 });
