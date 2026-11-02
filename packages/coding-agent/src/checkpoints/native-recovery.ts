@@ -333,8 +333,13 @@ export async function captureNativeCheckpoint(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	if (artifactRootExists) {
-		for (const rel of await walkFiles(artifactRoot))
+		for (const rel of await walkFiles(artifactRoot)) {
+			// Artifacts are automatic captures, not an explicit selection of
+			// sensitive workspace paths. Apply the same exclusion policy first.
+			if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
+				throw new Error("Artifact paths include excluded checkpoint files");
 			artifacts[rel] = encode(await readIncluded(join(artifactRoot, ...rel.split("/")), artifactRoot, "artifact"));
+		}
 	}
 	const blobs: Record<string, string> = {};
 	const journals = [
@@ -481,6 +486,11 @@ async function materialize(bundle: NativeCheckpointBundle, directory: string, fo
 	// Capture applies the shared exclusion policy before reading workspace
 	// bytes. A restored (possibly older or tampered) bundle must enforce the
 	// same path policy before publishing any workspace files.
+	for (const name of Object.keys(bundle.artifacts)) {
+		const rel = safeRelative(name);
+		if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)
+			throw new Error("Artifact paths include excluded checkpoint files");
+	}
 	for (const file of bundle.workspace.files) {
 		const rel = safeRelative(file.path);
 		if (filterCheckpointFiles([{ path: rel, content: new Uint8Array(0) }]).length !== 1)

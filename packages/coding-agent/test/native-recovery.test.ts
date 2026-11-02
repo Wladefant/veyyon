@@ -323,6 +323,31 @@ describe("native recovery", () => {
 		await symlink(outside, escape, process.platform === "win32" ? "junction" : "dir");
 		await expect(captureNativeCheckpoint(session, [join(escape, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
 	});
+	test("artifact capture and restore reject private shared-policy paths before publication", async () => {
+		const root = await scratch();
+		const session = join(root, "session.jsonl");
+		await writeFile(session, JSON.stringify({ type: "session", id: "artifact-policy", cwd: root }) + "\n");
+		const artifactRoot = join(root, "session");
+		const denied = join(artifactRoot, "shared-auth");
+		await mkdir(denied, { recursive: true });
+		const privateFile = join(denied, "synthetic.bin");
+		await writeFile(privateFile, "");
+		await truncate(privateFile, 48 * 1024 * 1024 + 1);
+		await expect(captureNativeCheckpoint(session, [])).rejects.toThrow(/Artifact paths include excluded checkpoint files/);
+		await rm(artifactRoot, { recursive: true });
+		await mkdir(artifactRoot);
+		await writeFile(join(artifactRoot, "safe.txt"), "synthetic safe artifact");
+		const approved = await captureNativeCheckpoint(session, []);
+		expect(Object.keys(approved.artifacts)).toEqual(["safe.txt"]);
+		const tampered = { ...approved, artifacts: { "credentials/private.json": Buffer.from("synthetic").toString("base64") } };
+		const deniedDestination = join(root, "denied-artifact-policy");
+		await expect(restoreNativeCheckpoint(tampered, deniedDestination)).rejects.toThrow(/Artifact paths include excluded checkpoint files/);
+		await expect(lstat(deniedDestination)).rejects.toMatchObject({ code: "ENOENT" });
+		const allowedDestination = join(root, "allowed-artifact-policy");
+		await restoreNativeCheckpoint(approved, allowedDestination);
+		expect(await readFile(join(allowedDestination, "sessions", "session", "safe.txt"), "utf8")).toBe("synthetic safe artifact");
+	});
+
 	test("restore rejects workspace paths excluded by the capture policy", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");
