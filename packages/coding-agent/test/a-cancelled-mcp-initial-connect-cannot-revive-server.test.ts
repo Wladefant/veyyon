@@ -1,6 +1,7 @@
 import { expect, it } from "bun:test";
 import { createServer } from "node:http";
 import { MCPManager } from "../src/mcp/manager";
+import { createMCPToolName } from "../src/mcp/tool-bridge";
 
 // WHY: the server's first initialize response may arrive after the operator
 // explicitly disconnects it. The stale connection must not resurrect config,
@@ -74,7 +75,7 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 	});
 	const listening = Promise.withResolvers<void>();
 	server.once("error", listening.reject);
-	server.listen(0, "127.0.0.1", listening.resolve);
+	server.listen(0, "127.0.0.1", () => listening.resolve());
 	await withinConnectBoundary(listening.promise, "private server listen");
 	server.off("error", listening.reject);
 	const address = server.address();
@@ -104,19 +105,22 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 		expect(initializeCalls).toBe(2);
 		expect(manager.getConnectedServers()).toContain(name);
 		const tools = manager.getTools().filter(tool => tool.mcpServerName === name);
-		expect(tools).toHaveLength(1);
+		expect(tools.map(tool => tool.name)).toEqual([createMCPToolName(name, "read_fixture")]);
 		expect(notifications.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
 		expect(publishedToolLists).toBeGreaterThanOrEqual(1);
 	} finally {
 		releaseFirstInitialize.resolve();
 		try {
 			if (initial) await withinConnectBoundary(initial, "initial connection teardown");
-			await withinConnectBoundary(manager.disconnectAll(), "manager teardown");
 		} finally {
-			server.closeAllConnections();
-			const stopped = Promise.withResolvers<void>();
-			server.close(() => stopped.resolve());
-			await withinConnectBoundary(stopped.promise, "private server shutdown");
+			try {
+				await withinConnectBoundary(manager.disconnectAll(), "manager teardown");
+			} finally {
+				server.closeAllConnections();
+				const stopped = Promise.withResolvers<void>();
+				server.close(() => stopped.resolve());
+				await withinConnectBoundary(stopped.promise, "private server shutdown");
+			}
 		}
 	}
 }, 30_000);
