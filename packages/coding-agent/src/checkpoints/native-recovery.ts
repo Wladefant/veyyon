@@ -381,6 +381,12 @@ export async function captureNativeCheckpoint(
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	if (artifactRootExists) {
+		// A selected journal name like .ssh.jsonl may otherwise designate its
+		// excluded .ssh sibling as an automatic artifact root. Child-relative
+		// checks cannot see that root component, so reject it before traversal.
+		const artifactRootName = safeRelative(basename(artifactRoot));
+		if (filterCheckpointFiles([{ path: artifactRootName, content: new Uint8Array(0) }]).length !== 1)
+			throw new Error("Artifact root includes excluded checkpoint files");
 		for (const rel of await walkFiles(artifactRoot, artifactRoot, listingBudget)) {
 			// Artifacts are automatic captures, not an explicit selection of
 			// sensitive workspace paths. Apply the same exclusion policy first.

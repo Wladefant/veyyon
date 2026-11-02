@@ -492,6 +492,34 @@ describe("native recovery", () => {
 		expect(await readFile(join(allowedDestination, "sessions", "session", "safe.txt"), "utf8")).toBe("synthetic safe artifact");
 	});
 
+	test("rejects a credential-named automatic artifact root before reading its children", async () => {
+		const root = await scratch();
+		for (const [stem, child, expectedError] of [
+			[".ssh", "id_ed25519", /Unsafe checkpoint path/],
+			["shared-auth", "private.bin", /Artifact root includes excluded checkpoint files/],
+		] as const) {
+			const session = join(root, `${stem}.jsonl`);
+			const artifactRoot = join(root, stem);
+			await mkdir(artifactRoot);
+			await writeFile(session, JSON.stringify({ type: "session", id: "synthetic-root-policy", cwd: root }) + "\n");
+			const excludedChild = join(artifactRoot, child);
+			await writeFile(excludedChild, "");
+			// A sparse, oversized synthetic leaf would hit the byte budget if
+			// admitted. The expected root-policy error must win before its read.
+			await truncate(excludedChild, 48 * 1024 * 1024 + 1);
+			await expect(captureNativeCheckpoint(session, [])).rejects.toThrow(expectedError);
+			await rm(artifactRoot, { recursive: true });
+			await rm(session);
+		}
+		const session = join(root, "session.jsonl");
+		const artifactRoot = join(root, "session");
+		await mkdir(artifactRoot);
+		await writeFile(session, JSON.stringify({ type: "session", id: "ordinary-root", cwd: root }) + "\n");
+		await writeFile(join(artifactRoot, "ordinary.txt"), "synthetic ordinary artifact");
+		const approved = await captureNativeCheckpoint(session, []);
+		expect(Buffer.from(approved.artifacts["ordinary.txt"]!, "base64").toString("utf8"))
+			.toBe("synthetic ordinary artifact");
+	});
 	test("native capture and restore reject conventional credential names before reading", async () => {
 		const root = await scratch();
 		const session = join(root, "session.jsonl");
