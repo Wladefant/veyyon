@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SESSION_TITLE_SLOT_BYTES } from "@veyyon/kernel/session/session-entries";
 import { parseTitleSlotLine } from "@veyyon/kernel/session/session-title-slot";
-import { type FileHandle, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { type FileHandle, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 
@@ -191,11 +191,35 @@ export async function persistSessionResumeCapability(
 	const consumed: SessionOwnershipMarker = { ...marker, resumeToken, epoch };
 	delete consumed.claimToken;
 	const temporary = `${path}.${randomUUID()}.tmp`;
-	await writeFile(temporary, JSON.stringify(consumed), { flag: "wx", mode: 0o600 });
 	try {
+		// The one-time authority claim must not be finalized before its rotated
+		// recovery capability has at least been flushed to the source file.
+		const file = await open(temporary, "wx", 0o600);
+		try {
+			await file.writeFile(JSON.stringify(consumed));
+			await file.sync();
+		} finally {
+			await file.close();
+		}
 		await rename(temporary, path);
+		// Flush renamed directory metadata where directory handles support sync.
+		// Windows post-rename power-loss durability still requires host proof.
+		if (process.platform !== "win32") {
+			const directory = await open(dirname(path), "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		}
 	} catch (error) {
-		await rm(temporary, { force: true });
+		try {
+			await rm(temporary, { force: true });
+		} catch (cleanupError) {
+			throw new Error("Could not persist or clean up the rotated session resume capability", {
+				cause: new AggregateError([error, cleanupError]),
+			});
+		}
 		throw new Error("Could not persist the rotated session resume capability", { cause: error });
 	}
 }

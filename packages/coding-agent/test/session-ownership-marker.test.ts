@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -42,12 +42,25 @@ test("native handoff identity fails closed without matching recovery marker and 
 	expect(consumed?.marker.resumeToken).toBe("a-resume-capability-long-enough");
 	expect(consumed?.marker.epoch).toBe(8);
 	expect(JSON.parse(await readFile(markerPath, "utf8"))).not.toHaveProperty("claimToken");
+	expect((await readdir(sessions)).filter(name => name.endsWith(".tmp"))).toEqual([]);
 
 	await rm(markerPath);
 	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/marker is missing/i);
 	await rm(join(root, "recovery.json"));
 	await writeFile(markerPath, JSON.stringify(marker), { mode: 0o600 });
 	await expect(readSessionOwnershipMarker(sessionFile, "transfer")).rejects.toThrow(/recovery metadata/i);
+});
+
+// Refused replacement must not leave a temporary one-use capability behind.
+test("a failed resume-marker rename removes the temporary capability", async () => {
+	const root = await mkdtemp(join(tmpdir(), "session-ownership-refused-rename-"));
+	roots.push(root);
+	const target = join(root, "checkpoint-ownership.json");
+	await mkdir(target);
+	await expect(persistSessionResumeCapability(target, marker, "a-resume-capability-long-enough", 8)).rejects.toThrow(
+		/Could not persist the rotated session resume capability/,
+	);
+	expect(await readdir(root)).toEqual(["checkpoint-ownership.json"]);
 });
 
 test("a copied native journal without sidecars never resumes as an ordinary checkpoint", async () => {
