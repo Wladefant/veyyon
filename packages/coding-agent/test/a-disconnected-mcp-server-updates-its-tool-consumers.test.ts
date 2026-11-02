@@ -279,7 +279,7 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 				}
 				throw new Error("Unexpected extra tools/list request after coalescing");
 			}
-			return realRequest.call(transport, method, params, options) as Promise<T>;
+			return originalRequest.call(transport, method, params, options) as Promise<T>;
 		};
 		try {
 			const beforeRefreshNotifications = changes.length;
