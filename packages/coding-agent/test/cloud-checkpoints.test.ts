@@ -149,6 +149,51 @@ describe("cloud checkpoints", () => {
 		}
 	});
 
+	test("two actual guards retain winner admission and renewal after late former lease", async () => {
+		for (const staleReply of ["valid", "invalid"] as const) {
+			let releaseOld!: (reply: Response) => void;
+			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			const actions: string[] = [];
+			const grant = (ownerNode: string, epoch: number) => ({
+				ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0, manifestHash: "",
+			});
+			const fake: CheckpointFetch = async (input, init) => {
+				const path = new URL(String(input)).pathname;
+				const action = path.split("/").pop()!;
+				const body = JSON.parse(String(init?.body));
+				actions.push(`${action}:${body.ownerNode}`);
+				if (action === "lease") {
+					return body.ownerNode === "owner-a"
+						? pendingOld
+						: Response.json(grant("owner-b", 2));
+				}
+				if (action === "renew") return Response.json(grant("owner-b", 2));
+				if (action === "release") return Response.json(grant("owner-b", 3));
+				throw new Error("Unexpected authority endpoint");
+			};
+			const client = new CheckpointClient({
+				baseUrl: "https://checkpoint.invalid", token: "test",
+				key: new Uint8Array(32), fetch: fake,
+			});
+			const old = new SynchronizedSession("s", client, undefined, "owner-a");
+			const winner = new SynchronizedSession("s", client, undefined, "owner-b");
+			const firstAdmission = old.admit();
+			await winner.admit();
+			const rejection = expect(firstAdmission).rejects.toThrow(/admission superseded/);
+			releaseOld(Response.json(grant(staleReply === "valid" ? "owner-a" : "foreign", 1)));
+			await rejection;
+			await client.assertWritable("s", 2, "owner-b");
+			await winner.admit();
+			await old.close();
+			await client.assertWritable("s", 2, "owner-b");
+			await winner.close();
+			expect(actions.filter(a => a === "renew:owner-b")).toHaveLength(2);
+			expect(actions.filter(a => a === "release:owner-a")).toHaveLength(0);
+			expect(actions.filter(a => a === "release:owner-b")).toHaveLength(1);
+		}
+	});
+
 	test("a late transfer-claim reply cannot overwrite or invalidate a newer lease", async () => {
 		for (const staleReply of ["valid", "wrong-transfer"] as const) {
 			let releaseOld!: (response: Response) => void;
