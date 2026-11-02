@@ -1341,6 +1341,17 @@ export class MCPManager {
 				});
 			})().then(
 				connection => {
+					// Initial handshake completion is NOT permission to re-enroll
+					// after an explicit disconnect revoked this exact pending
+					// attempt. Otherwise a late success resurrects #serverConfigs,
+					// starts events and leaves the transport untracked/unclosable.
+					if (
+						this.#pendingConnections.get(name) !== connectionPromise ||
+						!this.#serverConfigs.has(name)
+					) {
+						closeTransportDetached(connection.transport, name, "initial-connect-revoked");
+						throw new Error("MCP initial connection was withdrawn before completion");
+					}
 					// Store original config (without resolved tokens) to keep
 					// cache keys stable and avoid leaking rotating credentials.
 					connection.config = config;
@@ -1721,9 +1732,12 @@ export class MCPManager {
 	 * Disconnect from a specific server.
 	 */
 	async disconnectServer(name: string): Promise<void> {
-		await this.#stopServerEvents(name);
+		// Revoke a still-pending initial handshake synchronously, before any
+		// awaited event drain gives its late response an opportunity to enroll.
+		// Its success continuation will dispose that exact obsolete transport.
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
+		await this.#stopServerEvents(name);
 		this.#pendingReconnections.delete(name);
 		this.#sources.delete(name);
 		this.#serverConfigs.delete(name);
