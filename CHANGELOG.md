@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-11-02
+
+### Changed
+
+- Terminal ownership failures name the record, verification step, original error code and message, elapsed time, and Windows ACL command deadline. Ownership checks still fail closed without retries ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
+### Fixed
+
+- Terminal writer ownership failures now report the owner record path, the failed verification step, the original error code and message, the elapsed time and the 15 s ACL deadline (#892, Refs #849).
+
+## [1.7.4] - 2026-11-02
+
+### Fixed
+
+- IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
+## [1.7.3] - 2026-11-01
+
+### Fixed
+
+- ACP preserves the first streamed reply chunk when `message_start` arrives late ([PR #830](https://github.com/Wladefant/veyyon/pull/830)).
+
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Telegram delivery tracing emits allowlisted delivery metadata across socket acceptance, terminal control, runtime turn consumption, provider streaming, and delivery outcome stages ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+- Telegram delivery traces propagate through message queues, compaction, and agent turns to emit consumption and provider-call lifecycle events ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+- Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
+### Fixed
+
+- Record Telegram turn consumption once across the original message and all transferred copies ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
 ## [1.7.1] - 2026-10-31
 
 ### Fixed
