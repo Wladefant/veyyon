@@ -692,9 +692,10 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 // protocol, and bulk completion must include the earlier pending close.
 it("bulk MCP teardown joins a concurrent per-server close without duplicate transport DELETE", async () => {
 	const names = { a: "joined-close-a", b: "joined-close-b" };
-	const aDeleteEntered = Promise.withResolvers<void>();
+	const aCloseEntered = Promise.withResolvers<void>();
 	const bDeleteEntered = Promise.withResolvers<void>();
 	const releaseADelete = Promise.withResolvers<void>();
+	let aCloseCalls = 0;
 	let aDeletes = 0;
 	let bDeletes = 0;
 	const server = createServer(async (request, response) => {
@@ -707,7 +708,6 @@ it("bulk MCP teardown joins a concurrent per-server close without duplicate tran
 			if (request.method === "DELETE") {
 				if (route === "a") {
 					aDeletes++;
-					aDeleteEntered.resolve();
 					if (aDeletes === 1) await releaseADelete.promise;
 				} else {
 					bDeletes++;
@@ -761,14 +761,27 @@ it("bulk MCP teardown joins a concurrent per-server close without duplicate tran
 		};
 		const load = await withinConnectBoundary(manager.connectServers(configs, {}), "two live peer connects");
 		expect(load.connectedServers.sort()).toEqual([names.a, names.b].sort());
+		// Only the external close boundary is held. The manager and HTTP
+		// transport remain real. Counting invocations proves the previous bulk
+		// implementation started a SECOND close even when HttpTransport.close
+		// makes the duplicate DELETE a no-op by clearing #connected first.
+		const connection = await withinConnectBoundary(manager.waitForConnection(names.a), "live A transport");
+		const actualClose = connection.transport.close.bind(connection.transport);
+		connection.transport.close = async () => {
+			aCloseCalls++;
+			aCloseEntered.resolve();
+			if (aCloseCalls === 1) await releaseADelete.promise;
+			await actualClose();
+		};
 		single = manager.disconnectServer(names.a);
-		await withinConnectBoundary(aDeleteEntered.promise, "single A DELETE held");
+		await withinConnectBoundary(aCloseEntered.promise, "single A close held");
 		bulk = manager.disconnectAll();
 		// B's DELETE proves the bulk teardown has reached its connected-peer
 		// closing snapshot without releasing the independent A close.
 		await withinConnectBoundary(bDeleteEntered.promise, "bulk B DELETE");
 		releaseADelete.resolve();
 		await withinConnectBoundary(Promise.all([single, bulk]), "joined single/bulk teardown");
+		expect(aCloseCalls).toBe(1);
 		expect(aDeletes).toBe(1);
 		expect(bDeletes).toBe(1);
 		expect(manager.getConnectedServers()).toEqual([]);
