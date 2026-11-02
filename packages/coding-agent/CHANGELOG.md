@@ -62,6 +62,7 @@
 
 ### Fixed
 
+- Kernel subprocess stderr passes through the producer output guard before it reaches the logger ([Refs #907](https://github.com/Wladefant/veyyon/issues/907)).
 - Image removal archives original image records, leaves recovery references, and restores only unchanged live records when persistence fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Image removal leaves cold assistant payloads unloaded when they contain no supported images ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Image removal refuses user and developer image records with preserved native OpenAI Responses history ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
