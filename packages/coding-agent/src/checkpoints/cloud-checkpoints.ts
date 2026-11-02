@@ -24,6 +24,11 @@ export interface CheckpointLease {
 	targetNode?: string;
 	transferId?: string;
 }
+function hasLiveLeaseFence(lease: CheckpointLease | null | undefined): lease is CheckpointLease {
+	if (!lease || !Number.isSafeInteger(lease.epoch) || lease.epoch < 0) return false;
+	const expiresAt = typeof lease.expiresAt === "string" ? Date.parse(lease.expiresAt) : Number.NaN;
+	return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
 export interface CheckpointClaim {
 	lease: CheckpointLease;
 	resumeToken: string;
@@ -132,6 +137,10 @@ export class CheckpointClient {
 		if (!lease || lease.ownerNode !== ownerNode) {
 			this.loseLease(sessionId);
 			throw new Error("Checkpoint authority lease owner mismatch");
+		}
+		if (!hasLiveLeaseFence(lease)) {
+			this.loseLease(sessionId);
+			throw new Error("Checkpoint authority lease fence invalid");
 		}
 		this.#leases.set(sessionId, lease);
 		this.#lost.delete(sessionId);
@@ -303,6 +312,7 @@ export class CheckpointClient {
 			// Renewing an existing lease cannot invent or jump a fencing epoch.
 			if (!Number.isSafeInteger(next.epoch) || next.epoch !== lease.epoch)
 				throw new Error("Checkpoint authority lease epoch mismatch");
+			if (!hasLiveLeaseFence(next)) throw new Error("Checkpoint authority lease fence invalid");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {
@@ -341,13 +351,10 @@ export class CheckpointClient {
 	}
 	async assertWritable(sessionId: string, epoch: number): Promise<void> {
 		const lease = this.#leases.get(sessionId);
-		const expiresAt = lease ? Date.parse(lease.expiresAt) : Number.NaN;
 		if (
-			!lease ||
+			!hasLiveLeaseFence(lease) ||
 			this.#lost.has(sessionId) ||
-			lease.epoch !== epoch ||
-			!Number.isFinite(expiresAt) ||
-			expiresAt <= Date.now()
+			lease.epoch !== epoch
 		)
 			throw new Error("Checkpoint lease lost; synchronized writes are fenced");
 	}
