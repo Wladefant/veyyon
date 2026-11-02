@@ -61,7 +61,7 @@ import {
 import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "./runtime-config";
 import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
-import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from "./tool-bridge";
+import { DeferredMCPTool, MCPTool, type MCPToolDetails } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
 import { describeMCPServerTarget } from "./transports/transport-failure";
 import {
@@ -1517,11 +1517,10 @@ export class MCPManager {
 	}
 
 	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
-		// The prefix must be derived the same way the tool names were, or a server
-		// whose name needed sanitizing keeps its stale tools AND gains a second
-		// copy on every reconnect. See `mcpToolNamePrefix`.
-		const prefix = mcpToolNamePrefix(name);
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		// Both MCPTool and DeferredMCPTool carry their exact originating server.
+		// Name-prefix matching would also erase a healthy sibling: "alpha"
+		// owns mcp__alpha_*, but "alpha_beta" tools share that string prefix.
+		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		for (let ti = 0; ti < tools.length; ti++) this.#tools.push(tools[ti]!);
 		// Stable sort by name so reconnect order does not perturb the array.
 		// See `sortMCPToolsByName` for the cache-stability rationale.
@@ -1747,13 +1746,12 @@ export class MCPManager {
 			this.#connections.delete(name);
 		}
 
-		// Remove tools from this server and notify consumers
-		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
-		// The prefix must be derived the same way the tool names were, or a server
-		// whose name needed sanitizing keeps its stale tools AND gains a second
-		// copy on every reconnect. See `mcpToolNamePrefix`.
-		const prefix = mcpToolNamePrefix(name);
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		// Remove tools using the exact server identity that minted them.
+		// Tool-name prefixes overlap for distinct names ("alpha", "alpha_beta"),
+		// so a prefix filter can silently erase a healthy sibling. Match the
+		// notification gate to the very same exact owner predicate.
+		const hadTools = this.#tools.some(tool => tool.mcpServerName === name);
+		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
 
 		// Notify prompt consumers so stale commands are cleared
@@ -2100,12 +2098,17 @@ export class MCPManager {
 	async refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
 		if (!connection) return;
+		const epoch = this.#epoch;
 
 		// Clear cached tools
 		connection.tools = undefined;
 
 		// Reload tools
 		const serverTools = await listTools(connection);
+		// A request already in flight may settle even after its transport is
+		// retired. Never publish or cache stale tools after disconnect,
+		// reconnect or a whole-manager reset.
+		if (this.#connections.get(name) !== connection || this.#epoch !== epoch) return;
 		const reconnect = () => this.reconnectServer(name);
 		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
 		void this.toolCache?.set(name, connection.config, serverTools);
