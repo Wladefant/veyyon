@@ -83,6 +83,86 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await streamReady.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		expect(storage!.disableCredentialById(id, "synthetic peer revocation during silent SSE")).toBe(true);
+		// No SSE delta or manual refresh is delivered: only the production idle
+		// reconciliation can retire the revoked row.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected broker truth");
+		expect(authoritative.snapshot.credentials).toEqual([]);
+	});
+
+	test("retains a known safety block through an idle SSE GET failure, then adopts a peer block", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const first = await peer.fetchSnapshot();
+		if (first.status !== 200) throw new Error("expected broker snapshot");
+		const id = first.snapshot.credentials[0]!.id;
+		const blockedUntilA = Date.now() + 120_000;
+		expect(await peer.upsertCredentialBlock(id, {
+			providerKey: "anthropic", blockScope: "scope-A",
+			blockedUntilMs: blockedUntilA, updatedAtMs: Date.now(),
+		})).toEqual({ ok: true });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected seeded broker snapshot");
+		const streamReady = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		const firstVerifyFailed = Promise.withResolvers<void>();
+		let rejectNextVerification = true;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (rejectNextVerification && opts?.waitMs === undefined) {
+				rejectNextVerification = false;
+				firstVerifyFailed.resolve();
+				throw new Error("synthetic broker GET unavailable");
+			}
+			return realFetch(opts);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await streamReady.promise;
+		const blockedUntilB = blockedUntilA + 60_000;
+		expect(await peer.upsertCredentialBlock(id, {
+			providerKey: "anthropic", blockScope: "scope-B",
+			blockedUntilMs: blockedUntilB, updatedAtMs: Date.now(),
+		})).toEqual({ ok: true });
+		await firstVerifyFailed.promise;
+		// Failed reconciliation cannot optimistically lift an existing block.
+		expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(blockedUntilA);
+		await waitUntil(() => remote!.getCredentialBlock(id, "anthropic", "scope-B") === blockedUntilB);
+		expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(blockedUntilA);
+		const brokerTruth = await peer.fetchSnapshot();
+		if (brokerTruth.status !== 200) throw new Error("expected final broker snapshot");
+		expect(brokerTruth.snapshot.credentials[0]?.blocks).toMatchObject([
+			{ providerKey: "anthropic", blockScope: "scope-A", blockedUntilMs: blockedUntilA },
+			{ providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: blockedUntilB },
+		]);
+	});
+
 	test("accepts the first snapshot of a reconnected SSE stream after broker generation resets", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
