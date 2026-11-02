@@ -1866,7 +1866,16 @@ export class MCPManager {
 			for (const conn of this.#connections.values()) {
 				conn.transport.onClose = undefined;
 			}
-			const promises = Array.from(this.#connections.values()).map(conn => disconnectServer(conn));
+			// Join already-started single-server teardowns rather than sending a
+			// duplicate transport DELETE. Include a retiring server even if its
+			// connection was already removed before this snapshot.
+			const retiring = new Set(this.#activeDisconnects.keys());
+			const promises = [
+				...this.#activeDisconnects.values(),
+				...Array.from(this.#connections.entries())
+					.filter(([name]) => !retiring.has(name))
+					.map(([, connection]) => disconnectServer(connection)),
+			];
 			await Promise.allSettled(promises);
 
 			this.#pendingConnections.clear();
