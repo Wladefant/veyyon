@@ -5445,6 +5445,7 @@ export class AgentSession {
 			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<void> {
+		await this.refreshExternalTurn();
 		this.#inFlight.begin();
 		startupMarker("prompt:start");
 		const generation = this.#promptGeneration;
@@ -8081,6 +8082,18 @@ export class AgentSession {
 		const sessionFile = this.sessionFile;
 		if (!sessionFile) return;
 		await this.switchSession(sessionFile);
+	}
+
+	/**
+	 * Adopt a completed turn from another writer before an idle prompt. This
+	 * leaves the Agent's steering and follow-up queues untouched.
+	 */
+	async refreshExternalTurn(): Promise<boolean> {
+		if (this.isStreaming) return false;
+		if (!(await this.sessionManager.refreshExternalTurn())) return false;
+		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
+		return true;
 	}
 
 	/**
