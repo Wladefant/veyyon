@@ -44,6 +44,8 @@ describe("MCP stdio inbound peer method envelopes", () => {
 			{ jsonrpc: "2.0", id: 34, method: "roots/list", params: null },
 			{ jsonrpc: "2.0", id: null, method: "roots/list", params: {} },
 			{ jsonrpc: "2.0", id: 35, method: "roots/list", result: {} },
+			// An invalid method-bearing id:null hybrid must not fail pending client requests.
+			{ jsonrpc: "2.0", id: null, method: "roots/list", error: { code: -32700, message: "synthetic" } },
 			{ jsonrpc: "1.0", method: "notifications/tools/list_changed", params: {} },
 			{ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: [] },
 			{ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "valid" } },
