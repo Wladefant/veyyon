@@ -75,6 +75,19 @@ cleanup() {
       kill -KILL -- "-$child_pid" 2>/dev/null || true
     fi
     wait "$child_pid" 2>/dev/null || true
+
+    # KILL is asynchronous for descendants; wait briefly until live group members exit.
+    local i
+    for ((i = 0; i < 20; i++)); do
+      if ! ps -eo pgid=,stat= | awk -v pgid="$child_pid" '$1 == pgid && $2 !~ /^Z/ { live = 1 } END { exit !live }'; then
+        return 0
+      fi
+      sleep 0.05
+    done
+    if ps -eo pgid=,stat= | awk -v pgid="$child_pid" '$1 == pgid && $2 !~ /^Z/ { live = 1 } END { exit !live }'; then
+      echo "::error::Live processes remain in child process group $child_pid after cleanup deadline" >&2
+      return 1
+    fi
   fi
 }
 
@@ -102,4 +115,10 @@ setsid env "OVH_PROCESS_OWNER=$owner" timeout --kill-after=30s "${OVH_STEP_TIMEO
 child_pid=$!
 wait "$child_pid"
 status=$?
+cleanup
+cleanup_status=$?
+trap - EXIT
+if (( cleanup_status != 0 )); then
+  exit 1
+fi
 exit "$status"
