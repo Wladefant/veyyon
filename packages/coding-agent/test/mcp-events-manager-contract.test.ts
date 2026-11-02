@@ -202,12 +202,15 @@ describe("MCPManager event subscription contracts", () => {
 			});
 			const probeA = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
 			const portA = probeA.port ?? 0;
-			await probeA.stop(true);
+			// Allocate both listeners while they are live so the OS cannot
+			// recycle one ephemeral port for the other.
 			const probeB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
 			const portB = probeB.port ?? 0;
+			await probeA.stop(true);
 			await probeB.stop(true);
 			expect(portA).toBeGreaterThan(0);
 			expect(portB).toBeGreaterThan(0);
+			expect(portA).not.toBe(portB);
 			const retiredEnvName = "MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET";
 			const successorEnvName = "MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET";
 			const oldRetiredEnv = process.env[retiredEnvName];
@@ -218,7 +221,7 @@ describe("MCPManager event subscription contracts", () => {
 			process.env[successorEnvName] = successorSecret;
 			const manager = new MCPManager(process.cwd());
 			const sharedPath = "/events/reused-pending-challenge";
-			const makeEvents = (name: string, port: number, secretRef: string) => ({
+			const makeEvents = (port: number, secretRef: string) => ({
 				enabled: true,
 				subscriptions: [{
 					name: EVENT_NAME,
@@ -235,7 +238,7 @@ describe("MCPManager event subscription contracts", () => {
 				// Start A without an event listener so its transport can be given a
 				// deterministic delayed RPC; the real manager and receiver still run.
 				await withinHandlerChange(connect(manager, "retiring-webhook", managerConfig(serverA, makeEvents(
-					"retiring-webhook", portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET",
+					portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET",
 				))), "connect retiring server");
 				const retiringConnection = manager.getConnection("retiring-webhook");
 				if (!retiringConnection) throw new Error("Retiring MCP server did not connect");
@@ -261,7 +264,7 @@ describe("MCPManager event subscription contracts", () => {
 				expect(manager.getActiveEventSubscriptionCount("retiring-webhook")).toBe(0);
 				// Different owner key, deliberately reusing the retired callback path.
 				await withinHandlerChange(connect(manager, "successor-webhook", managerConfig(serverB, makeEvents(
-					"successor-webhook", portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET",
+					portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET",
 				))), "connect successor server");
 				await withinHandlerChange(successorStarted.promise, "successor pending webhook subscribe");
 				// The old operation settles only AFTER B has reserved its HMAC key.
