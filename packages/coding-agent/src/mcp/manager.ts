@@ -1417,12 +1417,15 @@ export class MCPManager {
 				.then(async ({ connection, serverTools }) => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
-					if (this.#supersededInitialToolLoads.has(toolsPromise)) return;
-					const reconnect = () => this.reconnectServer(name);
-					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
-					this.#replaceServerTools(name, customTools);
-					this.#onToolsChanged?.(this.#tools);
-					void this.toolCache?.set(name, config, serverTools);
+					// A newer refresh owns the tool catalog, but the original
+					// handshake still owns connection-status and resource/prompt setup.
+					if (!this.#supersededInitialToolLoads.has(toolsPromise)) {
+						const reconnect = () => this.reconnectServer(name);
+						const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+						this.#replaceServerTools(name, customTools);
+						this.#onToolsChanged?.(this.#tools);
+						void this.toolCache?.set(name, config, serverTools);
+					}
 
 					this.#lastErrors.delete(name);
 					onStatus?.({ type: "connected", serverName: name });
@@ -1480,8 +1483,12 @@ export class MCPManager {
 
 			for (const task of connectionTasks) {
 				const { name } = task;
-				// A later live refresh owns this server's catalog now, not the original startup snapshot.
-				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) continue;
+				// A later live refresh owns this catalog, but the original
+				// transport is still connected and belongs in the startup summary.
+				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) {
+					if (this.#connections.has(name)) connectedServers.add(name);
+					continue;
+				}
 				if (task.tracked.status === "fulfilled") {
 					const value = task.tracked.value;
 					if (!value) continue;
