@@ -2808,7 +2808,8 @@ describe("MCPManager event subscription contracts", () => {
 	it("does not close a new webhook host during an earlier stopEvents", async () => {
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
 		const listenPort = probe.port ?? 0;
-		probe.stop(true);
+		expect(listenPort).toBeGreaterThan(0);
+		await probe.stop(true);
 		const oldUnsubscribeEntered = Promise.withResolvers<void>();
 		const releaseOldUnsubscribe = Promise.withResolvers<void>();
 		const initialCursor = Promise.withResolvers<void>();
@@ -2816,6 +2817,7 @@ describe("MCPManager event subscription contracts", () => {
 		const replacementEventsListed = Promise.withResolvers<void>();
 		let eventListCalls = 0;
 		const deliveredAfterStop = Promise.withResolvers<void>();
+		const postStopCursor = Promise.withResolvers<void>();
 		let oldUnsubscribed = false;
 		let subscribeCount = 0;
 		const server = fakeMcpServer({
@@ -2856,6 +2858,7 @@ describe("MCPManager event subscription contracts", () => {
 		manager.setOnEventCursor((_serverName, _key, cursor) => {
 			if (cursor === "stop-cursor-1") initialCursor.resolve();
 			if (cursor === "stop-cursor-2") replacementCursor.resolve();
+			if (cursor === "new-webhook-cursor") postStopCursor.resolve();
 		});
 		let stop: Promise<void> | undefined;
 		try {
@@ -2918,6 +2921,7 @@ describe("MCPManager event subscription contracts", () => {
 			);
 			expect(response.status).toBe(202);
 			await withinHandlerChange(deliveredAfterStop.promise, "replacement owner receives signed event");
+			await withinHandlerChange(postStopCursor.promise, "replacement owner persists event cursor");
 		} finally {
 			releaseOldUnsubscribe.resolve();
 			try {
