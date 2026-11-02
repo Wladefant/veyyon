@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- A named session fork refuses pre-existing destination JSONL or artifact sidecar paths before publication, protecting unrelated history and evidence from replacement or adoption ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - A refused source-writer close during session fork restores the active session lifecycle and prevents its abandoned terminal marker from overwriting separately appended history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Fork artifact copying now refuses symbolic links and other unsafe entries anywhere in the source or copied tree before a new session is published ([#774](https://github.com/Wladefant/veyyon/issues/774)).
