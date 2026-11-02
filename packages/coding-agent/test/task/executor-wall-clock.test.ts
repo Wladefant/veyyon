@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
@@ -73,41 +72,41 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		mockCreateAgentSession(session);
 
-		await runSubprocess({
+		const result = await runSubprocess({
 			...baseOptions,
 			id: "agent-terminal-completed",
 			settings,
 		});
 
-		expect(AgentRegistry.global().get("agent-terminal-completed")?.terminalOutcome).toBe("completed");
+		expect(result.terminalOutcome).toBe("completed");
+
 	});
 	it("records a failed terminal outcome", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const session = createMockSession(() => {
 			throw new Error("agent prompt failed");
 		});
-		mockCreateAgentSession(session);
-
-		await runSubprocess({
+		const failed = await runSubprocess({
 			...baseOptions,
 			id: "agent-terminal-failed",
 			settings,
 		});
 
-		expect(AgentRegistry.global().get("agent-terminal-failed")?.terminalOutcome).toBe("failed");
+		expect(failed.terminalOutcome).toBe("failed");
 	});
 	it("records setup failures as startup-failed", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		vi.spyOn(sdkModule, "createAgentSession").mockRejectedValue(new Error("session startup failed"));
 
-		await runSubprocess({
+		const result = await runSubprocess({
 			...baseOptions,
 			id: "agent-terminal-startup-failed",
 			settings,
 		});
 
-		expect(AgentRegistry.global().get("agent-terminal-startup-failed")?.terminalOutcome).toBe("startup-failed");
+		expect(result.terminalOutcome).toBe("startup-failed");
 	});
+
 
 	it("records a stalled terminal outcome after recovery fails", async () => {
 		vi.useFakeTimers();
@@ -127,10 +126,11 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			expect(handle.abortCalls()).toBe(1);
 			await vi.advanceTimersByTimeAsync(120_001);
 			expect(handle.abortCalls()).toBe(2);
+			expect(handle.prompts).toHaveLength(2);
+			expect(handle.prompts[1]?.text).toContain("Continue the same assignment from your existing session state.");
 			const result = await resultPromise;
 			expect(result.abortReason).toContain("stalled");
-			expect(AgentRegistry.global().get("agent-stalled-terminal-outcome")?.terminalOutcome).toBe("stalled");
-		} finally {
+			expect(result.terminalOutcome).toBe("stalled");
 			controller.abort();
 			await resultPromise;
 		}
@@ -189,11 +189,57 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			expect(handle.prompts).toHaveLength(1);
 			expect(result.abortReason).toContain("stalled");
 			expect(result.cancellationAcknowledged).toBe(false);
-			expect(AgentRegistry.global().get("agent-pending-abort")?.terminalOutcome).toBe("stalled");
+			expect(result.terminalOutcome).toBe("stalled");
 		} finally {
 			controller.abort();
 			settleAbort?.();
 			await vi.advanceTimersByTimeAsync(5_001);
+			await resultPromise;
+		}
+	});
+	it("aborts the final idle wait after a yield has already been accepted", async () => {
+		vi.useFakeTimers();
+		let settleFinalIdle: (() => void) | undefined;
+		let finalIdleStarted: (() => void) | undefined;
+		let idleCalls = 0;
+		const finalIdle = new Promise<void>(resolve => {
+			settleFinalIdle = resolve;
+		});
+		const started = new Promise<void>(resolve => {
+			finalIdleStarted = resolve;
+		});
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const handle = createMockSessionHandle(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
+		});
+		handle.session.waitForIdle = async () => {
+			idleCalls++;
+			if (idleCalls === 1) return;
+			finalIdleStarted?.();
+			await finalIdle;
+		};
+		mockCreateAgentSession(handle.session);
+
+		const resultPromise = runSubprocess({
+			...baseOptions,
+			id: "agent-yield-final-idle-stall",
+			settings,
+		});
+		try {
+			await started;
+			await vi.advanceTimersByTimeAsync(180_001);
+			await Promise.resolve();
+			await Promise.resolve();
+			const finishedWithoutManualIdleRelease = await Promise.race([
+				resultPromise.then(() => true),
+				Promise.resolve(false),
+			]);
+			expect(finishedWithoutManualIdleRelease).toBe(true);
+			const result = await resultPromise;
+			expect(result.terminalOutcome).toBe("stalled");
+			expect(handle.prompts).toHaveLength(1);
+		} finally {
+			settleFinalIdle?.();
 			await resultPromise;
 		}
 	});

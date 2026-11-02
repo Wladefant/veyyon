@@ -52,7 +52,7 @@ import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import { scopeOfAgent, sessionWorkerAccess } from "../native-control/telegram-control-bridge";
 import { agentPrompts } from "../prompts/agent/rows";
 import { AgentLifecycleManager, syncStatusWithTurns } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, type AgentTerminalOutcome } from "../registry/agent-registry";
 import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { discoverAuthStorage } from "../session/auth-broker-config";
@@ -940,6 +940,7 @@ interface DriveOutcome {
 	turnAborted: boolean;
 	/** The most precise reason available for {@link DriveOutcome.turnAborted}. */
 	turnAbortReason?: string;
+	startupFailed?: boolean;
 }
 
 const MAX_YIELD_RETRIES = 3;
@@ -1082,11 +1083,7 @@ async function driveSessionToYield(
 		const drive: YieldDrive = { session, monitor, awaitAbortable, yieldToolChoice };
 		await remindToYield(drive);
 		await repairYieldSchema(drive, outputSchema);
-		if (monitor.yieldCalled()) {
-			await session.waitForIdle();
-		} else {
-			await awaitAbortable(session.waitForIdle());
-		}
+		await awaitAbortable(session.waitForIdle());
 	} catch (err) {
 		// An abort is not a failure: it is reported as one of the two abort facts, and whether it
 		// costs the run its result depends on whether a yield landed, which this function cannot see.
@@ -1191,6 +1188,7 @@ export interface RunVerdictInputs {
 	readonly turnAbortReason?: string;
 	/** The CALLER's signal, which aborts the run even when the turn never noticed. */
 	readonly callerAborted: boolean;
+	readonly stalled?: boolean;
 	/** Reason resolvers, consulted only for the case each one owns. */
 	readonly resolveAbortReason: () => string | undefined;
 	readonly resolveSignalAbortReason: () => string | undefined;
@@ -1204,11 +1202,11 @@ export interface RunVerdict {
 
 export function resolveRunVerdict(inputs: RunVerdictInputs): RunVerdict {
 	let exitCode = inputs.exitCodeAfterFinalize;
-	// The wall clock first, and independent of everything else: a late yield must not buy back a
-	// timed-out run's success.
-	if (inputs.runtimeLimitExceeded && exitCode === 0) exitCode = 1;
+	// A runtime timeout or phase stall is terminal even when a yield landed during teardown.
+	if ((inputs.runtimeLimitExceeded || inputs.stalled) && exitCode === 0) exitCode = 1;
 
 	const aborted =
+		Boolean(inputs.stalled) ||
 		inputs.runtimeLimitExceeded ||
 		inputs.abortedViaYield ||
 		(!inputs.hasYield && (inputs.turnAborted || inputs.callerAborted));
@@ -1219,12 +1217,14 @@ export function resolveRunVerdict(inputs: RunVerdictInputs): RunVerdict {
 
 	if (!aborted) return { exitCode, aborted: false };
 
-	const abortReason = inputs.runtimeLimitExceeded
+	const abortReason = inputs.stalled
 		? inputs.resolveAbortReason()
-		: inputs.abortedViaYield
-			? inputs.yieldAbortReason
-			: (inputs.turnAbortReason ??
-				(inputs.callerAborted ? inputs.resolveSignalAbortReason() : inputs.resolveAbortReason()));
+		: inputs.runtimeLimitExceeded
+			? inputs.resolveAbortReason()
+			: inputs.abortedViaYield
+				? inputs.yieldAbortReason
+				: (inputs.turnAbortReason ??
+					(inputs.callerAborted ? inputs.resolveSignalAbortReason() : inputs.resolveAbortReason()));
 	return { exitCode, aborted: true, abortReason };
 }
 
@@ -1353,13 +1353,28 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		yieldAbortReason,
 		runtimeLimitExceeded: monitor.runtimeLimitExceeded(),
 		turnCutShort: done.turnCutShort,
+		stalled: monitor.abortKind() === "stalled",
 		turnAborted: done.turnAborted,
 		turnAbortReason: done.turnAbortReason,
 		callerAborted: Boolean(signal?.aborted),
 		resolveAbortReason: () => monitor.resolveAbortReasonText(),
 		resolveSignalAbortReason: () => monitor.resolveSignalAbortReason(),
 	});
+	const terminalOutcome: AgentTerminalOutcome = done.startupFailed
+		? "startup-failed"
+		: monitor.abortKind() === "stalled"
+			? "stalled"
+			: wasAborted
+				? "cancelled"
+				: exitCode === 0
+					? "completed"
+					: "failed";
 	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
+	AgentRegistry.global().recordTerminalOutcome(
+		id,
+		terminalOutcome,
+		finalAbortReason ?? (stderr || undefined),
+	);
 	monitor.scheduleProgress(true);
 
 	// Emit lifecycle end event after finalization so yield status is reflected
@@ -1398,7 +1413,9 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		modelOverride,
 		resolvedModel: progress.resolvedModel,
 		error: resolveSubagentErrorText(exitCode, stderr, rawOutput, wasAborted),
+		terminalOutcome,
 		aborted: wasAborted,
+		cancellationAcknowledged: wasAborted ? monitor.abortCleanupSettled() : true,
 		abortReason: finalAbortReason,
 		usage: monitor.hasUsage() ? monitor.accumulatedUsage : undefined,
 		outputPath,
@@ -1764,7 +1781,9 @@ export function createSubagentSession(
 
 const CANCELLED_BEFORE_START = "Cancelled before start";
 
-function cancelledBeforeStart(options: ExecutorOptions): SingleResult {
+function startupFailedBeforeMonitor(options: ExecutorOptions, error: unknown, startTime: number): SingleResult {
+	const reason = error instanceof Error ? error.message : String(error);
+	AgentRegistry.global().recordTerminalOutcome(options.id, "startup-failed", reason);
 	return {
 		index: options.index,
 		id: options.id,
@@ -1775,15 +1794,40 @@ function cancelledBeforeStart(options: ExecutorOptions): SingleResult {
 		description: options.description,
 		exitCode: 1,
 		output: "",
-		stderr: CANCELLED_BEFORE_START,
+		stderr: reason,
+		truncated: false,
+		durationMs: Date.now() - startTime,
+		tokens: 0,
+		requests: 0,
+		modelOverride: options.modelOverride,
+		terminalOutcome: "startup-failed",
+		error: reason,
+	};
+}
+function cancelledBeforeStart(options: ExecutorOptions): SingleResult {
+	const reason = CANCELLED_BEFORE_START;
+	AgentRegistry.global().recordTerminalOutcome(options.id, "cancelled", reason);
+	return {
+		index: options.index,
+		id: options.id,
+		agent: options.agent.name,
+		agentSource: options.agent.source,
+		task: options.task,
+		assignment: options.assignment,
+		description: options.description,
+		exitCode: 1,
+		output: "",
+		stderr: reason,
 		truncated: false,
 		durationMs: 0,
 		tokens: 0,
 		requests: 0,
 		modelOverride: options.modelOverride,
-		error: CANCELLED_BEFORE_START,
+		terminalOutcome: "cancelled",
+		error: reason,
 		aborted: true,
-		abortReason: CANCELLED_BEFORE_START,
+		abortReason: reason,
+		cancellationAcknowledged: false,
 	};
 }
 
@@ -2370,12 +2414,13 @@ interface RunRelease {
  * Wait, at most 5s, for an in-flight session abort to settle. A timeout or error leaves the teardown
  * that follows to proceed best-effort.
  */
-async function settleActiveSessionAbort(monitor: AgentRunMonitor): Promise<void> {
+async function settleActiveSessionAbort(monitor: AgentRunMonitor): Promise<boolean> {
 	const { signal, cancel } = scopedTimeoutSignal(5000);
 	try {
 		await untilAborted(signal, () => monitor.waitForActiveSessionAbort());
+		return monitor.abortCleanupSettled();
 	} catch {
-		// Timeouts and abort errors are expected here; teardown continues either way.
+		return false;
 	} finally {
 		cancel();
 	}
@@ -2453,7 +2498,8 @@ async function driveChildRun(
 	lifecycle: Pick<RunRelease, "agentIdleTtlMs" | "prune">,
 ): Promise<DriveOutcome & { durationMs: number }> {
 	const { options, monitor } = ctx;
-	const abortSignal = monitor.abortSignal;
+	let abortSignal = monitor.abortSignal;
+	let driveStarted = false;
 	const sessionAbortController = new AbortController();
 	let outcome: DriveOutcome = { turnCutShort: false, turnAborted: false };
 	let unsubscribe: (() => void) | undefined;
@@ -2466,12 +2512,30 @@ async function driveChildRun(
 		throwIfRunAborted(abortSignal);
 		await autoloadChildSkills(opened.session, options);
 		ctx.marks.readyAt = performance.now();
+		driveStarted = true;
 		outcome = await driveSessionToYield(opened.session, monitor, options.task, options.outputSchema);
+		if (monitor.abortKind() === "stalled") {
+			if ((await settleActiveSessionAbort(monitor)) && monitor.prepareStallRecovery()) {
+				unsubscribe();
+				abortSignal = monitor.abortSignal;
+				unsubscribe = monitor.attach(opened.session);
+				outcome = await driveSessionToYield(
+					opened.session,
+					monitor,
+					"Your previous turn stalled and was stopped. Continue the same assignment from your existing session state. Do not repeat actions already completed. Finish the remaining work, then yield.",
+					options.outputSchema,
+				);
+			}
+		}
 	} catch (err) {
 		// Setup threw: a real failure unless the run was cancelled, in which case the abort facts
 		// describe it.
 		if (!abortSignal.aborted) {
-			outcome = { ...outcome, failure: err instanceof Error ? err.stack || err.message : String(err) };
+			outcome = {
+				...outcome,
+				failure: err instanceof Error ? err.stack || err.message : String(err),
+				startupFailed: !driveStarted,
+			};
 		}
 	} finally {
 		outcome = withSetupAbort(outcome, monitor);
@@ -2507,19 +2571,25 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	const effectiveCwd = worktree ?? spawnOptions.cwd;
 	// Both spawn paths (`task` tool, eval `agent()`) end here, so a role's context selection is
 	// applied once, on the lists they inherited, before any session option is built from them.
-	const roleContext = await selectRoleContext({
-		agent,
-		contextFiles: spawnOptions.contextFiles,
-		skills: spawnOptions.skills,
-		cwd: effectiveCwd,
-	});
-	const options: ExecutorOptions = { ...spawnOptions, ...roleContext };
-	const settings = await createSubagentSettingsForCwd(
-		options.settings ?? Settings.isolated(),
-		effectiveCwd,
-		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
-		options.parentServiceTier,
-	);
+	let options: ExecutorOptions;
+	let settings: Settings;
+	try {
+		const roleContext = await selectRoleContext({
+			agent,
+			contextFiles: spawnOptions.contextFiles,
+			skills: spawnOptions.skills,
+			cwd: effectiveCwd,
+		});
+		options = { ...spawnOptions, ...roleContext };
+		settings = await createSubagentSettingsForCwd(
+			options.settings ?? Settings.isolated(),
+			effectiveCwd,
+			agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
+			options.parentServiceTier,
+		);
+	} catch (error) {
+		return startupFailedBeforeMonitor(spawnOptions, error, startTime);
+	}
 	const maxNestedSpawnDepth = resolveAgentMaxNestedSpawnDepth(settings, agent.name);
 	const childDepth = (options.taskDepth ?? 0) + 1;
 	const atMaxDepth = !canSpawnAtDepth(maxNestedSpawnDepth, childDepth);

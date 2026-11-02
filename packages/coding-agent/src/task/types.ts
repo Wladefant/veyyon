@@ -5,6 +5,7 @@ import { lazy } from "@veyyon/utils/abortable";
 import { $envpos } from "@veyyon/utils/env";
 import type { BaseType } from "arktype";
 import type { RetryRecoveryMode } from "../modes/retry-display";
+import type { AgentTerminalOutcome } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { DEFAULT_SPAWN_AGENT } from "./spawn-policy";
@@ -514,7 +515,11 @@ export interface SingleResult {
 	/** Resolved model display string in the form `<provider>/<id>`, suffixed with `:<thinkingLevel>` whenever the effort the agent runs at is known, including an inherited one. Omitted from tool-result JSON when undefined to keep wire payloads small. */
 	resolvedModel?: string;
 	error?: string;
+	/** Durable outcome classification carried with the executor result. */
+	terminalOutcome?: AgentTerminalOutcome;
 	aborted?: boolean;
+	/** True only when a requested abort and its cleanup settled before result delivery. */
+	cancellationAcknowledged?: boolean;
 	abortReason?: string;
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;

@@ -15,6 +15,7 @@
   - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL parking and revival of finished agents.
 
   - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | parked | aborted`).
+
   - `packages/coding-agent/src/async/job-manager.ts`: background job registration, progress, and result delivery.
   - `packages/coding-agent/src/task/parallel.ts`: `Semaphore` used for the session-scoped concurrency bound.
   - `@veyyon/natives` (`natives/fs/iso`): isolation PAL: `isoResolve` / `isoStart` / `isoStop` backend resolution and fallback.
@@ -27,6 +28,13 @@
 
   - `packages/coding-agent/src/sdk.ts`: child-session router/tool wiring and per-agent `AgentOutputManager`.
   - `docs/internal/task-agent-discovery.md`: deeper discovery and precedence notes.
+
+### Phase watchdog
+
+The run monitor measures progress from session events, not transcript age or display refreshes. Its no-progress limits are 120 seconds during startup, 180 seconds while streaming, 15 minutes while a tool runs, and 30 minutes while waiting for a child. A first stall aborts the same session and permits one recovery only after the abort settles. A second stall ends the run with the `stalled` terminal outcome. A pending or unresolved abort never permits recovery.
+### Parked-agent retention
+
+Parked terminal agents remain registered for five minutes, then lifecycle releases the live ref while preserving the transcript for `history://`. A parked task whose recorded parent no longer exists is released on the bounded 30-second orphan recheck. An unfinished task receives a persisted `stalled` outcome before release. Parentless root sessions are not treated as orphans.
 
 ### Long waits on expensive lanes
 

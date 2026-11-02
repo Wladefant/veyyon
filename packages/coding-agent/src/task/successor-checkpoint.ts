@@ -7,11 +7,12 @@ import { isEexist } from "@veyyon/utils/fs-error";
 import type { AgentDefinition, SingleResult } from "./types";
 
 const checkpointSchema = type({
-	version: "2",
+	version: "3",
 	sliceId: "string",
 	agentId: "string",
 	generation: "0 | 1 | 2",
 	workflow: "string",
+	cancellationAcknowledged: "boolean",
 	results: type({ agentId: "string", output: "string", stderr: "string", "error?": "string" }).array(),
 });
 
@@ -70,16 +71,25 @@ export async function claimSuccessorCheckpoint(
 	let checkpoint: SuccessorCheckpoint;
 	try {
 		const parsed = checkpointSchema(JSON.parse(await fs.readFile(file, "utf8")));
-		if (parsed instanceof type.errors || parsed.agentId !== predecessorId) throw new Error("Invalid checkpoint");
+		if (
+			parsed instanceof type.errors ||
+			parsed.agentId !== predecessorId ||
+			parsed.cancellationAcknowledged !== true
+		)
+			throw new Error("Invalid checkpoint");
 		checkpoint = parsed;
 	} catch {
-		throw new Error(`successor-checkpoint-unavailable: no valid version 2 checkpoint for ${predecessorId}`);
+		throw new Error(
+			`successor-checkpoint-unavailable: no valid acknowledged version 3 checkpoint for ${predecessorId}; spawn a fresh lane and read history://${predecessorId} before continuing`,
+		);
 	}
 	if (checkpoint.generation >= 2) {
 		throw new Error(`successor-limit: slice ${checkpoint.sliceId} already used its two successors`);
 	}
 	if (checkpoint.workflow !== workflow) {
-		throw new Error(`successor-workflow-changed: ${predecessorId} requires its pinned task, agent contract and cwd`);
+		throw new Error(
+			`successor-workflow-changed: ${predecessorId} requires its pinned task, agent contract and cwd; spawn a fresh lane and read history://${predecessorId} before continuing`,
+		);
 	}
 	let claim: fs.FileHandle;
 	try {
@@ -91,7 +101,15 @@ export async function claimSuccessorCheckpoint(
 		throw error;
 	}
 	try {
-		await claim.writeFile(JSON.stringify({ predecessorId, successorId, sliceId: checkpoint.sliceId }));
+		await claim.writeFile(
+			JSON.stringify({
+				predecessorId,
+				successorId,
+				sliceId: checkpoint.sliceId,
+				generation: checkpoint.generation + 1,
+				workflow,
+			}),
+		);
 		await claim.sync();
 	} finally {
 		await claim.close();
@@ -107,11 +125,12 @@ export async function writeSuccessorCheckpoint(
 	predecessor?: SuccessorCheckpoint,
 ): Promise<void> {
 	const checkpoint: SuccessorCheckpoint = {
-		version: 2,
+		version: 3,
 		sliceId: predecessor?.sliceId ?? result.id,
 		agentId: result.id,
 		generation: predecessor ? (predecessor.generation === 0 ? 1 : 2) : 0,
 		workflow,
+		cancellationAcknowledged: result.cancellationAcknowledged === true,
 		results: [
 			...(predecessor?.results ?? []),
 			{

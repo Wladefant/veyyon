@@ -618,9 +618,9 @@ async function runPreparedSpawn(
 			);
 		}
 		const predecessor = AgentRegistry.global().get(params.successorOf);
-		if (predecessor?.status === "running") {
+		if (predecessor && (predecessor.session !== null || !predecessor.terminalOutcome)) {
 			return spawnRefusal(
-				`successor-predecessor-active: ${params.successorOf} has not stopped`,
+				`successor-predecessor-active: ${params.successorOf} has not settled cancellation and cleanup`,
 				projectAgentsDir,
 				Date.now() - startTime,
 			);
