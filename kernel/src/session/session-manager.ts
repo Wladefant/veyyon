@@ -2024,28 +2024,28 @@ export class SessionManager {
 				throw new Error("Cannot fork session: artifact copy incomplete");
 			}
 			// Size equality does not establish that referenced recovery bytes survived
-		// the copy. Hash the two files as streams to keep memory bounded even for
-		// large saved tool output; do not read or import foreign-session artifacts.
-		const sha256File = async (filename: string): Promise<string> => {
-			const digest = createHash("sha256");
-			for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
-			return digest.digest("hex");
-		};
-		for (const id of referencedIds) {
-				const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
-				const originalPath = path.join(oldArtifactDir, filename);
-				const copiedPath = path.join(nextArtifactDir, filename);
-				const [original, copied] = await Promise.all([
-					fs.promises.lstat(originalPath),
-					fs.promises.lstat(copiedPath),
-				]);
-				if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
-					throw new Error("Cannot fork session: referenced artifact copy incomplete");
-				}
-				const [originalHash, copiedHash] = await Promise.all([sha256File(originalPath), sha256File(copiedPath)]);
-				if (originalHash !== copiedHash) {
-					throw new Error("Cannot fork session: referenced artifact bytes differ from source");
-				}
+			// the copy. Hash the two files as streams to keep memory bounded even for
+			// large saved tool output; do not read or import foreign-session artifacts.
+			const sha256File = async (filename: string): Promise<string> => {
+				const digest = createHash("sha256");
+				for await (const chunk of fs.createReadStream(filename)) digest.update(chunk);
+				return digest.digest("hex");
+			};
+			for (const id of referencedIds) {
+					const filename = sourceNames.find(name => name.startsWith(`${id}.`) && name.endsWith(".log"))!;
+					const originalPath = path.join(oldArtifactDir, filename);
+					const copiedPath = path.join(nextArtifactDir, filename);
+					const [original, copied] = await Promise.all([
+						fs.promises.lstat(originalPath),
+						fs.promises.lstat(copiedPath),
+					]);
+					if (!original.isFile() || !copied.isFile() || original.size !== copied.size) {
+						throw new Error("Cannot fork session: referenced artifact copy incomplete");
+					}
+					const [originalHash, copiedHash] = await Promise.all([sha256File(originalPath), sha256File(copiedPath)]);
+					if (originalHash !== copiedHash) {
+						throw new Error("Cannot fork session: referenced artifact bytes differ from source");
+					}
 			}
 		}
 	}
