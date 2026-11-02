@@ -300,7 +300,6 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		}
 	});
 
-
 	it("does not abort early when the runtime budget is unlimited", async () => {
 		// The child answers immediately with a yield, so nothing hangs; the point is
 		// only that NO timeout fires when maxRuntimeMs=0.
