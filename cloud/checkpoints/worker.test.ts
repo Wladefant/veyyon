@@ -23,6 +23,25 @@ function fixture() {
  const post = (action:string,body:unknown) => authority.fetch(new Request(`https://test/v1/sessions/s/${action}`, {method:"POST",body:JSON.stringify(body)}));
  return {post, objects, storage, data, authority, objectAccess:()=>({gets:objectGets,buffers:objectBufferReads}), beforeRead:(callback:()=>void)=>{beforeObjectGet=callback}, failPut:(key:string)=>{failPutKey=key}};
 }
+test("malformed or capped expected heads cannot spend checkpoint object reads",async()=>{
+ const {post,objects,objectAccess,data}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number};
+ const bytes=new Uint8Array([7,8,9]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const cases:[unknown,number][]=[["0",1],[null,1],[-1,0],[100,101]];
+ for(const [index,[expectedHead,sequence]] of cases.entries()){
+  const manifest={version:1,sessionId:"s",sequence,objects:[{hash,size:bytes.length}]};
+  const response=await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead,idempotencyKey:`rejected-head-${index}`,manifest});
+  expect(response.status).toBe(400);
+ }
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ expect((await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"numeric-head",manifest})).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+});
+
 test("a lease change during object verification cannot commit past the final authority fence",async()=>{
  const {post,objects,data,beforeRead,objectAccess}=fixture();
  const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number;expiresAt:string};

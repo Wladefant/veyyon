@@ -45,7 +45,9 @@ export class SessionAuthority {
  const body=raw as Record<string,unknown>;
  if(!isCheckpointNodeLabel(body.ownerNode))return json({error:"valid owner required"},400);
  if(action==="commit"){
- const manifest=manifestOf(body.manifest);if(!manifest || manifest.sequence!==Number(body.expectedHead)+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
+ const expectedHead=body.expectedHead;
+ const manifest=manifestOf(body.manifest);
+ if(typeof expectedHead!=="number" || !Number.isSafeInteger(expectedHead) || expectedHead<0 || expectedHead>=100 || !manifest || manifest.sequence!==expectedHead+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
  if (manifest.sessionId !== new URL(request.url).pathname.split("/")[3]) return json({error:"session identity mismatch"},400);
  // Cheap advisory preflight avoids object reads by already-fenced writers.
  // The transaction below MUST recheck ownership after asynchronous R2 work.
