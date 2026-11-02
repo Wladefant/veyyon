@@ -41,6 +41,9 @@ export type MCPReconnect = () => Promise<MCPServerConnection | null>;
 export function mcpFailureWarrantsReconnect(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message.toLowerCase();
+	// A correlated JSON-RPC application error is a known failed operation,
+	// even when its peer-controlled message quotes an HTTP status or socket name.
+	if (/^mcp error -?\d+:/.test(msg)) return false;
 	// Stale session (server restarted, old session ID is gone). Unanchored on
 	// purpose: `mcpHttpFailureMessage` leads with the URL that failed, so the
 	// status now sits mid-sentence ("... failed: HTTP 404: ..."). The old
