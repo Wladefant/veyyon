@@ -332,4 +332,53 @@ describe("history:// case-folded disk roster", () => {
 			await temp.remove();
 		}
 	});
+
+	it("does not borrow a different registered case-folded agent's disk transcript when its own ref is empty", async () => {
+		const temp = TempDir.createSync("@veyyon-history-registered-folded-file-");
+		try {
+			registerArtifactsDir(temp.path());
+			await createDiskArchive(temp.path(), "reviewer");
+			const file = path.join(temp.path(), "saved", "reviewer.jsonl");
+			register("Reviewer"); // Exact registered ID exists but has no retained file.
+			AgentRegistry.global().register({
+				id: "reviewer",
+				displayName: "reviewer",
+				kind: "sub",
+				session: null,
+				sessionFile: file,
+				status: "parked",
+			});
+			const handler = new HistoryProtocolHandler();
+			for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
+				await expect(handler.resolve(parseInternalUrl(`history://Reviewer${suffix}`)))
+					.rejects.toThrow("has no transcript");
+			}
+			const existing = await handler.resolve(parseInternalUrl("history://reviewer?entry=saved-entry&limit=1000"));
+			expect((JSON.parse(existing.content) as { status: string }).status).toBe("ok");
+			const ids = (await handler.complete()).map(item => item.value);
+			expect(ids).toEqual(["Reviewer", "reviewer"]);
+			expect((await handler.resolve(parseInternalUrl("history://"))).content).toContain("| Reviewer |");
+			expect((await handler.resolve(parseInternalUrl("history://"))).content).toContain("| reviewer |");
+
+			// A live registered exact ID must remain directly accessible despite
+			// the other registered spelling. The guard targets only disk fallback.
+			AgentRegistry.resetGlobalForTests();
+			register("Reviewer", true);
+			AgentRegistry.global().register({
+				id: "reviewer", displayName: "reviewer", kind: "sub",
+				session: null, sessionFile: file, status: "parked",
+			});
+			expect((await handler.resolve(parseInternalUrl("history://Reviewer"))).notes)
+				.toContain("Source: live session");
+
+			// A UNIQUE registered ID without its own file retains the existing
+			// case-insensitive disk archival recovery compatibility.
+			AgentRegistry.resetGlobalForTests();
+			register("Reviewer");
+			const unique = await handler.resolve(parseInternalUrl("history://Reviewer?entry=saved-entry&limit=1000"));
+			expect((JSON.parse(unique.content) as { status: string }).status).toBe("ok");
+		} finally {
+			await temp.remove();
+		}
+	});
 });
