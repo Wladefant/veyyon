@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { HttpTransport } from "../src/mcp/transports/http";
 
 type SSEFrame = unknown;
@@ -16,8 +16,13 @@ async function bounded<T>(promise: Promise<T>, phase: string): Promise<T> {
 
 async function withLiveSSE<T>(
 	frames: SSEFrame[],
-	run: (transport: HttpTransport) => Promise<T>,
+	run: (transport: HttpTransport, sendFrame: (frame: SSEFrame) => void) => Promise<T>,
 ): Promise<T> {
+	let liveSSE: ServerResponse | null = null;
+	const sendFrame = (frame: SSEFrame): void => {
+		if (!liveSSE || liveSSE.destroyed) throw new Error("Disposable GET SSE connection is not open");
+		liveSSE.write("data: " + JSON.stringify(frame) + "\n\n");
+	};
 	const server: Server = createServer((request, response) => {
 		if (request.method !== "GET" || request.url !== "/mcp") {
 			response.writeHead(202).end();
@@ -27,7 +32,8 @@ async function withLiveSSE<T>(
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
 		});
-		for (const frame of frames) response.write("data: " + JSON.stringify(frame) + "\n\n");
+		liveSSE = response;
+		for (const frame of frames) sendFrame(frame);
 		// Keep the real GET listener open; losing it before the valid frame is
 		// delivered is a failure, not a normal end-of-stream.
 	});
@@ -48,7 +54,7 @@ async function withLiveSSE<T>(
 	});
 	try {
 		await transport.connect();
-		return await run(transport);
+		return await run(transport, sendFrame);
 	} finally {
 		try {
 			await bounded(transport.close(), "client transport cleanup");
@@ -213,5 +219,57 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 				}
 			},
 		);
+	}, 15_000);
+
+	// Capacity must recover after admitted server requests have finished.
+	// Otherwise one bad server-side burst can permanently starve future
+	// legitimate requests on the same healthy GET SSE connection.
+	it("recovers per-transport request admission after pending responses settle", async () => {
+		const makeRequest = (id: number) => ({
+			jsonrpc: "2.0",
+			id,
+			method: "roots/list",
+			params: {},
+		});
+		await withLiveSSE([], async (transport, sendFrame) => {
+			const release = Promise.withResolvers<void>();
+			const firstCapacity = Promise.withResolvers<void>();
+			const admittedAfterRelease = Promise.withResolvers<void>();
+			let started = 0;
+			const errors: string[] = [];
+			transport.onError = error => errors.push(error.message);
+			transport.onRequest = async () => {
+				started++;
+				if (started === 32) firstCapacity.resolve();
+				if (started > 32) admittedAfterRelease.resolve();
+				if (started <= 32) await release.promise;
+				return { roots: [] };
+			};
+			try {
+				await bounded(transport.startSSEListener(), "SSE recovery fixture GET");
+				sendFrame(Array.from({ length: 32 }, (_, index) => makeRequest(index)));
+				await bounded(firstCapacity.promise, "32 pending SSE request handlers");
+				sendFrame(makeRequest(99));
+				await Promise.resolve();
+				expect(started).toBe(32);
+				release.resolve();
+
+				// Await real loopback response POST completion indirectly by a
+				// bounded series of candidate frames; a permanently stuck
+				// admission counter will never permit any of them.
+				for (let index = 0; index < 30 && started === 32; index++) {
+					sendFrame(makeRequest(100 + index));
+					await Promise.race([
+						admittedAfterRelease.promise,
+						new Promise<void>(resolve => setTimeout(resolve, 40)),
+					]);
+				}
+				await bounded(admittedAfterRelease.promise, "SSE request admission after settled responses");
+				expect(started).toBeGreaterThan(32);
+				expect(errors).toEqual([]);
+			} finally {
+				release.resolve();
+			}
+		});
 	}, 15_000);
 });
