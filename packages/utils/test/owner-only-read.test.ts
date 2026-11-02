@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyOwnerOnlyWindowsAcl, readOwnerOnlyFile, readOwnerOnlyFileSync } from "@veyyon/utils";
+import { applyOwnerOnlyWindowsAcl, readOwnerOnlyFile, readOwnerOnlyFiles, readOwnerOnlyFileSync } from "@veyyon/utils";
 
 const posix = process.platform !== "win32";
 const tempDirs: string[] = [];
@@ -68,6 +68,22 @@ async function tempRecord(mode: number, body = '{"version":1}'): Promise<string>
 
 afterEach(async () => {
 	for (const dir of tempDirs.splice(0)) await fsp.rm(dir, { recursive: true, force: true });
+});
+
+it("bounds a discovery read when the file grows after stat", async () => {
+	const file = await tempRecord(0o600);
+	let grew = false;
+	await expect(readOwnerOnlyFiles([file], () => false, {
+		platform: "win32",
+		windowsAcl: { run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }) },
+		onStep: step => {
+			if (step === "read") {
+				grew = true;
+				fs.writeFileSync(file, Buffer.alloc(65537));
+			}
+		},
+	})).rejects.toThrow("larger than a discovery record");
+	expect(grew).toBe(true);
 });
 
 describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {

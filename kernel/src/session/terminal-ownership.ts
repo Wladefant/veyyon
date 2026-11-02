@@ -21,6 +21,20 @@ async function isEndpointServing(endpoint: string): Promise<boolean> {
 	});
 }
 
+/** Only ESRCH for the publisher PID proves that an unverifiable claim is obsolete. */
+function isDeadTerminalRecord(filePath: string): boolean {
+	const match = /^([1-9]\d*)-[^.]+\.json$/.exec(path.basename(filePath));
+	if (!match) return false;
+	const pid = Number(match[1]);
+	if (!Number.isSafeInteger(pid)) return false;
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ESRCH";
+	}
+	return false;
+}
+
 /** Live terminal discovery is an ownership claim, never permission to open another writer. */
 export async function assertNotTerminalOwned(
 	sessionFile: string,
@@ -55,11 +69,20 @@ export async function assertNotTerminalOwned(
 					return true;
 				}
 			},
-			{ ...options, onStep: current => { step = current; options.onStep?.(current); } },
+			{
+				...options,
+				isRecordObsolete: isDeadTerminalRecord,
+				onStep: current => { step = current; options.onStep?.(current); },
+			},
 		);
 	} catch (error) {
 		logger.warn("Cannot establish terminal writer ownership", { path: directory, reason: errorMessage(error) });
-		const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "unknown");
+		let diagnostic = error;
+		for (let depth = 0; depth < 16 && diagnostic instanceof Error; depth++) {
+			if (typeof (diagnostic as NodeJS.ErrnoException).code === "string" || !diagnostic.cause) break;
+			diagnostic = diagnostic.cause;
+		}
+		const code = (diagnostic as NodeJS.ErrnoException)?.code ?? (diagnostic instanceof Error ? diagnostic.name : "unknown");
 		const detail = errorMessage(error);
 		throw new Error(
 			`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${detail}`,

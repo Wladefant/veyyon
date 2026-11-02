@@ -6,7 +6,8 @@
 
 ### Fixed
 
-- Terminal ownership scans skip explicit claims for other sessions, batch Windows file ACL checks, and log verification failures ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+- Terminal ownership scans check the parent once, verify records in bounded batches, and retry transient reads up to three times. Unverifiable records fail closed with their path and cause unless the record is gone or its filename PID is dead ([#833](https://github.com/Wladefant/veyyon/issues/833), [#849](https://github.com/Wladefant/veyyon/issues/849)).
+
 ## [1.7.5] - 2026-11-02
 
 ### Changed

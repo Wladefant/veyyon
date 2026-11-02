@@ -38,7 +38,7 @@ describe("terminal ownership failure diagnostics", () => {
 			expect(error).toBeInstanceOf(Error);
 			expect(error.cause).toBe(readerError);
 			expect(error.cause.cause).toBe(cause);
-			expect(error.message).toContain(`Cannot establish terminal writer ownership: ${record}; step=${step}; code=Error;`);
+			expect(error.message).toContain(`Cannot establish terminal writer ownership: ${record}; step=${step}; code=EPERM;`);
 			expect(error.message).toContain(`step=${step}; code=EPERM;`);
 			expect(error.message).toContain("elapsed=1ms; ACL deadline=15000ms per command; access denied");
 			expect(read).toHaveBeenCalledTimes(1);

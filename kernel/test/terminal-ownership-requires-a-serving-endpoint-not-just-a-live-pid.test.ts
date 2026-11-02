@@ -231,7 +231,7 @@ describe("terminal ownership Windows ACL scan", () => {
 	it("refuses a matching loose ACL and reports the ACL cause", async () => {
 		const root = await tempRoot();
 		const sessionFile = path.join(root, "matching.jsonl");
-		await writeClaim(root, sessionFile, endpointFor(root, "unavailable"), deadPid());
+		await writeClaim(root, sessionFile, endpointFor(root, "unavailable"), process.pid);
 		const calls: string[] = [];
 		await expect(
 			assertNotTerminalOwned(sessionFile, root, {
