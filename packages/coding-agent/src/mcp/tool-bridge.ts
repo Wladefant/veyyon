@@ -28,7 +28,8 @@ import { createMCPToolView } from "./view";
 export type MCPReconnect = () => Promise<MCPServerConnection | null>;
 
 /**
- * Whether a failed MCP call is worth tearing the connection down and sending once more.
+ * Whether a failed MCP call is worth reconnecting for a future explicit invocation.
+ * Reconnection never authorizes automatic replay of a tools/call whose response was lost.
  *
  * Two kinds of fault qualify, and they belong to different layers. The socket vocabulary is the
  * error registry's — a refused, reset or unreachable peer reads the same in every package — and this

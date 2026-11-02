@@ -14,6 +14,7 @@ const writeTool: MCPToolDefinition = {
 	inputSchema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
 };
 const context = {} as Parameters<MCPTool["execute"]>[3];
+const FAKE_PRIVATE_ARG = "TEST_ONLY_MCP_PRIVATE_ARG_890";
 
 function fakeTransport(dispatch: (...args: Parameters<MCPTransport["request"]>) => Promise<unknown>): MCPTransport {
 	return {
@@ -64,7 +65,7 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 				return refreshedConnection;
 			});
 
-			const first = await tool.execute("origin-1", { value: "first" }, undefined, context);
+			const first = await tool.execute("origin-1", { value: FAKE_PRIVATE_ARG }, undefined, context);
 			expect(oldCalls).toBe(1);
 			expect(refreshedCalls).toBe(0);
 			expect(effects).toBe(1);
@@ -73,6 +74,7 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 			expect(JSON.stringify(first)).toContain("outcome unknown");
 			expect(JSON.stringify(first)).toContain("Do not automatically repeat");
 			expect(JSON.stringify(first)).not.toContain("ECONNRESET");
+			expect(JSON.stringify(first)).not.toContain(FAKE_PRIVATE_ARG);
 
 			// A second *explicit* invocation remains possible on the refreshed
 			// connection, but it must not be confused with the prior call.

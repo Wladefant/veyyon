@@ -103,7 +103,7 @@ describe("mcpFailureWarrantsReconnect", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MCPTool.execute retry behavior
+// MCPTool.execute unknown-outcome and future-call reconnect behavior
 // ---------------------------------------------------------------------------
 
 describe("MCPTool.execute refuses implicit replay after a lost response", () => {
