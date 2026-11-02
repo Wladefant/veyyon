@@ -1512,6 +1512,10 @@ export class MCPManager {
 					const value = task.tracked.value;
 					if (!value) continue;
 					const { connection, serverTools } = value;
+					// A fulfilled task is only a historical result. A per-server
+					// disconnect may have retired that transport while another
+					// startup task was waiting on cached tools.
+					if (this.#connections.get(name) !== connection || this.#activeDisconnects.has(name)) continue;
 					connectedServers.add(name);
 					const reconnect = () => this.reconnectServer(name);
 					const mcpTools = MCPTool.fromTools(connection, serverTools, reconnect);
@@ -1522,7 +1526,8 @@ export class MCPManager {
 					reportedErrors.add(name);
 				} else {
 					const cached = cachedTools.get(name);
-					if (cached) {
+					// A revoked pending load must not be resurrected from cache.
+					if (cached && this.#pendingToolLoads.get(name) === task.toolsPromise && this.#serverConfigs.has(name) && !this.#activeDisconnects.has(name)) {
 						const source = this.#sources.get(name);
 						const reconnect = () => this.reconnectServer(name);
 						const deferred = DeferredMCPTool.fromTools(
@@ -1543,6 +1548,11 @@ export class MCPManager {
 		// or report an already-closed startup server as still connected.
 		if (this.#epoch !== startupEpoch) {
 			return { tools: [], errors, connectedServers: [], exaApiKeys: [] };
+		}
+		// Existing connections added before another task awaited cache can also
+		// have been explicitly retired without changing the bulk epoch.
+		for (const name of connectedServers) {
+			if (!this.#connections.has(name) || this.#activeDisconnects.has(name)) connectedServers.delete(name);
 		}
 
 		// Stable sort by name so the order is independent of connection completion.
