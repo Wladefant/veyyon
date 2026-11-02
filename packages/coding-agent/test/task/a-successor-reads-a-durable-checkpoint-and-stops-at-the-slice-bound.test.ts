@@ -20,6 +20,7 @@ import * as executor from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import { TempDir } from "@veyyon/utils";
 import * as atomicWriter from "@veyyon/utils/atomic-write";
+import * as successorCheckpoint from "@veyyon/coding-agent/task/successor-checkpoint";
 import { makeToolSession, type ToolSessionOverrides } from "../helpers/tool-session";
 
 const assignment = "Continue the same slice.";
@@ -183,6 +184,70 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(1);
 	});
 
+	it("rechecks a predecessor that revives while the durable checkpoint claim resolves", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "parked",
+			session: null,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "completed");
+
+		const claim = successorCheckpoint.claimSuccessorCheckpoint;
+		vi.spyOn(successorCheckpoint, "claimSuccessorCheckpoint").mockImplementation(async (...args) => {
+			const checkpoint = await claim(...args);
+			registry.setStatus(predecessor, "idle");
+			registry.setStatus(predecessor, "running");
+			return checkpoint;
+		});
+
+		const refused = await dispatch("Raced successor", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("successor-predecessor-active");
+		expect(executed).toHaveLength(1);
+		expect(registry.get(predecessor)?.status).toBe("running");
+		expect(registry.get(predecessor)?.terminalOutcome).toBeUndefined();
+	});
+	it("retires a settled parked predecessor after a successful successor handoff", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const transcript = dir.join("predecessor.jsonl");
+		const transcriptBytes = '{"type":"message","text":"retained history"}\n';
+		await fs.writeFile(transcript, transcriptBytes);
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "parked",
+			session: null,
+			sessionFile: transcript,
+		});
+		registry.recordTerminalOutcome(predecessor, "completed");
+		let reviveCalls = 0;
+		AgentLifecycleManager.global().adopt(predecessor, {
+			idleTtlMs: 0,
+			revive: async () => {
+				reviveCalls++;
+				return {} as AgentSession;
+			},
+		});
+
+		await dispatch("Replacement", predecessor);
+
+		expect(executed).toHaveLength(2);
+		expect(registry.get(predecessor)).toBeUndefined();
+		await expect(AgentLifecycleManager.global().ensureLive(predecessor)).rejects.toThrow(
+			`history://${predecessor}`,
+		);
+		expect(reviveCalls).toBe(0);
+		expect(await fs.readFile(transcript, "utf8")).toBe(transcriptBytes);
+	});
 	it("rejects corrupt and unknown-version checkpoints", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
