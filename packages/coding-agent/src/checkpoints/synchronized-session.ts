@@ -9,6 +9,7 @@ export class SynchronizedSession {
 	#renewal?: Promise<void>;
 	#lease?: CheckpointLease;
 	#admission?: Promise<void>;
+	#closing?: Promise<void>;
 	#resumeToken?: string;
 	constructor(
 		readonly sessionId: string,
@@ -127,7 +128,13 @@ export class SynchronizedSession {
 			this.#timer.unref();
 		}
 	}
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		// A close result is final, including an ambiguous failed /release:
+		// never send a second release for the same potentially spent epoch.
+		if (!this.#closing) this.#closing = this.#closeOnce();
+		return this.#closing;
+	}
+	async #closeOnce(): Promise<void> {
 		// Fence admission and periodic renewal, then drain calls before release.
 		this.#loseOwnership();
 		await this.#admission?.catch(() => {});

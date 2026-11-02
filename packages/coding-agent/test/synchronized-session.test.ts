@@ -229,6 +229,133 @@ test("concurrent admission shares one in-flight checkpoint lease acquisition", a
 	expect(actions).toEqual(["lease", "renew", "release"]);
 });
 
+// WHY: two callers must not issue two /release mutations using the same
+// potentially spent epoch while the first close response is in flight.
+test("concurrent close calls share exactly one authority release and stay fenced", async () => {
+	const entered = Promise.withResolvers<void>();
+	const finishRelease = Promise.withResolvers<void>();
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "release") {
+			entered.resolve();
+			await finishRelease.promise;
+		}
+		return Response.json({
+			ownerNode: "test-owner",
+			epoch: action === "release" ? 2 : 1,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"close-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await session.admit();
+	const first = session.close();
+	const second = session.close();
+	const deadline = setTimeout(() => entered.reject(new Error("close never issued /release")), 3000);
+	try {
+		await entered.promise;
+		expect(second).toBe(first);
+		expect(actions).toEqual(["lease", "renew", "release"]);
+		await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	} finally {
+		clearTimeout(deadline);
+		finishRelease.resolve();
+	}
+	await Promise.all([first, second]);
+	await session.close();
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+test("a failed close cannot replay an ambiguous authority release", async () => {
+	const actions: string[] = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "release") return new Response(null, { status: 409 });
+		return Response.json({
+			ownerNode: "test-owner", epoch: 1,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+		});
+	};
+	const session = new SynchronizedSession(
+		"ambiguous-release-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		undefined,
+		"test-owner",
+	);
+	await session.admit();
+	const first = session.close();
+	const second = session.close();
+	expect(first).toBe(second);
+	await expect(first).rejects.toThrow(/HTTP 409/);
+	await expect(second).rejects.toThrow(/HTTP 409/);
+	await expect(session.close()).rejects.toThrow(/HTTP 409/);
+	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
+	expect(actions).toEqual(["lease", "renew", "release"]);
+});
+
+// WHY: a transferred resume-marker epoch is persisted once per actual lease release,
+// even if the host invokes shutdown twice before the authority responds.
+test("concurrent transferred-session close persists the resume epoch once", async () => {
+	const previousNode = process.env.VEYYON_CHECKPOINT_NODE;
+	process.env.VEYYON_CHECKPOINT_NODE = "destination-device";
+	const entered = Promise.withResolvers<void>();
+	const finishRelease = Promise.withResolvers<void>();
+	const token = "a-long-enough-resume-capability";
+	const actions: string[] = [];
+	const persisted: Array<{ token: string; epoch: number }> = [];
+	const fake: CheckpointFetch = async input => {
+		const action = new URL(String(input)).pathname.split("/").pop()!;
+		actions.push(action);
+		if (action === "finalize") return Response.json({ ok: true });
+		if (action === "release") {
+			entered.resolve();
+			await finishRelease.promise;
+		}
+		return Response.json({
+			ownerNode: "runtime-owner", epoch: action === "release" ? 6 : 5,
+			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+			...(action === "claim" ? { resumeToken: token } : {}),
+		});
+	};
+	const session = new SynchronizedSession(
+		"transferred-close-single-flight",
+		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
+		{
+			version: 1, sessionId: "transferred-close-single-flight", targetNode: "destination-device",
+			transferId: "transfer-close", transferEpoch: 4, claimToken: "a-long-enough-claim-capability",
+			epoch: 4,
+		},
+		"runtime-owner",
+		async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
+	);
+	const deadline = setTimeout(() => entered.reject(new Error("transferred close never issued /release")), 3000);
+	try {
+		await session.admit();
+		const first = session.close();
+		const second = session.close();
+		expect(first).toBe(second);
+		await entered.promise;
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+		finishRelease.resolve();
+		await Promise.all([first, second]);
+		expect(persisted).toEqual([{ token, epoch: 5 }, { token, epoch: 6 }]);
+		await session.close();
+		expect(actions).toEqual(["claim", "finalize", "renew", "release"]);
+	} finally {
+		clearTimeout(deadline);
+		finishRelease.resolve();
+		if (previousNode === undefined) delete process.env.VEYYON_CHECKPOINT_NODE;
+		else process.env.VEYYON_CHECKPOINT_NODE = previousNode;
+	}
+});
+
 // WHY: a shutdown while /lease is unresolved used to release nothing and return,
 // then the late admission installed a timer and admitted work after close.
 test("close during checkpoint lease acquisition releases the late grant and refuses admission", async () => {
