@@ -92,6 +92,7 @@ export class CheckpointClient {
 	#leases = new Map<string, CheckpointLease>();
 	#lost = new Set<string>();
 	#pendingCommits = new Map<string, { ciphertext: Uint8Array; payloadHash: string; idempotencyKey: string }>();
+	#activeCommits = new Map<string, { payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }>();
 	constructor(readonly options: CheckpointClientOptions) {
 		this.enabled = Boolean(options.baseUrl && options.token && options.key?.byteLength === 32);
 		this.#fetch = options.fetch ?? fetch;
@@ -364,6 +365,31 @@ export class CheckpointClient {
 		await this.assertWritable(sessionId, lease.epoch);
 		const operation = `${sessionId}:${expectedHead}`;
 		const payloadHash = createHash("sha256").update(JSON.stringify(bundle)).digest("hex");
+		const active = this.#activeCommits.get(operation);
+		if (active) {
+			if (active.payloadHash !== payloadHash) throw new Error("Pending checkpoint replay payload changed");
+			if (active.ownerNode !== lease.ownerNode || active.epoch !== lease.epoch)
+				throw new Error("Checkpoint lease changed during concurrent commit");
+			return await active.promise;
+		}
+		// Reserve the operation before the first awaited encryption step; otherwise
+		// two callers create different ciphertext/idempotency keys for one head.
+		const promise = this.#commitOnce(sessionId, bundle, expectedHead, lease, operation, payloadHash);
+		this.#activeCommits.set(operation, { payloadHash, ownerNode: lease.ownerNode, epoch: lease.epoch, promise });
+		try {
+			return await promise;
+		} finally {
+			if (this.#activeCommits.get(operation)?.promise === promise) this.#activeCommits.delete(operation);
+		}
+	}
+	async #commitOnce(
+		sessionId: string,
+		bundle: CheckpointBundle,
+		expectedHead: number,
+		lease: CheckpointLease,
+		operation: string,
+		payloadHash: string,
+	): Promise<unknown> {
 		let pending = this.#pendingCommits.get(operation);
 		if (pending && pending.payloadHash !== payloadHash) throw new Error("Pending checkpoint replay payload changed");
 		if (!pending) {
