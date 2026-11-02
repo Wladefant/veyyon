@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP `session/load` finds a stored session by ID after a cwd change, restores its transcript cwd, and rejects a later load from a mismatched cwd ([Refs Wladefant/superboard#1999](https://github.com/Wladefant/superboard/issues/1999)).
 ## [1.7.5] - 2026-11-02
 
 ### Fixed
