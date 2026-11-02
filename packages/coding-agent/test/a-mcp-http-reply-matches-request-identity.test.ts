@@ -182,6 +182,8 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 				["null error", id => ({ jsonrpc: "2.0", id, error: null })],
 				["string error", id => ({ jsonrpc: "2.0", id, error: "not an error object" })],
 				["invalid error code", id => ({ jsonrpc: "2.0", id, error: { code: "-32603", message: "failed" } })],
+				["fractional error code", id => ({ jsonrpc: "2.0", id, error: { code: -32603.5, message: "failed" } })],
+				["unsafe integer error code", id => ({ jsonrpc: "2.0", id, error: { code: Number.MAX_SAFE_INTEGER + 1, message: "failed" } })],
 				["missing error message", id => ({ jsonrpc: "2.0", id, error: { code: -32603 } })],
 			];
 			for (const [name, reply] of malformed) {
@@ -275,6 +277,8 @@ describe("MCP HTTP JSON-RPC reply correlation", () => {
 				["both arms", id => ({ jsonrpc: "2.0", id, result: {}, error: { code: -32603, message: "fake" } })],
 				["neither arm", id => ({ jsonrpc: "2.0", id })],
 				["malformed error", id => ({ jsonrpc: "2.0", id, error: { code: "bad", message: "untrusted" } })],
+				["fractional error code", id => ({ jsonrpc: "2.0", id, error: { code: -32603.5, message: "untrusted" } })],
+				["unsafe integer error code", id => ({ jsonrpc: "2.0", id, error: { code: Number.MAX_SAFE_INTEGER + 1, message: "untrusted" } })],
 				["null error", id => ({ jsonrpc: "2.0", id, error: null })],
 			];
 			for (const [label, response] of invalid) {
