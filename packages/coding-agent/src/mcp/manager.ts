@@ -436,6 +436,8 @@ export class MCPManager {
 	#notificationsEnabled = false;
 	#notificationsEpoch = 0;
 	#subscribedResources = new Map<string, Set<string>>();
+	/** Per-connection tools/list single flight; one later notification requests one fresh pass. */
+	#pendingToolRefreshes = new Map<string, { connection: MCPServerConnection; again: boolean; promise: Promise<void> }>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
 	#serverConfigs = new Map<string, MCPServerConfig>();
@@ -2101,31 +2103,62 @@ export class MCPManager {
 	/**
 	 * Refresh tools from a specific server.
 	 */
-	async refreshServerTools(name: string): Promise<void> {
+	refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
-		if (!connection || this.#retiredToolConnections.has(connection)) return;
-		const epoch = this.#epoch;
+		if (!connection || this.#retiredToolConnections.has(connection)) return Promise.resolve();
 
-		// Clear cached tools
-		connection.tools = undefined;
+		// Each tools/list reply writes connection.tools inside client.ts before
+		// manager-level stale checks can run. Serialize requests for the SAME
+		// live connection; a second notification schedules a newer pass instead
+		// of letting a slow old response roll the catalog backwards.
+		const active = this.#pendingToolRefreshes.get(name);
+		if (active?.connection === connection) {
+			active.again = true;
+			return active.promise;
+		}
 
-		// Reload tools
-		const serverTools = await listTools(connection);
-		// A request already in flight may settle even after its transport is
-		// retired. Never publish or cache stale tools after disconnect,
-		// reconnect or a whole-manager reset.
-		if (
-			this.#retiredToolConnections.has(connection) ||
-			this.#connections.get(name) !== connection ||
-			this.#epoch !== epoch
-		) return;
-		const reconnect = () => this.reconnectServer(name);
-		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
-		void this.toolCache?.set(name, connection.config, serverTools);
+		const completion = Promise.withResolvers<void>();
+		const state = { connection, again: false, promise: completion.promise };
+		this.#pendingToolRefreshes.set(name, state);
+		void (async () => {
+			try {
+				do {
+					state.again = false;
+					if (this.#retiredToolConnections.has(connection) || this.#connections.get(name) !== connection) break;
+					const epoch = this.#epoch;
 
-		// Replace tools from this server
-		this.#replaceServerTools(name, customTools);
-		this.#onToolsChanged?.(this.#tools);
+					// A transport response may still fail while a newer change is
+					// queued; allow the later request to recover a live connection.
+					connection.tools = undefined;
+					let serverTools: Awaited<ReturnType<typeof listTools>>;
+					try {
+						serverTools = await listTools(connection);
+					} catch (error) {
+						if (state.again) continue;
+						throw error;
+					}
+
+					// A completed response is not permission to publish after
+					// explicit retirement, reconnect or bulk reset.
+					if (
+						this.#retiredToolConnections.has(connection) ||
+						this.#connections.get(name) !== connection ||
+						this.#epoch !== epoch
+					) break;
+					const reconnect = () => this.reconnectServer(name);
+					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					void this.toolCache?.set(name, connection.config, serverTools);
+					this.#replaceServerTools(name, customTools);
+					this.#onToolsChanged?.(this.#tools);
+				} while (state.again);
+				completion.resolve();
+			} catch (error) {
+				completion.reject(error);
+			} finally {
+				if (this.#pendingToolRefreshes.get(name) === state) this.#pendingToolRefreshes.delete(name);
+			}
+		})();
+		return completion.promise;
 	}
 
 	/**
