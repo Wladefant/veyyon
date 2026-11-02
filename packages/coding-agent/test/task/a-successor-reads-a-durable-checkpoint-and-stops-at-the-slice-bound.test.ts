@@ -191,7 +191,7 @@ describe("explicit bounded lane successors", () => {
 		if (!file) throw new Error("No durable checkpoint");
 		const checkpointPath = path.join(directory, file);
 		const original = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
-		for (const bytes of ["{", JSON.stringify({ ...original, version: 3 })]) {
+		for (const bytes of ["{", JSON.stringify({ ...original, version: original.version + 1 })]) {
 			await fs.writeFile(checkpointPath, bytes);
 			const refused = await dispatch("Invalid", predecessor);
 			expect(refused.isError).toBe(true);

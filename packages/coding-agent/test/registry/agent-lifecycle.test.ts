@@ -3,6 +3,7 @@ import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifec
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 
 interface SessionStub {
 	session: AgentSession;
@@ -73,8 +74,19 @@ describe("AgentLifecycleManager", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	function registerIdleSub(id: string, session: AgentSession | null, sessionFile: string | null = `/tmp/${id}.jsonl`) {
-		return registry.register({ id, displayName: "task", kind: "sub", session, sessionFile, status: "idle" });
+	function registerIdleSub(
+		id: string,
+		session: AgentSession | null,
+		sessionFile: string | null = `/tmp/${id}.jsonl`,
+		parentId?: string,
+	) {
+		return registry.register({ id, displayName: "task", kind: "sub", session, sessionFile, parentId, status: "idle" });
+	}
+
+	function registerReportingParent(): string {
+		const id = "PruneParent";
+		registry.register({ id, displayName: "parent", kind: "main", session: makeSessionStub().session });
+		return id;
 	}
 
 	/**
@@ -298,6 +310,7 @@ describe("AgentLifecycleManager", () => {
 			id: "Cold-Prunes",
 			displayName: "task",
 			kind: "sub",
+			parentId: registerReportingParent(),
 			session: null,
 			sessionFile: "/tmp/Cold-Prunes.jsonl",
 			status: "parked",
@@ -338,6 +351,7 @@ describe("AgentLifecycleManager", () => {
 			id: "Cold-Waits",
 			displayName: "task",
 			kind: "sub",
+			parentId: registerReportingParent(),
 			session: null,
 			sessionFile: "/tmp/Cold-Waits.jsonl",
 			status: "parked",
@@ -378,6 +392,7 @@ describe("AgentLifecycleManager", () => {
 			id: "Cold-Lifted",
 			displayName: "task",
 			kind: "sub",
+			parentId: registerReportingParent(),
 			session: null,
 			sessionFile: "/repo/Cold-Lifted.jsonl",
 			status: "parked",
@@ -662,7 +677,7 @@ describe("AgentLifecycleManager", () => {
 	it("park() on an already-parked agent leaves its prune deadline armed", async () => {
 		vi.useFakeTimers();
 		const stub = makeSessionStub();
-		registerIdleSub("Twice", stub.session, "/tmp/Twice.jsonl");
+		registerIdleSub("Twice", stub.session, "/tmp/Twice.jsonl", registerReportingParent());
 		lifecycle.adopt("Twice", { idleTtlMs: TTL, pruneAfterMs: TTL * 5 });
 
 		vi.advanceTimersByTime(TTL);
@@ -698,6 +713,7 @@ describe("AgentLifecycleManager", () => {
 			id: "Waking",
 			displayName: "task",
 			kind: "sub",
+			parentId: registerReportingParent(),
 			session: null,
 			sessionFile: "/tmp/Waking.jsonl",
 			status: "parked",
@@ -759,28 +775,45 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("marks an unfinished parked child stalled before cleaning up its missing-parent orphan", async () => {
-		const parent = registry.register({
-			id: "Gone",
-			displayName: "parent",
-			kind: "sub",
-			session: null,
-			status: "parked",
-		});
-		const child = registry.register({
-			id: "Orphan",
-			displayName: "child",
-			kind: "sub",
-			parentId: "Gone",
-			session: null,
-			sessionFile: "/tmp/Orphan.jsonl",
-			status: "parked",
-		});
-		registry.unregister(parent.id);
-		await flushAsync();
+		const temp = TempDir.createSync("parked-orphan-history-");
+		const transcript = SessionManager.create(temp.path(), temp.path());
+		try {
+			transcript.appendCustomEntry("fixture", { agentId: "Orphan" });
+			await transcript.flush();
+			const sessionFile = transcript.getSessionFile();
+			if (!sessionFile) throw new Error("Missing orphan transcript");
+			await transcript.close();
+			const child = registry.register({
+				id: "Orphan",
+				displayName: "child",
+				kind: "sub",
+				parentId: "Gone",
+				session: null,
+				sessionFile,
+				status: "parked",
+			});
+			await lifecycle.cleanupParkedOrphans();
 
-		expect(registry.get("Orphan")).toBeUndefined();
-		expect(child.terminalOutcome).toBe("stalled");
-		expect(child.terminalOutcomeReason).toMatch(/parent/i);
+			expect(registry.get("Orphan")).toBeUndefined();
+			expect(child.terminalOutcome).toBe("stalled");
+			expect(child.terminalOutcomeReason).toMatch(/parent/i);
+			const reopened = await SessionManager.open(sessionFile);
+			try {
+				expect(reopened.getEntries()).toContainEqual(
+					expect.objectContaining({
+						type: "custom_message",
+						customType: "agent-terminal-outcome",
+						display: true,
+						content: 'Agent "Orphan" stalled: Parent session no longer exists.',
+					}),
+				);
+			} finally {
+				await reopened.close();
+			}
+		} finally {
+			await transcript.close();
+			temp.removeSync();
+		}
 	});
 
 	it("does not classify root sessions without a parent as missing-parent orphans", async () => {
