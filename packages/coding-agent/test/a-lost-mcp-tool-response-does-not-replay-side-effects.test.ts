@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { DeferredMCPTool, MCPTool } from "../src/mcp/tool-bridge";
+import { resolveMCPTimeoutMs } from "../src/mcp/timeout";
+import { mcpTimeoutMessage } from "../src/mcp/transports/transport-failure";
 import type { MCPServerConnection, MCPToolCallResult, MCPToolDefinition, MCPTransport } from "../src/mcp/types";
 
 // WHY: a tools/call can perform its side effect before the transport loses the
@@ -389,5 +391,67 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		expect(third.isError).not.toBe(true);
 		expect(third.content[0]).toEqual({ type: "text", text: "explicit third call" });
 		expect(recoveredCalls).toBe(1);
+	});
+
+	// WHY: the transport can time out *after* the server commits a side
+	// effect. The bridge must not tell a model to retry just because the fault
+	// did not contain ECONNRESET or HTTP 503. The real transports generate the
+	// same first-party message; only transport I/O is simulated by this test.
+	for (const kind of ["stdio", "http"] as const) {
+		it(`treats an attempted ${kind} tools/call deadline as unknown and not retryable`, async () => {
+			const ms = resolveMCPTimeoutMs(137);
+			const target = kind === "stdio" ? { command: "test-only" } : { url: "https://example.invalid/mcp" };
+			const cfg = kind === "stdio"
+				? { type: "stdio" as const, command: "test-only", timeout: 137 }
+				: { type: "http" as const, url: "https://example.invalid/mcp", timeout: 137 };
+			const deadline = mcpTimeoutMessage(target, 'request "tools/call"', ms);
+			let dispatches = 0;
+			let reconnects = 0;
+			const original = {
+				...connection(fakeTransport(async () => {
+					dispatches++;
+					throw new Error(deadline);
+				})),
+				config: cfg,
+			};
+			const reconnect = async () => {
+				reconnects++;
+				return original;
+			};
+			const direct = new MCPTool(original, writeTool, reconnect);
+			const deferred = new DeferredMCPTool("write-fixture", writeTool, async () => original, undefined, reconnect);
+			for (const tool of [direct, deferred]) {
+				const result = await boundedUnknownOutcome(
+					tool.execute("post-dispatch-timeout", { value: FAKE_PRIVATE_ARG }, undefined, context),
+				);
+				const text = JSON.stringify(result);
+				expect(result.isError).toBe(true);
+				expect(text).toContain("outcome unknown");
+				expect(text).toContain("Do not automatically repeat");
+				expect(text).not.toContain("retry this call at most once");
+				expect(text).not.toContain(deadline);
+				expect(text).not.toContain(FAKE_PRIVATE_ARG);
+			}
+			expect(dispatches).toBe(2);
+			expect(reconnects).toBe(0);
+		});
+	}
+
+	it("preserves a correlated application error quoting the transport timeout as definite", async () => {
+		const quoted = mcpTimeoutMessage(
+			{ command: "test-only" }, 'request "tools/call"', resolveMCPTimeoutMs(137),
+		);
+		let dispatches = 0;
+		const conn = connection(fakeTransport(async () => {
+			dispatches++;
+			throw new Error("MCP error -32603: " + quoted);
+		}));
+		const result = await boundedUnknownOutcome(
+			new MCPTool(conn, writeTool).execute("application-timeout-lookalike", { value: "safe" }, undefined, context),
+		);
+		expect(dispatches).toBe(1);
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result)).toContain("MCP error -32603");
+		expect(JSON.stringify(result)).not.toContain("outcome unknown");
 	});
 });
