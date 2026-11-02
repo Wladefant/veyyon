@@ -744,6 +744,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const revisionAtDelete = this.#appliedSnapshotRevision;
 		const mutation = Symbol("block-delete");
 		this.#startCredentialBlockMutation(credentialId, mutation);
+		// A later block POST can fully settle before this DELETE's old HTTP
+		// acknowledgement arrives. Its pending-set is then empty, but removing
+		// the blocks here would erase that broker-confirmed newer restriction.
+		const mutationEpochAtDelete = this.#credentialBlockMutationEpoch;
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(response => {
@@ -751,7 +755,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
 				}
 				const otherPending = (this.#pendingCredentialBlockMutations.get(credentialId)?.size ?? 0) > 1;
-				if (revisionAtDelete === this.#appliedSnapshotRevision && !otherPending) {
+				if (
+					revisionAtDelete === this.#appliedSnapshotRevision &&
+					mutationEpochAtDelete === this.#credentialBlockMutationEpoch &&
+					!otherPending
+				) {
 					this.#deleteSnapshotBlocks(credentialId);
 					for (const blockKey of this.#credentialBlockReconcileAfter.keys()) {
 						if (blockKey.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(blockKey);
