@@ -1,6 +1,6 @@
 import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { createHash, randomUUID } from "node:crypto";
-import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { raceWithTimeout, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import type { NativeCheckpointBundle } from "./native-recovery";
 
@@ -134,7 +134,12 @@ export class CheckpointClient {
 			let complete = false;
 			try {
 				while (true) {
-					const part = await reader.read();
+					const part = await raceWithTimeout(
+						reader.read(),
+						this.#timeout,
+						() => new Error("Checkpoint response body timed out"),
+						{ signal },
+					);
 					if (part.done) {
 						complete = true;
 						break;
@@ -562,7 +567,12 @@ export class CheckpointClient {
 				let complete = false;
 				try {
 					while (true) {
-						const part = await reader.read();
+						const part = await raceWithTimeout(
+							reader.read(),
+							this.#timeout,
+							() => new Error("Checkpoint response body timed out"),
+							{ signal },
+						);
 						if (part.done) {
 							complete = true;
 							break;

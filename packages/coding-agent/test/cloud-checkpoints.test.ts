@@ -392,6 +392,55 @@ test("checkpoint authority JSON accepts a valid response split across streaming 
 	await expect(client.assertWritable("s", receipt.epoch)).resolves.toBeUndefined();
 });
 
+test("checkpoint JSON reader fails on deadline when fake stream ignores abort", async () => {
+	let cancelled = 0;
+	let pulls = 0;
+	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
+		pull() {
+			pulls++;
+			return new Promise<void>(() => {});
+		},
+		cancel() { cancelled++; },
+	}, { highWaterMark: 0 }), { status: 200 });
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 30,
+	});
+	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/timed out/);
+	expect(pulls).toBe(1);
+	expect(cancelled).toBe(1);
+	await expect(client.assertWritable("s", 1)).rejects.toThrow(/lease lost/);
+});
+
+test("checkpoint object reader fails on deadline when fake stream ignores abort", async () => {
+	const manifest = {
+		version: 1, sessionId: "s", sequence: 1,
+		objects: [{ hash: "a".repeat(64), size: 32 }],
+	};
+	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
+	let cancelled = 0;
+	let objectGets = 0;
+	const fake: CheckpointFetch = async input => {
+		const path = new URL(String(input)).pathname;
+		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
+		if (path.includes("/objects/")) {
+			objectGets++;
+			return new Response(new ReadableStream<Uint8Array>({
+				pull() { return new Promise<void>(() => {}); },
+				cancel() { cancelled++; },
+			}, { highWaterMark: 0 }), { status: 200 });
+		}
+		throw new Error("Unexpected checkpoint request");
+	};
+	const client = new CheckpointClient({
+		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
+		fetch: fake, timeoutMs: 30,
+	});
+	await expect(client.restore("s")).rejects.toThrow(/timed out/);
+	expect(objectGets).toBe(1);
+	expect(cancelled).toBe(1);
+});
+
 test("restoration rejects an oversized streaming object without consuming a second chunk", async () => {
 	const object = { hash: "a".repeat(64), size: 1 };
 	// Match the Worker head shape so the streaming-object assertion is reached.
