@@ -3334,4 +3334,84 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
+
+	// A detached A child can keep a disconnect(B) pending after A's handler
+	// returns. Its inherited ALS scope is INACTIVE, so it must not invent a
+	// reciprocal cycle when an actual B callback later disconnects idle A.
+	it("does not treat a completed detached callback as a live wait edge", async () => {
+		const aName = "detached-edge-A";
+		const bName = "detached-edge-B";
+		const bEntered = Promise.withResolvers<void>();
+		const releaseB = Promise.withResolvers<void>();
+		const aPageCommitted = Promise.withResolvers<void>();
+		const detachedDone = Promise.withResolvers<void>();
+		const bDone = Promise.withResolvers<void>();
+		let result = "";
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("A-detaches", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("B-closes-A", "B-cursor")],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor((name, _key, cursor) => {
+			if (name === aName && cursor === "A-page") aPageCommitted.resolve();
+		});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "A-detaches") {
+				// Do not await this operation in A's handler. A's callback
+				// scope must become inactive before B's own teardown starts.
+				void manager.disconnectServer(bName).then(detachedDone.resolve, detachedDone.reject);
+				return;
+			}
+			if (name === bName && occurrence.eventId === "B-closes-A") {
+				bEntered.resolve();
+				await releaseB.promise;
+				try {
+					await manager.disconnectServer(aName);
+					result = "B-closed-idle-A";
+				} catch (error) {
+					result = error instanceof Error ? error.message : String(error);
+				} finally {
+					bDone.resolve();
+				}
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-edge B connection");
+			await withinHandlerChange(bEntered.promise, "held B callback");
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-edge A connection");
+			await withinHandlerChange(aPageCommitted.promise, "A callback has finished");
+			releaseB.resolve();
+			await withinHandlerChange(Promise.all([bDone.promise, detachedDone.promise]), "both noncyclic disconnects");
+			expect(result).toBe("B-closed-idle-A");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+		} finally {
+			releaseB.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "detached-edge cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
 });
