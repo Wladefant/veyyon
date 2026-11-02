@@ -196,18 +196,23 @@ export async function readOwnerOnlyFiles(
 		if (path.dirname(filePath) !== parent) throw new Error("Discovery records must share a parent directory");
 		if (platform === "win32") assertWindowsFilePath(filePath);
 	}
+	options.onStep?.(platform === "win32" ? "ACL #1 (parent)" : "parent");
 	await checkParent(filePaths[0], platform, options);
 	const candidates: Array<{ filePath: string; handle: fsp.FileHandle; stats: fs.Stats; content: string }> = [];
 	try {
 		for (const filePath of filePaths) {
 			let handle: fsp.FileHandle | undefined;
 			try {
+				options.onStep?.("lstat");
 				if (platform === "win32" && (await fsp.lstat(filePath)).isSymbolicLink()) {
 					throw refuse(filePath, "is a symbolic link");
 				}
+				options.onStep?.("open");
 				handle = await fsp.open(filePath, platform === "win32" ? "r" : POSIX_READ_FLAGS);
+				options.onStep?.("stat");
 				const stats = await handle.stat();
 				assertRecordStats(filePath, stats, platform);
+				options.onStep?.("read");
 				const content = await handle.readFile({ encoding: "utf8" });
 				if (couldMatch(content)) {
 					candidates.push({ filePath, handle, stats, content });
@@ -219,10 +224,12 @@ export async function readOwnerOnlyFiles(
 				await handle?.close();
 			}
 		}
+		options.onStep?.("ACL #2 (record)");
 		await verifyOwnerOnlyWindowsAcls(
 			candidates.map(candidate => candidate.filePath),
 			{ ...options.windowsAcl, platform },
 		);
+		options.onStep?.("identity");
 		for (const candidate of candidates) {
 			assertSameFile(candidate.filePath, await fsp.lstat(candidate.filePath), candidate.stats);
 		}
