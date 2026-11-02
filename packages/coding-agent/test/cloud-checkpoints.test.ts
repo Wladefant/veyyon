@@ -541,3 +541,38 @@ test("transfer receipt must bind target owner, next epoch, and live deadline bef
 		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
 	}
 });
+
+// WHY: a definite HTTP rejection is not a lost transport response, so the
+// one-use transfer must not be retried. Synthetic responses cannot prove a
+// live checkpoint authority or a network timeout/reconciliation outcome.
+test("definite transfer refusals are not replayed while ambiguous statuses retry at most once", async () => {
+	for (const [status, expectedCalls] of [
+		[400, 1], [401, 1], [403, 1], [404, 1], [409, 1], [422, 1],
+		[408, 2], [429, 2], [500, 2], [503, 2],
+	] as const) {
+		let transfers = 0;
+		const fake: CheckpointFetch = async input => {
+			const action = new URL(String(input)).pathname.split("/").pop();
+			if (action === "lease")
+				return Response.json({
+					ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0, manifestHash: "",
+				});
+			if (action === "transfer") {
+				transfers++;
+				return new Response("synthetic authority rejection", { status });
+			}
+			throw new Error(`Unexpected authority call: ${action}`);
+		};
+		const client = new CheckpointClient({
+			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		});
+		const sessionId = `definite-refusal-${status}`;
+		const grant = await client.acquireLease(sessionId, "source");
+		await expect(
+			client.transferLease(sessionId, "destination", "a-long-enough-claim-token", "transfer-1"),
+		).rejects.toThrow(new RegExp(`HTTP ${status}`));
+		expect(transfers).toBe(expectedCalls);
+		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
+	}
+});

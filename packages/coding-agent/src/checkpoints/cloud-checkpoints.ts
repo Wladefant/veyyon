@@ -291,6 +291,13 @@ export class CheckpointClient {
 		try {
 			next = await this.#request<CheckpointLease>(path, init);
 		} catch (firstError) {
+			// An explicit 4xx refusal (except 408/429) is not an uncertain
+			// transport result. Never replay a one-use transfer after a known 409.
+			const status = firstError instanceof Error
+				? /^Checkpoint service returned HTTP (\d{3})$/.exec(firstError.message)
+				: null;
+			if (status && Number(status[1]) < 500 && status[1] !== "408" && status[1] !== "429")
+				throw firstError;
 			try {
 				next = await this.#request<CheckpointLease>(path, init);
 			} catch {
