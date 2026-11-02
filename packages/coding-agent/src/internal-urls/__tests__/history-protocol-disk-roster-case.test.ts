@@ -306,4 +306,30 @@ describe("history:// case-folded disk roster", () => {
 			await temp.remove();
 		}
 	});
+
+	it("does not substitute an advisor disk file for a visible parked identity without its own transcript", async () => {
+		const temp = TempDir.createSync("@veyyon-history-advisor-visible-fallback-");
+		try {
+			registerArtifactsDir(temp.path());
+			await createDiskArchive(temp.path(), "Guide");
+			AgentRegistry.global().register({
+				id: "Guide",
+				displayName: "Guide",
+				kind: "advisor",
+				session: null,
+				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
+				status: "parked",
+			});
+			register("guide"); // Legitimate visible agent, but no session or retained sessionFile.
+			const handler = new HistoryProtocolHandler();
+			expect((await handler.resolve(parseInternalUrl("history://"))).content).toContain("| guide |");
+			expect((await handler.complete()).map(item => item.value)).toEqual(["guide"]);
+			for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
+				await expect(handler.resolve(parseInternalUrl(`history://guide${suffix}`)))
+					.rejects.toThrow("has no transcript");
+			}
+		} finally {
+			await temp.remove();
+		}
+	});
 });
