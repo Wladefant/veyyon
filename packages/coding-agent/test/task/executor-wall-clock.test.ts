@@ -270,36 +270,87 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		let settleFinalIdle: (() => void) | undefined;
 		let finalIdleStarted: (() => void) | undefined;
 		let idleCalls = 0;
+		const trace: string[] = [];
+		const mark = (label: string) => {
+			trace.push(label);
+			console.info(`[final-idle-trace] ${label}`);
+		};
 		const finalIdle = new Promise<void>(resolve => {
 			settleFinalIdle = resolve;
 		});
 		const started = new Promise<void>(resolve => {
 			finalIdleStarted = resolve;
 		});
-		const settings = Settings.isolated({ "agent.maxRuntimeMs": 180_000 });
-		const handle = createMockSessionHandle(
-			({ emit }) => {
-				emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
-			},
-			{ onAbort: () => settleFinalIdle?.() },
-		);
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		const handle = createMockSessionHandle(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "tool-yield-before-idle"));
+		});
+		const originalAbort = handle.session.abort.bind(handle.session);
+		handle.session.abort = async (...args: Parameters<typeof originalAbort>) => {
+			mark("session.abort:start");
+			try {
+				return await originalAbort(...args);
+			} finally {
+				mark("session.abort:settle");
+			}
+		};
+		const originalDispose = handle.session.dispose.bind(handle.session);
+		handle.session.dispose = async (...args: Parameters<typeof originalDispose>) => {
+			mark("session.dispose:start");
+			try {
+				return await originalDispose(...args);
+			} finally {
+				mark("session.dispose:settle");
+			}
+		};
 		handle.session.waitForIdle = async () => {
 			idleCalls++;
-			if (idleCalls === 1) return;
+			mark(`waitForIdle:${idleCalls}:start`);
+			if (idleCalls === 1) {
+				mark("waitForIdle:1:settle");
+				return;
+			}
 			finalIdleStarted?.();
-			await finalIdle;
+			try {
+				await finalIdle;
+				mark(`waitForIdle:${idleCalls}:settle`);
+			} catch (error) {
+				mark(`waitForIdle:${idleCalls}:reject:${String(error)}`);
+				throw error;
+			}
 		};
 		mockCreateAgentSession(handle.session);
 
+		let resultState = "pending";
 		const resultPromise = runSubprocess({
 			...baseOptions,
 			id: "agent-yield-final-idle-stall",
 			settings,
+		}).then(
+			result => {
+				resultState = "resolved";
+				mark("result:resolve");
+				return result;
+			},
+			error => {
+				resultState = `rejected:${String(error)}`;
+				mark(`result:reject:${String(error)}`);
+				throw error;
+			},
+		);
+		const diagnostic = Bun.sleep(200).then(() => {
+			if (resultState === "pending") {
+				console.info(`[final-idle-trace] SNAPSHOT pending; ${trace.join(" | ")}`);
+			}
 		});
 		try {
+			mark("await:final-idle-started");
 			await started;
+			mark("final-idle-started:settle");
 			await flushAsync();
+			mark("advance:180001:start");
 			await advanceTimersAndFlush(180_001);
+			mark("advance:180001:settle");
 			await flushAsync();
 			expect(handle.abortCalls()).toBe(1);
 			const result = await resultPromise;
@@ -308,6 +359,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		} finally {
 			settleFinalIdle?.();
 			await resultPromise;
+			await diagnostic;
 		}
 	});
 
