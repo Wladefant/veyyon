@@ -158,5 +158,4 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			},
 		);
 	}, 15_000);
-
 });
