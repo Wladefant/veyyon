@@ -1,5 +1,5 @@
 /** Read-only Win32 ACL verification. No shell startup, privilege changes, or cached ACL decisions. */
-import { dlopen, FFIType, ptr, read } from "bun:ffi";
+import { dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
 
 interface NativeSecurityApi {
 	security: {
@@ -14,15 +14,15 @@ interface NativeSecurityApi {
 			descriptor: BigUint64Array,
 		): number;
 		GetTokenInformation(token: bigint, kind: number, buffer: Buffer, length: number, returned: Uint32Array): number;
-		GetSecurityDescriptorControl(descriptor: number, control: Uint16Array, revision: Uint32Array): number;
-		GetAce(dacl: number, index: number, ace: BigUint64Array): number;
-		EqualSid(left: number, right: number): number;
-		IsWellKnownSid(sid: number, kind: number): number;
+		GetSecurityDescriptorControl(descriptor: Pointer, control: Uint16Array, revision: Uint32Array): number;
+		GetAce(dacl: Pointer, index: number, ace: BigUint64Array): number;
+		EqualSid(left: Pointer, right: Pointer): number;
+		IsWellKnownSid(sid: Pointer, kind: number): number;
 	};
 	kernel: {
 		GetFileAttributesW(target: Buffer): number;
 		GetLastError(): number;
-		LocalFree(pointer: number): unknown;
+		LocalFree(pointer: Pointer): unknown;
 	};
 }
 
@@ -51,9 +51,9 @@ function loadSecurityApi(): NativeSecurityApi {
 
 let api: NativeSecurityApi | undefined;
 
-function pointerAt(buffer: BigUint64Array): number {
+function pointerAt(buffer: BigUint64Array): Pointer {
 	// Windows Bun targets are 64-bit. User-mode addresses fit exactly in a JS number.
-	return Number(buffer[0]);
+	return Number(buffer[0]) as Pointer;
 }
 
 function failure(operation: string, code: number): Error {
@@ -75,7 +75,7 @@ export function verifyNativeOwnerOnlyWindowsAcl(filePath: string): void {
 	if (!security.GetTokenInformation(0xffff_ffff_ffff_fffcn, 1, tokenUser, tokenUser.length, tokenLength)) {
 		throw failure("GetTokenInformation", kernel.GetLastError());
 	}
-	const user = Number(tokenUser.readBigUInt64LE());
+	const user = Number(tokenUser.readBigUInt64LE()) as Pointer;
 	const ownerPointer = new BigUint64Array(1);
 	const daclPointer = new BigUint64Array(1);
 	const descriptorPointer = new BigUint64Array(1);
@@ -114,7 +114,7 @@ export function verifyNativeOwnerOnlyWindowsAcl(filePath: string): void {
 			if (read.u8(ace, 0) !== 0) throw new Error("ACL principal rule is not an allow rule");
 			if (read.u8(ace, 1) !== expectedFlags) throw new Error("ACL principal rule has unexpected inheritance flags");
 			if (read.u32(ace, 4) !== 0x001f_01ff) throw new Error("ACL principal rule is not exactly full control");
-			const sid = ace + 8;
+			const sid = (ace + 8) as Pointer;
 			if (security.EqualSid(sid, user)) userRules++;
 			else if (security.IsWellKnownSid(sid, 22))
 				systemRules++; // WinLocalSystemSid
