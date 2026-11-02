@@ -143,6 +143,7 @@ describe("native recovery", () => {
 		const local = await captureNativeCheckpoint(file, [], "local");
 		expect(local.artifacts).toEqual({});
 		await rm(artifacts, { recursive: true });
+		await mkdir(artifacts);
 		let nested = artifacts;
 		for (let index = 0; index < 34; index++) {
 			nested = join(nested, `d${index}`);
