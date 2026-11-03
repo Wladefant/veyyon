@@ -1218,6 +1218,39 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(brokerTruth.snapshot.credentials).toEqual([]);
 	});
 
+	test("backs off an invalid unconditional 304 without hammering the broker", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const firstCanonical = Promise.withResolvers<void>();
+		let conditionalRequests = 0;
+		let canonicalRequests = 0;
+		// A misbehaving intermediary returns 304 even for an unconditional read.
+		// That is not evidence that a revoked grant is still valid. Back off rather
+		// than retrying it in a tight loop after the monotonic deadline expires.
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			await scheduler.wait(1, { signal: opts?.signal });
+			if (opts?.ifGenerationGt !== undefined) {
+				conditionalRequests += 1;
+				return { status: 304 as const, generation: initial.snapshot.generation };
+			}
+			canonicalRequests += 1;
+			firstCanonical.resolve();
+			return { status: 304 as const, generation: initial.snapshot.generation };
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			streamSnapshots: false,
+			snapshotStreamVerifyIntervalMs: 20,
+		});
+		await firstCanonical.promise;
+		await scheduler.wait(40);
+		expect(conditionalRequests).toBeGreaterThan(0);
+		expect(canonicalRequests).toBe(1);
+		expect(remote.snapshot.credentials).toEqual(initial.snapshot.credentials);
+	});
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
