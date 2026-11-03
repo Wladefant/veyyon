@@ -458,7 +458,9 @@ export async function callTool(
 
 	// ACP waits for the synchronous child task to finish; disable only its deadline and keep caller cancellation.
 	const requestOptions =
-		connection._source?.provider === "acp" && options?.timeoutMs === undefined ? { ...options, timeoutMs: 0 } : options;
+		connection._source?.provider === "acp" && options?.timeoutMs === undefined
+			? { ...options, timeoutMs: 0 }
+			: options;
 	return connection.transport.request<MCPToolCallResult>("tools/call", params, requestOptions);
 }
 

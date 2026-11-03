@@ -6,8 +6,19 @@ import type { MCPRequestOptions, MCPServerConnection, MCPTransport } from "@veyy
 
 const toolResult = { content: [{ text: "child finished", type: "text" as const }] };
 
-function makeConnection(provider?: string): { connection: MCPServerConnection; calls: Array<{ method: string; params: Record<string, unknown> | undefined; options: MCPRequestOptions | undefined }> } {
-	const calls: Array<{ method: string; params: Record<string, unknown> | undefined; options: MCPRequestOptions | undefined }> = [];
+function makeConnection(provider?: string): {
+	connection: MCPServerConnection;
+	calls: Array<{
+		method: string;
+		params: Record<string, unknown> | undefined;
+		options: MCPRequestOptions | undefined;
+	}>;
+} {
+	const calls: Array<{
+		method: string;
+		params: Record<string, unknown> | undefined;
+		options: MCPRequestOptions | undefined;
+	}> = [];
 	const transport = {
 		connected: true,
 		request: async <T>(method: string, params?: Record<string, unknown>, options?: MCPRequestOptions): Promise<T> => {
@@ -21,7 +32,9 @@ function makeConnection(provider?: string): { connection: MCPServerConnection; c
 		connection: {
 			name: "child",
 			config: { command: "child", args: [] },
-			...(provider ? { _source: { provider, providerName: provider, path: "test", level: "project" as const } } : {}),
+			...(provider
+				? { _source: { provider, providerName: provider, path: "test", level: "project" as const } }
+				: {}),
 			serverInfo: { name: "child", version: "1" },
 			capabilities: { tools: {} },
 			transport,
@@ -35,16 +48,18 @@ describe("ACP delegated tool call deadlines", () => {
 		const { connection, calls } = makeConnection("acp");
 		const controller = new AbortController();
 		const expected = { ...toolResult, content: [{ text: "completed", type: "text" as const }] };
-		(connection.transport.request as (method: string, params?: Record<string, unknown>, options?: MCPRequestOptions) => Promise<unknown>) = async (
-			method,
-			params,
-			options,
-		) => {
+		(connection.transport.request as (
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		) => Promise<unknown>) = async (method, params, options) => {
 			calls.push({ method, params, options });
 			return expected;
 		};
 
-		await expect(callTool(connection, "delegate", { task: "work" }, { signal: controller.signal })).resolves.toBe(expected);
+		await expect(callTool(connection, "delegate", { task: "work" }, { signal: controller.signal })).resolves.toBe(
+			expected,
+		);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.method).toBe("tools/call");
 		expect(calls[0]?.options).toEqual({ signal: controller.signal, timeoutMs: 0 });
@@ -81,11 +96,11 @@ describe("ACP delegated tool call deadlines", () => {
 		const cancellation = new Promise<never>((_resolve, reject) => {
 			aborted = () => reject(received?.reason);
 		});
-		(connection.transport.request as (method: string, params?: Record<string, unknown>, options?: MCPRequestOptions) => Promise<unknown>) = (
-			method,
-			params,
-			options,
-		) => {
+		(connection.transport.request as (
+			method: string,
+			params?: Record<string, unknown>,
+			options?: MCPRequestOptions,
+		) => Promise<unknown>) = (method, params, options) => {
 			calls.push({ method, params, options });
 			received = options?.signal;
 			received?.addEventListener("abort", aborted, { once: true });
@@ -99,17 +114,23 @@ describe("ACP delegated tool call deadlines", () => {
 		expect(calls[0]?.options?.timeoutMs).toBe(0);
 	});
 	it("only ACP calls outlive a real HTTP transport's default deadline", async () => {
+		const cancelRequestReceived = Promise.withResolvers<void>();
 		const server = Bun.serve({
 			port: 0,
 			async fetch(request) {
-				const { id } = (await request.json()) as { id: string | number };
-				// A real delay is required to cross HttpTransport's actual AbortController deadline; fake timers do not drive fetch.
+				const body = (await request.json()) as {
+					id: string | number;
+					params?: { arguments?: { task?: string } };
+				};
+				if (body.params?.arguments?.task === "cancel") cancelRequestReceived.resolve();
 				await Bun.sleep(140);
-				return Response.json({ jsonrpc: "2.0", id, result: toolResult });
+				return Response.json({ jsonrpc: "2.0", id: body.id, result: toolResult });
 			},
 		});
 		const url = `http://127.0.0.1:${server.port}/mcp`;
-		const makeLiveConnection = async (provider: string): Promise<{ connection: MCPServerConnection; transport: HttpTransport }> => {
+		const makeLiveConnection = async (
+			provider: string,
+		): Promise<{ connection: MCPServerConnection; transport: HttpTransport }> => {
 			const transport = new HttpTransport({ type: "http", url, timeout: 60 });
 			await transport.connect();
 			const { connection } = makeConnection(provider);
@@ -139,6 +160,21 @@ describe("ACP delegated tool call deadlines", () => {
 				);
 			} finally {
 				await explicitlyTimedAcp.transport.close();
+			}
+			const cancellable = await makeLiveConnection("acp");
+			const controller = new AbortController();
+			try {
+				const pending = callTool(
+					cancellable.connection,
+					"delegate",
+					{ task: "cancel" },
+					{ signal: controller.signal },
+				);
+				await cancelRequestReceived.promise;
+				controller.abort(new Error("parent cancelled"));
+				await expect(pending).rejects.toThrow("parent cancelled");
+			} finally {
+				await cancellable.transport.close();
 			}
 		} finally {
 			server.stop(true);
