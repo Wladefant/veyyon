@@ -526,7 +526,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 						throw new AIError.AuthBrokerError("Auth broker stream initial snapshot superseded during connection");
 					}
 					const { kind: _kind, ...snapshot } = event;
-					this.#applySnapshot(snapshot, snapshot.generation);
+					// An identical first frame after reconnect is not new broker state.
+					// Use the existing no-progress comparator for equal generations;
+					// a real same-generation update still applies, and a broker restart
+					// with a reset generation remains authoritative on this connection.
+					if (snapshot.generation === this.#generation) this.#applyStreamEvent(event);
+					else this.#applySnapshot(snapshot, snapshot.generation);
 				} else {
 					this.#applyStreamEvent(event);
 				}
