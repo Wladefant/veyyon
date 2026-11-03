@@ -84,6 +84,44 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+	test("identical initial SSE frames on reconnect cannot hide a broker peer revocation", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const revokedId = initial.snapshot.credentials[0]!.id;
+		const firstEof = Promise.withResolvers<void>();
+		let completedStreams = 0;
+		let fullSnapshotCallbacks = 0;
+		// Unlike empty-EOF or in-stream replay, each short connection delivers
+		// one valid but outdated *first* snapshot before ending cleanly.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (_opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			await Bun.sleep(5);
+			completedStreams += 1;
+			if (completedStreams === 1) firstEof.resolve();
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 150,
+			onSnapshot: () => { fullSnapshotCallbacks += 1; },
+		});
+		await firstEof.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([revokedId]);
+		expect(storage!.disableCredentialById(revokedId, "synthetic revocation behind first-frame replay")).toBe(true);
+		// No new SSE generation, manual refresh, or live credentials: the
+		// already-existing canonical GET watchdog must discover broker truth.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		// An identical first frame must not count as an accepted full snapshot.
+		expect(fullSnapshotCallbacks).toBe(1);
+		expect(completedStreams).toBeLessThan(10);
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(canonical.snapshot.credentials).toEqual([]);
+	});
+
 	test("recovers broker truth when short SSE connections end cleanly before any frame", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
