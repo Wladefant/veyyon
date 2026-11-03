@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP BashTool terminal creation honors cancellation and the original command deadline, and cleans up handles returned after cancellation ([Refs #867](https://github.com/Wladefant/veyyon/issues/867)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
