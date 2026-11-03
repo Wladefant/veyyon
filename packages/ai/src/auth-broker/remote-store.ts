@@ -558,8 +558,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (
 					snapshot.generation === this.#generation &&
 					isDeepStrictEqual(
-						snapshot.credentials.map(entry => normalizeSnapshotEntryBlocks(entry, Date.now())),
-						this.#snapshot.credentials,
+						// A full broker snapshot is keyed by credential ID, not row order.
+						// Permuting unchanged rows cannot defer the canonical GET watchdog.
+						snapshot.credentials
+							.map(entry => normalizeSnapshotEntryBlocks(entry, Date.now()))
+							.sort((a, b) => a.id - b.id),
+						[...this.#snapshot.credentials].sort((a, b) => a.id - b.id),
 					) &&
 					isDeepStrictEqual(snapshot.refresher, this.#snapshot.refresher)
 				) return;
