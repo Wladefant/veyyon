@@ -23,7 +23,9 @@ async function isEndpointServing(endpoint: string): Promise<boolean> {
 
 /** Recover only claims whose publisher identity independently proves there is no writer. */
 async function isAbsentPublisher(file: string, directory: string): Promise<boolean> {
-	const publisher = /^([1-9]\d*)-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/.exec(file);
+	const publisher = /^([1-9]\d*)-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/.exec(
+		file,
+	);
 	if (!publisher) return false;
 	const pid = Number(publisher[1]);
 	if (!Number.isSafeInteger(pid)) return false;
@@ -32,9 +34,10 @@ async function isAbsentPublisher(file: string, directory: string): Promise<boole
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
 	}
-	const endpoint = process.platform === "win32"
-		? `\\\\.\\pipe\\veyyon-terminal-${publisher[2]}`
-		: path.join(directory, `${publisher[2]}.sock`);
+	const endpoint =
+		process.platform === "win32"
+			? `\\\\.\\pipe\\veyyon-terminal-${publisher[2]}`
+			: path.join(directory, `${publisher[2]}.sock`);
 	try {
 		return !(await isEndpointServing(endpoint));
 	} catch {
@@ -62,7 +65,11 @@ export async function assertNotTerminalOwned(sessionFile: string, root = getConf
 		let step = "open";
 		// Unreadable claims remain fail-closed unless the publisher PID or endpoint proves absence.
 		try {
-			const contents = await readOwnerOnlyFile(record, { onStep: current => { step = current; } });
+			const contents = await readOwnerOnlyFile(record, {
+				onStep: current => {
+					step = current;
+				},
+			});
 			step = "parse";
 			owner = JSON.parse(contents);
 		} catch (error) {

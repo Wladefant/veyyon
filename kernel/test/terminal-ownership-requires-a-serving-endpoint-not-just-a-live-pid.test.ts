@@ -135,10 +135,15 @@ describe("terminal ownership claims", () => {
 		await fsp.mkdir(path.join(root, "run", "terminals"), { recursive: true });
 		const nonce = crypto.randomUUID();
 		const endpoint = endpointFor(root, nonce);
-		await writeRecord(
-			path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`),
-			{ version: 1, sessionId: "stale", pid: process.pid, cwd: root, sessionFile, endpoint, token: "t" },
-		);
+		await writeRecord(path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`), {
+			version: 1,
+			sessionId: "stale",
+			pid: process.pid,
+			cwd: root,
+			sessionFile,
+			endpoint,
+			token: "t",
+		});
 		await listen(endpoint);
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
 	});
@@ -151,10 +156,13 @@ describe("terminal ownership claims", () => {
 		const withoutEndpoint = path.join(root, "dead-no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
 		const pid = deadPid();
-		await writeRecord(
-			path.join(directory, `${pid}-${crypto.randomUUID()}.json`),
-			{ version: 1, sessionId: "x", pid, cwd: root, sessionFile: withoutEndpoint },
-		);
+		await writeRecord(path.join(directory, `${pid}-${crypto.randomUUID()}.json`), {
+			version: 1,
+			sessionId: "x",
+			pid,
+			cwd: root,
+			sessionFile: withoutEndpoint,
+		});
 		await expect(assertNotTerminalOwned(withoutEndpoint, root)).resolves.toBeUndefined();
 	});
 
@@ -196,10 +204,13 @@ describe("terminal ownership claims", () => {
 		const sessionFile = path.join(root, "no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
 		await fsp.mkdir(directory, { recursive: true });
-		await writeRecord(
-			path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`),
-			{ version: 1, sessionId: "x", pid: process.pid, cwd: root, sessionFile },
-		);
+		await writeRecord(path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`), {
+			version: 1,
+			sessionId: "x",
+			pid: process.pid,
+			cwd: root,
+			sessionFile,
+		});
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
 	});
 });
