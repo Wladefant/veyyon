@@ -1171,12 +1171,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const firstConditional = Promise.withResolvers<void>();
 		let conditionalRequests = 0;
 		let canonicalRequests = 0;
+		let prematureConditionalPolls = 0;
 		// A newly restarted broker may reuse the *same numeric generation* as the
 		// worker's previous epoch. Conditional long-polls then produce 304 even
 		// when an independently revoked credential is absent from broker truth.
 		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
 			if (opts?.ifGenerationGt !== undefined) {
 				conditionalRequests += 1;
+				if (conditionalRequests > 1 && canonicalRequests === 0) prematureConditionalPolls += 1;
 				firstConditional.resolve();
 				await scheduler.wait(5, { signal: opts.signal });
 				return { status: 304 as const, generation: initial.snapshot.generation };
@@ -1196,7 +1198,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			client,
 			initialSnapshot: initial.snapshot,
 			streamSnapshots: false,
-			snapshotStreamVerifyIntervalMs: 80,
+			// Short 304s must not busy-loop while waiting for the canonical deadline.
+			snapshotStreamVerifyIntervalMs: 350,
 		});
 		await firstConditional.promise;
 		expect(conditionalRequests).toBeGreaterThan(0);
@@ -1207,6 +1210,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
 		expect(conditionalRequests).toBeGreaterThan(0);
 		expect(canonicalRequests).toBeGreaterThan(0);
+		expect(prematureConditionalPolls).toBe(0); // a 5ms 304 cannot trigger another poll before verification
 		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
 		expect(remote.listAuthCredentials()).toEqual([]);
 		const brokerTruth = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
