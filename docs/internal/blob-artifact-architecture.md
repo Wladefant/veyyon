@@ -47,6 +47,8 @@ Artifact types share this directory:
 
 Agents can adopt the parent `ArtifactManager`; in that case parent and agent tree share one artifact directory and numeric artifact ID space.
 
+A live `SessionManager.fork()` refuses before publishing when the effective (possibly adopted) artifact directory is different from the current JSONL file's own sidecar. A child JSONL nested in its parent's artifact tree must not copy a stale, same-numbered child sidecar as though it were the parent's evidence, or recursively copy the parent's tree into its own descendant. This is a conservative **unsupported-adopted-fork** boundary, not a promise to import shared-parent artifacts. Historical `forkFrom()` has only the persisted source filename, not the running `ArtifactManager` ownership; resolving that separate provenance contract requires explicit mapping and qualification rather than guessing a parent directory.
+
 ## ID and name allocation schemes
 
 ### Blob IDs: content hash
