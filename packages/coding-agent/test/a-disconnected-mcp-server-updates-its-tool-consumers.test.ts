@@ -241,7 +241,7 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 	manager.setOnToolsChanged(tools => {
 		const names = tools.map(tool => tool.name);
 		changes.push(names);
-		if (names.filter(tool => tool.startsWith(`mcp__${name}_`)).length === MANY_TOOL_COUNT) {
+		if (tools.filter(tool => tool.mcpServerName === name).length === MANY_TOOL_COUNT) {
 			startupCatalog.resolve();
 		}
 	});
@@ -334,7 +334,7 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 	manager.setOnToolsChanged(tools => {
 		const names = tools.map(tool => tool.name);
 		notices.push(names);
-		if (names.filter(toolName => toolName.startsWith(`mcp__${name}_`)).length === MANY_TOOL_COUNT) loaded.resolve();
+		if (tools.filter(tool => tool.mcpServerName === name).length === MANY_TOOL_COUNT) loaded.resolve();
 	});
 	const bounded = async <T>(work: Promise<T>, phase: string): Promise<T> => {
 		const expired = Promise.withResolvers<never>();
