@@ -472,7 +472,9 @@ describe("native recovery", () => {
 		await writeFile(outsideFile, "outside");
 		const escapePath = join(root, "escape");
 		await symlink(outside, escapePath, process.platform === "win32" ? "junction" : "dir");
-		await expect(captureNativeCheckpoint(session, [join(escapePath, "public.txt")])).rejects.toThrow(/symbolic|escapes/i);
+		await expect(captureNativeCheckpoint(session, [join(escapePath, "public.txt")])).rejects.toThrow(
+			/symbolic|escapes/i,
+		);
 	});
 	test("native artifact named __proto__ survives capture and restore as an own JSON key", async () => {
 		const root = await scratch();
