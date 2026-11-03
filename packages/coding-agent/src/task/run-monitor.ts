@@ -4,6 +4,8 @@
  * drives the child session; this module watches it.
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import type { AgentEvent } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -1044,9 +1046,34 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 				break;
 			}
 		}
-		watchdogPhase = activeWatchdogTools.size === 0 ? "streaming" : hasWaitingChild ? "waiting-child" : "tool-running";
-		armPhaseWatchdog();
-		scheduleProgress(applyAgentEvent(event));
+		const phase = activeWatchdogTools.size === 0 ? "streaming" : hasWaitingChild ? "waiting-child" : "tool-running";
+		const phaseChanged = phase !== watchdogPhase;
+		const previousOutput = recentOutputTail;
+		const previousTaskDetails = progress.inflightTaskDetails;
+		watchdogPhase = phase;
+		const flush = applyAgentEvent(event);
+		const assistantEvent = event.type === "message_update" ? event.assistantMessageEvent : undefined;
+		const progressEvent =
+			event.type === "agent_start" ||
+			event.type === "turn_start" ||
+			event.type === "turn_end" ||
+			event.type === "message_start" ||
+			event.type === "message_end" ||
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_end" ||
+			event.type === "agent_end" ||
+			(event.type === "message_update" &&
+				((assistantEvent?.type === "text_delta" &&
+					typeof assistantEvent.delta === "string" &&
+					assistantEvent.delta.length > 0) ||
+					recentOutputTail !== previousOutput)) ||
+			(event.type === "tool_execution_update" &&
+				!isDeepStrictEqual(previousTaskDetails, progress.inflightTaskDetails));
+		if (phaseChanged || progressEvent) {
+			lastProgressEventAt = Date.now();
+			armPhaseWatchdog();
+		}
+		scheduleProgress(flush);
 	};
 	const prepareStallRecovery = (): boolean => {
 		if (

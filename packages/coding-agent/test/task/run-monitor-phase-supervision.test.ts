@@ -67,6 +67,69 @@ describe("run monitor phase supervision", () => {
 		monitor.finish();
 	});
 
+	it("does not renew the streaming watchdog for unchanged non-text updates", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("message_start", { message: { role: "assistant", content: [] } }));
+		vi.advanceTimersByTime(179_999);
+		emit(
+			event("message_update", {
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_start" },
+			}),
+		);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("does not renew the child watchdog for unchanged task updates", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("tool_execution_start", { toolName: "task", toolCallId: "child-1", args: { task: "delegate" } }));
+		const details = { results: [], totalDurationMs: 0 };
+		emit(event("tool_execution_update", { toolName: "task", toolCallId: "child-1", partialResult: { details } }));
+		vi.advanceTimersByTime(1_799_999);
+		emit(
+			event("tool_execution_update", {
+				toolName: "task",
+				toolCallId: "child-1",
+				partialResult: { details: { results: [], totalDurationMs: 0 } },
+			}),
+		);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("renews the child watchdog when task details change", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("tool_execution_start", { toolName: "task", toolCallId: "child-1", args: { task: "delegate" } }));
+		emit(
+			event("tool_execution_update", {
+				toolName: "task",
+				toolCallId: "child-1",
+				partialResult: { details: { results: [], totalDurationMs: 0 } },
+			}),
+		);
+		vi.advanceTimersByTime(1_799_999);
+		emit(
+			event("tool_execution_update", {
+				toolName: "task",
+				toolCallId: "child-1",
+				partialResult: { details: { results: [], totalDurationMs: 1 } },
+			}),
+		);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1_799_999);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		monitor.finish();
+	});
+
 	it("resets the streaming stall clock on real progress events, but not display heartbeats", () => {
 		vi.useFakeTimers();
 		const { monitor, emit } = createMonitor();
