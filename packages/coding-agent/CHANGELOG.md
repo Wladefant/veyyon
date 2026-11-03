@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native Mainplane receipts require string operation and state values and exact UTF-8 output bodies ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
