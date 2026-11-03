@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { logger } from "@veyyon/utils";
 import { HttpTransport } from "../src/mcp/transports/http";
 
@@ -18,6 +18,7 @@ async function bounded<T>(promise: Promise<T>, phase: string): Promise<T> {
 async function withLiveSSE<T>(
 	frames: SSEFrame[],
 	run: (transport: HttpTransport, sendFrame: (frame: SSEFrame) => void) => Promise<T>,
+	onPost?: (request: IncomingMessage, response: ServerResponse) => void,
 ): Promise<T> {
 	let liveSSE: ServerResponse | null = null;
 	const sendFrame = (frame: SSEFrame): void => {
@@ -26,6 +27,10 @@ async function withLiveSSE<T>(
 	};
 	const server: Server = createServer((request, response) => {
 		if (request.method !== "GET" || request.url !== "/mcp") {
+			if (request.method === "POST" && onPost) {
+				onPost(request, response);
+				return;
+			}
 			response.writeHead(202).end();
 			return;
 		}
@@ -33,6 +38,7 @@ async function withLiveSSE<T>(
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
 		});
+		response.flushHeaders();
 		liveSSE = response;
 		for (const frame of frames) sendFrame(frame);
 		// Keep the real GET listener open; losing it before the valid frame is
@@ -76,11 +82,7 @@ async function withLiveSSE<T>(
 describe("MCP persistent HTTP SSE frame validation", () => {
 	it("skips null and scalar JSON frames while retaining a subsequent valid notification", async () => {
 		await withLiveSSE(
-			[
-				null,
-				42,
-				{ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "fixture" } },
-			],
+			[null, 42, { jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "fixture" } }],
 			async transport => {
 				const received = Promise.withResolvers<void>();
 				const notices: Array<{ method: string; params: unknown }> = [];
@@ -92,9 +94,7 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 				};
 				await bounded(transport.startSSEListener(), "SSE GET connection");
 				await bounded(received.promise, "notification after malformed frames");
-				expect(notices).toEqual([
-					{ method: "notifications/tools/list_changed", params: { source: "fixture" } },
-				]);
+				expect(notices).toEqual([{ method: "notifications/tools/list_changed", params: { source: "fixture" } }]);
 				expect(errors).toEqual([]);
 			},
 		);
@@ -102,11 +102,13 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 
 	it("never invokes a client request for invalid-version SSE batch elements", async () => {
 		await withLiveSSE(
-			[[
-				{ jsonrpc: "1.0", id: 71, method: "sampling/createMessage", params: { ignored: true } },
-				{ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "batch" } },
-				{ jsonrpc: "2.0", id: 72, method: "sampling/createMessage", params: { accepted: true } },
-			]],
+			[
+				[
+					{ jsonrpc: "1.0", id: 71, method: "sampling/createMessage", params: { ignored: true } },
+					{ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { source: "batch" } },
+					{ jsonrpc: "2.0", id: 72, method: "sampling/createMessage", params: { accepted: true } },
+				],
+			],
 			async transport => {
 				const gotNotification = Promise.withResolvers<void>();
 				const gotRequest = Promise.withResolvers<void>();
@@ -123,9 +125,7 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 				};
 				await bounded(transport.startSSEListener(), "SSE GET batch connection");
 				await bounded(Promise.all([gotNotification.promise, gotRequest.promise]), "valid batch members");
-				expect(requests).toEqual([
-					{ method: "sampling/createMessage", params: { accepted: true } },
-				]);
+				expect(requests).toEqual([{ method: "sampling/createMessage", params: { accepted: true } }]);
 				expect(notifications).toEqual([
 					{ method: "notifications/tools/list_changed", params: { source: "batch" } },
 				]);
@@ -185,39 +185,90 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			method: "notifications/tools/list_changed",
 			params: { source: "after-flood" },
 		};
+		await withLiveSSE([oversized, ...bursts, Array.from({ length: 128 }, () => null), next], async transport => {
+			const gate = Promise.withResolvers<void>();
+			const reachedCapacity = Promise.withResolvers<void>();
+			const receivedNext = Promise.withResolvers<void>();
+			const errors: string[] = [];
+			let started = 0;
+			const notifications: unknown[] = [];
+			transport.onError = error => errors.push(error.message);
+			transport.onRequest = async () => {
+				started++;
+				if (started === 32) reachedCapacity.resolve();
+				await gate.promise;
+				return { roots: [] };
+			};
+			transport.onNotification = (method, params) => {
+				notifications.push({ method, params });
+				if ((params as { source?: string })?.source === "after-flood") receivedNext.resolve();
+			};
+			try {
+				await bounded(transport.startSSEListener(), "SSE admission fixture GET");
+				await bounded(
+					Promise.all([reachedCapacity.promise, receivedNext.promise]),
+					"bounded SSE requests and recovery",
+				);
+				// Let any already-scheduled unbounded callbacks run before the oracle.
+				await Promise.resolve();
+				expect(started).toBe(32);
+				expect(notifications).toEqual([
+					{ method: "notifications/tools/list_changed", params: { source: "after-flood" } },
+				]);
+				expect(errors).toEqual([]);
+			} finally {
+				gate.resolve();
+			}
+		});
+	}, 15_000);
+
+	it("returns correlated overload errors without admitting more handlers", async () => {
+		const release = Promise.withResolvers<void>();
+		const atCapacity = Promise.withResolvers<void>();
+		const receivedNext = Promise.withResolvers<void>();
+		const busyReplies: unknown[] = [];
+		let started = 0;
+		const makeRequest = (id: number) => ({ jsonrpc: "2.0", id, method: "roots/list", params: {} });
 		await withLiveSSE(
-			[oversized, ...bursts, Array.from({ length: 128 }, () => null), next],
-			async transport => {
-				const gate = Promise.withResolvers<void>();
-				const reachedCapacity = Promise.withResolvers<void>();
-				const receivedNext = Promise.withResolvers<void>();
-				const errors: string[] = [];
-				let started = 0;
-				const notifications: unknown[] = [];
-				transport.onError = error => errors.push(error.message);
+			[],
+			async (transport, sendFrame) => {
 				transport.onRequest = async () => {
-					started++;
-					if (started === 32) reachedCapacity.resolve();
-					await gate.promise;
+					if (++started === 32) atCapacity.resolve();
+					await release.promise;
 					return { roots: [] };
 				};
-				transport.onNotification = (method, params) => {
-					notifications.push({ method, params });
-					if ((params as { source?: string })?.source === "after-flood") receivedNext.resolve();
-				};
+				transport.onNotification = () => receivedNext.resolve();
 				try {
-					await bounded(transport.startSSEListener(), "SSE admission fixture GET");
-					await bounded(Promise.all([reachedCapacity.promise, receivedNext.promise]), "bounded SSE requests and recovery");
-					// Let any already-scheduled unbounded callbacks run before the oracle.
-					await Promise.resolve();
+					await bounded(transport.startSSEListener(), "overload fixture GET");
+					sendFrame(Array.from({ length: 32 }, (_, index) => makeRequest(index)));
+					await bounded(atCapacity.promise, "overload handler capacity");
+					sendFrame([makeRequest(32), makeRequest(33)]);
+					sendFrame({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+					await bounded(receivedNext.promise, "notification after correlated overload replies");
 					expect(started).toBe(32);
-					expect(notifications).toEqual([
-						{ method: "notifications/tools/list_changed", params: { source: "after-flood" } },
+					expect(busyReplies).toEqual([
+						{ jsonrpc: "2.0", id: 32, error: { code: -32000, message: "Server busy" } },
+						{ jsonrpc: "2.0", id: 33, error: { code: -32000, message: "Server busy" } },
 					]);
-					expect(errors).toEqual([]);
 				} finally {
-					gate.resolve();
+					release.resolve();
 				}
+			},
+			(request, response) => {
+				let body = "";
+				request.setEncoding("utf8");
+				request.on("data", chunk => {
+					body += chunk;
+				});
+				request.on("end", () => {
+					const reply = JSON.parse(body) as { error?: unknown };
+					if (!reply.error) {
+						response.writeHead(202).end();
+						return;
+					}
+					busyReplies.push(reply);
+					response.writeHead(202).end();
+				});
 			},
 		);
 	}, 15_000);
@@ -324,12 +375,12 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		} finally {
 			warnSpy.mockRestore();
 		}
-		expect(warnings.filter(message =>
-			message === "Skipping invalid MCP HTTP SSE batch member" ||
-			message === "Skipping oversized MCP HTTP SSE message batch"
-		)).toEqual([
-			"Skipping invalid MCP HTTP SSE batch member",
-			"Skipping oversized MCP HTTP SSE message batch",
-		]);
+		expect(
+			warnings.filter(
+				message =>
+					message === "Skipping invalid MCP HTTP SSE batch member" ||
+					message === "Skipping oversized MCP HTTP SSE message batch",
+			),
+		).toEqual(["Skipping invalid MCP HTTP SSE batch member", "Skipping oversized MCP HTTP SSE message batch"]);
 	}, 15_000);
 });

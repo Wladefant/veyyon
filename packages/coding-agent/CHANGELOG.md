@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP HTTP SSE validates decoded frames, bounds request fanout, and returns correlated overload errors without dropping valid requests ([Refs #927](https://github.com/Wladefant/veyyon/issues/927)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

@@ -42,7 +42,6 @@ const MAX_HTTP_SSE_BATCH_MEMBERS = 256;
 // Count request handling AND its HTTP response delivery in the same budget.
 const MAX_PENDING_HTTP_SSE_SERVER_REQUESTS = 32;
 
-
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 
 type MCPToolArgsAttemptFactory = () => Promise<Record<string, unknown>>;
@@ -103,13 +102,9 @@ function isStreamMessage(value: unknown): value is JsonRpcMessage {
 		return !("id" in value) || typeof value.id === "string" || typeof value.id === "number";
 	}
 	if (value.id !== null && typeof value.id !== "string" && typeof value.id !== "number") return false;
-	if (("result" in value) === ("error" in value)) return false;
+	if ("result" in value === "error" in value) return false;
 	if ("error" in value) {
-		return (
-			isRecord(value.error) &&
-			typeof value.error.code === "number" &&
-			typeof value.error.message === "string"
-		);
+		return isRecord(value.error) && typeof value.error.code === "number" && typeof value.error.message === "string";
 	}
 	return "result" in value;
 }
@@ -238,7 +233,7 @@ export class HttpTransport implements MCPTransport {
 		try {
 			for await (const message of readSseJson<JsonRpcMessage>(body, signal)) {
 				if (!this.#connected) break;
-				this.#dispatchSSEMessage(message);
+				await this.#dispatchSSEMessage(message);
 			}
 		} catch (error) {
 			if (error instanceof Error && !isAbortError(error)) {
@@ -249,7 +244,7 @@ export class HttpTransport implements MCPTransport {
 	}
 
 	/** Validate and admit an untrusted SSE event using bounded per-frame work. */
-	#dispatchSSEMessage(message: unknown): void {
+	async #dispatchSSEMessage(message: unknown): Promise<void> {
 		const members = Array.isArray(message) ? message : [message];
 		if (members.length > MAX_HTTP_SSE_BATCH_MEMBERS) {
 			// Reject the complete oversized batch: partial execution could leave
@@ -260,6 +255,7 @@ export class HttpTransport implements MCPTransport {
 		let invalidMember = false;
 		let requestCapacityExceeded = false;
 		for (const member of members) {
+			if (!this.#connected) return;
 			// JSON-RPC batches are flat; nested arrays and malformed envelopes
 			// must never reach callbacks or recurse into untrusted structures.
 			if (Array.isArray(member) || !isStreamMessage(member)) {
@@ -270,6 +266,13 @@ export class HttpTransport implements MCPTransport {
 			if ("method" in member && "id" in member && member.id != null) {
 				if (this.#pendingSSEServerRequests >= MAX_PENDING_HTTP_SSE_SERVER_REQUESTS) {
 					requestCapacityExceeded = true;
+					// Apply reader backpressure instead of creating another unbounded
+					// set of response POSTs when the handler budget is full.
+					await this.#sendServerResponse({
+						jsonrpc: "2.0",
+						id: member.id,
+						error: { code: -32000, message: "Server busy" },
+					});
 					continue;
 				}
 				this.#pendingSSEServerRequests++;
@@ -582,7 +585,7 @@ export class HttpTransport implements MCPTransport {
 							continue;
 						}
 						if (!this.#connected) continue;
-						this.#dispatchSSEMessage(message);
+						await this.#dispatchSSEMessage(message);
 					}
 				}
 				if (!captured) {
