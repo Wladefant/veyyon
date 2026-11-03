@@ -1980,12 +1980,42 @@ export class SessionManager {
 		// Refuse a pinned destination inside the original evidence tree before
 		// reserving a sidecar. Otherwise mkdir mutates the source, and copying a
 		// directory into its own descendant can recurse or fail after the mutation.
-		const relativeTarget = path.relative(path.resolve(oldArtifactDir), path.resolve(nextArtifactDir));
-		if (
-			relativeTarget === "" ||
-			(relativeTarget !== ".." && !relativeTarget.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeTarget))
-		) {
+		const destinationInsideSource = (source: string, target: string): boolean => {
+			const relative = path.relative(source, target);
+			return (
+				relative === "" ||
+				(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+			);
+		};
+		if (destinationInsideSource(path.resolve(oldArtifactDir), path.resolve(nextArtifactDir))) {
 			throw new Error("Cannot fork session: destination inside source artifact tree");
+		}
+		// A pinned forkFrom() destination may be reached through a directory
+		// symlink/junction *outside* the source tree. Lexical containment alone
+		// misses the physical alias; reserving the child sidecar then modifies
+		// the source evidence before recursive copy even starts.
+		// Only existing directories can be realpathed. When the source has no
+		// sidecar, there is no source tree to copy; when the destination parent
+		// is absent, mkdir below will refuse without creating descendants.
+		let physicalSource: string | undefined;
+		try {
+			physicalSource = await fs.promises.realpath(oldArtifactDir);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		if (physicalSource) {
+			let physicalTargetParent: string | undefined;
+			try {
+				physicalTargetParent = await fs.promises.realpath(path.dirname(nextArtifactDir));
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			if (
+				physicalTargetParent &&
+				destinationInsideSource(physicalSource, path.join(physicalTargetParent, path.basename(nextArtifactDir)))
+			) {
+				throw new Error("Cannot fork session: destination inside source artifact tree");
+			}
 		}
 
 		// A pinned forkFrom() target may name another persisted session, and a
