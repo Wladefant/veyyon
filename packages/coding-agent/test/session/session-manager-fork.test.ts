@@ -309,6 +309,47 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 	});
 
 
+
+	it("refuses forkFrom through an aliased destination parent before mutating source evidence", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-alias-evidence-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		try {
+			const original = "synthetic original output may not be copied into itself";
+			expect(await source.saveArtifact(original, "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Original evidence: artifact://0", timestamp: Date.now(),
+			});
+			await source.ensureOnDisk();
+			const sourceFile = source.getSessionFile();
+			const sourceArtifact = await source.getArtifactPath("0");
+			if (!sourceFile || !sourceArtifact) throw new Error("expected source artifact and transcript");
+
+			const sourceArtifactDir = path.dirname(sourceArtifact);
+			const alias = path.join(sessions, "aliased-artifact-parent");
+			// The target is lexically outside sourceArtifactDir but physically inside it.
+			// A Windows directory junction exercises the same parent-path alias.
+			await fs.symlink(sourceArtifactDir, alias, process.platform === "win32" ? "junction" : "dir");
+			const nestedSession = path.join(alias, "aliased-child.jsonl");
+			const nestedSidecar = path.join(alias, "aliased-child");
+			const transcriptBefore = await fs.readFile(sourceFile, "utf8");
+			const inventoryBefore = (await fs.readdir(sourceArtifactDir)).sort();
+
+			await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+				sessionFile: nestedSession, suppressBreadcrumb: true,
+			})).rejects.toThrow(/destination inside source artifact tree/i);
+			expect((await fs.readdir(sourceArtifactDir)).sort()).toEqual(inventoryBefore);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(transcriptBefore);
+			expect(await fs.readFile(sourceArtifact, "utf8")).toBe(original);
+			expect(await Bun.file(nestedSession).exists()).toBe(false);
+			expect(await Bun.file(nestedSidecar).exists()).toBe(false);
+			expect(source.getSessionFile()).toBe(sourceFile);
+		} finally {
+			await source.close();
+		}
+	});
+
 	it("refuses a pinned forkFrom destination equal to the source without rewriting history", async () => {
 		using temp = TempDir.createSync("@veyyon-forkfrom-same-path-");
 		const cwd = path.join(temp.path(), "project");
