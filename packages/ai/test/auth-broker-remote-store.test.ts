@@ -200,6 +200,61 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.credentials.some(entry => entry.id === id)).toBe(false);
 	});
 
+	test("duplicate same-generation SSE frames cannot conceal a revoked broker credential", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth entry");
+		// Distinct entries within the SAME generation must still reach the client.
+		// Only exact no-progress replay is redundant.
+		const additional = {
+			...original,
+			id: original.id + 1_000_000,
+			credential: { ...original.credential, access: "access-synthetic-same-generation" },
+		};
+		const connected = Promise.withResolvers<void>();
+		let repeatedOldEntry = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			connected.resolve();
+			yield {
+				kind: "entry" as const, entry: additional,
+				generation: initial.snapshot.generation,
+				serverNowMs: initial.snapshot.serverNowMs,
+				refresher: initial.snapshot.refresher,
+			};
+			// A broken relay repeats a previously valid row, never forwarding
+			// the broker's subsequent revocation. Do not treat this as progress.
+			while (!opts.signal?.aborted) {
+				repeatedOldEntry += 1;
+				yield {
+					kind: "entry" as const, entry: original,
+					generation: initial.snapshot.generation,
+					serverNowMs: initial.snapshot.serverNowMs,
+					refresher: initial.snapshot.refresher,
+				};
+				await Bun.sleep(5);
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await connected.promise;
+		await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
+		await waitUntil(() => repeatedOldEntry >= 5);
+		expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
+		// Only the production idle verifier can discover the canonical broker
+		// state; no explicit refreshSnapshot() or fresh SSE event is allowed.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(canonical.snapshot.credentials).toEqual([]);
+	});
+
 	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
