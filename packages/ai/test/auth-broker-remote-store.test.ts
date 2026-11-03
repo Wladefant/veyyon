@@ -239,7 +239,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
 		});
 		await connected.promise;
 		await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
