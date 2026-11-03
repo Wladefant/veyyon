@@ -55,6 +55,10 @@ export class ProducerOutputGuard {
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
 
+	get hasPendingCandidate(): boolean {
+		return this.#candidate.length > 0 && !this.#withholding;
+	}
+
 	sanitize(text: string): string {
 		try {
 			const normalized = sanitizeText(text);

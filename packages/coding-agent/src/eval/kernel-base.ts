@@ -980,8 +980,8 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
-		// Unframed stderr recovers only at an explicit empty physical record.
-		// Cell completion is not a group boundary, so incomplete groups stay withheld.
+		// Empty physical records end a group only after its inventory candidate completes.
+		// Cell completion is not a boundary, so incomplete groups stay withheld.
 		const guard = new ProducerOutputGuard(
 			text => text,
 			() => 0,
@@ -1008,15 +1008,24 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			line = "";
 			lineHasCharacters = false;
 			groupOverflow = false;
+			guard.reset();
 		};
 		const endRecord = (): void => {
 			if (!lineHasCharacters) {
+				if (!groupOverflow && guard.hasPendingCandidate) {
+					if (group.length + 1 > MAX_GROUP_CHARACTERS) markOverflow();
+					else group += "\n";
+					return;
+				}
 				flushGroup();
 			} else {
 				if (!groupOverflow) {
 					const addition = `${line}\n`;
 					if (group.length + addition.length > MAX_GROUP_CHARACTERS) markOverflow();
-					else group += addition;
+					else {
+						group += addition;
+						guard.push(addition);
+					}
 				}
 				line = "";
 				lineHasCharacters = false;

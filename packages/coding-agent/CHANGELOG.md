@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Kernel stderr logging resumes safe diagnostics after complete blank-record groups and withholds incomplete groups at EOF ([Refs #907](https://github.com/Wladefant/veyyon/issues/907)).
+- Kernel stderr logging keeps blank-separated inventory candidates together, resumes later safe diagnostics, and withholds incomplete or oversized groups ([Refs #907](https://github.com/Wladefant/veyyon/issues/907)).
 
 ## [1.7.7] - 2026-11-02
 
