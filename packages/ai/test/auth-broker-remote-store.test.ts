@@ -84,6 +84,34 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+	test("reconciles a peer revocation while the initial SSE connection emits no frame", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamConnected = Promise.withResolvers<void>();
+		// Deliberately never yield the first SSE frame. This models a gateway
+		// holding its initial response body open, without using any real grant.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			streamConnected.resolve();
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await streamConnected.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		expect(storage!.disableCredentialById(id, "synthetic peer revocation before first SSE frame")).toBe(true);
+		// Before the fix the first-frame-only watchdog never starts, so this
+		// times out while the original snapshot still contains the revoked row.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected canonical broker truth");
+		expect(authoritative.snapshot.credentials).toEqual([]);
+	});
+
 	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
