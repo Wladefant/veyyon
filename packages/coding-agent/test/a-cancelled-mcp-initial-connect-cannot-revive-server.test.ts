@@ -1,6 +1,6 @@
 import { expect, it, vi } from "bun:test";
-import { logger } from "@veyyon/utils";
 import { createServer } from "node:http";
+import { logger } from "@veyyon/utils";
 import { MCPManager } from "../src/mcp/manager";
 import { createMCPToolName } from "../src/mcp/tool-bridge";
 import type { MCPToolCache } from "../src/mcp/tool-cache";
@@ -127,7 +127,6 @@ it("a cancelled initial MCP handshake cannot revive its server after explicit di
 	}
 }, 30_000);
 
-
 // WHY: bulk shutdown closes a snapshot of connected servers, while another
 // server's initial initialize response may arrive after that snapshot. The
 // pending promise must be fenced by the same global teardown epoch that
@@ -217,7 +216,7 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 	let originalConnect: Promise<unknown> | undefined;
 	let bulkShutdown: Promise<void> | undefined;
 	try {
-		originalConnect = manager.connectServers(configs, {});
+		originalConnect = manager.connectServers({ [names.a]: configs[names.a]!, [names.b]: configs[names.b]! }, {});
 		// The other server A must already be registered before disconnectAll
 		// snapshots connected transports; B is held inside initialize.
 		await withinConnectBoundary(
@@ -236,14 +235,20 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 		// A held DELETE leaves the manager inside teardown; C must be refused
 		// before launching any transport, rather than succeeding and becoming orphaned.
 		await expect(
-			withinConnectBoundary(manager.connectServers({ [names.c]: configs[names.c]! }, {}), "new C while bulk disconnect runs"),
+			withinConnectBoundary(
+				manager.connectServers({ [names.c]: configs[names.c]! }, {}),
+				"new C while bulk disconnect runs",
+			),
 		).rejects.toThrow(/bulk disconnect.*in progress/i);
 		expect(cInitializations).toBe(0);
 		expect(manager.getServerConfig(names.c)).toBeUndefined();
 		// Manual/automatic reconnect must also not capture the incremented epoch
 		// while the old A transport is still in disconnectAll's close snapshot.
 		expect(
-			await withinConnectBoundary(manager.reconnectServer(names.a, { manual: true }), "reconnect while bulk disconnect runs"),
+			await withinConnectBoundary(
+				manager.reconnectServer(names.a, { manual: true }),
+				"reconnect while bulk disconnect runs",
+			),
 		).toBeNull();
 		expect(aInitializations).toBe(1);
 		releaseADelete.resolve();
@@ -269,9 +274,12 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 		expect(manager.getConnectedServers()).toContain(names.c);
 		expect(manager.getTools().some(tool => tool.mcpServerName === names.c)).toBe(true);
 		expect(manager.getConnectedServers()).toContain(names.b);
-		expect(manager.getTools().filter(tool => tool.mcpServerName === names.b).map(tool => tool.name)).toEqual([
-			createMCPToolName(names.b, "read_fixture"),
-		]);
+		expect(
+			manager
+				.getTools()
+				.filter(tool => tool.mcpServerName === names.b)
+				.map(tool => tool.name),
+		).toEqual([createMCPToolName(names.b, "read_fixture")]);
 	} finally {
 		releaseBInitialize.resolve();
 		releaseADelete.resolve();
@@ -290,7 +298,6 @@ it("bulk MCP disconnect retires a pending initialize before closing its connecte
 		}
 	}
 }, 35_000);
-
 
 // WHY: the initial startup batch can still be waiting on tool-cache discovery
 // after a bulk teardown has already removed its live transports. An old batch
@@ -415,7 +422,6 @@ it("a stale MCP startup batch cannot publish tools after bulk teardown completes
 	}
 }, 35_000);
 
-
 // WHY: a single-server disconnect keeps the old transport mapped while
 // waiting for its DELETE to settle. A new connect or tool waiter must not
 // treat that retiring transport as a newly available live connection.
@@ -479,7 +485,10 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 	const manager = new MCPManager(process.cwd());
 	let disconnecting: Promise<void> | undefined;
 	try {
-		const initial = await withinConnectBoundary(manager.connectServers({ [name]: config }, {}), "initial live connection");
+		const initial = await withinConnectBoundary(
+			manager.connectServers({ [name]: config }, {}),
+			"initial live connection",
+		);
 		expect(initial.connectedServers).toContain(name);
 		expect(manager.getConnectedServers()).toContain(name);
 		disconnecting = manager.disconnectServer(name);
@@ -513,7 +522,10 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		await withinConnectBoundary(disconnecting, "held disconnect completion");
 		expect(deleteCalls).toBe(1);
 		expect(manager.getConnectedServers()).not.toContain(name);
-		const fresh = await withinConnectBoundary(manager.connectServers({ [name]: config }, {}), "fresh post-close connection");
+		const fresh = await withinConnectBoundary(
+			manager.connectServers({ [name]: config }, {}),
+			"fresh post-close connection",
+		);
 		expect(fresh.connectedServers).toContain(name);
 		expect(initializeCalls).toBe(3);
 		expect(manager.getConnectedServers()).toContain("single-disconnect-unaffected-peer");
@@ -522,9 +534,14 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		// A failed close must NOT leave the retiring transport advertised as
 		// connected when the per-name gate is released. Simulate only the
 		// external close rejection; all manager lifecycle code is production.
-		const connection = await withinConnectBoundary(manager.waitForConnection(name), "connected transport for close failure");
+		const connection = await withinConnectBoundary(
+			manager.waitForConnection(name),
+			"connected transport for close failure",
+		);
 		const originalClose = connection.transport.close.bind(connection.transport);
-		connection.transport.close = async () => { throw new Error("fixture close rejected"); };
+		connection.transport.close = async () => {
+			throw new Error("fixture close rejected");
+		};
 		try {
 			await expect(
 				withinConnectBoundary(manager.disconnectServer(name), "rejected transport close"),
@@ -559,7 +576,6 @@ it("single-server teardown blocks same-name connect and reconnect until close se
 		}
 	}
 }, 30_000);
-
 
 // WHY: bulk disconnect has an epoch fence, but a single-server disconnect
 // must also revoke A's historical fulfilled task before a held B cache lookup
@@ -613,10 +629,12 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 			} else {
 				result = {};
 			}
-			response.writeHead(200, {
-				"content-type": "application/json",
-				...(message.method === "initialize" ? { "Mcp-Session-Id": "retired-peer-" + route } : {}),
-			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+			response
+				.writeHead(200, {
+					"content-type": "application/json",
+					...(message.method === "initialize" ? { "Mcp-Session-Id": "retired-peer-" + route } : {}),
+				})
+				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		} catch {
 			if (!response.headersSent) response.writeHead(500).end();
 		}
@@ -657,7 +675,7 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 		expect(manager.getConnectedServers()).not.toContain(nameA);
 		expect(manager.getTools().filter(tool => tool.mcpServerName === nameA)).toEqual([]);
 		releaseCacheRead.resolve();
-		const oldResult = await withinConnectBoundary(original, "held startup batch completion") as {
+		const oldResult = (await withinConnectBoundary(original, "held startup batch completion")) as {
 			connectedServers: string[];
 			tools: Array<{ mcpServerName?: string }>;
 		};
@@ -686,7 +704,6 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 		}
 	}
 }, 35_000);
-
 
 // WHY: a global disconnect must join an in-flight single-server close.
 // Even when an HTTP transport suppresses duplicate DELETE requests, a second
@@ -728,19 +745,22 @@ it("bulk MCP teardown joins a concurrent per-server close without a duplicate cl
 				response.writeHead(202).end();
 				return;
 			}
-			const result: Record<string, unknown> = message.method === "initialize"
-				? {
-					protocolVersion: "2025-03-26",
-					capabilities: { tools: {} },
-					serverInfo: { name: "joined-close", version: "1.0.0" },
-				}
-				: message.method === "tools/list"
-					? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
-					: {};
-			response.writeHead(200, {
-				"content-type": "application/json",
-				...(message.method === "initialize" ? { "Mcp-Session-Id": "joined-close-" + route } : {}),
-			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+			const result: Record<string, unknown> =
+				message.method === "initialize"
+					? {
+							protocolVersion: "2025-03-26",
+							capabilities: { tools: {} },
+							serverInfo: { name: "joined-close", version: "1.0.0" },
+						}
+					: message.method === "tools/list"
+						? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
+						: {};
+			response
+				.writeHead(200, {
+					"content-type": "application/json",
+					...(message.method === "initialize" ? { "Mcp-Session-Id": "joined-close-" + route } : {}),
+				})
+				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		} catch {
 			if (!response.headersSent) response.writeHead(500).end();
 		}
@@ -805,7 +825,6 @@ it("bulk MCP teardown joins a concurrent per-server close without a duplicate cl
 	}
 }, 35_000);
 
-
 // WHY: bulk shutdown can begin closing a live transport before a concurrent
 // explicit per-server disconnect. Both callers must join one actual close,
 // independent of HTTP's duplicate-DELETE suppression. The fixture does not
@@ -844,19 +863,22 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 				response.writeHead(202).end();
 				return;
 			}
-			const result: Record<string, unknown> = message.method === "initialize"
-				? {
-					protocolVersion: "2025-03-26",
-					capabilities: { tools: {} },
-					serverInfo: { name: "bulk-first-close", version: "1.0.0" },
-				}
-				: message.method === "tools/list"
-					? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
-					: {};
-			response.writeHead(200, {
-				"content-type": "application/json",
-				...(message.method === "initialize" ? { "Mcp-Session-Id": "bulk-first-" + route } : {}),
-			}).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+			const result: Record<string, unknown> =
+				message.method === "initialize"
+					? {
+							protocolVersion: "2025-03-26",
+							capabilities: { tools: {} },
+							serverInfo: { name: "bulk-first-close", version: "1.0.0" },
+						}
+					: message.method === "tools/list"
+						? { tools: [{ name: "read_fixture", inputSchema: { type: "object", properties: {} } }] }
+						: {};
+			response
+				.writeHead(200, {
+					"content-type": "application/json",
+					...(message.method === "initialize" ? { "Mcp-Session-Id": "bulk-first-" + route } : {}),
+				})
+				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		} catch {
 			if (!response.headersSent) response.writeHead(500).end();
 		}
@@ -896,7 +918,10 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		};
 
 		bulk = manager.disconnectAll();
-		await withinConnectBoundary(Promise.all([aCloseEntered.promise, bCloseEntered.promise]), "bulk peer closes entered");
+		await withinConnectBoundary(
+			Promise.all([aCloseEntered.promise, bCloseEntered.promise]),
+			"bulk peer closes entered",
+		);
 		// Reverse of the existing single-first test: this second public API
 		// call must join the bulk-owned A close, not call transport.close again.
 		single = manager.disconnectServer(names.a);
@@ -934,7 +959,10 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 		// If A's transport.close rejects, best-effort bulk teardown must still
 		// close healthy peer B, preserve A's safe per-name failure diagnostic,
 		// and never leak the synthetic peer-supplied private detail.
-		const nextB = await withinConnectBoundary(manager.connectServers({ [names.b]: configs[names.b] }, {}), "reconnect B for failed-close control");
+		const nextB = await withinConnectBoundary(
+			manager.connectServers({ [names.b]: configs[names.b] }, {}),
+			"reconnect B for failed-close control",
+		);
 		expect(nextB.connectedServers).toContain(names.b);
 		const newA = await withinConnectBoundary(manager.waitForConnection(names.a), "failed-close control A");
 		const reallyCloseA = newA.transport.close.bind(newA.transport);
@@ -947,13 +975,15 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 			expect(bDeletes).toBe(2);
 			expect(manager.getConnectedServers()).toEqual([]);
 			expect(manager.getTools()).toEqual([]);
-			expect(manager.getLastError(names.a)).toBe("MCP transport close unconfirmed; verify the server before reconnecting");
+			expect(manager.getLastError(names.a)).toBe(
+				"MCP transport close unconfirmed; verify the server before reconnecting",
+			);
 			expect(manager.getLastError(names.a)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 			expect(manager.getLastError(names.b)).toBeUndefined();
-			expect(warnings).toHaveBeenCalledWith(
-				"MCP bulk disconnect did not close every server cleanly",
-				{ path: "mcp:disconnectAll", failedCloses: 1 },
-			);
+			expect(warnings).toHaveBeenCalledWith("MCP bulk disconnect did not close every server cleanly", {
+				path: "mcp:disconnectAll",
+				failedCloses: 1,
+			});
 			expect(JSON.stringify(warnings.mock.calls)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 		} finally {
 			warnings.mockRestore();
