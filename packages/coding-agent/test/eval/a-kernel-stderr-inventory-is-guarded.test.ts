@@ -41,7 +41,7 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 				"import os; os.write(2, b'ALPHA=fake-a\\nBETA=fake-b\\nGAMMA=fake-c\\n\\nsafe after inventory\\n\\nAPI_TOKEN=fake-token-value\\n\\nsafe after credential\\n\\n')",
 			);
 			const structuredResult = await kernel.execute(
-				"import os; os.write(2, b'{\\n  \"ALPHA\": \"fake-structured\",\\n\\n  \"BETA\": [\"quoted } brace\", {\"deep\": [true, null]}],\\n\\n  \"GAMMA\": {\"array\": [{\"text\": \"fake-map\"}]}\\n}\\n\\nsafe after structured inventory\\n\\n')",
+				'import os; os.write(2, b\'{\\n  "ALPHA": "fake-structured",\\n\\n  "BETA": ["quoted } brace", {"deep": [true, null]}],\\n\\n  "GAMMA": {"array": [{"text": "fake-map"}]}\\n}\\n\\nsafe after structured inventory\\n\\n\')',
 			);
 			expect(structuredResult.status).toBe("ok");
 			const ordinaryAssignmentsResult = await kernel.execute(
@@ -89,7 +89,7 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 			});
 			kernels.push(incompleteSafeKernel);
 			const incompleteSafeResult = await incompleteSafeKernel.execute(
-				"import os; os.write(2, b'{\\n  \"ALPHA\": \"fake-incomplete-structured\",\\n\\nfresh kernel incomplete safe tail')",
+				'import os; os.write(2, b\'{\\n  "ALPHA": "fake-incomplete-structured",\\n\\nfresh kernel incomplete safe tail\')',
 			);
 			expect(incompleteSafeResult.status).toBe("ok");
 			await Promise.all(kernels.map(kernel => kernel.shutdown()));
