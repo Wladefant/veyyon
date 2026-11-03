@@ -555,13 +555,20 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// Replayed equal-generation state is not progress: accepting it
 				// repeatedly would starve the canonical idle GET and invalidate
 				// in-flight GETs through the applied-revision fence.
+				// Compare the effective view: a locally pending safety block can be
+				// absent from an unchanged broker frame without being fresh state.
+				const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
 				if (
 					snapshot.generation === this.#generation &&
 					isDeepStrictEqual(
 						// A full broker snapshot is keyed by credential ID, not row order.
 						// Permuting unchanged rows cannot defer the canonical GET watchdog.
 						snapshot.credentials
-							.map(entry => normalizeSnapshotEntryBlocks(entry, Date.now()))
+							.map(entry =>
+								this.#retainPendingCredentialBlocks(
+									normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
+								),
+							)
 							.sort((a, b) => a.id - b.id),
 						[...this.#snapshot.credentials].sort((a, b) => a.id - b.id),
 					) &&
@@ -573,10 +580,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			case "entry": {
 				if (event.generation < this.#generation) return;
 				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
+				const effectiveIncoming = this.#retainPendingCredentialBlocks(
+					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
+				);
 				if (
 					event.generation === this.#generation &&
 					current &&
-					isDeepStrictEqual(current, normalizeSnapshotEntryBlocks(event.entry, Date.now())) &&
+					isDeepStrictEqual(current, effectiveIncoming) &&
 					isDeepStrictEqual(event.refresher, this.#snapshot.refresher)
 				) return;
 				this.#applyStreamEntry(event.entry, event.refresher, event.generation, event.serverNowMs);
