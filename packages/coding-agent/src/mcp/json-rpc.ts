@@ -20,7 +20,8 @@ const MCP_DEFAULT_TIMEOUT_MS = 60_000;
 export function redactUrlForLog(url: string): string {
 	try {
 		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "(invalid MCP URL)";
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+			return "(invalid MCP URL)";
 		parsed.username = "";
 		parsed.password = "";
 		// Query names and values can both be caller-controlled. The path remains
@@ -90,7 +91,9 @@ export async function callMCP<T = unknown>(
 
 	// The fence must span the body read as well: an SSE-style MCP response can
 	// stall mid-stream, and only the armed signal interrupts `response.text()`.
-	const requestTimeout = options?.signal ? undefined : scopedTimeoutSignal(MCP_DEFAULT_TIMEOUT_MS);
+	const requestTimeout = options?.signal
+		? undefined
+		: scopedTimeoutSignal(MCP_DEFAULT_TIMEOUT_MS);
 	let text: string;
 	try {
 		const response = await fetch(url, {

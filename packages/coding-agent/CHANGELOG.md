@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- MCP JSON-RPC failures no longer log caller arguments, response bytes, status reasons, or URL query values ([Refs #856](https://github.com/Wladefant/veyyon/issues/856)).
 
 ## [1.7.8] - 2026-11-03
 
