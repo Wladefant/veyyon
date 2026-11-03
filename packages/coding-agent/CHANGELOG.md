@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP server connections preserve tools from previously connected peers ([Refs #897](https://github.com/Wladefant/veyyon/issues/897)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
