@@ -161,3 +161,33 @@ test("dump between credential label chunks keeps the credential out of artifacts
 	expect(persisted).not.toContain("fake-credential-123");
 	expect(result.output).not.toContain("fake-credential-123");
 });
+
+test("host text after an unfinished inventory reaches every sink while the inventory stays withheld", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+	directories.push(directory);
+	const artifactPath = path.join(directory, "output.txt");
+	const live: string[] = [];
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(),
+		artifactPath,
+		artifactId: "fake-output",
+		spillThreshold: 1,
+		onChunk: chunk => live.push(chunk),
+	});
+	sink.push('status\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"');
+	sink.pushHostText("PTY error: connection lost\n");
+	const result = await sink.dumpWithArtifactStatus();
+	const persisted = await fs.readFile(artifactPath, "utf8");
+	const expected = `status\n${BLOCKED_OUTPUT_RECORD}\nPTY error: connection lost\n`;
+	expect(result.output).not.toContain("fake-a");
+	expect(result.output).not.toContain("fake-b");
+	expect(result.output).not.toContain("PTY error: connection lost");
+	expect(live.join("")).toBe(expected);
+	expect(persisted).toBe(expected);
+});
+
+test("host text carrying a credential record is still withheld", async () => {
+	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+	sink.pushHostText("Error: API_KEY=fake-credential-123\n");
+	expect((await sink.dump()).output).toBe(BLOCKED_OUTPUT_RECORD);
+});

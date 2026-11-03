@@ -5,6 +5,8 @@
 ### Fixed
 
 - JS eval timeout and cancellation withhold incomplete structured environment inventories ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- JS eval timeout, thrown-error and PTY error explanations now follow a withheld incomplete inventory instead of disappearing with it ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- Complete output that prints a RegExp such as `{ pattern: /\{/ }` streams unchanged instead of being withheld as an unfinished structure ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 
 ## [1.7.7] - 2026-11-02
 

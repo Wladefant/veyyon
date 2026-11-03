@@ -534,28 +534,54 @@ describe("executeJs", () => {
 		const execution = executeJs(
 			[
 				'console.log(\'inventory status\\n{\\n  "ALPHA": "neutral-one",\\n  "BETA": "neutral-two"\');',
-				"await new Promise(() => {})",
+				'phase("inventory queued");',
+				"await Promise.withResolvers().promise",
 			].join("\n"),
 			{
 				sessionId,
 				session,
 				sessionFile,
-				onChunk: chunk => {
-					chunks.push(chunk);
-					if (mode === "cancel" && chunk.includes("inventory status")) {
+				onStatus: event => {
+					if (mode === "cancel" && event.op === "phase" && event.title === "inventory queued") {
 						controller.abort(new Error("cancelled"));
 					}
 				},
+				onChunk: chunk => chunks.push(chunk),
 				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
 			},
 		);
 		const result = await execution;
 		expect(result.cancelled).toBe(true);
 		if (mode === "cancel") expect(chunks.join("")).toContain("inventory status");
+		// The host's own explanation survives the withheld producer record: the
+		// model must still learn that the worker was killed and its state is gone.
+		if (mode === "timeout") expect(result.output).toContain("VM state was reset");
 		expect(chunks.join("")).not.toContain("ALPHA");
 		expect(chunks.join("")).not.toContain("BETA");
 		expect(result.output).not.toContain("ALPHA");
 		expect(result.output).not.toContain("BETA");
+	});
+	it("keeps a thrown error's message after an incomplete structured inventory", async () => {
+		const result = await executeJs(
+			[
+				'console.log(\'inventory status\\n{\\n  "ALPHA": "neutral-one",\\n  "BETA": "neutral-two"\');',
+				'throw new Error("synthetic eval failure");',
+			].join("\n"),
+			{ sessionId, session, sessionFile },
+		);
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("synthetic eval failure");
+		expect(result.output).not.toContain("ALPHA");
+		expect(result.output).not.toContain("BETA");
+	});
+	it("prints a complete object holding a RegExp and the text after it", async () => {
+		const result = await executeJs('console.log({ pattern: /\\{/ });\nconsole.log("done");', {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("{ pattern: /\\{/ }\ndone\n");
 	});
 	it("cancels execution when the timeout expires", async () => {
 		const result = await executeJs("await new Promise(() => {})", {
@@ -623,5 +649,29 @@ describe("ProducerOutputGuard finalization", () => {
 				expect(output).not.toContain("fake-c");
 			}
 		}
+	});
+
+	// util.inspect prints a RegExp bare, so an escaped or classed delimiter inside it is
+	// not structure. Each complete line must stream at once instead of being held.
+	it.each(["/\\{/", "/[{]/", "/\\[/", "/[[]/", "/a\\/{/", "/x/g"])(
+		"streams a complete object holding the RegExp %s",
+		pattern => {
+			const guard = new ProducerOutputGuard();
+			const line = `{ pattern: ${pattern} }\n`;
+			expect(guard.push(line)).toBe(line);
+			expect(guard.push("done\n")).toBe("done\n");
+			expect(guard.finish()).toBe("");
+		},
+	);
+
+	it("treats a slash that never closes on its line as ordinary text", () => {
+		const guard = new ProducerOutputGuard();
+		expect(guard.push("{ ratio: 1 / 2, path: /usr }\n")).toBe("{ ratio: 1 / 2, path: /usr }\n");
+	});
+
+	it("still withholds an unfinished inventory whose values look like RegExps", () => {
+		const guard = new ProducerOutputGuard();
+		const output = guard.push("{\n  ALPHA: /fake-a{/,\n") + guard.push('  BETA: "fake-b"') + guard.finish();
+		expect(output).toBe(BLOCKED_OUTPUT_RECORD);
 	});
 });

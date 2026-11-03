@@ -31,6 +31,22 @@ function isInventory(text: string): boolean {
 	return false;
 }
 
+// util.inspect prints a RegExp bare (`{ pattern: /\{/ }`), so a delimiter it escapes or
+// holds in a class is not structure. Only a value position that closes on its own line
+// counts; any other slash is ordinary text, so a lone path segment cannot hide a brace.
+const REGEX_LITERAL = /\/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\[])+\/[dgimsuvy]*/y;
+const REGEX_VALUE_START = ":,[{>";
+
+/** Characters after `start` that a RegExp literal opening there covers, or 0. */
+function regexLiteralLength(line: string, start: number): number {
+	let previous = start - 1;
+	while (previous >= 0 && (line[previous] === " " || line[previous] === "\t")) previous--;
+	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous])) return 0;
+	REGEX_LITERAL.lastIndex = start;
+	const match = REGEX_LITERAL.exec(line);
+	return match ? match[0].length - 1 : 0;
+}
+
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
 	#pending = "";
@@ -120,7 +136,8 @@ export class ProducerOutputGuard {
 				}
 				// Track quoted delimiters only inside a structured record: an earlier
 				// ordinary line in the held group may itself contain quotes or braces.
-				for (const character of line) {
+				for (let index = 0; index < line.length; index++) {
+					const character = line[index];
 					if (this.#escaped) {
 						this.#escaped = false;
 					} else if (this.#quote) {
@@ -128,6 +145,8 @@ export class ProducerOutputGuard {
 						else if (character === this.#quote) this.#quote = "";
 					} else if (character === '"' || character === "'") {
 						this.#quote = character;
+					} else if (character === "/") {
+						index += regexLiteralLength(line, index);
 					} else if (character === "{" || character === "[") {
 						this.#depth++;
 					} else if (character === "}" || character === "]") {

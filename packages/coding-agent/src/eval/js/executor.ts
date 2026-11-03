@@ -158,12 +158,12 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 		if (signal?.aborted || isCancellation(error)) {
 			const timedOut = isTimeoutError(signal?.reason) || isTimeoutError(options.signal?.reason);
 			if (timedOut) {
-				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs));
+				outputSink.pushHostText(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs));
 			}
 			return await finish(undefined, true);
 		}
 		const message = error instanceof Error ? (error.stack ?? error.message) : errorMessage(error);
-		outputSink.push(message);
+		outputSink.pushHostText(message);
 		return await finish(1, false);
 	}
 }

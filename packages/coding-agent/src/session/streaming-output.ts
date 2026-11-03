@@ -940,6 +940,20 @@ export class OutputSink {
 		this.#pushFiltered(this.#outputGuard ? this.#outputGuard.push(chunk) : chunk, options);
 	}
 
+	/**
+	 * Append host-authored text, such as a timeout or failure explanation, after the
+	 * producer's bytes. The producer stream is finalized first, so an unfinished record
+	 * it withholds cannot absorb the explanation; the text is still filtered as a whole.
+	 */
+	pushHostText(text: string): void {
+		if (this.#outputGuard) {
+			const tail = this.#outputGuard.finish();
+			this.#pushFiltered(tail && !tail.endsWith("\n") ? `${tail}\n` : tail);
+			text = this.#outputGuard.sanitize(text);
+		}
+		this.#pushFiltered(text);
+	}
+
 	#pushFiltered(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
 		this.#partialEscape = partial;
