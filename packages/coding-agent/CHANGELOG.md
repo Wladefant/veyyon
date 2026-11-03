@@ -5,6 +5,13 @@
 ### Fixed
 
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- ACP clients receive each completed external turn once before the next prompt, replay string-content messages, and return cancellation while a disk refresh is pending without starting provider work ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- ACP external-turn reconciliation preserves cancelled or failed history delivery, excludes imported usage from prompt totals, and refreshes todo and display projections ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- ACP rejects unfinished external turns, excludes imported usage during cancelled replay, and acknowledges imported history after a successful full load ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
 
 ## [1.7.7] - 2026-11-02
 
