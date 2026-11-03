@@ -1162,6 +1162,100 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+	test("unchanged conditional 200 replies cannot postpone broker revocation behind volatile timestamps", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const originalFetch = client.fetchSnapshot.bind(client);
+		const firstConditional = Promise.withResolvers<void>();
+		let conditionalRequests = 0;
+		let canonicalRequests = 0;
+		let prematureConditionalPolls = 0;
+		let appliedSnapshots = 0;
+		// A faulty relay replays old full HTTP 200 responses rather than proper 304s.
+		// Only volatile generation-independent timestamps/countdowns change.
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.ifGenerationGt !== undefined) {
+				conditionalRequests += 1;
+				if (conditionalRequests > 1 && canonicalRequests === 0) prematureConditionalPolls += 1;
+				firstConditional.resolve();
+				await scheduler.wait(5, { signal: opts.signal });
+				const replay = structuredClone(initial.snapshot);
+				replay.generatedAt += conditionalRequests * 1_000;
+				replay.serverNowMs += conditionalRequests * 1_000;
+				replay.refresher.nextSweepInMs += conditionalRequests * 1_000;
+				for (const entry of replay.credentials) {
+					if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalRequests * 1_000;
+				}
+				return { status: 200 as const, generation: replay.generation, snapshot: replay };
+			}
+			canonicalRequests += 1;
+			const truth = await originalFetch(opts);
+			if (truth.status !== 200) throw new Error("expected unconditional broker snapshot");
+			return {
+				status: 200 as const,
+				generation: initial.snapshot.generation,
+				snapshot: { ...truth.snapshot, generation: initial.snapshot.generation },
+			};
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			streamSnapshots: false,
+			snapshotStreamVerifyIntervalMs: 350,
+			onSnapshot: () => { appliedSnapshots += 1; },
+		});
+		await firstConditional.promise;
+		expect(conditionalRequests).toBeGreaterThan(0);
+		expect(canonicalRequests).toBe(0);
+		expect(storage!.disableCredentialById(id, "synthetic peer revoke hidden by stale 200")).toBe(true);
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(prematureConditionalPolls).toBe(0);
+		expect(canonicalRequests).toBeGreaterThan(0);
+		expect(appliedSnapshots).toBe(1); // repeated stale 200s are not progress
+		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+		expect(remote.listAuthCredentials()).toEqual([]);
+	});
+
+	test("genuinely changed same-generation conditional 200 snapshot applies immediately", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const changed: SnapshotResponse = {
+			...initial.snapshot,
+			refresher: { ...initial.snapshot.refresher, skewMs: initial.snapshot.refresher.skewMs + 1 },
+			credentials: initial.snapshot.credentials.map(entry => ({
+				...entry,
+				credential: entry.credential.type === "oauth"
+					? { ...entry.credential, access: "synthetic-accepted-access-change" }
+					: entry.credential,
+			})),
+		};
+		let conditionalRequests = 0;
+		let canonicalRequests = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.ifGenerationGt !== undefined) {
+				conditionalRequests += 1;
+				return { status: 200 as const, generation: initial.snapshot.generation, snapshot: changed };
+			}
+			canonicalRequests += 1;
+			throw new Error("unnecessary canonical broker request before changed conditional 200");
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			streamSnapshots: false,
+			snapshotStreamVerifyIntervalMs: 5_000,
+		});
+		await waitUntil(() => remote!.snapshot.refresher.skewMs === changed.refresher.skewMs);
+		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+			access: "synthetic-accepted-access-change", refresh: REMOTE_REFRESH_SENTINEL,
+		});
+		expect(conditionalRequests).toBeGreaterThan(0);
+		expect(canonicalRequests).toBe(0);
+	});
+
 	test("long-poll reconciles a peer revoke despite equal broker generations after restart", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
