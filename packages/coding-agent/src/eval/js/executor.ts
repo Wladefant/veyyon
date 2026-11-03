@@ -1,7 +1,8 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
 import { OutputSink } from "../../session/streaming-output";
-import { ProducerOutputGuard } from "../../secrets/producer-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
 import {
@@ -80,6 +81,15 @@ function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
+	// Status callbacks publish immediately, so they cannot retract the prefix of
+	// an inventory split across events. Conservatively withhold each assignment
+	// record, including a single assignment, without delaying safe progress.
+	const sanitizeStatus = (text: string): string =>
+		sanitizeText(text)
+			.split("\n")
+			.some(line => /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line))
+			? BLOCKED_OUTPUT_RECORD
+			: outputGuard.sanitize(text);
 	const outputSink = new OutputSink({
 		outputGuard,
 		artifactPath: options.artifactPath,
@@ -151,8 +161,8 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 								...output,
 								event: {
 									...event,
-									...(typeof event.message === "string" ? { message: outputGuard.sanitize(event.message) } : {}),
-									...(typeof event.title === "string" ? { title: outputGuard.sanitize(event.title) } : {}),
+									...(typeof event.message === "string" ? { message: sanitizeStatus(event.message) } : {}),
+									...(typeof event.title === "string" ? { title: sanitizeStatus(event.title) } : {}),
 								},
 							};
 						}

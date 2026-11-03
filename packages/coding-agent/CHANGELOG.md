@@ -4,8 +4,9 @@
 
 ### Fixed
 
-- JavaScript eval `log()` and `phase()` status events pass through the producer output guard before they reach live updates or retained result details ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
+- JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
 
+## [1.7.7] - 2026-11-02
 
 - OVH CI now builds and verifies one native addon for selected test shards, then shares it with those shards; no user-facing change ([PR #900](https://github.com/Wladefant/veyyon/pull/900)).
 
