@@ -1,11 +1,11 @@
 import { expect, it } from "bun:test";
-import type { AgentStorage } from "@veyyon/kernel/session/agent-storage";
-import { MCPToolCache } from "@veyyon/coding-agent/mcp/tool-cache";
-import type { MCPRequestOptions, MCPToolsListResult } from "../src/mcp/types";
 import { createServer } from "node:http";
 import * as path from "node:path";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import { createMCPToolName } from "@veyyon/coding-agent/mcp/tool-bridge";
+import { MCPToolCache } from "@veyyon/coding-agent/mcp/tool-cache";
+import type { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import type { MCPRequestOptions, MCPToolsListResult } from "../src/mcp/types";
 import { MANY_TOOL_COUNT, manyToolName } from "./fixtures/many-tools-mcp";
 
 // WHY: a disconnected server's tools can vanish from MCPManager while a tool
@@ -32,7 +32,10 @@ it("a sanitized MCP server disconnect updates consumers without removing sibling
 	manager.setOnToolsChanged(tools => {
 		const names = tools.map(tool => tool.name);
 		observedRegistries.push(names);
-		if (expectedServerTools.every(name => names.includes(name)) && expectedSiblingTools.every(name => names.includes(name))) {
+		if (
+			expectedServerTools.every(name => names.includes(name)) &&
+			expectedSiblingTools.every(name => names.includes(name))
+		) {
 			bothLoaded.resolve();
 		}
 	});
@@ -75,7 +78,6 @@ it("a sanitized MCP server disconnect updates consumers without removing sibling
 	}
 }, 30_000);
 
-
 // WHY: normalized MCP server names are not a prefix-free namespace.
 // "alpha" and "alpha_beta" have overlapping tool-name prefixes, so a
 // server-name prefix filter removes a healthy sibling during refresh or
@@ -85,9 +87,7 @@ it("a sanitized MCP server disconnect updates consumers without removing sibling
 it("overlapping MCP server name prefixes keep sibling tools on refresh and disconnect", async () => {
 	const ownerName = "alpha";
 	const siblingName = "alpha_beta";
-	const ownerTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
-		createMCPToolName(ownerName, manyToolName(i)),
-	);
+	const ownerTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) => createMCPToolName(ownerName, manyToolName(i)));
 	const siblingTools = Array.from({ length: MANY_TOOL_COUNT }, (_, i) =>
 		createMCPToolName(siblingName, manyToolName(i)),
 	);
@@ -104,7 +104,10 @@ it("overlapping MCP server name prefixes keep sibling tools on refresh and disco
 		const fixtureConfig = { type: "stdio" as const, command: process.execPath, args: [FIXTURE_PATH] };
 		await manager.connectServers({ [ownerName]: fixtureConfig, [siblingName]: fixtureConfig }, {});
 		const startupDeadline = Promise.withResolvers<never>();
-		const timer = setTimeout(() => startupDeadline.reject(new Error("Both real MCP server tool loads did not finish")), 15_000);
+		const timer = setTimeout(
+			() => startupDeadline.reject(new Error("Both real MCP server tool loads did not finish")),
+			15_000,
+		);
 		try {
 			await Promise.race([initialToolLoads.promise, startupDeadline.promise]);
 		} finally {
@@ -138,7 +141,6 @@ it("overlapping MCP server name prefixes keep sibling tools on refresh and disco
 		await manager.disconnectAll();
 	}
 }, 35_000);
-
 
 // WHY: refreshServerTools awaits the external tools/list reply after taking a
 // connection snapshot. A late successful reply during OR after disconnect
@@ -226,7 +228,6 @@ it("does not republish tools from a refresh completed after server disconnect", 
 	}
 }, 30_000);
 
-
 // WHY: two notifications may request tools/list concurrently for the same
 // live transport. A delayed *older* reply must never overwrite the newest
 // catalog in either the connection cache or the manager registry.
@@ -298,7 +299,12 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 			// A superseded first response must never reach a tool consumer.
 			expect(changes).toHaveLength(beforeRefreshNotifications + 1);
 			const latest = [createMCPToolName(name, "new_catalog")];
-			expect(manager.getTools().filter(tool => tool.mcpServerName === name).map(tool => tool.name)).toEqual(latest);
+			expect(
+				manager
+					.getTools()
+					.filter(tool => tool.mcpServerName === name)
+					.map(tool => tool.name),
+			).toEqual(latest);
 			expect(connection.tools?.map(tool => tool.name)).toEqual(["new_catalog"]);
 			expect(changes.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
 		} finally {
@@ -314,7 +320,6 @@ it("serializes overlapping live-server tool refreshes and retains the newest cat
 		await bounded(manager.disconnectAll(), "fixture teardown");
 	}
 }, 30_000);
-
 
 // WHY: a pending list can fail just as a newer tools-changed notification
 // arrives. The queued notification must get a fresh request instead of
@@ -386,7 +391,10 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 			expect(notices.at(-1)).toEqual(manager.getTools().map(tool => tool.name));
 		} finally {
 			releaseFailure.resolve();
-			await bounded(Promise.allSettled([first, second].filter((p): p is Promise<void> => !!p)), "refresh settlement");
+			await bounded(
+				Promise.allSettled([first, second].filter((p): p is Promise<void> => !!p)),
+				"refresh settlement",
+			);
 			transport.request = originalRequest;
 		}
 	} finally {
@@ -394,7 +402,6 @@ it("recovers a queued tool-change refresh after the first list fails", async () 
 		await bounded(manager.disconnectAll(), "fixture teardown");
 	}
 }, 30_000);
-
 
 // WHY: initial discovery's tools/list can settle after a newer live refresh.
 // A single connection/cache must never publish the superseded initial catalog.
@@ -561,7 +568,6 @@ it(
 	30_000,
 );
 
-
 // WHY: A finishes its original tools/list while a second server B is still
 // loading. A subsequently publishes refreshed tools, but the final startup
 // aggregator must not replay A's stale tracked initial tool-list snapshot.
@@ -645,10 +651,12 @@ it("a completed startup catalog does not replace a newer live refresh while a pe
 				} else {
 					ownerLists++;
 					result = {
-						tools: [{
-							name: ownerLists === 1 ? "old_before_refresh" : "fresh_after_refresh",
-							inputSchema: { type: "object", properties: {} },
-						}],
+						tools: [
+							{
+								name: ownerLists === 1 ? "old_before_refresh" : "fresh_after_refresh",
+								inputSchema: { type: "object", properties: {} },
+							},
+						],
 					};
 				}
 			} else {
@@ -690,7 +698,12 @@ it("a completed startup catalog does not replace a newer live refresh while a pe
 		await bounded(manager.refreshServerTools(owner), "fresh owner refresh");
 		expect(ownerLists).toBe(2);
 		expect(liveOwner.tools?.map(tool => tool.name)).toEqual(["fresh_after_refresh"]);
-		expect(manager.getTools().filter(tool => tool.mcpServerName === owner).map(tool => tool.name)).toEqual([freshName]);
+		expect(
+			manager
+				.getTools()
+				.filter(tool => tool.mcpServerName === owner)
+				.map(tool => tool.name),
+		).toEqual([freshName]);
 
 		releasePeerList.resolve();
 		await bounded(peerPublished.promise, "real B catalog publication");
