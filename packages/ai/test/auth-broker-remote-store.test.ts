@@ -215,9 +215,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			credential: { ...original.credential, access: "access-synthetic-same-generation" },
 		};
 		const connected = Promise.withResolvers<void>();
-		let repeatedOldEntry = 0;
+		let replayedFrames = 0;
+		let fullSnapshotsObserved = 0;
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
+			yield { kind: "snapshot" as const, ...initial.snapshot }; // no-progress full replay
 			connected.resolve();
 			yield {
 				kind: "entry" as const, entry: additional,
@@ -228,23 +230,31 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// A broken relay repeats a previously valid row, never forwarding
 			// the broker's subsequent revocation. Do not treat this as progress.
 			while (!opts.signal?.aborted) {
-				repeatedOldEntry += 1;
+				replayedFrames += 1;
 				yield {
 					kind: "entry" as const, entry: original,
 					generation: initial.snapshot.generation,
 					serverNowMs: initial.snapshot.serverNowMs,
 					refresher: initial.snapshot.refresher,
 				};
+				yield {
+					kind: "removed" as const, id: additional.id + 1,
+					generation: initial.snapshot.generation,
+					serverNowMs: initial.snapshot.serverNowMs,
+					refresher: initial.snapshot.refresher,
+				}; // already absent: also no progress
 				await Bun.sleep(5);
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+			onSnapshot: () => { fullSnapshotsObserved += 1; },
 		});
 		await connected.promise;
 		await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
-		await waitUntil(() => repeatedOldEntry >= 5);
+		expect(fullSnapshotsObserved).toBe(1); // first full snapshot only; duplicate ignored
+		await waitUntil(() => replayedFrames >= 5);
 		expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
 		// Only the production idle verifier can discover the canonical broker
 		// state; no explicit refreshSnapshot() or fresh SSE event is allowed.
