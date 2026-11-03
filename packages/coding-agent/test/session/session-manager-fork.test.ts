@@ -270,6 +270,45 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 	});
 
 
+
+	it("refuses forkFrom into the source artifact tree before reserving any child evidence", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-nested-evidence-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		try {
+			expect(await source.saveArtifact("synthetic source evidence must stay unchanged", "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Recover synthetic evidence: artifact://0", timestamp: Date.now(),
+			});
+			await source.ensureOnDisk();
+			const sourceFile = source.getSessionFile();
+			const originalArtifact = await source.getArtifactPath("0");
+			if (!sourceFile || !originalArtifact) throw new Error("expected persisted synthetic evidence");
+			const artifactDir = path.dirname(originalArtifact);
+			const nestedSession = path.join(artifactDir, "nested-fork.jsonl");
+			const nestedSidecar = path.join(artifactDir, "nested-fork");
+			const originalSession = await fs.readFile(sourceFile, "utf8");
+			const originalBytes = await fs.readFile(originalArtifact, "utf8");
+			const originalInventory = (await fs.readdir(artifactDir)).sort();
+
+			// The old artifact tree cannot be the parent of the copied fork
+			// output: even a failed recursive cp must not reserve a child inside it.
+			await expect(SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
+				sessionFile: nestedSession, suppressBreadcrumb: true,
+			})).rejects.toThrow(/destination inside source artifact tree/i);
+			expect((await fs.readdir(artifactDir)).sort()).toEqual(originalInventory);
+			expect(await fs.readFile(sourceFile, "utf8")).toBe(originalSession);
+			expect(await fs.readFile(originalArtifact, "utf8")).toBe(originalBytes);
+			expect(await Bun.file(nestedSession).exists()).toBe(false);
+			expect(await Bun.file(nestedSidecar).exists()).toBe(false);
+			expect(source.getSessionFile()).toBe(sourceFile);
+		} finally {
+			await source.close();
+		}
+	});
+
+
 	it("refuses a pinned forkFrom destination equal to the source without rewriting history", async () => {
 		using temp = TempDir.createSync("@veyyon-forkfrom-same-path-");
 		const cwd = path.join(temp.path(), "project");
