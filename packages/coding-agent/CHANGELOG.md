@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- JavaScript eval diagnostics withhold exception payloads from finished or unattributable cells and failed display conversions ([Refs #938](https://github.com/Wladefant/veyyon/issues/938)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

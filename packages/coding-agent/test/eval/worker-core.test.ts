@@ -18,7 +18,10 @@ interface WorkerHarness {
 	onMessage(handler: (message: EvalWorkerOutbound) => void): () => void;
 }
 
-function createWorkerHarness(): WorkerHarness {
+function createWorkerHarness(
+	mode: "inline" | "isolated" = "inline",
+	interceptUnhandledRejections = postmortem.interceptUnhandledRejections,
+): WorkerHarness {
 	const hostListeners = new Set<(message: EvalWorkerOutbound) => void>();
 	const workerListeners = new Set<(message: EvalWorkerInbound) => void>();
 	const transport: EvalWorkerTransport = {
@@ -34,8 +37,8 @@ function createWorkerHarness(): WorkerHarness {
 		close: () => {},
 	};
 	new WorkerCore(transport, {
-		mode: "inline",
-		interceptUnhandledRejections: postmortem.interceptUnhandledRejections,
+		mode,
+		interceptUnhandledRejections,
 	});
 	return {
 		send(message) {
@@ -93,6 +96,99 @@ function installFatalCapture(): {
 }
 
 describe("WorkerCore", () => {
+	// These diagnostics outlive, or cannot identify, a run's secret policy.
+	// Inject only the process rejection boundary; execute cells and attribution in WorkerCore.
+	it("omits late finished-cell rejection payloads from worker diagnostics", async () => {
+		let consumeRejection: ((reason: unknown) => boolean) | undefined;
+		const harness = createWorkerHarness("inline", handler => {
+			consumeRejection = handler;
+			return () => {};
+		});
+		const cwd = process.cwd();
+		const filename = "[finished-cell-rejection].js";
+		const triggerName = "__veyyon_worker_core_late_rejection";
+		await initializeWorker(harness, { cwd, sessionId: "finished-cell-rejection", localRoots: {} });
+
+		try {
+			const result = waitForMessage(
+				harness,
+				message => message.type === "result" && message.runId === "finished-cell-rejection-run",
+			);
+			harness.send({
+				type: "run",
+				runId: "finished-cell-rejection-run",
+				code: `globalThis.${triggerName} = () => new Error("synthetic-diagnostic-secret");`,
+				filename,
+				snapshot: { cwd, sessionId: "finished-cell-rejection", localRoots: {} },
+			});
+			expect(await result).toMatchObject({ type: "result", runId: "finished-cell-rejection-run", ok: true });
+
+			const trigger = Reflect.get(globalThis, triggerName);
+			expect(typeof trigger).toBe("function");
+			const diagnostic = waitForMessage(
+				harness,
+				message => message.type === "log" && message.msg.includes("finished eval cell"),
+			);
+			if (typeof trigger === "function") expect(consumeRejection?.(trigger())).toBe(true);
+			const log = await diagnostic;
+			expect(log).toMatchObject({
+				type: "log",
+				level: "warn",
+				msg: "Unhandled rejection from a finished eval cell (missing await?)",
+			});
+			expect(JSON.stringify(log)).not.toContain("synthetic-diagnostic-secret");
+		} finally {
+			Reflect.deleteProperty(globalThis, triggerName);
+			harness.send({ type: "close" });
+		}
+	}, 5_000);
+	it("withholds unattributable rejection payloads while multiple runs are pending", async () => {
+		const messages: EvalWorkerOutbound[] = [];
+		let receive: ((message: EvalWorkerInbound) => void) | undefined;
+		let consumeRejection: ((reason: unknown) => boolean) | undefined;
+		let results = 0;
+		const done = Promise.withResolvers<void>();
+		const core = new WorkerCore(
+			{
+				send: message => {
+					messages.push(message);
+					if (message.type === "result" && ++results === 2) done.resolve();
+				},
+				onMessage: handler => {
+					receive = handler;
+					return () => {};
+				},
+				close: () => {},
+			},
+			{
+				mode: "isolated",
+				interceptUnhandledRejections: handler => {
+					consumeRejection = handler;
+					return () => {};
+				},
+			},
+		);
+		const snapshot = { cwd: process.cwd(), sessionId: "concurrent-diagnostics", localRoots: {} };
+		try {
+			receive?.({ type: "init", snapshot });
+			// Deliver both frames before either run settles, just as a worker transport can.
+			receive?.({ type: "run", runId: "first", filename: "[first].js", code: "void 0;", snapshot });
+			receive?.({ type: "run", runId: "second", filename: "[second].js", code: "void 0;", snapshot });
+			expect(consumeRejection?.("synthetic-unattributable-secret")).toBe(true);
+			const diagnostic = messages.find(
+				message => message.type === "log" && message.msg.includes("cannot attribute"),
+			);
+			expect(diagnostic).toMatchObject({
+				type: "log",
+				level: "warn",
+				msg: "Unhandled rejection during concurrent eval runs; cannot attribute to a cell",
+			});
+			expect(JSON.stringify(diagnostic)).not.toContain("synthetic-unattributable-secret");
+			await done.promise;
+		} finally {
+			core.dispose();
+		}
+	}, 5_000);
 	it("reports same-realm cwd conflicts through the worker protocol", async () => {
 		const first = createWorkerHarness();
 		const second = createWorkerHarness();
