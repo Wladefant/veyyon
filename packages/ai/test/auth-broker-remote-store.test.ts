@@ -122,6 +122,36 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(canonical.snapshot.credentials).toEqual([]);
 	});
 
+	test("applies a genuinely changed equal-generation first SSE snapshot", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
+		const changed = {
+			...initial.snapshot,
+			credentials: [{
+				...original,
+				credential: { ...original.credential, access: "access-new-same-generation" },
+			}],
+		};
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			// Even though the generation did not advance, the new broker row is
+			// genuine progress and must still be installed on the first frame.
+			yield { kind: "snapshot" as const, ...changed };
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await waitUntil(() =>
+			remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
+			remote.snapshot.credentials[0]?.credential.access === "access-new-same-generation",
+		);
+		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+			type: "oauth", access: "access-new-same-generation", refresh: REMOTE_REFRESH_SENTINEL,
+		});
+	});
+
 	test("recovers broker truth when short SSE connections end cleanly before any frame", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
