@@ -980,27 +980,77 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
-		// fd 2 is process-scoped and unframed, so it cannot inherit a request's owner.
-		// Use the inventory/credential guard without capturing whichever producer starts
-		// the long-lived kernel first.
+		// Unframed stderr recovers only at an explicit empty physical record.
+		// Cell completion is not a group boundary, so incomplete groups stay withheld.
 		const guard = new ProducerOutputGuard(
 			text => text,
 			() => 0,
 		);
-		const log = (text: string): void => {
-			const guarded = guard.push(text);
-			if (guarded.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: guarded });
+		const MAX_GROUP_CHARACTERS = 64 * 1024;
+		let group = "";
+		let line = "";
+		let groupOverflow = false;
+		let lineHasCharacters = false;
+		let pendingCR = false;
+		const markOverflow = (): void => {
+			groupOverflow = true;
+			group = "";
+			line = "";
+		};
+		const flushGroup = (): void => {
+			if (groupOverflow) {
+				logger.warn(`${this.#options.languageName} runner stderr`, { text: "[blocked stderr group: size limit]" });
+			} else {
+				const sanitized = guard.sanitize(group);
+				if (sanitized.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: sanitized });
+			}
+			group = "";
+			line = "";
+			lineHasCharacters = false;
+			groupOverflow = false;
+		};
+		const endRecord = (): void => {
+			if (!lineHasCharacters) {
+				flushGroup();
+			} else {
+				if (!groupOverflow) {
+					const addition = `${line}\n`;
+					if (group.length + addition.length > MAX_GROUP_CHARACTERS) markOverflow();
+					else group += addition;
+				}
+				line = "";
+				lineHasCharacters = false;
+			}
+		};
+		const collect = (text: string): void => {
+			for (let index = 0; index < text.length; index++) {
+				const character = text[index]!;
+				if (pendingCR) {
+					pendingCR = false;
+					if (character === "\n") continue;
+				}
+				if (character === "\r") {
+					endRecord();
+					pendingCR = true;
+				} else if (character === "\n") {
+					endRecord();
+				} else {
+					lineHasCharacters = true;
+					if (!groupOverflow) {
+						if (group.length + line.length + 1 > MAX_GROUP_CHARACTERS) markOverflow();
+						else line += character;
+					}
+				}
+			}
 		};
 		const loop = async () => {
 			try {
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-					log(decoder.decode(value, { stream: true }));
+					collect(decoder.decode(value, { stream: true }));
 				}
-				log(decoder.decode());
-				const tail = guard.finish();
-				if (tail.trim()) logger.warn(`${this.#options.languageName} runner stderr`, { text: tail });
+				collect(decoder.decode());
 			} catch {
 				/* ignore */
 			} finally {
