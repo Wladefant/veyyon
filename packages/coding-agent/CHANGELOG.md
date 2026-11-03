@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Agent session forks now restore the original session identity when publishing the new transcript fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
