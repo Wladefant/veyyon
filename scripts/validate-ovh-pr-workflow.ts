@@ -1,8 +1,14 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 interface Step {
+	id?: string;
+	run?: string;
+	shell?: string;
 	name?: string;
 	if?: string;
 	uses?: string;
@@ -11,8 +17,11 @@ interface Step {
 }
 
 interface Job {
+	name?: string;
+	needs?: string | string[];
 	if?: string;
 	"runs-on": string[];
+	outputs?: Record<string, string>;
 	steps: Step[];
 }
 
@@ -46,9 +55,10 @@ function check(name: string, run: () => void): void {
 }
 
 /**
- * Read workflow configuration only. The expressions use boolean operations,
- * equality, and property access with typed fixtures; this is not a general
- * GitHub Actions emulator. No app module, runner, checkout, or shell is started.
+ * Check workflow configuration and expressions with typed fixtures. The cleanup
+ * contract executes the actual YAML shell body using a fake Git and reaper in
+ * an isolated temporary directory, not a runner, checkout, or production job.
+ * This remains a focused contract, not a general GitHub Actions emulator.
  */
 function evaluate(expression: string | undefined, fixture: Record<string, unknown>): unknown {
 	if (typeof expression !== "string") throw new Error("Missing workflow expression");
@@ -60,6 +70,7 @@ const repository = "Wladefant/veyyon";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const mergeCommit = "c".repeat(40);
+const workflowCommit = "d".repeat(40);
 
 function context({
 	event = "pull_request",
@@ -73,6 +84,8 @@ function context({
 	focusedTests = "",
 	workflowChanged = "true",
 	installed = "success",
+	native = false,
+	nativeReady = "false",
 }: {
 	event?: string;
 	draft?: boolean;
@@ -85,12 +98,19 @@ function context({
 	focusedTests?: string;
 	workflowChanged?: string;
 	installed?: string;
+	native?: boolean;
+	nativeReady?: string;
 } = {}): Record<string, unknown> {
 	return {
 		github: {
 			repository,
 			event_name: event,
 			sha: mergeCommit,
+			workflow_sha: workflowCommit,
+			run_id: "12345",
+			run_attempt: "1",
+			ref: "refs/heads/main",
+			workflow: "OVH CI",
 			event:
 				event === "pull_request"
 					? {
@@ -104,13 +124,19 @@ function context({
 		},
 		inputs:
 			event === "workflow_dispatch"
-				? { typecheck, target_sha: target, base_sha: pinnedBase, test_files: focusedTests }
+				? { typecheck, target_sha: target, base_sha: pinnedBase, test_files: focusedTests, native }
 				: {},
 		vars: admission ? { OVH_CI_PR_ADMISSION: admission } : {},
-		needs: { prepare: { result: prepared } },
+		needs: {
+			prepare: {
+				result: prepared,
+				outputs: { native_ready: nativeReady },
+			},
+		},
 		steps: {
 			changed: { outputs: { workflow_changed: workflowChanged } },
 			install: { outcome: installed },
+			native: { outputs: { native_ready: nativeReady } },
 		},
 	};
 }
@@ -171,10 +197,16 @@ function validate(workflow: Workflow): void {
 		equal(eligibleJobs(context({ event: "workflow_dispatch", admission: "", typecheck: true })), ["typecheck"]);
 	});
 
-	check("every job keeps the fixed Veyyon runner boundary", () => {
+	check("every job keeps the Veyyon runner labels and manual label default", () => {
 		for (const job of Object.values(workflow.jobs)) {
-			equal(job["runs-on"], ["self-hosted", "Linux", "X64", "veyyon"]);
+			const runnerLabels = job["runs-on"];
+			equal(runnerLabels.slice(0, 3), ["self-hosted", "Linux", "X64"]);
+			equal(runnerLabels[3], "${{ inputs.runner_label || 'veyyon' }}");
 		}
+		const runnerLabel = workflow.on.workflow_dispatch?.inputs.runner_label as
+			| Record<string, unknown>
+			| undefined;
+		equal(runnerLabel?.default, "veyyon");
 	});
 
 	for (const [name, fixture, expected] of [
@@ -191,6 +223,63 @@ function validate(workflow: Workflow): void {
 			}
 		});
 	}
+
+	check("all cleanup jobs execute the workflow-pinned reaper for an older checked-out SHA", () => {
+		for (const job of Object.values(workflow.jobs)) {
+			const cleanup = job.steps.find(step => step.name === "Clean orphaned processes");
+			equal(cleanup?.shell, "bash");
+			equal(cleanup?.if, "always()");
+			equal(evaluate(cleanup?.env?.WORKFLOW_SHA,
+				context({ event: "workflow_dispatch", target: head })), workflowCommit);
+			if (typeof cleanup?.run !== "string") throw new Error("Cleanup command missing");
+			const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-reaper-"));
+			try {
+				const bin = join(sandbox, "bin");
+				mkdirSync(bin);
+				const git = join(bin, "git");
+				writeFileSync(git, [
+					"#!/bin/sh",
+					'if [ "$1" = "cat-file" ] && [ "$2" = "-e" ]; then',
+					'  printf "cat:%s\\n" "$3" >> "$RUNNER_TEMP/trace"',
+					'  [ "$TEST_MISSING_WORKFLOW_COMMIT" != "1" ] || exit 88',
+					"  exit 0",
+					"fi",
+					'if [ "$1" = "show" ]; then',
+					'  printf "show:%s\\n" "$2" >> "$RUNNER_TEMP/trace"',
+					'  printf \'echo "executed:$1" >> "$RUNNER_TEMP/trace"\\n\'',
+					"  exit 0",
+					"fi",
+					"exit 89",
+				].join("\n") + "\n");
+				chmodSync(git, 0o755);
+				const env = {
+					...process.env,
+					PATH: bin + ":" + process.env.PATH,
+					RUNNER_TEMP: sandbox,
+					WORKFLOW_SHA: workflowCommit,
+				};
+				const run = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env, encoding: "utf8", timeout: 10_000,
+				});
+				equal(run.status, 0);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim().split("\n"), [
+					"cat:" + workflowCommit + "^{commit}",
+					"show:" + workflowCommit + ":scripts/ovh-process-group.sh",
+					"executed:--cleanup",
+				]);
+				writeFileSync(join(sandbox, "trace"), "");
+				const missing = spawnSync("bash", ["-c", cleanup.run], {
+					cwd: sandbox, env: { ...env, TEST_MISSING_WORKFLOW_COMMIT: "1" },
+					encoding: "utf8", timeout: 10_000,
+				});
+				equal(missing.status === 0, false);
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim(),
+					"cat:" + workflowCommit + "^{commit}");
+			} finally {
+				rmSync(sandbox, { recursive: true, force: true });
+			}
+		}
+	});
 
 	check("selection uses the PR event base or explicitly pinned manual base", () => {
 		const selection = workflow.jobs.prepare!.steps.find(step => step.name === "Detect changed paths");
@@ -209,6 +298,88 @@ function validate(workflow: Workflow): void {
 			equal(evaluate(step?.if, fixture), expected);
 		});
 	}
+	check("build in prepare on any nonempty selection", () => {
+		equal(workflow.jobs.prepare.outputs?.native_ready !== undefined, true);
+		equal(evaluate(workflow.jobs.prepare.outputs?.native_ready, context({ nativeReady: "true" })), "true");
+		equal(evaluate(workflow.jobs.prepare.outputs?.native_ready, context({ nativeReady: "false" })), "false");
+		equal(workflow.jobs.prepare.outputs?.rust_changed, undefined);
+
+		const steps = workflow.jobs.prepare.steps;
+		const selectionIndex = steps.findIndex(step => step.id === "selection");
+		const nativeIndex = steps.findIndex(step => step.id === "native");
+		const plannerIndex = steps.findIndex(step => step.id === "planner");
+		equal(nativeIndex > selectionIndex, true);
+		equal(nativeIndex < plannerIndex, true);
+
+		const nativeStep = steps[nativeIndex];
+		equal(nativeStep?.env?.CARGO_BUILD_JOBS, "2");
+		equal(nativeStep?.run?.includes("bun run ci:build:native"), true);
+		equal(nativeStep?.run?.includes("-s \"$RELATED_TESTS\"") || nativeStep?.run?.includes("-s $RELATED_TESTS"), true);
+		equal(nativeStep?.run?.includes("native_ready=true"), true);
+
+		const shardNativeBuild = workflow.jobs.test.steps.find(step => step.run?.includes("ci:build:native"));
+		equal(shardNativeBuild, undefined);
+	});
+
+	check("clear missing-binding failure", () => {
+		const nativeStep = workflow.jobs.prepare.steps.find(step => step.id === "native");
+		equal(nativeStep !== undefined, true);
+		equal(nativeStep?.run?.includes("natives/bridge/bindings/native/veyyon_natives.linux-x64*.node"), true);
+		equal(nativeStep?.run?.includes("::error::"), true);
+		equal(nativeStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+
+		const verifyStep = workflow.jobs.test.steps.find(step =>
+			step.name === "Verify native addon" ||
+			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		);
+		equal(verifyStep !== undefined, true);
+		equal(verifyStep?.run?.includes("::error::"), true);
+		equal(verifyStep?.run?.includes("exit 1"), true);
+		equal(verifyStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+	});
+
+	check("artifact handoff", () => {
+		const uploadStep = workflow.jobs.prepare.steps.find(step =>
+			step.uses?.startsWith("actions/upload-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		equal(uploadStep !== undefined, true);
+		equal(uploadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
+		equal(uploadStep?.with?.path, "natives/bridge/bindings/native/veyyon_natives.linux-x64*.node");
+		equal(uploadStep?.with?.["if-no-files-found"], "error");
+		equal(uploadStep?.with?.["retention-days"], 7);
+		equal(evaluate(uploadStep?.if, context({ nativeReady: "true" })), true);
+		equal(evaluate(uploadStep?.if, context({ nativeReady: "false" })), false);
+
+		const downloadStep = workflow.jobs.test.steps.find(step =>
+			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		equal(downloadStep !== undefined, true);
+		equal(downloadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
+		equal(uploadStep?.with?.name, downloadStep?.with?.name);
+		equal(downloadStep?.with?.path, "natives/bridge/bindings/native");
+		equal(evaluate(downloadStep?.if, context({ nativeReady: "true" })), true);
+		equal(evaluate(downloadStep?.if, context({ nativeReady: "false" })), false);
+	});
+
+	check("shard preflight order", () => {
+		const steps = workflow.jobs.test.steps;
+		const installIndex = steps.findIndex(step => step.id === "install" || step.uses?.includes("bun-install"));
+		const downloadIndex = steps.findIndex(step =>
+			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		const verifyIndex = steps.findIndex(step =>
+			step.name === "Verify native addon" ||
+			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		);
+		const bwrapIndex = steps.findIndex(step => step.id === "bwrap" || step.name === "Prepare bwrap runtime");
+		const testIndex = steps.findIndex(step => step.name === "Run selected tests serially");
+
+		equal(installIndex !== -1, true);
+		equal(downloadIndex > installIndex, true);
+		equal(verifyIndex > downloadIndex, true);
+		equal(bwrapIndex > verifyIndex, true);
+		equal(testIndex > bwrapIndex, true);
+	});
 }
 
 // An optional YAML path supports an old-workflow negative control without

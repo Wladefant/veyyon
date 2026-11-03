@@ -10,17 +10,20 @@ import type { AgentTool } from "@veyyon/agent-core";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import * as utils from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
-import { Settings } from "../src/config/settings";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
 import { submitInteractiveInput } from "../src/main";
+import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 import type { SubmittedUserInput } from "../src/modes/terminal/types";
 import { AgentSession } from "../src/session/agent-session";
 import { OperatorAnswerInbox } from "../src/session/operator-answer-inbox";
+import { initTheme } from "../src/theme/theme";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -103,6 +106,26 @@ function connect(owner: TerminalOwner) {
 	};
 }
 
+async function createInteractiveMode(session: AgentSession, cwd: string): Promise<InteractiveMode> {
+	resetSettingsForTest();
+	cleanup.push(() => {
+		HistoryStorage.resetInstance();
+		resetSettingsForTest();
+	});
+	await Settings.init({ inMemory: true, cwd });
+	await initTheme();
+	spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
+	if (typeof process.stdin.setRawMode === "function") {
+		spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
+	}
+	const mode = new InteractiveMode(session, "test");
+	// The test owns no terminal. Keep the submission lifecycle and composer real.
+	spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+	mode.isInitialized = true;
+	cleanup.push(() => mode.stop());
+	return mode;
+}
+
 describe("telegram delivery tracing end-to-end", () => {
 	it("traces all 5 delivery stages with fake provider and no prompt text leaked", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-test-root-"));
@@ -125,12 +148,20 @@ describe("telegram delivery tracing end-to-end", () => {
 			],
 		});
 		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		cleanup.push(() => auth.close());
 		auth.setRuntimeApiKey("mock", "test-key");
 		const registry = new ModelRegistry(auth, path.join(tempDir, "models.yml"));
 		const store = SessionManager.create(tempDir, tempDir);
+		const providerCalls: Array<{ records: Array<Record<string, unknown>>; request: string }> = [];
 		const agent = new Agent({
 			initialState: { model: mock.model, systemPrompt: ["Test prompt"], tools: [], messages: [] },
-			streamFn: mock.stream,
+			streamFn: (model, context, options) => {
+				providerCalls.push({
+					records: loggedTraces.map(record => ({ ...record.context })),
+					request: JSON.stringify(context.messages),
+				});
+				return mock.stream(model, context, options);
+			},
 			sessionId: "fake-provider-session-id",
 		});
 
@@ -141,45 +172,11 @@ describe("telegram delivery tracing end-to-end", () => {
 			modelRegistry: registry,
 			providerSessionId: "fake-provider-session-id",
 		});
+		cleanup.push(() => session.dispose());
 
-		let pendingInputCallback: ((input: SubmittedUserInput) => void) | undefined;
+		const mode = await createInteractiveMode(session, tempDir);
 
-		const mockMode = {
-			sessionManager: store,
-			session,
-			isShuttingDown: false,
-			isInitialized: true,
-			get onInputCallback() {
-				return pendingInputCallback;
-			},
-			set onInputCallback(cb: ((input: SubmittedUserInput) => void) | undefined) {
-				pendingInputCallback = cb;
-			},
-			startPendingSubmission(input: {
-				text: string;
-				streamingBehavior?: "steer" | "followUp";
-				telegramTrace?: utils.TelegramDeliveryTraceData;
-			}): SubmittedUserInput {
-				return {
-					text: input.text,
-					streamingBehavior: input.streamingBehavior,
-					telegramTrace: input.telegramTrace,
-					cancelled: false,
-					started: false,
-				};
-			},
-			markPendingSubmissionStarted(input: SubmittedUserInput): boolean {
-				input.started = true;
-				return true;
-			},
-			finishPendingSubmission(): void {},
-			showError(): void {},
-			checkShutdownRequested(): boolean {
-				return false;
-			},
-		};
-
-		const serverClose = await startTerminalControl(mockMode as never);
+		const serverClose = await startTerminalControl(mode);
 		cleanup.push(serverClose);
 
 		const owner = await readOwner(tempDir);
@@ -187,8 +184,8 @@ describe("telegram delivery tracing end-to-end", () => {
 
 		// Wire input callback to trigger submitInteractiveInput
 		let submissionSettled: Promise<void> | undefined;
-		mockMode.onInputCallback = (input: SubmittedUserInput) => {
-			submissionSettled = submitInteractiveInput(mockMode as never, session, input);
+		mode.onInputCallback = (input: SubmittedUserInput) => {
+			submissionSettled = submitInteractiveInput(mode, session, input);
 		};
 
 		const SECRET_PROMPT_TEXT = "super-secret-user-prompt-12345";
@@ -242,6 +239,11 @@ describe("telegram delivery tracing end-to-end", () => {
 		const stages = loggedTraces.map(t => t.context.stage);
 		const acceptanceIdx = stages.indexOf("session_acceptance");
 		const deliveryStartIdx = stages.indexOf("terminal_delivery_start");
+		expect(providerCalls).toHaveLength(1);
+		expect(providerCalls[0]!.request).toContain(SECRET_PROMPT_TEXT);
+		expect(providerCalls[0]!.records.filter(record => record.stage === "provider_call_start")).toEqual([
+			expect.objectContaining({ traceId: "-1001999888:9001:42", sessionId: store.getSessionId() }),
+		]);
 		const consumptionIdx = stages.indexOf("turn_consumption");
 		const providerStartIdx = stages.indexOf("provider_call_start");
 		const deliveryOutcomeIdx = stages.indexOf("delivery_outcome");
@@ -327,6 +329,7 @@ describe("telegram delivery tracing end-to-end", () => {
 		} as unknown as AgentTool;
 
 		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		cleanup.push(() => auth.close());
 		auth.setRuntimeApiKey("mock", "test-key");
 		const registry = new ModelRegistry(auth, path.join(tempDir, "models.yml"));
 		const store = SessionManager.create(tempDir, tempDir);
@@ -351,9 +354,21 @@ describe("telegram delivery tracing end-to-end", () => {
 			],
 		});
 
+		const providerCalls: Array<{ traceIds: unknown[]; request: string }> = [];
+		let capturedRecords = 0;
 		const agent = new Agent({
 			initialState: { model: mock.model, systemPrompt: ["Test prompt"], tools: [probeTool], messages: [] },
-			streamFn: mock.stream,
+			streamFn: (model, context, options) => {
+				providerCalls.push({
+					traceIds: loggedTraces
+						.slice(capturedRecords)
+						.filter(record => record.context.stage === "provider_call_start")
+						.map(record => record.context.traceId),
+					request: JSON.stringify(context.messages),
+				});
+				capturedRecords = loggedTraces.length;
+				return mock.stream(model, context, options);
+			},
 		});
 		const session = new AgentSession({
 			agent,
@@ -363,28 +378,11 @@ describe("telegram delivery tracing end-to-end", () => {
 			toolRegistry: new Map([["probe", probeTool as never]]),
 			providerSessionId: "fake-provider-turn-session-id",
 		});
+		cleanup.push(() => session.dispose());
 
-		const mockMode = {
-			sessionManager: store,
-			session,
-			isShuttingDown: false,
-			isInitialized: true,
-			startPendingSubmission(input: {
-				text: string;
-				streamingBehavior?: "steer" | "followUp";
-				telegramTrace?: utils.TelegramDeliveryTraceData;
-			}): SubmittedUserInput {
-				return {
-					text: input.text,
-					streamingBehavior: input.streamingBehavior,
-					telegramTrace: input.telegramTrace,
-					cancelled: false,
-					started: false,
-				};
-			},
-		};
+		const mode = await createInteractiveMode(session, tempDir);
 
-		const serverClose = await startTerminalControl(mockMode as never);
+		const serverClose = await startTerminalControl(mode);
 		cleanup.push(serverClose);
 
 		const owner = await readOwner(tempDir);
@@ -494,15 +492,14 @@ describe("telegram delivery tracing end-to-end", () => {
 		expect(followUpStages.indexOf("provider_call_start")).toBeGreaterThan(followUpStages.indexOf("turn_consumption"));
 		expect(followUpStages).toContain("delivery_outcome");
 
-		// Exact-turn attribution: steer was consumed during turn 1, followUp was consumed during turn 2
-		const steerConsumptionIdx = loggedTraces.findIndex(
-			t => t.context.traceId === "-100222333:7001:101" && t.context.stage === "turn_consumption",
-		);
-		const followUpConsumptionIdx = loggedTraces.findIndex(
-			t => t.context.traceId === "-100222333:7002:102" && t.context.stage === "turn_consumption",
-		);
-		expect(steerConsumptionIdx).toBeGreaterThanOrEqual(0);
-		expect(followUpConsumptionIdx).toBeGreaterThan(steerConsumptionIdx);
+		// Each provider invocation gets only the newly consumed trace for that call.
+		expect(providerCalls.map(call => call.traceIds)).toEqual([[], ["-100222333:7001:101"], ["-100222333:7002:102"]]);
+		expect(providerCalls[0]!.request).toContain("Initial task");
+		expect(providerCalls[0]!.request).not.toContain("Steer now");
+		expect(providerCalls[0]!.request).not.toContain("Follow up next");
+		expect(providerCalls[1]!.request).toContain("Steer now");
+		expect(providerCalls[1]!.request).not.toContain("Follow up next");
+		expect(providerCalls[2]!.request).toContain("Follow up next");
 		for (const record of [...steerRecords, ...followUpRecords]) {
 			expect(record.context.sessionId).toBe(store.getSessionId());
 		}
