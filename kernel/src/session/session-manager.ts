@@ -2277,6 +2277,20 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;
+		// Agents may inherit the parent's ArtifactManager and numeric IDs while
+		// persisting their JSONL beneath that parent's artifact tree. Copying the
+		// JSONL-derived child sidecar would then bind inherited artifact://N to
+		// unrelated same-ID bytes, even if every source/destination hash matches.
+		// Fail before reserving any destination until shared-parent provenance has
+		// an explicit, safely scoped copy contract. Never recurse into the parent.
+		const sessionArtifactDir = artifactsDirectoryFor(oldSessionFile);
+		const effectiveArtifactDir = this.getArtifactsDir();
+		if (
+			!sessionArtifactDir || !effectiveArtifactDir ||
+			path.resolve(effectiveArtifactDir) !== path.resolve(sessionArtifactDir)
+		) {
+			throw new Error("Cannot fork session: adopted artifact scope differs from session sidecar");
+		}
 		// A direct caller may retry fork without an AgentSession-level flush.
 		// Repair its still-active original JSONL before leaving that file behind.
 		if (this.#abortedForkLifecycleIdsByFile.has(oldSessionFile)) await this.flush();
