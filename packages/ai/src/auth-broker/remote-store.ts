@@ -93,6 +93,20 @@ function credentialBlockSnapshotsEqual(
 	return true;
 }
 
+/**
+ * Only durable broker state can reset the SSE idle reconciliation deadline.
+ * These time-relative countdowns change on every server snapshot even with
+ * identical generation, grants, safety blocks, and refresh policy. Keep their
+ * original values in the stored snapshot; exclude them only from progress tests.
+ */
+function credentialSseProgressState(entry: SnapshotEntry): SnapshotEntry {
+	return { ...entry, rotatesInMs: null };
+}
+
+function refresherSseProgressState(schedule: RefresherSchedule): RefresherSchedule {
+	return { ...schedule, nextSweepInMs: 0 };
+}
+
 function snapshotBlocksChanged(previous: readonly SnapshotEntry[], next: readonly SnapshotEntry[]): boolean {
 	const previousBlocksById = new Map<number, readonly CredentialBlockSnapshot[] | undefined>();
 	for (const entry of previous) previousBlocksById.set(entry.id, entry.blocks);
@@ -590,14 +604,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 						// Permuting unchanged rows cannot defer the canonical GET watchdog.
 						snapshot.credentials
 							.map(entry =>
-								this.#retainPendingCredentialBlocks(
+								credentialSseProgressState(this.#retainPendingCredentialBlocks(
 									normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
-								),
+								)),
 							)
 							.sort((a, b) => a.id - b.id),
-						[...this.#snapshot.credentials].sort((a, b) => a.id - b.id),
+						this.#snapshot.credentials.map(credentialSseProgressState).sort((a, b) => a.id - b.id),
 					) &&
-					isDeepStrictEqual(snapshot.refresher, this.#snapshot.refresher)
+					isDeepStrictEqual(refresherSseProgressState(snapshot.refresher), refresherSseProgressState(this.#snapshot.refresher))
 				) return;
 				this.#applySnapshot(snapshot, snapshot.generation);
 				return;
@@ -611,8 +625,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (
 					event.generation === this.#generation &&
 					current &&
-					isDeepStrictEqual(current, effectiveIncoming) &&
-					isDeepStrictEqual(event.refresher, this.#snapshot.refresher)
+					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(effectiveIncoming)) &&
+					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
 				) return;
 				this.#applyStreamEntry(event.entry, event.refresher, event.generation, event.serverNowMs);
 				return;
@@ -622,7 +636,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (
 					event.generation === this.#generation &&
 					!this.#snapshot.credentials.some(entry => entry.id === event.id) &&
-					isDeepStrictEqual(event.refresher, this.#snapshot.refresher)
+					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
 				) return;
 				this.#removeStreamCredential(event.id, event.refresher, event.generation, event.serverNowMs);
 				return;
