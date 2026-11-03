@@ -80,7 +80,6 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 			kernels.length = 0;
 			expect(await readLogDirectory(logs)).not.toContain("fresh kernel incomplete safe tail");
 
-
 			const blockedTailKernel = await PythonKernel.start({
 				cwd: tempDir.path(),
 				sessionId: `kernel-stderr-inventory:${crypto.randomUUID()}`,
