@@ -163,7 +163,6 @@ describe("real EvalTool output stays redacted under its registered producer owne
 			update => progress.push(update),
 		);
 		const details = result.details as EvalToolDetails;
-		const output = details.cells?.[0]?.output ?? "";
 		const content = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
 		const callbackOutputs = progress.map(
 			update => (update.details as EvalToolDetails | undefined)?.cells?.[0]?.output ?? "",
