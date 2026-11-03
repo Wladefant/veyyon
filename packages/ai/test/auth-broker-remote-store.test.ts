@@ -269,6 +269,72 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+	test("pending local safety blocks do not make unchanged SSE replays fresh", async () => {
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		storage!.upsertCredential("anthropic", mintOAuthCredential("pending-replay", Date.now() + 120_000));
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		expect(initial.snapshot.credentials).toHaveLength(2);
+		const blockedId = initial.snapshot.credentials[0]!.id;
+		const revokedId = initial.snapshot.credentials[1]!.id;
+		const oldEntry = initial.snapshot.credentials[0]!;
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const connected = Promise.withResolvers<void>();
+		let replayedFrames = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			connected.resolve();
+			while (!opts.signal?.aborted) {
+				// Neither replay includes the speculative local block. Both are
+				// unchanged broker state, even while the POST is held in flight.
+				yield {
+					kind: "entry" as const, generation: initial.snapshot.generation,
+					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					entry: oldEntry,
+				};
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				replayedFrames += 2;
+				await Bun.sleep(5);
+			}
+		});
+		const pendingStarted = Promise.withResolvers<void>();
+		const pendingReply = Promise.withResolvers<{ ok: boolean }>();
+		spyOn(client, "upsertCredentialBlock").mockImplementation(async () => {
+			pendingStarted.resolve();
+			return pendingReply.promise;
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+		});
+		await connected.promise;
+		const blockedUntilMs = Date.now() + 120_000;
+		remote.upsertCredentialBlock({
+			credentialId: blockedId, providerKey: "anthropic", blockScope: "credential",
+			blockedUntilMs, updatedAtMs: Date.now(),
+		});
+		await pendingStarted.promise;
+		try {
+			await waitUntil(() => replayedFrames >= 10);
+			expect(remote.getCredentialBlock(blockedId, "anthropic", "credential")).toBe(blockedUntilMs);
+			expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke behind held block replay")).toBe(true);
+			// Only the production watchdog can discover the canonical revocation.
+			// A repeated frame must not mask it or release the pending safety block.
+			await waitUntil(() =>
+				remote!.snapshot.credentials.length === 1 &&
+				remote.snapshot.credentials[0]?.id === blockedId,
+			);
+			expect(remote.getCredentialBlock(blockedId, "anthropic", "credential")).toBe(blockedUntilMs);
+			const canonical = await peer.fetchSnapshot();
+			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(canonical.snapshot.credentials.map(entry => entry.id)).toEqual([blockedId]);
+		} finally {
+			// Never strand a held synthetic mutation if an assertion fails.
+			pendingReply.resolve({ ok: false });
+		}
+	});
+
+
 	test("permuted no-progress full SSE snapshots cannot postpone broker revocation", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		// Both rows are genuine synthetic broker credentials. A full snapshot's
