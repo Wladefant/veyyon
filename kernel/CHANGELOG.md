@@ -7,6 +7,13 @@
 ### Fixed
 
 - Terminal ownership checks can ignore unreadable or malformed publisher records. The filename PID must be dead, or its derived endpoint must be absent. Live or uncertain claims still fail closed ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- External-turn reconciliation preserves the selected branch and accepts only completed descendant runs with settled tool calls ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- Warm session refresh reports unfinished external message extensions instead of admitting a conflicting local turn ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
 
 ## [1.7.5] - 2026-11-02
 
