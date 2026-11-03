@@ -464,8 +464,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// polls would then return 304 forever. Reuse the idle verifier's
 		// monotonic deadline to periodically fetch canonical broker truth,
 		// while preserving ordinary 30s conditional long-polls between checks.
+		const pollStartedAt = performance.now();
 		const needsCanonicalVerification =
-			performance.now() - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs;
+			pollStartedAt - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs;
 		const result = await this.#client.fetchSnapshot(
 			needsCanonicalVerification
 				? { signal: this.#backgroundAbort.signal }
@@ -475,7 +476,22 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 						signal: this.#backgroundAbort.signal,
 					},
 		);
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+		if (result.status === 200) {
+			this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+			return;
+		}
+		if (needsCanonicalVerification) {
+			// An unconditional read must return broker truth; a 304 cannot establish freshness.
+			throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
+		}
+		// A faulty proxy may return 304 immediately instead of holding the requested
+		// long-poll. Pace only the unused wait window, capped by the existing
+		// monotonic canonical-GET deadline, so stale state is never kept longer.
+		const remainingPollMs = BACKGROUND_WAIT_MS - (performance.now() - pollStartedAt);
+		const remainingVerifyMs =
+			this.#snapshotStreamVerifyIntervalMs - (performance.now() - this.#snapshotReceivedMonotonicAt);
+		const paceMs = Math.min(remainingPollMs, remainingVerifyMs);
+		if (paceMs > 0) await scheduler.wait(paceMs, { signal: this.#backgroundAbort.signal });
 	}
 
 	/**
