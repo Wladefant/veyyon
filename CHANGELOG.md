@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- ACP clients receive each completed external turn once before the next prompt, replay string-content messages, and return cancellation while a disk refresh is pending without starting provider work ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- ACP external-turn reconciliation preserves cancelled or failed history delivery, excludes imported usage from prompt totals, and refreshes todo and display projections ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- ACP rejects unfinished external turns, excludes imported usage during cancelled replay, and acknowledges imported history after a successful full load ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- External-turn reconciliation preserves the selected branch and accepts only completed descendant runs with settled tool calls ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- Warm session refresh reports unfinished external message extensions instead of admitting a conflicting local turn ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+
+## [1.7.7] - 2026-11-02
+
+## [1.7.6] - 2026-11-02
+
+### Fixed
+
+- ACP `session/load` finds a stored session by ID after a cwd change, restores its transcript cwd, and rejects a later load from a mismatched cwd ([Refs Wladefant/superboard#1999](https://github.com/Wladefant/superboard/issues/1999)).
+
+## [1.7.5] - 2026-11-02
+
+### Changed
+
+- Terminal ownership failures name the record, verification step, original error code and message, elapsed time, and Windows ACL command deadline. Ownership checks still fail closed without retries ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
+### Fixed
+
+- Terminal writer ownership failures now report the owner record path, the failed verification step, the original error code and message, the elapsed time and the 15 s ACL deadline (#892, Refs #849).
+
+## [1.7.4] - 2026-11-02
+
+### Fixed
+
+- IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
