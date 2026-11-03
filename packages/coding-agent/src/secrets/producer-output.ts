@@ -38,10 +38,14 @@ const REGEX_LITERAL = /\/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\[])+\/[dgimsuvy]*/y;
 const REGEX_VALUE_START = ":,[{>";
 
 /** Characters after `start` that a RegExp literal opening there covers, or 0. */
-function regexLiteralLength(line: string, start: number): number {
+function regexLiteralLength(line: string, start: number, depth: number): number {
 	let previous = start - 1;
 	while (previous >= 0 && (line[previous] === " " || line[previous] === "\t")) previous--;
-	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous])) return 0;
+	// Console arguments have a space between them; a completed top-level container
+	// can precede a RegExp argument, unlike a nested container or a division operand.
+	const consoleArgument =
+		depth === 0 && previous < start - 1 && (line[previous] === "}" || line[previous] === "]");
+	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous]) && !consoleArgument) return 0;
 	REGEX_LITERAL.lastIndex = start;
 	const match = REGEX_LITERAL.exec(line);
 	return match ? match[0].length - 1 : 0;
@@ -86,6 +90,15 @@ export class ProducerOutputGuard {
 		} catch {
 			return BLOCKED_OUTPUT_RECORD;
 		}
+	}
+
+	/** Validate a separate, complete payload without reopening this producer stream. */
+	sanitizeComplete(text: string): string {
+		const guard = new ProducerOutputGuard(
+			value => this.#redact?.(value) ?? value,
+			value => this.#pendingPrefixLength?.(value) ?? 0,
+		);
+		return guard.push(text) + guard.finish();
 	}
 
 	#block(): string {
@@ -146,7 +159,7 @@ export class ProducerOutputGuard {
 					} else if (character === '"' || character === "'") {
 						this.#quote = character;
 					} else if (character === "/") {
-						index += regexLiteralLength(line, index);
+						index += regexLiteralLength(line, index, this.#depth);
 					} else if (character === "{" || character === "[") {
 						this.#depth++;
 					} else if (character === "}" || character === "]") {

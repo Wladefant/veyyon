@@ -561,18 +561,30 @@ describe("executeJs", () => {
 		expect(result.output).not.toContain("ALPHA");
 		expect(result.output).not.toContain("BETA");
 	});
-	it("keeps a thrown error's message after an incomplete structured inventory", async () => {
-		const result = await executeJs(
-			[
-				'console.log(\'inventory status\\n{\\n  "ALPHA": "neutral-one",\\n  "BETA": "neutral-two"\');',
-				'throw new Error("synthetic eval failure");',
-			].join("\n"),
-			{ sessionId, session, sessionFile },
-		);
+	it("keeps a thrown error's explanation without leaking unfinished credential values", async () => {
+		const message = 'eval failure\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"';
+		const callbacks: string[] = [];
+		const result = await executeJs(`throw new Error(${JSON.stringify(message)});`, {
+			sessionId,
+			session,
+			sessionFile,
+			onChunk: chunk => callbacks.push(chunk),
+		});
 		expect(result.exitCode).toBe(1);
-		expect(result.output).toContain("synthetic eval failure");
-		expect(result.output).not.toContain("ALPHA");
-		expect(result.output).not.toContain("BETA");
+		expect(result.output).toContain("eval failure");
+		expect(callbacks.join("")).toContain("eval failure");
+		for (const value of ["fake-a", "fake-b"]) {
+			expect(result.output).not.toContain(value);
+			expect(callbacks.join("")).not.toContain(value);
+		}
+	});
+	it.each([
+		['console.log({ count: 1 }, /\\{/);', "{ count: 1 } /\\{/"],
+		['console.log([{ count: 1 }, /\\{/]);', "[ { count: 1 }, /\\{/ ]"],
+	])("prints RegExp after a completed object or array: %s", async (code, expected) => {
+		const result = await executeJs(`${code}\nconsole.log("done");`, { sessionId, session, sessionFile });
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(`${expected}\ndone\n`);
 	});
 	it("prints a complete object holding a RegExp and the text after it", async () => {
 		const result = await executeJs('console.log({ pattern: /\\{/ });\nconsole.log("done");', {

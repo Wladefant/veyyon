@@ -189,5 +189,61 @@ test("host text after an unfinished inventory reaches every sink while the inven
 test("host text carrying a credential record is still withheld", async () => {
 	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
 	sink.pushHostText("Error: API_KEY=fake-credential-123\n");
-	expect((await sink.dump()).output).toBe(BLOCKED_OUTPUT_RECORD);
+	expect((await sink.dump()).output).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+});
+
+test.each([
+	["ordinary diagnostic", "eval failure: worker exited\n", "eval failure: worker exited\n"],
+	["complete two-key map", 'eval failure\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"\n}\n', "eval failure\n{\n  \"ALPHA\": \"fake-a\",\n  \"BETA\": \"fake-b\"\n}\n"],
+])("pushHostText preserves %s", async (_name, input, expected) => {
+	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+	sink.pushHostText(input);
+	expect((await sink.dump()).output).toBe(expected);
+});
+
+test("pushHostText keeps captured secret-owner redaction independent of producer finalization", async () => {
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-owned-value", origin: "environment" }]);
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
+	const sink = new OutputSink({ outputGuard: guard });
+	sink.push('unfinished status\n{\n  "ALPHA": "fake-a"');
+	sink.pushHostText("eval failure: fake-owned-value\n");
+	const result = await sink.dump();
+	expect(result.output).toContain("eval failure:");
+	expect(result.output).toContain(secrets.obfuscate("fake-owned-value"));
+	expect(result.output).not.toContain("fake-owned-value");
+	expect(result.output).not.toContain("fake-a");
+});
+
+test.each([
+	["unfinished two-key map", '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"'],
+	["unfinished array", '[\n  { "ALPHA": "fake-a" },\n  { "BETA": "fake-b" }'],
+])("pushHostText with %s preserves diagnostics but withholds values in inline and spill output", async (_label, record) => {
+	for (const spill of [false, true]) {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-host-error-"));
+		directories.push(directory);
+		const artifactPath = path.join(directory, "output.txt");
+		const live: string[] = [];
+		const diagnostic = `eval failure\n${record}`;
+		const sink = new OutputSink({
+			outputGuard: new ProducerOutputGuard(),
+			...(spill ? { artifactPath, artifactId: "fake-host-error", spillThreshold: 1 } : {}),
+			onChunk: chunk => live.push(chunk),
+		});
+		sink.pushHostText(diagnostic);
+		const result = await sink.dumpWithArtifactStatus();
+		const inline = live.join("");
+		expect(inline).toContain("eval failure");
+		if (!spill) expect(result.output).toContain("eval failure");
+		else expect(result.output).not.toContain("eval failure");
+		for (const value of ["fake-a", "fake-b"]) {
+			expect(inline).not.toContain(value);
+			expect(result.output).not.toContain(value);
+		}
+		if (spill) {
+			const artifact = await fs.readFile(artifactPath, "utf8");
+			expect(artifact).toContain("eval failure");
+			expect(artifact).not.toContain("fake-a");
+			expect(artifact).not.toContain("fake-b");
+		}
+	}
 });

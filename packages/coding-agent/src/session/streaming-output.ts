@@ -941,15 +941,15 @@ export class OutputSink {
 	}
 
 	/**
-	 * Append host-authored text, such as a timeout or failure explanation, after the
-	 * producer's bytes. The producer stream is finalized first, so an unfinished record
-	 * it withholds cannot absorb the explanation; the text is still filtered as a whole.
+	 * Append host explanations after finalizing the producer stream, so a withheld
+	 * unfinished record cannot absorb them. Validate the separate payload structurally:
+	 * exception and PTY explanations can still contain producer-controlled text.
 	 */
 	pushHostText(text: string): void {
 		if (this.#outputGuard) {
 			const tail = this.#outputGuard.finish();
 			this.#pushFiltered(tail && !tail.endsWith("\n") ? `${tail}\n` : tail);
-			text = this.#outputGuard.sanitize(text);
+			text = this.#outputGuard.sanitizeComplete(text);
 		}
 		this.#pushFiltered(text);
 	}
