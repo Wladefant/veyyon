@@ -366,9 +366,11 @@ describe("BashTool ACP terminal routing", () => {
 			kill: async () => { killed++; },
 			release: async () => { released++; },
 		};
+		let createStartedAt = 0;
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
 			createTerminal: async () => {
+				createStartedAt = Date.now();
 				const ready = Promise.withResolvers<ClientBridgeTerminalHandle>();
 				setTimeout(() => ready.resolve(handle), 600);
 				return ready.promise;
@@ -378,7 +380,6 @@ describe("BashTool ACP terminal routing", () => {
 		// Fake time advances setTimeout/Date. The production clock stays
 		// monotonic; this narrowly makes it advance in lockstep for the test.
 		vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-		const began = Date.now();
 		const tool = new BashTool(makeSession(bridge));
 		const failure = await driveFakeTime(
 			tool.execute("combined-budget", { command: "echo never", timeout: 1 }),
@@ -388,8 +389,8 @@ describe("BashTool ACP terminal routing", () => {
 		);
 		expect(failure).toBeInstanceOf(Error);
 		expect((failure as Error).message).toContain("Command timed out after 1 seconds");
-		expect(Date.now() - began).toBeGreaterThanOrEqual(1_000);
-		expect(Date.now() - began).toBeLessThan(1_150);
+		expect(Date.now() - createStartedAt).toBeGreaterThanOrEqual(1_000);
+		expect(Date.now() - createStartedAt).toBeLessThan(1_150);
 		expect(killed).toBe(1);
 		expect(released).toBe(1);
 		exit.resolve({ exitCode: null, signal: "TERM" });
