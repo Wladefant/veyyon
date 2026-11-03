@@ -307,8 +307,10 @@ describe("Windows owner-only discovery path policy", () => {
 			},
 		};
 		const checked: string[] = [];
+		const steps: string[] = [];
 		const options = {
 			platform: "win32" as const,
+			onStep: (step: string) => steps.push(step),
 			windowsAcl: {
 				run: async (_script: string, checkedPath: string) => {
 					checked.push(checkedPath);
@@ -325,6 +327,7 @@ describe("Windows owner-only discovery path policy", () => {
 
 		await expect(readOwnerOnlyFile(file, options)).resolves.toBe('{"version":1}');
 		expect(checked).toEqual([dir, file]);
+		expect(steps).toEqual(["path", "ACL #1 (parent)", "lstat", "open", "stat", "ACL #2 (record)", "identity", "read"]);
 		checked.length = 0;
 		expect(readOwnerOnlyFileSync(file, options)).toBe('{"version":1}');
 		expect(checked).toEqual([dir, file]);
