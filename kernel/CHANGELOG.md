@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Historical session forks refuse an explicitly named destination reached through a symlinked or junctioned parent inside the original artifact tree, before reserving any copied evidence ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Named session forks refuse destinations nested inside their source artifact directory before reserving a copied sidecar, preserving the original evidence tree ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks refuse detected parent-directory identity substitutions during artifact verification, including same-content symlinked nested evidence, before publishing a fork ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks pin a verified file descriptor for artifact hashing, using no-follow/nonblocking opens where supported and refusing substituted or nonregular evidence before publishing a fork ([#774](https://github.com/Wladefant/veyyon/issues/774)).
