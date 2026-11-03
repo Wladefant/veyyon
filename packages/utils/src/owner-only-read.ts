@@ -50,6 +50,8 @@ export interface OwnerOnlyReadOptions {
 	platform?: NodeJS.Platform;
 	/** Forwarded to the Windows ACL check. `run` and `runSync` keep that check hermetic in tests. */
 	windowsAcl?: WindowsAclOptions;
+	/** Reports the current verification step without changing the checks or their errors. */
+	onStep?: (step: string) => void;
 }
 
 function refuse(filePath: string, reason: string): Error {
@@ -131,28 +133,39 @@ function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): 
  */
 export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyReadOptions = {}): Promise<string> {
 	const platform = options.platform ?? process.platform;
+	options.onStep?.("path");
 	if (platform === "win32") assertWindowsFilePath(filePath);
+	options.onStep?.(platform === "win32" ? "ACL #1 (parent)" : "parent");
 	await checkParent(filePath, platform, options);
 	if (platform === "win32") {
 		// A symbolic link is refused before it is opened, so the open never follows one.
+		options.onStep?.("lstat");
 		if ((await fsp.lstat(filePath)).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");
+		options.onStep?.("open");
 		const handle = await fsp.open(filePath, "r");
 		try {
+			options.onStep?.("stat");
 			const opened = await handle.stat();
 			assertRecordStats(filePath, opened, platform);
+			options.onStep?.("ACL #2 (record)");
 			await verifyOwnerOnlyWindowsAcl(filePath, { ...options.windowsAcl, platform });
+			options.onStep?.("identity");
 			assertSameFile(filePath, await fsp.lstat(filePath), opened);
+			options.onStep?.("read");
 			return await handle.readFile({ encoding: "utf8" });
 		} finally {
 			await handle.close();
 		}
 	}
 	// O_NOFOLLOW reports a symlink as ELOOP; name that refusal instead of the raw errno.
+	options.onStep?.("open");
 	const handle = await fsp.open(filePath, POSIX_READ_FLAGS).catch(error => {
 		throw isFsError(error) && error.code === "ELOOP" ? refuse(filePath, "is a symbolic link") : error;
 	});
 	try {
+		options.onStep?.("stat");
 		assertRecordStats(filePath, await handle.stat(), platform);
+		options.onStep?.("read");
 		return await handle.readFile({ encoding: "utf8" });
 	} finally {
 		await handle.close();
