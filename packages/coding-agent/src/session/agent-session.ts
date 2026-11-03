@@ -108,7 +108,11 @@ import {
 	contextCompaction,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, type NewSessionOptions } from "@veyyon/kernel/session/session-entries";
+import {
+	EPHEMERAL_MODEL_CHANGE_ROLE,
+	type NewSessionOptions,
+	type SessionEntry,
+} from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -8087,6 +8091,37 @@ export class AgentSession {
 		const sessionFile = this.sessionFile;
 		if (!sessionFile) return;
 		await this.switchSession(sessionFile);
+	}
+
+	/**
+	 * Adopt a finished turn from another writer into an idle session and return
+	 * the ids of the adopted entries. The Agent's steering and follow-up queues
+	 * stay untouched; the agent context, the checkpoint branch and the todo board
+	 * are rebuilt from the adopted branch. Hosts that report history to a client
+	 * call this before a prompt; the prompt itself never reads the disk.
+	 */
+	async refreshExternalTurn(): Promise<readonly string[]> {
+		if (this.isStreaming) return [];
+		const adopted = await this.sessionManager.refreshExternalTurn();
+		if (adopted.length === 0) return adopted;
+		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
+		this.#todo.syncFromBranch();
+		return adopted;
+	}
+
+	/**
+	 * The messages a client shows for one persisted entry, through the same
+	 * secret-withholding and argot-expansion path as {@link buildDisplaySessionContext}.
+	 * A custom message the transcript marks as hidden yields nothing.
+	 */
+	buildDisplayMessagesForEntry(entry: SessionEntry): AgentMessage[] {
+		const context = this.#expandArgot(
+			this.#secrets.deobfuscateSessionContextForDisplay(
+				this.sessionManager.buildEntryContext(entry, { activeProvider: this.model?.provider }),
+			),
+		);
+		return context.messages.filter(message => message.role !== "custom" || message.display);
 	}
 
 	/**

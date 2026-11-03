@@ -19,6 +19,13 @@
 - Fork artifact copying now refuses symbolic links and other unsafe entries anywhere in the source or copied tree before a new session is published ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks reject referenced local artifact copies whose contents differ from their source, including same-byte-length corruption, before publishing a new session ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - `SessionManager.fork()` and `forkFrom()` verify inherited local recovery artifacts and copy them before publishing a new session, refuse missing or nonregular evidence, keep later artifact IDs distinct, and preserve explicit foreign-session links without local lookup ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- External-turn reconciliation preserves the selected branch and accepts only completed descendant runs with settled tool calls ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- Warm session refresh reports unfinished external message extensions instead of admitting a conflicting local turn ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
 
 ## [1.7.5] - 2026-11-02
 
