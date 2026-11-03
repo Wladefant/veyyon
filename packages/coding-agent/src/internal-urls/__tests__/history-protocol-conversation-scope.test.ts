@@ -49,16 +49,24 @@ function liveRoot(id: string, scope: string): void {
 }
 
 describe("history:// across conversations", () => {
-
 	/** A transcript filename is the public agent ID used for disk fallback. */
-	async function archive(root: string, folder: string, id: string, sessionId: string, message: string): Promise<string> {
+	async function archive(
+		root: string,
+		folder: string,
+		id: string,
+		sessionId: string,
+		message: string,
+	): Promise<string> {
 		const dir = path.join(root, folder);
 		await fs.mkdir(dir, { recursive: true });
 		const file = path.join(dir, id + ".jsonl");
-		await fs.writeFile(file, [
-			JSON.stringify({ type: "session", id: sessionId }),
-			JSON.stringify({ type: "message", id: "entry", parentId: null, message }),
-		].join("\n") + "\n");
+		await fs.writeFile(
+			file,
+			[
+				JSON.stringify({ type: "session", id: sessionId }),
+				JSON.stringify({ type: "message", id: "entry", parentId: null, message }),
+			].join("\n") + "\n",
+		);
 		return file;
 	}
 
@@ -73,10 +81,12 @@ describe("history:// across conversations", () => {
 			expect([...files.keys()].filter(id => id.toLowerCase() === "reviewer")).toEqual([]);
 			expect([...(await ambiguousSessionFileIds())].some(id => id.toLowerCase() === "reviewer")).toBe(true);
 			const handler = new HistoryProtocolHandler();
-			await expect(handler.resolve(new URL("history://Reviewer?entry=entry") as never))
-				.rejects.toThrow(/Ambiguous agent/i);
-			await expect(handler.resolve(new URL("history://reviewer?entry=entry") as never))
-				.rejects.toThrow(/Ambiguous agent/i);
+			await expect(handler.resolve(new URL("history://Reviewer?entry=entry") as never)).rejects.toThrow(
+				/Ambiguous agent/i,
+			);
+			await expect(handler.resolve(new URL("history://reviewer?entry=entry") as never)).rejects.toThrow(
+				/Ambiguous agent/i,
+			);
 		} finally {
 			await temp.remove();
 		}
@@ -92,8 +102,9 @@ describe("history:// across conversations", () => {
 
 			expect((await sessionFilesFromDisk()).has("Reviewer")).toBe(false);
 			expect((await ambiguousSessionFileIds()).has("Reviewer")).toBe(true);
-			await expect(new HistoryProtocolHandler().resolve(new URL("history://Reviewer?entry=entry") as never))
-				.rejects.toThrow(/Ambiguous agent: Reviewer/);
+			await expect(
+				new HistoryProtocolHandler().resolve(new URL("history://Reviewer?entry=entry") as never),
+			).rejects.toThrow(/Ambiguous agent: Reviewer/);
 		} finally {
 			await temp.remove();
 		}
@@ -159,8 +170,9 @@ describe("history:// across conversations", () => {
 		const resolve = new HistoryProtocolHandler().resolve(new URL("history://Scout") as never);
 
 		await expect(resolve).rejects.toThrow(/2 conversations at once/);
-		await expect(new HistoryProtocolHandler().resolve(new URL("history://Scout?entry=entry-one") as never))
-			.rejects.toThrow(/2 conversations at once/);
+		await expect(
+			new HistoryProtocolHandler().resolve(new URL("history://Scout?entry=entry-one") as never),
+		).rejects.toThrow(/2 conversations at once/);
 	});
 
 	/** The index is the same leak in table form: every conversation's agents in one list. */
@@ -196,13 +208,21 @@ describe("history:// across conversations", () => {
 		try {
 			liveRoot("acp:a", "session-a");
 			const file = path.join(temp.path(), "session.jsonl");
-			await fs.writeFile(file, [
-				JSON.stringify({ type: "session", id: "session-a" }),
-				JSON.stringify({ type: "message", id: "record-one", parentId: null, message: "original text" }),
-			].join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: "session-a" }),
+					JSON.stringify({ type: "message", id: "record-one", parentId: null, message: "original text" }),
+				].join("\n") + "\n",
+			);
 			AgentRegistry.global().register({
-				id: "Scout", displayName: "scout", kind: "sub", parentId: "acp:a",
-				session: null, sessionFile: file, status: "parked",
+				id: "Scout",
+				displayName: "scout",
+				kind: "sub",
+				parentId: "acp:a",
+				session: null,
+				sessionFile: file,
+				status: "parked",
 			});
 			const result = await new HistoryProtocolHandler().resolve(
 				new URL("history://Scout?entry=record-one&limit=1000") as never,
@@ -223,23 +243,41 @@ describe("history:// across conversations", () => {
 		try {
 			liveRoot("acp:a", "session-a");
 			const file = path.join(temp.path(), "session.jsonl");
-			await fs.writeFile(file, [
-				JSON.stringify({ type: "session", id: "session-a" }),
-				JSON.stringify({ type: "message", id: "root-entry", parentId: null, message: "root text" }),
-				JSON.stringify({ type: "message", id: "abandoned-entry", parentId: "root-entry", message: "onlyAbandoned" }),
-			].join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: "session-a" }),
+					JSON.stringify({ type: "message", id: "root-entry", parentId: null, message: "root text" }),
+					JSON.stringify({
+						type: "message",
+						id: "abandoned-entry",
+						parentId: "root-entry",
+						message: "onlyAbandoned",
+					}),
+				].join("\n") + "\n",
+			);
 			let liveLeaf: string | null = "abandoned-entry";
 			AgentRegistry.global().register({
-				id: "Scout", displayName: "scout", kind: "sub", parentId: "acp:a",
-				session: { sessionManager: {
-					getSessionFile: () => file,
-					getLeafId: () => liveLeaf,
-				} } as unknown as AgentSession,
-				sessionFile: file, status: "running",
+				id: "Scout",
+				displayName: "scout",
+				kind: "sub",
+				parentId: "acp:a",
+				session: {
+					sessionManager: {
+						getSessionFile: () => file,
+						getLeafId: () => liveLeaf,
+					},
+				} as unknown as AgentSession,
+				sessionFile: file,
+				status: "running",
 			});
 			const handler = new HistoryProtocolHandler();
-			const read = async (query: string): Promise<{
-				status: string; leafId?: string; fragment?: string;
+			const read = async (
+				query: string,
+			): Promise<{
+				status: string;
+				leafId?: string;
+				fragment?: string;
 				matches?: Array<{ entryId: string }>;
 			}> => {
 				const resource = await handler.resolve(new URL(`history://Scout?${query}`) as never);
@@ -265,8 +303,9 @@ describe("history:// across conversations", () => {
 			const explicit = await read("entry=abandoned-entry&leaf=abandoned-entry");
 			expect(explicit.status).toBe("ok");
 			expect(explicit.fragment).toContain("onlyAbandoned");
-			expect((await read("q=onlyAbandoned&leaf=abandoned-entry")).matches?.map(hit => hit.entryId))
-				.toEqual(["abandoned-entry"]);
+			expect((await read("q=onlyAbandoned&leaf=abandoned-entry")).matches?.map(hit => hit.entryId)).toEqual([
+				"abandoned-entry",
+			]);
 
 			// resetLeaf() may leave an empty branch; never fall back to the disk tail.
 			liveLeaf = null;
