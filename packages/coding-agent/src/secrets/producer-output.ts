@@ -43,8 +43,7 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	while (previous >= 0 && (line[previous] === " " || line[previous] === "\t")) previous--;
 	// Console arguments have a space between them; a completed top-level container
 	// can precede a RegExp argument, unlike a nested container or a division operand.
-	const consoleArgument =
-		depth === 0 && previous < start - 1 && (line[previous] === "}" || line[previous] === "]");
+	const consoleArgument = depth === 0 && previous < start - 1 && (line[previous] === "}" || line[previous] === "]");
 	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous]) && !consoleArgument) return 0;
 	REGEX_LITERAL.lastIndex = start;
 	const match = REGEX_LITERAL.exec(line);
@@ -66,10 +65,7 @@ export class ProducerOutputGuard {
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(
-		redact?: (text: string) => string,
-		pendingPrefixLength?: (text: string) => number,
-	) {
+	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
 		const owner = currentProducerSecretOwner();
 		this.#redact = redact ?? owner?.redact;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
@@ -202,7 +198,7 @@ export class ProducerOutputGuard {
 			if (newline < 0) break;
 			this.#recordLength = 0;
 			if (this.#dropping) {
-				output.push(this.#block() + "\n");
+				output.push(`${this.#block()}\n`);
 				break;
 			}
 			let pendingPrefix = 0;
