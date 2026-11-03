@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP tool calls report unknown outcomes after lost responses without automatically repeating possible side effects ([Refs #890](https://github.com/Wladefant/veyyon/issues/890)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
