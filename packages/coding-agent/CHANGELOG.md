@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native Mainplane session and operation identities reject malformed Unicode before hashing ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
