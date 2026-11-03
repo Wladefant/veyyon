@@ -1977,6 +1977,16 @@ export class SessionManager {
 		const oldArtifactDir = artifactsDirectoryFor(oldSessionFile);
 		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
 		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
+		// Refuse a pinned destination inside the original evidence tree before
+		// reserving a sidecar. Otherwise mkdir mutates the source, and copying a
+		// directory into its own descendant can recurse or fail after the mutation.
+		const relativeTarget = path.relative(path.resolve(oldArtifactDir), path.resolve(nextArtifactDir));
+		if (
+			relativeTarget === "" ||
+			(relativeTarget !== ".." && !relativeTarget.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeTarget))
+		) {
+			throw new Error("Cannot fork session: destination inside source artifact tree");
+		}
 
 		// A pinned forkFrom() target may name another persisted session, and a
 		// missing source artifact directory must not allow its pre-existing
