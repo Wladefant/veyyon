@@ -1015,19 +1015,29 @@ export class BashTool
 				// The helper handed off this handle, so this path is its sole owner.
 				// Bound both best-effort cleanup RPCs and retain the timeout outcome.
 				try {
-					const kill = await settleWithin(Promise.resolve().then(() => handle.kill()), 1_000, "timed-out" as const);
+					const kill = await settleWithin(
+						Promise.resolve().then(() => handle.kill()),
+						1_000,
+						"timed-out" as const,
+					);
 					if (kill === "timed-out") logger.warn("ACP terminal kill unconfirmed after creation deadline");
 				} catch {
 					logger.warn("ACP terminal kill failed after creation deadline");
 				}
 				try {
-					const release = await settleWithin(Promise.resolve().then(() => handle.release()), 1_000, "timed-out" as const);
+					const release = await settleWithin(
+						Promise.resolve().then(() => handle.release()),
+						1_000,
+						"timed-out" as const,
+					);
 					if (release === "timed-out") logger.warn("ACP terminal release unconfirmed after creation deadline");
 				} catch {
 					logger.warn("ACP terminal release failed after creation deadline");
 				}
 				throw new ToolError(
-					call.timeoutSec === undefined ? "Command timed out" : `Command timed out after ${call.timeoutSec} seconds`,
+					call.timeoutSec === undefined
+						? "Command timed out"
+						: `Command timed out after ${call.timeoutSec} seconds`,
 				);
 			}
 			// The command deadline spans the remote terminal/create phase as well

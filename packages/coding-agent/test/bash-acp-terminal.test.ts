@@ -246,7 +246,7 @@ describe("BashTool ACP terminal routing", () => {
 	// returned after abort must be killed/released without tool execution.
 	async function bounded<T>(operation: Promise<T>, label: string): Promise<T> {
 		const deadline = Promise.withResolvers<never>();
-		const timer = setTimeout(() => deadline.reject(new Error("Timed out waiting for " + label)), 3_500);
+		const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${label}`)), 3_500);
 		try {
 			return await Promise.race([operation, deadline.promise]);
 		} finally {
@@ -266,9 +266,9 @@ describe("BashTool ACP terminal routing", () => {
 		const controller = new AbortController();
 		controller.abort();
 		const tool = new BashTool(makeSession(bridge));
-		await expect(bounded(tool.execute("pre-abort-terminal", { command: "echo never" }, controller.signal), "pre-aborted tool")).rejects.toThrow(
-			"Command aborted",
-		);
+		await expect(
+			bounded(tool.execute("pre-abort-terminal", { command: "echo never" }, controller.signal), "pre-aborted tool"),
+		).rejects.toThrow("Command aborted");
 		expect(creates).toBe(0);
 	}, 8_000);
 
@@ -329,12 +329,20 @@ describe("BashTool ACP terminal routing", () => {
 			terminalId: "deadline-ACP-terminal",
 			waitForExit: async () => ({ exitCode: 0 }),
 			currentOutput: async () => ({ output: "", truncated: false }),
-			kill: async () => { killed++; },
-			release: async () => { released++; lateCleanupDone.resolve(); },
+			kill: async () => {
+				killed++;
+			},
+			release: async () => {
+				released++;
+				lateCleanupDone.resolve();
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { creationEntered.resolve(); return provideHandle.promise; },
+			createTerminal: () => {
+				creationEntered.resolve();
+				return provideHandle.promise;
+			},
 		};
 		const tool = new BashTool(makeSession(bridge));
 		const running = tool.execute("deadline-terminal", { command: "echo never", timeout: 1 });
@@ -363,8 +371,12 @@ describe("BashTool ACP terminal routing", () => {
 			terminalId: "combined-budget",
 			waitForExit: async () => exit.promise,
 			currentOutput: async () => ({ output: "", truncated: false }),
-			kill: async () => { killed++; },
-			release: async () => { released++; },
+			kill: async () => {
+				killed++;
+			},
+			release: async () => {
+				released++;
+			},
 		};
 		let createStartedAt = 0;
 		const bridge: ClientBridge = {
@@ -381,9 +393,7 @@ describe("BashTool ACP terminal routing", () => {
 		// monotonic; this narrowly makes it advance in lockstep for the test.
 		vi.spyOn(performance, "now").mockImplementation(() => Date.now());
 		const tool = new BashTool(makeSession(bridge));
-		const failure = await driveFakeTime(
-			tool.execute("combined-budget", { command: "echo never", timeout: 1 }),
-		).then(
+		const failure = await driveFakeTime(tool.execute("combined-budget", { command: "echo never", timeout: 1 })).then(
 			() => undefined,
 			(error: unknown) => error,
 		);
@@ -401,7 +411,10 @@ describe("BashTool ACP terminal routing", () => {
 		const unavailable = Promise.withResolvers<ClientBridgeTerminalHandle>();
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { entered.resolve(); return unavailable.promise; },
+			createTerminal: () => {
+				entered.resolve();
+				return unavailable.promise;
+			},
 		};
 		const controller = new AbortController();
 		const tool = new BashTool(makeSession(bridge));
@@ -424,10 +437,18 @@ describe("BashTool ACP terminal routing", () => {
 		let waits = 0;
 		const handle: ClientBridgeTerminalHandle = {
 			terminalId: "handoff-race",
-			waitForExit: async () => { waits++; return { exitCode: 0 }; },
+			waitForExit: async () => {
+				waits++;
+				return { exitCode: 0 };
+			},
 			currentOutput: async () => ({ output: "", truncated: false }),
-			kill: async () => { kills++; },
-			release: async () => { releases++; released.resolve(); },
+			kill: async () => {
+				kills++;
+			},
+			release: async () => {
+				releases++;
+				released.resolve();
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
@@ -455,12 +476,20 @@ describe("BashTool ACP terminal routing", () => {
 			terminalId: "kill-error",
 			waitForExit: async () => ({ exitCode: 0 }),
 			currentOutput: async () => ({ output: "", truncated: false }),
-			kill: async () => { throw new Error("synthetic editor kill refusal"); },
-			release: async () => { releases++; released.resolve(); },
+			kill: async () => {
+				throw new Error("synthetic editor kill refusal");
+			},
+			release: async () => {
+				releases++;
+				released.resolve();
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { entered.resolve(); return provide.promise; },
+			createTerminal: () => {
+				entered.resolve();
+				return provide.promise;
+			},
 		};
 		const controller = new AbortController();
 		const tool = new BashTool(makeSession(bridge));
@@ -494,14 +523,26 @@ describe("BashTool ACP terminal routing", () => {
 		});
 		const handle: ClientBridgeTerminalHandle = {
 			terminalId: "late-release-unresponsive",
-			waitForExit: async () => { waits++; return { exitCode: 0 }; },
+			waitForExit: async () => {
+				waits++;
+				return { exitCode: 0 };
+			},
 			currentOutput: async () => ({ output: "should never be delivered", truncated: false }),
-			kill: async () => { kills++; },
-			release: () => { releases++; releaseEntered.resolve(); return neverReleased.promise; },
+			kill: async () => {
+				kills++;
+			},
+			release: () => {
+				releases++;
+				releaseEntered.resolve();
+				return neverReleased.promise;
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { entered.resolve(); return provideHandle.promise; },
+			createTerminal: () => {
+				entered.resolve();
+				return provideHandle.promise;
+			},
 		};
 		const controller = new AbortController();
 		const tool = new BashTool(makeSession(bridge));
@@ -520,7 +561,11 @@ describe("BashTool ACP terminal routing", () => {
 		expect(kills).toBe(1);
 		expect(releases).toBe(1);
 		expect(waits).toBe(0);
-		expect(warning.mock.calls.filter(([message]) => message === "ACP late terminal release unconfirmed after command cancellation")).toHaveLength(1);
+		expect(
+			warning.mock.calls.filter(
+				([message]) => message === "ACP late terminal release unconfirmed after command cancellation",
+			),
+		).toHaveLength(1);
 	}, 12_000);
 
 	it("attempts terminal release after a bounded wait for a hung late kill", async () => {
@@ -534,11 +579,17 @@ describe("BashTool ACP terminal routing", () => {
 			waitForExit: async () => ({ exitCode: 0 }),
 			currentOutput: async () => ({ output: "", truncated: false }),
 			kill: () => neverKilled.promise,
-			release: async () => { releases++; released.resolve(); },
+			release: async () => {
+				releases++;
+				released.resolve();
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { entered.resolve(); return provide.promise; },
+			createTerminal: () => {
+				entered.resolve();
+				return provide.promise;
+			},
 		};
 		const controller = new AbortController();
 		const tool = new BashTool(makeSession(bridge));
@@ -561,7 +612,11 @@ describe("BashTool ACP terminal routing", () => {
 		let createCalls = 0;
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
-			createTerminal: () => { createCalls++; entered.resolve(); return provide.promise; },
+			createTerminal: () => {
+				createCalls++;
+				entered.resolve();
+				return provide.promise;
+			},
 		};
 		const controller = new AbortController();
 		const tool = new BashTool(makeSession(bridge));
@@ -570,9 +625,7 @@ describe("BashTool ACP terminal routing", () => {
 		try {
 			await bounded(entered.promise, "late rejected terminal/create start");
 			controller.abort();
-			await expect(bounded(running, "caller settlement before late rejection")).rejects.toThrow(
-				"Command aborted",
-			);
+			await expect(bounded(running, "caller settlement before late rejection")).rejects.toThrow("Command aborted");
 		} finally {
 			controller.abort();
 			provide.reject(new Error("synthetic client create failed after cancellation"));
@@ -610,8 +663,12 @@ describe("BashTool ACP terminal routing", () => {
 				outputCalls++;
 				return { output: "should never reach model", truncated: false };
 			},
-			kill: async () => { kills++; },
-			release: async () => { releases++; },
+			kill: async () => {
+				kills++;
+			},
+			release: async () => {
+				releases++;
+			},
 		};
 		const bridge: ClientBridge = {
 			capabilities: { terminal: true },
@@ -622,14 +679,13 @@ describe("BashTool ACP terminal routing", () => {
 			},
 		};
 		const tool = new BashTool(makeSession(bridge));
-		await expect(tool.execute("late-successful-create", { command: "echo should-not-run", timeout: 1 })).rejects.toThrow(
-			"Command timed out after 1 seconds",
-		);
+		await expect(
+			tool.execute("late-successful-create", { command: "echo should-not-run", timeout: 1 }),
+		).rejects.toThrow("Command timed out after 1 seconds");
 		expect(creates).toBe(1);
 		expect(waitCalls).toBe(0);
 		expect(outputCalls).toBe(0);
 		expect(kills).toBe(1);
 		expect(releases).toBe(1);
 	}, 12_000);
-
 });
