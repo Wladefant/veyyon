@@ -344,7 +344,7 @@ describe("BashTool ACP terminal routing", () => {
 			waitForExit: async () => ({ exitCode: 0 }),
 			currentOutput: () => {
 				// The timeout path allows 250ms for best-effort final output.
-				observerTimer ??= setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_600);
+				observerTimer ??= setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_200);
 				return pendingOutput.promise;
 			},
 			kill: async () => {},
