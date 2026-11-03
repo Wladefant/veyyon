@@ -45,7 +45,7 @@ describe("producer output withholds multiline registered literals", () => {
 			expect(streamed).toContain("after\n");
 		}
 	});
-	it("keeps serialization-shaped records safe across every two-chunk split", () => {
+	describe("serialization-shaped records are independently safe across every boundary", () => {
 		const cases = [
 			{
 				input: "env {\n  ALPHA: 'fake-a-fake-a-fake-a-fake-a-fake-a-fake-a-fake-a-fake-a',\n  BETA: 'fake-b-fake-b-fake-b-fake-b-fake-b-fake-b-fake-b-fake-b',\n  GAMMA: 'fake-c-fake-c-fake-c-fake-c-fake-c-fake-c-fake-c-fake-c'\n}\n",
@@ -159,20 +159,20 @@ describe("producer output withholds multiline registered literals", () => {
 			},
 		];
 		for (const { input, values, visible } of cases) {
-			const atomic = guardFor().sanitize(input);
-			if (visible) expect(atomic).toBe(input);
-			else expect(atomic).toBe("[credential output withheld]");
-			for (let split = 0; split <= input.length; split++) {
-				const guard = guardFor();
-				const output = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
-				if (visible) {
-					for (const value of values) expect(output).toContain(value);
-				} else {
-					for (const value of values) expect(output).not.toContain(value);
-					expect(output).toContain("[credential output withheld]");
+			it(`classifies ${input.slice(0, 42)} safely at every chunk boundary`, () => {
+				const atomic = guardFor().sanitize(input);
+				if (visible) expect(atomic).toBe(input);
+				else expect(atomic).toBe("[credential output withheld]");
+				for (let split = 0; split <= input.length; split++) {
+					const guard = guardFor();
+					const output = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
+					if (visible) {
+						for (const value of values) expect(output).toContain(value);
+					} else {
+						for (const value of values) expect(output).not.toContain(value);
+						expect(output).toContain("[credential output withheld]");
+					}
 				}
-			}
-			{
 				const guard = guardFor();
 				const output = [...input].map(character => guard.push(character)).join("") + guard.finish();
 				if (visible) {
@@ -181,7 +181,7 @@ describe("producer output withholds multiline registered literals", () => {
 					for (const value of values) expect(output).not.toContain(value);
 					expect(output).toContain("[credential output withheld]");
 				}
-			}
+			});
 		}
 	});
 	it("flushes a complete secret on finish and blocks later chunks after an incomplete prefix", () => {
