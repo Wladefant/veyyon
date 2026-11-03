@@ -123,12 +123,22 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const releaseOldFirstFrame = Promise.withResolvers<void>();
 		const oldFrameHandled = Promise.withResolvers<void>();
 		let connections = 0;
+		let realReconnectedSnapshotSeen = false;
+		let resumedEntryFrameSeen = false;
 
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			// Only the first connection delivers the stale snapshot. A reconnect
 			// must read the real SQLite-backed broker's new canonical state.
 			if (connections++ > 0) {
-				yield* originalStream(opts);
+				for await (const event of originalStream(opts)) {
+					if (event.kind === "snapshot") realReconnectedSnapshotSeen = true;
+					if (
+						event.kind === "entry" &&
+						event.entry.credential.type === "oauth" &&
+						event.entry.credential.access === "access-after-reconnect"
+					) resumedEntryFrameSeen = true;
+					yield event;
+				}
 				return;
 			}
 			streamConnected.resolve();
@@ -169,6 +179,25 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const authoritative = await peer.fetchSnapshot();
 		if (authoritative.status !== 200) throw new Error("expected canonical broker snapshot");
 		expect(authoritative.snapshot.credentials).toEqual([]);
+
+		// Rejecting an obsolete first frame must reconnect, not silently stop
+		// consuming later broker mutations. An idle GET alone cannot satisfy this
+		// oracle: observe the genuine reconnected SSE snapshot and entry frame.
+		await waitUntil(() => connections >= 2 && realReconnectedSnapshotSeen);
+		storage!.upsertCredential("anthropic", mintOAuthCredential("after-reconnect", Date.now() + 120_000));
+		await waitUntil(() =>
+			resumedEntryFrameSeen &&
+			remote!.snapshot.credentials.some(entry =>
+				entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
+			),
+		);
+		const resumed = remote.snapshot.credentials.find(entry =>
+			entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
+		);
+		expect(resumed?.credential).toMatchObject({
+			type: "oauth", access: "access-after-reconnect", refresh: REMOTE_REFRESH_SENTINEL,
+		});
+		expect(remote.snapshot.credentials.some(entry => entry.id === id)).toBe(false);
 	});
 
 	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
