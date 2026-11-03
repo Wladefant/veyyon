@@ -19,8 +19,8 @@ import type { OutputMeta } from "../tools/core/output-notice";
 import { normalizeLocalScheme } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted, toolAbort } from "../tools/core/tool-errors";
 import { callTool } from "./client";
-import { retainMCPToolArgsAttemptFactory } from "./transports/http";
 import { resolveMCPTimeoutMs } from "./timeout";
+import { retainMCPToolArgsAttemptFactory } from "./transports/http";
 import { isMCPTransportStateMessage, mcpTimeoutMessage } from "./transports/transport-failure";
 import type { MCPContent, MCPServerConnection, MCPToolCallParams, MCPToolCallResult, MCPToolDefinition } from "./types";
 import { createMCPToolView } from "./view";
@@ -66,17 +66,14 @@ export function mcpFailureWarrantsReconnect(error: unknown): boolean {
 function isAttemptedMCPToolRequestDeadline(error: unknown, connection: MCPServerConnection): boolean {
 	if (!(error instanceof Error) || /^MCP error -?\d+:/i.test(error.message)) return false;
 	const config = connection.config;
-	const target = "url" in config && typeof config.url === "string"
-		? { url: config.url }
-		: "command" in config && typeof config.command === "string"
-			? { command: config.command }
-			: undefined;
+	const target =
+		"url" in config && typeof config.url === "string"
+			? { url: config.url }
+			: "command" in config && typeof config.command === "string"
+				? { command: config.command }
+				: undefined;
 	if (!target) return false;
-	return error.message === mcpTimeoutMessage(
-		target,
-		'request "tools/call"',
-		resolveMCPTimeoutMs(config.timeout),
-	);
+	return error.message === mcpTimeoutMessage(target, 'request "tools/call"', resolveMCPTimeoutMs(config.timeout));
 }
 
 type MCPToolArgs = NonNullable<MCPToolCallParams["arguments"]>;
@@ -354,12 +351,14 @@ function buildUnknownOutcomeResult(
 	providerName: string | undefined,
 ): CustomToolResult<MCPToolDetails> {
 	return {
-		content: [{
-			type: "text",
-			text:
-				`MCP tool "${mcpToolName}" on server "${serverName}" outcome unknown: the request may have reached the server, but its completion response was not verified. ` +
-				"Do not automatically repeat this call. Reconcile through a read-only receipt/status or ask the operator before any new invocation.",
-		}],
+		content: [
+			{
+				type: "text",
+				text:
+					`MCP tool "${mcpToolName}" on server "${serverName}" outcome unknown: the request may have reached the server, but its completion response was not verified. ` +
+					"Do not automatically repeat this call. Reconcile through a read-only receipt/status or ask the operator before any new invocation.",
+			},
+		],
 		details: { serverName, mcpToolName, isError: true, provider, providerName },
 		isError: true,
 	};
@@ -408,9 +407,12 @@ async function reconnectForFutureCalls(
 	const pending = reconnectWithAbort(reconnect, signal);
 	// Observe resolution and rejection even after the grace budget expires.
 	// A late connection is adopted only through the caller's ownership guard.
-	void pending.then(connection => {
-		if (connection && !signal?.aborted) onConnected?.(connection);
-	}, () => {});
+	void pending.then(
+		connection => {
+			if (connection && !signal?.aborted) onConnected?.(connection);
+		},
+		() => {},
+	);
 	const deadline = Promise.withResolvers<void>();
 	const timer = setTimeout(() => deadline.resolve(), UNKNOWN_OUTCOME_RECONNECT_GRACE_MS);
 	try {
@@ -604,7 +606,12 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				// whose completion could delay the safety-critical result.
 				// A superseded invocation must not restart a connection that a
 				// later explicit invocation already recovered while arguments yielded.
-				if (!timedOutAfterDispatch && this.reconnect && this.#reconnectGeneration === generation && this.connection === attemptedConnection) {
+				if (
+					!timedOutAfterDispatch &&
+					this.reconnect &&
+					this.#reconnectGeneration === generation &&
+					this.connection === attemptedConnection
+				) {
 					await reconnectForFutureCalls(this.reconnect, signal, newConn => {
 						// An older readiness result must not replace a connection
 						// selected by a newer explicitly authorized invocation.
@@ -742,7 +749,10 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 						);
 					} catch (firstError) {
 						rethrowIfAborted(firstError, signal);
-						if (firstCallAttempted && (isAttemptedMCPToolRequestDeadline(firstError, newConn) || mcpFailureWarrantsReconnect(firstError))) {
+						if (
+							firstCallAttempted &&
+							(isAttemptedMCPToolRequestDeadline(firstError, newConn) || mcpFailureWarrantsReconnect(firstError))
+						) {
 							return buildUnknownOutcomeResult(
 								this.serverName,
 								this.tool.name,

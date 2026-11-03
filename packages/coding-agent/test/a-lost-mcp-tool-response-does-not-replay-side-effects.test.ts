@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { createServer } from "node:http";
+import { resolveMCPTimeoutMs } from "../src/mcp/timeout";
 import { DeferredMCPTool, MCPTool } from "../src/mcp/tool-bridge";
 import { HttpTransport } from "../src/mcp/transports/http";
-import { resolveMCPTimeoutMs } from "../src/mcp/timeout";
 import { mcpTimeoutMessage } from "../src/mcp/transports/transport-failure";
 import type { MCPServerConnection, MCPToolCallResult, MCPToolDefinition, MCPTransport } from "../src/mcp/types";
 
@@ -19,7 +19,6 @@ const writeTool: MCPToolDefinition = {
 };
 const context = {} as Parameters<MCPTool["execute"]>[3];
 const FAKE_PRIVATE_ARG = "TEST_ONLY_MCP_PRIVATE_ARG_890";
-
 
 async function boundedUnknownOutcome<T>(pending: Promise<T>): Promise<T> {
 	const deadline = Promise.withResolvers<never>();
@@ -61,20 +60,22 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 			let oldCalls = 0;
 			let refreshedCalls = 0;
 			let reconnects = 0;
-			const oldConnection = connection(fakeTransport(async () => {
-				oldCalls++;
-				effects++;
-				// The external side effect has completed; only the reply is lost.
-				throw new Error("ECONNRESET");
-			}));
-			const refreshedConnection = connection(fakeTransport(async () => {
-				refreshedCalls++;
-				effects++;
-				return completedResult("accepted on explicit request");
-			}));
-			const toolDef = hint === undefined
-				? writeTool
-				: { ...writeTool, annotations: { idempotentHint: hint } };
+			const oldConnection = connection(
+				fakeTransport(async () => {
+					oldCalls++;
+					effects++;
+					// The external side effect has completed; only the reply is lost.
+					throw new Error("ECONNRESET");
+				}),
+			);
+			const refreshedConnection = connection(
+				fakeTransport(async () => {
+					refreshedCalls++;
+					effects++;
+					return completedResult("accepted on explicit request");
+				}),
+			);
+			const toolDef = hint === undefined ? writeTool : { ...writeTool, annotations: { idempotentHint: hint } };
 			const tool = new MCPTool(oldConnection, toolDef, async () => {
 				reconnects++;
 				return refreshedConnection;
@@ -112,10 +113,12 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		it(`preserves a correlated application error instead of reconnecting: ${failureText}`, async () => {
 			let dispatches = 0;
 			let reconnects = 0;
-			const old = connection(fakeTransport(async () => {
-				dispatches++;
-				throw new Error(failureText);
-			}));
+			const old = connection(
+				fakeTransport(async () => {
+					dispatches++;
+					throw new Error(failureText);
+				}),
+			);
 			const reconnect = async () => {
 				reconnects++;
 				return old;
@@ -138,10 +141,12 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 	it("returns an unknown outcome without a reconnect callback rather than recommending blind retry", async () => {
 		let effects = 0;
 		const tool = new MCPTool(
-			connection(fakeTransport(async () => {
-				effects++;
-				throw new Error("HTTP 503: synthetic upstream unavailable");
-			})),
+			connection(
+				fakeTransport(async () => {
+					effects++;
+					throw new Error("HTTP 503: synthetic upstream unavailable");
+				}),
+			),
 			writeTool,
 		);
 		const result = await tool.execute("origin-without-reconnect", {}, undefined, context);
@@ -155,14 +160,18 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		let oldCalls = 0;
 		let refreshedCalls = 0;
 		let reconnects = 0;
-		let current = connection(fakeTransport(async () => {
-			oldCalls++;
-			throw new Error("fetch failed");
-		}));
-		const refreshed = connection(fakeTransport(async () => {
-			refreshedCalls++;
-			return completedResult("explicit only");
-		}));
+		let current = connection(
+			fakeTransport(async () => {
+				oldCalls++;
+				throw new Error("fetch failed");
+			}),
+		);
+		const refreshed = connection(
+			fakeTransport(async () => {
+				refreshedCalls++;
+				return completedResult("explicit only");
+			}),
+		);
 		const tool = new DeferredMCPTool(
 			"write-fixture",
 			writeTool,
@@ -190,10 +199,12 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 	it("permits a single first dispatch when the deferred connection failed before tools/call", async () => {
 		let attempts = 0;
 		let effects = 0;
-		const recovered = connection(fakeTransport(async () => {
-			effects++;
-			return completedResult("first dispatch succeeded");
-		}));
+		const recovered = connection(
+			fakeTransport(async () => {
+				effects++;
+				return completedResult("first dispatch succeeded");
+			}),
+		);
 		const tool = new DeferredMCPTool(
 			"write-fixture",
 			writeTool,
@@ -213,12 +224,14 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 	it("does not label a lost response as retryable after deferred pre-dispatch recovery", async () => {
 		let connectionAttempts = 0;
 		let sideEffects = 0;
-		const recovered = connection(fakeTransport(async () => {
-			sideEffects++;
-			// The *first* tools/call occurs on the recovered transport; its
-			// side effect commits, then the response disappears.
-			throw new Error("ECONNRESET");
-		}));
+		const recovered = connection(
+			fakeTransport(async () => {
+				sideEffects++;
+				// The *first* tools/call occurs on the recovered transport; its
+				// side effect commits, then the response disappears.
+				throw new Error("ECONNRESET");
+			}),
+		);
 		const tool = new DeferredMCPTool(
 			"write-fixture",
 			writeTool,
@@ -237,18 +250,23 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		expect(JSON.stringify(result)).not.toContain("ECONNRESET");
 	});
 
-
 	it("reports an attempted direct call as unknown while reconnect never settles", async () => {
 		const pendingReconnect = Promise.withResolvers<MCPServerConnection | null>();
 		let effects = 0;
 		let reconnects = 0;
-		const tool = new MCPTool(connection(fakeTransport(async () => {
-			effects++;
-			throw new Error("ECONNRESET: TEST_ONLY_PEER_DIAGNOSTIC");
-		})), writeTool, async () => {
-			reconnects++;
-			return pendingReconnect.promise;
-		});
+		const tool = new MCPTool(
+			connection(
+				fakeTransport(async () => {
+					effects++;
+					throw new Error("ECONNRESET: TEST_ONLY_PEER_DIAGNOSTIC");
+				}),
+			),
+			writeTool,
+			async () => {
+				reconnects++;
+				return pendingReconnect.promise;
+			},
+		);
 		const result = await boundedUnknownOutcome(
 			tool.execute("direct-unsettled-reconnect", { value: FAKE_PRIVATE_ARG }, undefined, context),
 		);
@@ -270,10 +288,13 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		const tool = new DeferredMCPTool(
 			"write-fixture",
 			writeTool,
-			async () => connection(fakeTransport(async () => {
-				effects++;
-				throw new Error("fetch failed: TEST_ONLY_PEER_DIAGNOSTIC");
-			})),
+			async () =>
+				connection(
+					fakeTransport(async () => {
+						effects++;
+						throw new Error("fetch failed: TEST_ONLY_PEER_DIAGNOSTIC");
+					}),
+				),
 			undefined,
 			async () => {
 				reconnects++;
@@ -298,18 +319,24 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		let latestCalls = 0;
 		let staleRecoveryCalls = 0;
 		let reconnectionAttempts = 0;
-		const original = connection(fakeTransport(async () => {
-			originalCalls++;
-			throw new Error("ECONNRESET");
-		}));
-		const latest = connection(fakeTransport(async () => {
-			latestCalls++;
-			return completedResult("latest recovered connection");
-		}));
-		const stale = connection(fakeTransport(async () => {
-			staleRecoveryCalls++;
-			return completedResult("wrong stale recovery");
-		}));
+		const original = connection(
+			fakeTransport(async () => {
+				originalCalls++;
+				throw new Error("ECONNRESET");
+			}),
+		);
+		const latest = connection(
+			fakeTransport(async () => {
+				latestCalls++;
+				return completedResult("latest recovered connection");
+			}),
+		);
+		const stale = connection(
+			fakeTransport(async () => {
+				staleRecoveryCalls++;
+				return completedResult("wrong stale recovery");
+			}),
+		);
 		const tool = new MCPTool(original, writeTool, async () => {
 			reconnectionAttempts++;
 			return reconnectionAttempts === 1 ? delayedFirstRecovery.promise : latest;
@@ -339,28 +366,36 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		let originalCalls = 0;
 		let recoveredCalls = 0;
 		let reconnects = 0;
-		const original = connection(fakeTransport(async () => {
-			originalCalls++;
-			throw new Error("ECONNRESET");
-		}));
-		const recovered = connection(fakeTransport(async () => {
-			recoveredCalls++;
-			return completedResult("explicit third call");
-		}));
-		const tool = new MCPTool(original, {
-			...writeTool,
-			inputSchema: {
-				type: "object",
-				properties: {
-					value: { type: "string" },
-					additional: { type: "array", items: { type: "string" } },
+		const original = connection(
+			fakeTransport(async () => {
+				originalCalls++;
+				throw new Error("ECONNRESET");
+			}),
+		);
+		const recovered = connection(
+			fakeTransport(async () => {
+				recoveredCalls++;
+				return completedResult("explicit third call");
+			}),
+		);
+		const tool = new MCPTool(
+			original,
+			{
+				...writeTool,
+				inputSchema: {
+					type: "object",
+					properties: {
+						value: { type: "string" },
+						additional: { type: "array", items: { type: "string" } },
+					},
+					required: ["value"],
 				},
-				required: ["value"],
 			},
-		}, async () => {
-			reconnects++;
-			return recovered;
-		});
+			async () => {
+				reconnects++;
+				return recovered;
+			},
+		);
 
 		// Recursing through many ordinary argument values drives the actual
 		// asynchronous prepareOutboundArgs path, rather than mocking that method.
@@ -387,9 +422,7 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		// A's superseded failure may not restart or replace B's live transport.
 		expect(reconnects).toBe(1);
 
-		const third = await boundedUnknownOutcome(
-			tool.execute("third-explicit", { value: "third" }, undefined, context),
-		);
+		const third = await boundedUnknownOutcome(tool.execute("third-explicit", { value: "third" }, undefined, context));
 		expect(third.isError).not.toBe(true);
 		expect(third.content[0]).toEqual({ type: "text", text: "explicit third call" });
 		expect(recoveredCalls).toBe(1);
@@ -403,17 +436,20 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 		it(`treats an attempted ${kind} tools/call deadline as unknown and not retryable`, async () => {
 			const ms = resolveMCPTimeoutMs(137);
 			const target = kind === "stdio" ? { command: "test-only" } : { url: "https://example.invalid/mcp" };
-			const cfg = kind === "stdio"
-				? { type: "stdio" as const, command: "test-only", timeout: 137 }
-				: { type: "http" as const, url: "https://example.invalid/mcp", timeout: 137 };
+			const cfg =
+				kind === "stdio"
+					? { type: "stdio" as const, command: "test-only", timeout: 137 }
+					: { type: "http" as const, url: "https://example.invalid/mcp", timeout: 137 };
 			const deadline = mcpTimeoutMessage(target, 'request "tools/call"', ms);
 			let dispatches = 0;
 			let reconnects = 0;
 			const original = {
-				...connection(fakeTransport(async () => {
-					dispatches++;
-					throw new Error(deadline);
-				})),
+				...connection(
+					fakeTransport(async () => {
+						dispatches++;
+						throw new Error(deadline);
+					}),
+				),
 				config: cfg,
 			};
 			const reconnect = async () => {
@@ -440,14 +476,14 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 	}
 
 	it("preserves a correlated application error quoting the transport timeout as definite", async () => {
-		const quoted = mcpTimeoutMessage(
-			{ command: "test-only" }, 'request "tools/call"', resolveMCPTimeoutMs(137),
-		);
+		const quoted = mcpTimeoutMessage({ command: "test-only" }, 'request "tools/call"', resolveMCPTimeoutMs(137));
 		let dispatches = 0;
-		const conn = connection(fakeTransport(async () => {
-			dispatches++;
-			throw new Error("MCP error -32603: " + quoted);
-		}));
+		const conn = connection(
+			fakeTransport(async () => {
+				dispatches++;
+				throw new Error("MCP error -32603: " + quoted);
+			}),
+		);
 		const result = await boundedUnknownOutcome(
 			new MCPTool(conn, writeTool).execute("application-timeout-lookalike", { value: "safe" }, undefined, context),
 		);
@@ -484,10 +520,13 @@ describe("a lost MCP tools/call response is not permission to replay a side effe
 				effects++;
 				if (holdReply) return; // completed effect, lost result; only fixture socket remains.
 				response.writeHead(200, { "Content-Type": "application/json" });
-				response.end(JSON.stringify({
-					jsonrpc: "2.0", id: call.id,
-					error: { code: -32603, message: "the application rejected the second explicit call" },
-				}));
+				response.end(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						id: call.id,
+						error: { code: -32603, message: "the application rejected the second explicit call" },
+					}),
+				);
 			})().catch(() => {
 				if (!response.headersSent) response.writeHead(400).end();
 				else response.end();
