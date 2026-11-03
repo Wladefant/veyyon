@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP stdio diagnostics omit malformed frame payloads and peer-controlled parse-error messages from persistent logs ([Refs #858](https://github.com/Wladefant/veyyon/issues/858)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
