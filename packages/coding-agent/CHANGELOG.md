@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native Mainplane text reads preserve the verified UTF-8 byte order mark ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
