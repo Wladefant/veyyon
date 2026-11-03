@@ -639,7 +639,7 @@ async function runPreparedSpawn(
 				(current.session !== null ||
 					!current.terminalOutcome ||
 					current.terminalOutcome !== predecessorOutcome ||
-					current.status !== predecessorStatus)) {
+					current.status !== predecessorStatus))) {
 			const released = await releasePreDispatchSuccessorClaim(spawn.artifacts.dir, params.successorOf, agentId);
 			return spawnRefusal(
 				`successor-predecessor-active: ${params.successorOf} changed while its checkpoint was being claimed${released ? "" : "; its claim remains reserved"}`,
