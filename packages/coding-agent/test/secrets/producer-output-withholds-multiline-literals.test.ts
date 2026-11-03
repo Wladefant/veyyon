@@ -112,6 +112,21 @@ describe("producer output withholds multiline registered literals", () => {
 				values: ["Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending", "completed"],
 				visible: true,
 			},
+			{
+				input: "[warn] [worker] Here's env { ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' }\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "[warn] [worker's env] {\n ALPHA: 'fake-a',\n BETA: 'fake-b',\n GAMMA: 'fake-c'\n}\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: '"Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"\ncompleted\n',
+				values: ["Expected response", "completed"],
+				visible: true,
+			},
 		];
 
 		for (const { input, values, visible } of cases) {
@@ -121,6 +136,16 @@ describe("producer output withholds multiline registered literals", () => {
 			for (let split = 0; split <= input.length; split++) {
 				const guard = guardFor();
 				const output = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
+				if (visible) {
+					for (const value of values) expect(output).toContain(value);
+				} else {
+					for (const value of values) expect(output).not.toContain(value);
+					expect(output).toContain("[credential output withheld]");
+				}
+			}
+			if (input.includes("[warn]") || input.includes("Expected response")) {
+				const guard = guardFor();
+				const output = [...input].map(character => guard.push(character)).join("") + guard.finish();
 				if (visible) {
 					for (const value of values) expect(output).toContain(value);
 				} else {

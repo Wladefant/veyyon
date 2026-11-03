@@ -261,4 +261,50 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		});
 		expect(content).toContain("completed");
 	});
+	it("withholds warning inventories after bracketed console labels", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-bracketed-inventory-"));
+		for (const label of ["[worker] Here's env", "[worker's env]"]) {
+			const artifactPath = path.join(directory, `${label.length}.txt`);
+			const session = makeSession(artifactPath);
+			const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+			const progress: AgentToolResult[] = [];
+			const code = [
+				'console.log("padding-".repeat(400))',
+				`console.warn(${JSON.stringify(label)}, {`,
+				'  ALPHA: "fake-a".repeat(8),',
+				'  BETA: "fake-b".repeat(8),',
+				'  GAMMA: "fake-c".repeat(8)',
+				"})",
+			].join("\n");
+			const result = await tool.execute(
+				`synthetic-bracketed-${label.length}`,
+				{ language: "js", code, reset: true },
+				undefined,
+				update => progress.push(update),
+			);
+			const details = result.details as EvalToolDetails;
+			const content = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+			const artifact = fs.existsSync(artifactPath) ? fs.readFileSync(artifactPath, "utf8") : "";
+			for (const sink of [JSON.stringify(progress), JSON.stringify(details), content, artifact]) {
+				for (const canary of ["fake-a".repeat(8), "fake-b".repeat(8), "fake-c".repeat(8)]) {
+					expect(sink).not.toContain(canary);
+				}
+			}
+			expect(fs.existsSync(artifactPath)).toBe(true);
+		}
+	});
+
+	it("preserves serialized diagnostic strings and later completed output", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-serialized-diagnostic-"));
+		const session = makeSession(path.join(directory, "unused.txt"));
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			'console.log(JSON.stringify("Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"))',
+			'console.log("completed")',
+		].join("\n");
+		const result = await tool.execute("synthetic-serialized-diagnostic", { language: "js", code, reset: true });
+		const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
+		expect(output).toContain('"Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"');
+		expect(output).toContain("completed");
+	});
 });

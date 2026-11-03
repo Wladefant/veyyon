@@ -30,19 +30,30 @@ function quotedEnd(text: string, start: number): number {
 }
 
 function structuredStart(text: string): number {
-	// Console string arguments are raw labels, not quoted source. Their quote
-	// characters cannot start lexical state before a structured argument begins.
-	for (let index = 0; index < text.length; index++) {
-		if (text[index] === "{" || text[index] === "[") return index;
+	// A serialized scalar can contain braces, but console labels are raw text.
+	let brace = text.indexOf("{");
+	let start = text.search(/\S/);
+	while (start >= 0 && start < brace) {
+		if (text[start] === '"') {
+			const end = quotedEnd(text, start);
+			if (end < text.length) {
+				start = end + 1;
+				brace = text.indexOf("{", start);
+				continue;
+			}
+		}
+		start++;
 	}
-	return -1;
+	return brace;
 }
 
 function hasInventoryKeys(text: string): boolean {
+	const start = structuredStart(text);
+	const scanStart = start >= 0 ? start : text.search(/\S/);
 	const containers: string[] = [];
 	let expectingKey = false;
 	let keys = 0;
-	for (let index = 0; index < text.length; index++) {
+	for (let index = Math.max(scanStart, 0); index < text.length; index++) {
 		const character = text[index];
 		if (/\s/.test(character)) continue;
 		if (character === "{" || character === "[") {
@@ -54,12 +65,12 @@ function hasInventoryKeys(text: string): boolean {
 		} else if (character === ",") {
 			expectingKey = containers.at(-1) === "{";
 		} else {
-			const start = index;
-			const quoted = containers.length > 0 && isQuote(character);
+			const tokenStart = index;
+			const quoted = isQuote(character);
 			if (quoted) index = quotedEnd(text, index);
 			else while (index + 1 < text.length && /[A-Za-z0-9_$]/.test(text[index + 1])) index++;
 			if (expectingKey) {
-				const name = text.slice(start + (quoted ? 1 : 0), index + (quoted ? 0 : 1));
+				const name = text.slice(tokenStart + (quoted ? 1 : 0), index + (quoted ? 0 : 1));
 				let next = index + 1;
 				while (next < text.length && /\s/.test(text[next])) next++;
 				if (text[next] === ":" && ENV_MAP_KEY.test(name) && ++keys >= 3) return true;
