@@ -219,7 +219,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		let fullSnapshotsObserved = 0;
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
-			yield { kind: "snapshot" as const, ...initial.snapshot }; // no-progress full replay
+			// No-progress full replay must not trigger a second full-snapshot callback.
+			yield { kind: "snapshot" as const, ...initial.snapshot };
 			connected.resolve();
 			yield {
 				kind: "entry" as const, entry: additional,
@@ -242,18 +243,20 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					generation: initial.snapshot.generation,
 					serverNowMs: initial.snapshot.serverNowMs,
 					refresher: initial.snapshot.refresher,
-				}; // already absent: also no progress
+				}; // Already absent: also no progress.
 				await Bun.sleep(5);
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
-			onSnapshot: () => { fullSnapshotsObserved += 1; },
+			onSnapshot: () => {
+				fullSnapshotsObserved += 1;
+			},
 		});
 		await connected.promise;
 		await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
-		expect(fullSnapshotsObserved).toBe(1); // first full snapshot only; duplicate ignored
+		expect(fullSnapshotsObserved).toBe(1);
 		await waitUntil(() => replayedFrames >= 5);
 		expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
 		// Only the production idle verifier can discover the canonical broker
