@@ -1963,6 +1963,39 @@ export class SessionManager {
 		}
 	}
 
+	/** Shared local-vs-explicit-foreign artifact URL scanner for forks and synchronous branches. */
+	static #localArtifactReferences(retainedEntries: readonly FileEntry[], parentSessionId: string | undefined): Set<string> {
+		const referencedIds = new Set<string>();
+		for (const entry of retainedEntries) {
+			// Artifact IDs are per session. An explicit foreign-session reference
+			// must not be checked or copied from this session's artifact store.
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
+				let id = match[1];
+				if (!id) continue;
+				// The internal URL parser percent-decodes rawHost before checking
+				// the *whole* numeric ID. A valid artifact://%30 is local artifact 0
+				// and must not evade copy-before-fork validation.
+				try {
+					id = decodeURIComponent(id);
+				} catch {
+					// Keep malformed escapes unchanged, as parseInternalUrl does.
+				}
+				if (!/^\d+$/.test(id)) continue;
+				const query = match[2];
+				if (query !== undefined) {
+					const sessions = new URLSearchParams(query).getAll("session");
+					if (
+						sessions.length === 1 &&
+						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
+						sessions[0] !== parentSessionId
+					) continue;
+				}
+				referencedIds.add(id);
+			}
+		}
+		return referencedIds;
+	}
+
 	/**
 	 * Keep the original session's locally referenced artifact bytes available
 	 * before a fork publishes a new session. Both current-session forks and
@@ -2037,34 +2070,7 @@ export class SessionManager {
 		// Preserve the original referenced bytes before mutating the active
 		// session identity, entries or file. A best-effort post-switch copy can
 		// otherwise leave inherited artifact://0 pointing at unrelated new output.
-		const referencedIds = new Set<string>();
-		for (const entry of retainedEntries) {
-			// Artifact IDs are per session. An explicit foreign-session reference
-			// must not be checked or copied from this session's artifact store.
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
-				let id = match[1];
-				if (!id) continue;
-				// The internal URL parser percent-decodes rawHost before checking
-				// the *whole* numeric ID. A valid artifact://%30 is local artifact 0
-				// and must not evade copy-before-fork validation.
-				try {
-					id = decodeURIComponent(id);
-				} catch {
-					// Keep malformed escapes unchanged, as parseInternalUrl does.
-				}
-				if (!/^\d+$/.test(id)) continue;
-				const query = match[2];
-				if (query !== undefined) {
-					const sessions = new URLSearchParams(query).getAll("session");
-					if (
-						sessions.length === 1 &&
-						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
-						sessions[0] !== parentSessionId
-					) continue;
-				}
-				referencedIds.add(id);
-			}
-		}
+		const referencedIds = SessionManager.#localArtifactReferences(retainedEntries, parentSessionId);
 		let sourceNames: string[] | undefined;
 		try {
 			const stat = await fs.promises.lstat(oldArtifactDir);
@@ -3463,12 +3469,18 @@ export class SessionManager {
 	createBranchedSession(leafId: string): string | undefined {
 		const sourceSessionFile = this.#sessionFile;
 		if (!this.#index.has(leafId)) throw new Error(`Entry ${leafId} not found`);
-		this.#endLifecycle("session_switched");
 		const branchPath = this.getBranch(leafId);
 
 		// Labels are resolved afresh, and lifecycle/checkpoint entries belong to
 		// the source session identity rather than the child.
 		const entriesToKeep = branchPath.filter(entry => entry.type !== "label" && !isSessionIncarnationTelemetry(entry));
+		// This synchronous API cannot await the fork\x27s verified evidence copy.
+		// Refuse before mutating source lifecycle or session identity. A foreign
+		// ?session= link is not locally owned and need not be copied.
+		if (this.#persist && SessionManager.#localArtifactReferences(entriesToKeep, this.#sessionId).size > 0) {
+			throw new Error("Cannot branch session: retained local artifact evidence cannot be preserved synchronously");
+		}
+		this.#endLifecycle("session_switched");
 		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
 		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
 		for (const [targetId, label] of this.#index.labelsInEffect()) {
@@ -3528,6 +3540,8 @@ export class SessionManager {
 		this.#lifecycleEnded = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		// The new session must allocate into its own sidecar rather than a former parent's.
+		this.#adoptedArtifactManager = null;
 		this.#forceFileCreation = this.#persist;
 
 		if (!this.#persist) {
