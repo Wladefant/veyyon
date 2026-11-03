@@ -127,6 +127,11 @@ describe("producer output withholds multiline registered literals", () => {
 				values: ["Expected response", "completed"],
 				visible: true,
 			},
+			{
+				input: "[\n{ ALPHA: 'fake-a' },\n{ BETA: 'fake-b' },\n{ GAMMA: 'fake-c' }\n]\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
 		];
 
 		for (const { input, values, visible } of cases) {

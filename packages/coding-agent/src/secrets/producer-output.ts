@@ -31,8 +31,14 @@ function quotedEnd(text: string, start: number): number {
 
 function structuredStart(text: string): number {
 	// A serialized scalar can contain braces, but console labels are raw text.
-	let brace = text.indexOf("{");
 	let start = text.search(/\S/);
+	if (start >= 0 && text[start] === "[") {
+		let next = start + 1;
+		while (next < text.length && /\s/.test(text[next])) next++;
+		if (text[next] === "{") return start;
+		if (next === text.length) return start;
+	}
+	let brace = text.indexOf("{");
 	while (start >= 0 && start < brace) {
 		if (text[start] === '"') {
 			const end = quotedEnd(text, start);
