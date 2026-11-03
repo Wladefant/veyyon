@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Remote auth-broker paces premature conditional HTTP 304 replies to the existing freshness deadline and backs off invalid unconditional 304 responses instead of hot-looping snapshot requests ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker long-poll fallback periodically requests an unconditional canonical snapshot when idle, preventing a broker restart with a reused numeric generation from hiding credential revocation behind repeated HTTP 304 responses ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker ignores countdown-only same-generation SSE replays for snapshot freshness, preserving authoritative revoke reconciliation and legitimate refresh-policy updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker ignores unchanged same-generation SSE replays, including reordered snapshots and locally pending safety-block overlays, so duplicated frames cannot defer idle broker reconciliation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
