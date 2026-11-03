@@ -456,6 +456,34 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/**
+	 * A same-generation snapshot is not new broker progress when its effective
+	 * credential state and refresh policy have not changed. The broker recomputes
+	 * timestamps and countdowns on every response; those cannot postpone an
+	 * authoritative reconciliation. Preserve pending local safety blocks while
+	 * comparing broker frames, just as for SSE, without changing wire values.
+	 */
+	#isNoProgressSnapshot(snapshot: SnapshotResponse): boolean {
+		if (snapshot.generation !== this.#generation) return false;
+		const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
+		return (
+			isDeepStrictEqual(
+				snapshot.credentials
+					.map(entry =>
+						credentialSseProgressState(this.#retainPendingCredentialBlocks(
+							normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
+						)),
+					)
+					.sort((a, b) => a.id - b.id),
+				this.#snapshot.credentials.map(credentialSseProgressState).sort((a, b) => a.id - b.id),
+			) &&
+			isDeepStrictEqual(
+				refresherSseProgressState(snapshot.refresher),
+				refresherSseProgressState(this.#snapshot.refresher),
+			)
+		);
+	}
+
 	async #pollSnapshot(): Promise<void> {
 		const generationAtRequest = this.#generation;
 		const revisionAtRequest = this.#appliedSnapshotRevision;
@@ -477,16 +505,20 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					},
 		);
 		if (result.status === 200) {
-			this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
-			return;
-		}
-		if (needsCanonicalVerification) {
+			// A conditional 200 with no durable progress is no fresher than a 304:
+			// a broken relay may replay only different timestamps/countdowns forever.
+			// Unconditional canonical GETs are authoritative even at a reused generation.
+			if (needsCanonicalVerification || !this.#isNoProgressSnapshot(result.snapshot)) {
+				this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				return;
+			}
+		} else if (needsCanonicalVerification) {
 			// An unconditional read must return broker truth; a 304 cannot establish freshness.
 			throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
 		}
-		// A faulty proxy may return 304 immediately instead of holding the requested
-		// long-poll. Pace only the unused wait window, capped by the existing
-		// monotonic canonical-GET deadline, so stale state is never kept longer.
+		// A faulty proxy may return 304 or an unchanged 200 immediately instead
+		// of holding the requested long-poll. Pace only the unused wait window,
+		// capped by the monotonic canonical-GET deadline.
 		const remainingPollMs = BACKGROUND_WAIT_MS - (performance.now() - pollStartedAt);
 		const remainingVerifyMs =
 			this.#snapshotStreamVerifyIntervalMs - (performance.now() - this.#snapshotReceivedMonotonicAt);
@@ -623,23 +655,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// in-flight GETs through the applied-revision fence.
 				// Compare the effective view: a locally pending safety block can be
 				// absent from an unchanged broker frame without being fresh state.
-				const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
-				if (
-					snapshot.generation === this.#generation &&
-					isDeepStrictEqual(
-						// A full broker snapshot is keyed by credential ID, not row order.
-						// Permuting unchanged rows cannot defer the canonical GET watchdog.
-						snapshot.credentials
-							.map(entry =>
-								credentialSseProgressState(this.#retainPendingCredentialBlocks(
-									normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
-								)),
-							)
-							.sort((a, b) => a.id - b.id),
-						this.#snapshot.credentials.map(credentialSseProgressState).sort((a, b) => a.id - b.id),
-					) &&
-					isDeepStrictEqual(refresherSseProgressState(snapshot.refresher), refresherSseProgressState(this.#snapshot.refresher))
-				) return;
+				if (this.#isNoProgressSnapshot(snapshot)) return;
 				this.#applySnapshot(snapshot, snapshot.generation);
 				return;
 			}
