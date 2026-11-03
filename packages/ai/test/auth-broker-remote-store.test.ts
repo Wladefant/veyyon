@@ -268,6 +268,57 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(canonical.snapshot.credentials).toEqual([]);
 	});
 
+
+	test("permuted no-progress full SSE snapshots cannot postpone broker revocation", async () => {
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		// Both rows are genuine synthetic broker credentials. A full snapshot's
+		// position is not an authorization or freshness dimension.
+		storage!.upsertCredential("anthropic", mintOAuthCredential("permutation", Date.now() + 120_000));
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		expect(initial.snapshot.credentials).toHaveLength(2);
+		const revokedId = initial.snapshot.credentials[0]!.id;
+		const survivorId = initial.snapshot.credentials[1]!.id;
+		const reordered = {
+			...initial.snapshot,
+			credentials: [...initial.snapshot.credentials].reverse(),
+		};
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const connected = Promise.withResolvers<void>();
+		let replayed = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			connected.resolve();
+			while (!opts.signal?.aborted) {
+				// Alternating arrays contain exactly the same IDs and bytes.
+				// Before the fix each permutation reset the idle-GET timer.
+				yield { kind: "snapshot" as const, ...reordered };
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				replayed += 2;
+				await Bun.sleep(5);
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+		});
+		await connected.promise;
+		await waitUntil(() => replayed >= 10);
+		expect(remote.snapshot.credentials.map(entry => entry.id).sort()).toEqual(
+			[revokedId, survivorId].sort(),
+		);
+		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke during permuted SSE")).toBe(true);
+		// No manual refresh or new SSE generation is sent: only the production
+		// canonical watchdog GET can see the broker's deletion.
+		await waitUntil(() =>
+			remote!.snapshot.credentials.length === 1 &&
+			remote.snapshot.credentials[0]?.id === survivorId,
+		);
+		expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivorId]);
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(canonical.snapshot.credentials.map(entry => entry.id)).toEqual([survivorId]);
+	});
+
 	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
