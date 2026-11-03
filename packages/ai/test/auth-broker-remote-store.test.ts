@@ -112,6 +112,56 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials).toEqual([]);
 	});
 
+	test("does not resurrect a peer-revoked credential from the first SSE frame after idle GET", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const originalStream = client.openSnapshotStream.bind(client);
+		const streamConnected = Promise.withResolvers<void>();
+		const releaseOldFirstFrame = Promise.withResolvers<void>();
+		const oldFrameHandled = Promise.withResolvers<void>();
+		let connections = 0;
+
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			// Only the first connection delivers the stale snapshot. A reconnect
+			// must read the real SQLite-backed broker's new canonical state.
+			if (connections++ > 0) {
+				yield* originalStream(opts);
+				return;
+			}
+			streamConnected.resolve();
+			await releaseOldFirstFrame.promise;
+			try {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+			} finally {
+				oldFrameHandled.resolve();
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await streamConnected.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		expect(storage!.disableCredentialById(id, "synthetic peer revoke before delayed first SSE frame")).toBe(true);
+
+		// This change MUST arrive from the new automatic pre-frame watchdog,
+		// not from a manually requested GET or any SSE event.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+
+		// The now-superseded initial frame still contains the revoked ID.
+		// It must be rejected rather than restoring the old credential.
+		releaseOldFirstFrame.resolve();
+		await oldFrameHandled.promise;
+		expect(remote.snapshot.credentials).toEqual([]);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected canonical broker snapshot");
+		expect(authoritative.snapshot.credentials).toEqual([]);
+	});
+
 	test("reconciles peer revocation after an established SSE stream silently stalls", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
