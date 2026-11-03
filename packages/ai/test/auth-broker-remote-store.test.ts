@@ -132,7 +132,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				return;
 			}
 			streamConnected.resolve();
-			await releaseOldFirstFrame.promise;
+			// If an assertion fails before the frame is released, teardown must
+			// still unblock this generator when RemoteAuthCredentialStore closes.
+			const releaseOnAbort = () => releaseOldFirstFrame.resolve();
+			opts.signal?.addEventListener("abort", releaseOnAbort, { once: true });
+			try {
+				await releaseOldFirstFrame.promise;
+			} finally {
+				opts.signal?.removeEventListener("abort", releaseOnAbort);
+			}
+			if (opts.signal?.aborted) return;
 			try {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 			} finally {
