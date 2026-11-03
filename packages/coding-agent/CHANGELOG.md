@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP disconnects retire pending handshakes and join each server's complete teardown without reviving removed tools ([Refs #893](https://github.com/Wladefant/veyyon/issues/893)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
