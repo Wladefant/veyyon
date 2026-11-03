@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import type { AssistantMessage, Model } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AssistantMessage, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -14,6 +14,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "@veyyon/coding-agent/tools/agent/tod
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { ArgotSession, type Vocabulary } from "argot";
+
 const MODEL = getBundledModel("anthropic", "claude-sonnet-4-5") as Model;
 const SECRET = "SESSION_DISPLAY_SECRET_6281";
 const EXPANSION = "src/database/connection.ts";
@@ -145,8 +146,14 @@ describe("external turn adoption keeps real AgentSession state current", () => {
 		expect(projected[0]).toMatchObject({ role: "custom", display: true, content: "visible custom fixture" });
 		const assistantEntry = manager
 			.getBranch()
-			.find(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(block => block.type === "text" && block.text.includes("§dbconn")));
-		if (!assistantEntry) throw new Error("Expected the adopted assistant message carrying a handle and secret placeholder");
+			.find(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.content.some(block => block.type === "text" && block.text.includes("§dbconn")),
+			);
+		if (!assistantEntry)
+			throw new Error("Expected the adopted assistant message carrying a handle and secret placeholder");
 		const assistantDisplay = session.buildDisplayMessagesForEntry(assistantEntry);
 		expect(assistantDisplay[0]).toMatchObject({
 			role: "assistant",
