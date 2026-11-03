@@ -215,6 +215,12 @@ Blob implications after fork:
 
 - blobs are global and content-addressed, so no blob directory copy is required.
 
+### Synchronous session branching (`/branch` and `/btw`)
+
+Unlike the awaited `fork()` and `forkFrom()` paths above, `SessionManager.createBranchedSession(leafId)` is synchronous and cannot perform an evidence copy with asynchronous preflight and digest verification. For a persisted branch whose retained history contains a **locally owned** numeric `artifact://N` reference (including an encoded numeric ID or an explicit source-session ID), it **refuses before ending the original lifecycle or changing session identity** rather than publishing a new JSONL whose local evidence cannot be resolved. This is a fail-closed interim limitation, not support for branching a transcript with local recovery evidence. A valid explicit `?session=<other-session-id>` reference remains foreign and does not trigger a local copy or refusal.
+
+For an otherwise eligible branch with no retained local references, the existing synchronous branch still succeeds; on identity switch it discards any previously adopted parent `ArtifactManager`, so subsequent artifact output belongs only to the new session sidecar. The original parent evidence remains untouched. A full retained-local-evidence branch requires a separately owned asynchronous contract and caller migration; no automatic link reparenting, source pruning, or destructive recovery is performed here.
+
 ### Move to new cwd
 
 `SessionManager.moveTo()` relocates both session file and artifact directory with rollback logic if a later step fails, but the destination depends on how storage was chosen: an explicit `targetSessionDir` wins; a session created with an explicit `sessionDir` stays pinned in place; a managed cwd-encoded directory is re-derived for the new cwd under the same sessions root; anything else re-roots into the default session directory for the new cwd. This preserves artifact identity while relocating session scope.
