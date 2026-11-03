@@ -42,7 +42,10 @@ function pinnedBunVersion(): string {
 	return match[1];
 }
 
-async function runDetectStep(installedVersion: string, packageManager = `bun@${pinnedBunVersion()}`): Promise<DetectStepResult> {
+async function runDetectStep(
+	installedVersion: string,
+	packageManager = `bun@${pinnedBunVersion()}`,
+): Promise<DetectStepResult> {
 	const action = Bun.YAML.parse(await Bun.file(".github/actions/bun-install/action.yml").text()) as CompositeAction;
 	const step = action.runs.steps.find(candidate => candidate.name === "Detect bun");
 	if (!step?.run) throw new Error("bun-install action has no bun detection step");
@@ -75,8 +78,12 @@ async function runDetectStep(installedVersion: string, packageManager = `bun@${p
 	if (exitCode !== 0) throw new Error(`bun detection failed: ${stderr}`);
 	const [output, env, pathOutput] = await Promise.all([
 		Bun.file(outputPath).text(),
-		Bun.file(envPath).text().catch(() => ""),
-		Bun.file(pathPath).text().catch(() => ""),
+		Bun.file(envPath)
+			.text()
+			.catch(() => ""),
+		Bun.file(pathPath)
+			.text()
+			.catch(() => ""),
 	]);
 	const match = /^BUN_INSTALL=(.+)$/m.exec(env);
 	return {

@@ -12,7 +12,7 @@ describe("OVH process-group lifecycle", () => {
 		() => {
 			// Process-group cleanup depends on Linux sessions, signals, and /proc state.
 			const output = execFileSync("python3", [TEST], { encoding: "utf8", timeout: 60_000 });
-			expect(output).toContain("ovh-process-group: 17 passed, 0 failed");
+			expect(output).toContain("ovh-process-group: 18 passed, 0 failed");
 		},
 		LIFECYCLE_TEST_TIMEOUT_MS,
 	);

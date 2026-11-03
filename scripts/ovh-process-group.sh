@@ -54,6 +54,24 @@ if (($# == 0)); then
 fi
 
 owner="$(make_owner)"
+child_group_has_live_processes() {
+  local process_list status
+  if ! process_list="$(ps -eo pgid=,stat=)"; then
+    echo "::error::Could not inspect child process group $child_pid during cleanup" >&2
+    return 2
+  fi
+  if printf '%s\n' "$process_list" | awk -v pgid="$child_pid" '$1 == pgid && $2 !~ /^Z/ { live = 1 } END { exit !live }'; then
+    return 0
+  else
+    status=$?
+    if (( status == 1 )); then
+      return 1
+    fi
+    echo "::error::Could not inspect child process group $child_pid during cleanup" >&2
+    return 2
+  fi
+}
+
 cleanup() {
   trap '' INT TERM
   local i
@@ -77,15 +95,26 @@ cleanup() {
     wait "$child_pid" 2>/dev/null || true
 
     # KILL is asynchronous for descendants; wait briefly until live group members exit.
-    local i
+    local process_status
     for ((i = 0; i < 20; i++)); do
-      if ! ps -eo pgid=,stat= | awk -v pgid="$child_pid" '$1 == pgid && $2 !~ /^Z/ { live = 1 } END { exit !live }'; then
+      if child_group_has_live_processes; then
+        sleep 0.05
+      else
+        process_status=$?
+        if (( process_status == 1 )); then
+          return 0
+        fi
+        return 1
+      fi
+    done
+    if child_group_has_live_processes; then
+      echo "::error::Live processes remain in child process group $child_pid after cleanup deadline" >&2
+      return 1
+    else
+      process_status=$?
+      if (( process_status == 1 )); then
         return 0
       fi
-      sleep 0.05
-    done
-    if ps -eo pgid=,stat= | awk -v pgid="$child_pid" '$1 == pgid && $2 !~ /^Z/ { live = 1 } END { exit !live }'; then
-      echo "::error::Live processes remain in child process group $child_pid after cleanup deadline" >&2
       return 1
     fi
   fi

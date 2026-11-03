@@ -212,6 +212,37 @@ fi
             )
 
 
+def run_process_listing_failure_case():
+    with tempfile.TemporaryDirectory() as directory:
+        fake_bin = Path(directory) / "bin"
+        fake_bin.mkdir()
+        fake_ps = fake_bin / "ps"
+        fake_ps.write_text("""#!/bin/sh
+if [ "$*" = "-eo pgid=,stat=" ]; then
+    exit 1
+fi
+exec /bin/ps "$@"
+""")
+        fake_ps.chmod(0o755)
+        env = dict(os.environ, PATH=f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+        result = subprocess.run(
+            ["bash", str(WRAPPER), "python3", "-c", "pass"],
+            env=env,
+            timeout=5,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        require(
+            result.returncode == 1,
+            f"process listing failure returned {result.returncode}, expected cleanup failure",
+        )
+        require(
+            "Could not inspect child process group" in result.stderr,
+            f"process listing failure lacked its diagnostic: {result.stderr}",
+        )
+
+
 def run_deadline_case(mode):
     run_case(f"independent deadline {mode}", ["python3", "-c", TREE, mode], 124, need_tree=True, timeout="5s")
 
@@ -236,6 +267,7 @@ def main():
     run_deadline_case("deadline-stubborn")
     run_cleanup_case(None)
     run_cleanup_case("0")
+    run_process_listing_failure_case()
     run_cleanup_failure_status_cases()
     workflow_shell = "bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail"
     with tempfile.TemporaryDirectory() as directory:
@@ -244,7 +276,7 @@ def main():
         script.write_text("printf ok | tee \"$OUTPUT\"\n")
         result = subprocess.run(["bash", str(WRAPPER), "bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], env=dict(os.environ, OUTPUT=str(output)), timeout=4, check=False)
         require(result.returncode == 0 and output.read_text() == "ok", f"workflow shell pipeline failed: {workflow_shell}")
-    print("ovh-process-group: 17 passed, 0 failed")
+    print("ovh-process-group: 18 passed, 0 failed")
 
 
 if __name__ == "__main__":
