@@ -1162,6 +1162,58 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
+	test("long-poll reconciles a peer revoke despite equal broker generations after restart", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const originalFetch = client.fetchSnapshot.bind(client);
+		const firstConditional = Promise.withResolvers<void>();
+		let conditionalRequests = 0;
+		let canonicalRequests = 0;
+		// A newly restarted broker may reuse the *same numeric generation* as the
+		// worker's previous epoch. Conditional long-polls then produce 304 even
+		// when an independently revoked credential is absent from broker truth.
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.ifGenerationGt !== undefined) {
+				conditionalRequests += 1;
+				firstConditional.resolve();
+				await scheduler.wait(5, { signal: opts.signal });
+				return { status: 304 as const, generation: initial.snapshot.generation };
+			}
+			canonicalRequests += 1;
+			const authoritative = await originalFetch(opts);
+			if (authoritative.status !== 200) throw new Error("expected unconditional broker snapshot");
+			// Preserve the collided generation on the canonical response too, so
+			// this proves fresh broker *content* is accepted even without a bump.
+			return {
+				status: 200 as const,
+				generation: initial.snapshot.generation,
+				snapshot: { ...authoritative.snapshot, generation: initial.snapshot.generation },
+			};
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			streamSnapshots: false,
+			snapshotStreamVerifyIntervalMs: 80,
+		});
+		await firstConditional.promise;
+		expect(conditionalRequests).toBeGreaterThan(0);
+		expect(canonicalRequests).toBe(0); // normal conditional behavior before freshness deadline
+		expect(storage!.disableCredentialById(id, "synthetic peer revoke across restart collision")).toBe(true);
+		// Without a periodic unconditional GET, repeated equal-generation 304s
+		// never remove the stale grant. No manual refreshSnapshot call is allowed.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(conditionalRequests).toBeGreaterThan(0);
+		expect(canonicalRequests).toBeGreaterThan(0);
+		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const brokerTruth = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
+		if (brokerTruth.status !== 200) throw new Error("expected broker truth");
+		expect(brokerTruth.snapshot.credentials).toEqual([]);
+	});
+
 	test("accepts a lower broker generation after restart without an intervening local update", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
