@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

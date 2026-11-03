@@ -18,9 +18,9 @@ import type {
 	JsonRpcRequest,
 	JsonRpcResponse,
 	MCPRequestOptions,
+	MCPStdioServerConfig,
 	MCPStreamRequest,
 	MCPStreamRequestOptions,
-	MCPStdioServerConfig,
 	MCPTransport,
 	ServerRequestResponse,
 } from "../types";
@@ -478,7 +478,13 @@ export class StdioTransport implements MCPTransport {
 	>();
 	#streamRequests = new Map<
 		string | number,
-		{ onNotification: (notification: JsonRpcMessage) => void; resolve: () => void; reject: (error: Error) => void; signal?: AbortSignal; onAbort?: () => void }
+		{
+			onNotification: (notification: JsonRpcMessage) => void;
+			resolve: () => void;
+			reject: (error: Error) => void;
+			signal?: AbortSignal;
+			onAbort?: () => void;
+		}
 	>();
 	#connected = false;
 	#readLoop: Promise<void> | null = null;
@@ -648,10 +654,19 @@ export class StdioTransport implements MCPTransport {
 			for (const m of message) this.#handleMessage(m);
 			return;
 		}
+		// JSONL can contain primitives; reject each member without losing its valid siblings.
+		if (message === null || typeof message !== "object") {
+			logger.warn("Ignored an unreadable message from an MCP server", {
+				server: this.config.command,
+				failureType: "type",
+				fix: "If a tool call from this server hangs, this is likely why. Check the server's own logs.",
+			});
+			return;
+		}
 		// Validate method-bearing peer frames before interpreting id:null errors:
 		// a request/error hybrid must not reject every pending client call.
 		// Correlated client replies have a separate validation path.
-		if (message !== null && typeof message === "object" && "method" in message) {
+		if ("method" in message) {
 			const params = message.params;
 			if (
 				message.jsonrpc !== "2.0" ||
@@ -708,10 +723,12 @@ export class StdioTransport implements MCPTransport {
 			const stream = this.#streamRequests.get(responseId);
 			if (stream) {
 				if (response.error) {
-					stream.reject(Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
-						code: response.error.code,
-						data: response.error.data,
-					}));
+					stream.reject(
+						Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
+							code: response.error.code,
+							data: response.error.data,
+						}),
+					);
 				} else {
 					stream.resolve();
 				}
@@ -754,9 +771,7 @@ export class StdioTransport implements MCPTransport {
 		const requestParams = {
 			...(params ?? {}),
 			_meta: {
-				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta)
-					? params._meta
-					: {}),
+				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta) ? params._meta : {}),
 				"io.modelcontextprotocol/subscriptionId": id,
 			},
 		};
@@ -960,7 +975,6 @@ export class StdioTransport implements MCPTransport {
 				reject(new Error(mcpTimeoutMessage({ command: this.config.command }, `request "${method}"`, timeout)));
 			}, timeout);
 		}
-
 
 		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
