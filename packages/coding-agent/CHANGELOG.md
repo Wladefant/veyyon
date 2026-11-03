@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Withhold unattributable kernel stderr bytes instead of logging raw ownerless chunks ([Refs #941](https://github.com/Wladefant/veyyon/issues/941)).
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
