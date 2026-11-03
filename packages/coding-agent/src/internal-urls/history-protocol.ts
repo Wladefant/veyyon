@@ -20,6 +20,9 @@
  */
 
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import type { AgentRef } from "../registry/agent-registry";
+import { AgentRegistry } from "../registry/agent-registry";
+import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import {
 	parseExactHistoryRequest,
 	parseHistorySearchRequest,
@@ -28,9 +31,6 @@ import {
 	searchLiveHistoryEntries,
 	searchStoredHistoryEntries,
 } from "./history-exact";
-import type { AgentRef } from "../registry/agent-registry";
-import { AgentRegistry } from "../registry/agent-registry";
-import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
@@ -110,8 +110,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// agent-facing history paths, even if their JSONL is discoverable on disk.
 		const registered = registry.list();
 		const visible = registered.filter(ref => ref.kind !== "advisor");
-		const advisorFolded = new Set(registered.filter(ref => ref.kind === "advisor")
-			.map(ref => ref.id.toLowerCase()));
+		const advisorFolded = new Set(registered.filter(ref => ref.kind === "advisor").map(ref => ref.id.toLowerCase()));
 
 		if (!agentId) {
 			if (url.searchParams.has("entry") || url.searchParams.has("q")) {
@@ -130,8 +129,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// An advisor's registered ID must not turn into a disk fallback when we
 		// hide the ref. Refuse its case aliases too. An exact visible ref remains
 		// usable when another registered advisor differs only in letter case.
-		if (advisorFolded.has(agentId.toLowerCase()) &&
-			(!exactRegistered || exactRegistered.kind === "advisor")) {
+		if (advisorFolded.has(agentId.toLowerCase()) && (!exactRegistered || exactRegistered.kind === "advisor")) {
 			throw new Error(`Unknown agent: ${agentId}`);
 		}
 		let ref = exactRegistered;
@@ -152,9 +150,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// A known registered ref with no live/retained session must never borrow
 		// a different registered identity's disk transcript through case-folded
 		// fallback. Keep unique-ID archival recovery and direct ref reads.
-		const diskFallbackSafe = !advisorFolded.has(agentId.toLowerCase()) &&
-			!registered.some(candidate => candidate.id !== ref?.id &&
-				candidate.id.toLowerCase() === agentId.toLowerCase());
+		const diskFallbackSafe =
+			!advisorFolded.has(agentId.toLowerCase()) &&
+			!registered.some(
+				candidate => candidate.id !== ref?.id && candidate.id.toLowerCase() === agentId.toLowerCase(),
+			);
 
 		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
 		// Resolve only registry-owned or uniquely discovered session files, never a
@@ -183,8 +183,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					? await readStoredHistoryEntry(sessionFile, exactRequest)
 					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
 				const content = JSON.stringify(result, null, 2);
-				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
-					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
+				return {
+					url: url.href,
+					content,
+					contentType: "application/json",
+					size: Buffer.byteLength(content, "utf8"),
+					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"],
+				};
 			}
 			if (ref?.session) {
 				const requestedLeaf = exactRequest ? exactRequest.leafId : searchRequest!.leafId;
@@ -193,8 +198,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
 					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());
 				const content = JSON.stringify(result, null, 2);
-				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
-					notes: ["Active in-memory branch; no persistent session file"] };
+				return {
+					url: url.href,
+					content,
+					contentType: "application/json",
+					size: Buffer.byteLength(content, "utf8"),
+					notes: ["Active in-memory branch; no persistent session file"],
+				};
 			}
 			// Preserve the existing ambiguous/unknown-agent diagnostic below.
 		}
@@ -347,7 +357,9 @@ async function renderIndex(refs: AgentRef[], registeredFolded: ReadonlySet<strin
 	for (const entry of entries) {
 		lines.push(`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} |`);
 	}
-	lines.push("", "Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.");
+	lines.push(
+		"",
+		"Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.",
+	);
 	return `${lines.join("\n")}\n`;
 }
-

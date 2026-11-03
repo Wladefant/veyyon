@@ -61,10 +61,13 @@ function scopedParkedScout(parentId: string, sessionFile: string): void {
 async function createDiskArchive(root: string, id: string, folder = "saved"): Promise<void> {
 	const dir = path.join(root, folder);
 	await fs.mkdir(dir, { recursive: true });
-	await fs.writeFile(path.join(dir, `${id}.jsonl`), [
-		JSON.stringify({ type: "session", id: "saved-session" }),
-		JSON.stringify({ type: "message", id: "saved-entry", parentId: null, message: "saved text" }),
-	].join("\n") + "\n");
+	await fs.writeFile(
+		path.join(dir, `${id}.jsonl`),
+		[
+			JSON.stringify({ type: "session", id: "saved-session" }),
+			JSON.stringify({ type: "message", id: "saved-entry", parentId: null, message: "saved text" }),
+		].join("\n") + "\n",
+	);
 }
 
 function idRows(markdown: string): string[] {
@@ -84,8 +87,7 @@ describe("history:// case-folded disk roster", () => {
 			expect(idRows(index.content)).toHaveLength(1);
 			expect(idRows(index.content)[0]).toContain("| Reviewer |");
 
-			const ids = (await handler.complete()).map(item => item.value)
-				.filter(id => id.toLowerCase() === "reviewer");
+			const ids = (await handler.complete()).map(item => item.value).filter(id => id.toLowerCase() === "reviewer");
 			expect(ids).toEqual(["Reviewer"]);
 			// A lower-cased URL resolves the live registered agent, not the hidden
 			// on-disk spelling. This must agree with what the roster advertises.
@@ -124,12 +126,16 @@ describe("history:// case-folded disk roster", () => {
 			// instead reject their collision. Neither policy may be silently
 			// overridden by the index/completer's registered-name deduplication.
 			const diskNames = [...(await sessionFilesFromDisk()).keys()]
-				.filter(id => id.toLowerCase() === "reviewer").sort();
+				.filter(id => id.toLowerCase() === "reviewer")
+				.sort();
 			const handler = new HistoryProtocolHandler();
 			const indexed = idRows((await handler.resolve(new URL("history://") as never)).content)
-				.map(row => row.split("|")[1]?.trim()).sort();
-			const completed = (await handler.complete()).map(item => item.value)
-				.filter(id => id.toLowerCase() === "reviewer").sort();
+				.map(row => row.split("|")[1]?.trim())
+				.sort();
+			const completed = (await handler.complete())
+				.map(item => item.value)
+				.filter(id => id.toLowerCase() === "reviewer")
+				.sort();
 			expect(indexed).toEqual(diskNames);
 			expect(completed).toEqual(diskNames);
 		} finally {
@@ -144,10 +150,12 @@ describe("history:// case-folded disk roster", () => {
 		const handler = new HistoryProtocolHandler();
 		const index = await handler.resolve(new URL("history://") as never);
 		expect(idRows(index.content)).toHaveLength(2);
-		expect((await handler.complete()).map(item => item.value)
-			.filter(id => id.toLowerCase() === "reviewer")).toEqual(["Reviewer", "reviewer"]);
+		expect((await handler.complete()).map(item => item.value).filter(id => id.toLowerCase() === "reviewer")).toEqual([
+			"Reviewer",
+			"reviewer",
+		]);
 	});
-	
+
 	it("refuses third-case registered aliases in overview, exact reads and search", async () => {
 		// WHY: registry names are exact-case identities, but an unqualified
 		// case-fold fallback used to choose the first of two matching agents.
@@ -156,16 +164,16 @@ describe("history:// case-folded disk roster", () => {
 		const handler = new HistoryProtocolHandler();
 		// parseInternalUrl retains the raw host spelling; new URL() may fold it.
 		for (const suffix of ["", "?q=needle", "?entry=entry-1&offset=0&limit=8000"]) {
-			await expect(handler.resolve(parseInternalUrl(`history://REVIEWER${suffix}`)))
-				.rejects.toThrow("Ambiguous registered agent: REVIEWER");
+			await expect(handler.resolve(parseInternalUrl(`history://REVIEWER${suffix}`))).rejects.toThrow(
+				"Ambiguous registered agent: REVIEWER",
+			);
 		}
 		// Explicit exact spellings are still distinct selectable identities.
 		const upper = await handler.resolve(parseInternalUrl("history://Reviewer"));
 		const lower = await handler.resolve(parseInternalUrl("history://reviewer"));
 		expect(upper.content).toContain("# Reviewer (running)");
 		expect(lower.content).toContain("# reviewer (running)");
-		const names = (await handler.complete()).map(item => item.value)
-			.filter(id => id.toLowerCase() === "reviewer");
+		const names = (await handler.complete()).map(item => item.value).filter(id => id.toLowerCase() === "reviewer");
 		expect(names).toEqual(["Reviewer", "reviewer"]);
 	});
 
@@ -191,10 +199,13 @@ describe("history:// case-folded disk roster", () => {
 			// A live-only root count incorrectly sees one conversation and
 			// leaks B's archived transcript through the process-global registry.
 			const handler = new HistoryProtocolHandler();
-			for (const url of ["history://", "history://Scout", "history://Scout?q=saved",
-				"history://Scout?entry=saved-entry&limit=1000"]) {
-				await expect(handler.resolve(parseInternalUrl(url)))
-					.rejects.toThrow(/2 conversations at once/);
+			for (const url of [
+				"history://",
+				"history://Scout",
+				"history://Scout?q=saved",
+				"history://Scout?entry=saved-entry&limit=1000",
+			]) {
+				await expect(handler.resolve(parseInternalUrl(url))).rejects.toThrow(/2 conversations at once/);
 			}
 			expect(await handler.complete()).toEqual([]);
 		} finally {
@@ -232,7 +243,6 @@ describe("history:// case-folded disk roster", () => {
 		}
 	});
 
-
 	it("keeps discoverable registered advisor transcripts out of every agent-facing history path", async () => {
 		const temp = TempDir.createSync("@veyyon-history-advisor-private-");
 		try {
@@ -263,14 +273,14 @@ describe("history:// case-folded disk roster", () => {
 			// disk fallback, for either markdown or stored exact/search routes.
 			for (const id of ["Guide", "guide", "GUIDE"]) {
 				for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
-					await expect(handler.resolve(parseInternalUrl(`history://${id}${suffix}`)))
-						.rejects.toThrow("Unknown agent");
+					await expect(handler.resolve(parseInternalUrl(`history://${id}${suffix}`))).rejects.toThrow(
+						"Unknown agent",
+					);
 				}
 			}
 			const archived = await handler.resolve(parseInternalUrl("history://Helper?entry=saved-entry&limit=1000"));
 			expect((JSON.parse(archived.content) as { status: string }).status).toBe("ok");
-			expect((await handler.resolve(parseInternalUrl("history://Scout"))).notes)
-				.toContain("Source: live session");
+			expect((await handler.resolve(parseInternalUrl("history://Scout"))).notes).toContain("Source: live session");
 		} finally {
 			await temp.remove();
 		}
@@ -296,11 +306,9 @@ describe("history:// case-folded disk roster", () => {
 			expect(index).toContain("| guide |");
 			expect(index).not.toContain("| Guide |");
 			expect((await handler.complete()).map(item => item.value)).toEqual(["guide"]);
-			expect((await handler.resolve(parseInternalUrl("history://guide"))).notes)
-				.toContain("Source: live session");
+			expect((await handler.resolve(parseInternalUrl("history://guide"))).notes).toContain("Source: live session");
 			for (const name of ["Guide", "GUIDE"]) {
-				await expect(handler.resolve(parseInternalUrl(`history://${name}`)))
-					.rejects.toThrow("Unknown agent");
+				await expect(handler.resolve(parseInternalUrl(`history://${name}`))).rejects.toThrow("Unknown agent");
 			}
 		} finally {
 			await temp.remove();
@@ -325,8 +333,9 @@ describe("history:// case-folded disk roster", () => {
 			expect((await handler.resolve(parseInternalUrl("history://"))).content).toContain("| guide |");
 			expect((await handler.complete()).map(item => item.value)).toEqual(["guide"]);
 			for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
-				await expect(handler.resolve(parseInternalUrl(`history://guide${suffix}`)))
-					.rejects.toThrow("has no transcript");
+				await expect(handler.resolve(parseInternalUrl(`history://guide${suffix}`))).rejects.toThrow(
+					"has no transcript",
+				);
 			}
 		} finally {
 			await temp.remove();
@@ -350,8 +359,9 @@ describe("history:// case-folded disk roster", () => {
 			});
 			const handler = new HistoryProtocolHandler();
 			for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
-				await expect(handler.resolve(parseInternalUrl(`history://Reviewer${suffix}`)))
-					.rejects.toThrow("has no transcript");
+				await expect(handler.resolve(parseInternalUrl(`history://Reviewer${suffix}`))).rejects.toThrow(
+					"has no transcript",
+				);
 			}
 			const existing = await handler.resolve(parseInternalUrl("history://reviewer?entry=saved-entry&limit=1000"));
 			expect((JSON.parse(existing.content) as { status: string }).status).toBe("ok");
@@ -365,11 +375,16 @@ describe("history:// case-folded disk roster", () => {
 			AgentRegistry.resetGlobalForTests();
 			register("Reviewer", true);
 			AgentRegistry.global().register({
-				id: "reviewer", displayName: "reviewer", kind: "sub",
-				session: null, sessionFile: file, status: "parked",
+				id: "reviewer",
+				displayName: "reviewer",
+				kind: "sub",
+				session: null,
+				sessionFile: file,
+				status: "parked",
 			});
-			expect((await handler.resolve(parseInternalUrl("history://Reviewer"))).notes)
-				.toContain("Source: live session");
+			expect((await handler.resolve(parseInternalUrl("history://Reviewer"))).notes).toContain(
+				"Source: live session",
+			);
 
 			// A UNIQUE registered ID without its own file retains the existing
 			// case-insensitive disk archival recovery compatibility.
