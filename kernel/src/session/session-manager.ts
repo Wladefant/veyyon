@@ -2214,32 +2214,41 @@ export class SessionManager {
 		await this.#refreshForeignLines();
 		return this.#foreignLines.length > 0;
 	}
+
 	/**
-	 * Adopt a completed turn written by another manager to this transcript.
+	 * Adopt a completed turn written by another manager to this transcript, and
+	 * return the ids of the entries it adopted, in branch order. An empty result
+	 * means nothing changed.
 	 *
 	 * The stat/version check in {@link #refreshForeignLines} keeps the ordinary
-	 * no-change path cheap. A foreign line triggers one full load; only a new
-	 * assistant turn on the active branch is adopted. The caller must use this
-	 * only while its agent is idle.
+	 * no-change path cheap. A foreign line triggers one full load. The foreign
+	 * entries are adopted only when they extend the branch this manager holds
+	 * right now: the first unknown entry must be a child of the current leaf, so a
+	 * sibling branch or a metadata-only append never moves the selected leaf. The
+	 * extension must also end in a finished run: its last message is an assistant
+	 * message that is not waiting on a tool, and every tool call in it has a
+	 * result. Anything else stays foreign and the local branch is kept. The caller
+	 * must use this only while its agent is idle.
 	 */
-	async refreshExternalTurn(): Promise<boolean> {
-		if (!(await this.holdsForeignEntries())) return false;
+	async refreshExternalTurn(): Promise<readonly string[]> {
+		if (!(await this.holdsForeignEntries())) return [];
 		const sessionFile = this.#sessionFile;
-		if (!sessionFile) return false;
+		if (!sessionFile) return [];
 
 		// Flush local appends before loading, so the foreign adoption cannot discard
 		// entries that were still pending in this manager's writer.
 		await this.flush();
+		const capturedLeafId = this.#index.leafId();
 		const resolvedSessionFile = path.resolve(sessionFile);
 		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
 			coolCompactedHistory: true,
 		});
-		if (loaded.entries.length < 2) return false;
+		if (loaded.entries.length < 2) return [];
 
 		const fileEntries = loaded.entries;
 		const header = fileEntries[0] as SessionHeader;
-		if (header.id !== this.#sessionId) return false;
+		if (header.id !== this.#sessionId) return [];
 		await resolveBlobRefsInEntries(
 			fileEntries,
 			new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
@@ -2252,14 +2261,16 @@ export class SessionManager {
 		const entries = fileEntries.slice(1) as SessionEntry[];
 		const byId = new Map(entries.map(entry => [entry.id, entry]));
 		const activePath = walkBranchPath(byId, entries.at(-1));
-		const lastMessage = [...activePath].reverse().find(entry => entry.type === "message");
-		const hasNewActiveEntry = activePath.some(entry => !this.#index.has(entry.id));
-		if (!hasNewActiveEntry || lastMessage?.message.role !== "assistant") return false;
+		const adopted = this.#completedExtensionOf(capturedLeafId, activePath);
+		// The awaited load can race a local selection or append; adopt only against
+		// the branch the extension was validated for.
+		if (adopted.length === 0 || this.#index.leafId() !== capturedLeafId) return [];
 
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		const lifecycleStarted = this.#lifecycleStarted;
 		const lifecycleEnded = this.#lifecycleEnded;
 		await this.#drainAndCloseWriter();
+		if (this.#index.leafId() !== capturedLeafId) return [];
 		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
 		this.#applyEntries(header, entries, loaded.cold?.usage);
 		this.#lifecycleStarted = lifecycleStarted;
@@ -2278,7 +2289,38 @@ export class SessionManager {
 		}
 		if (loaded.layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(loaded.layout);
 		this.#coolUnreachablePayloads();
-		return true;
+		return adopted.map(entry => entry.id);
+	}
+
+	/**
+	 * The entries of `activePath` this manager does not hold, when they are a
+	 * finished extension of the branch ending at `leafId`; otherwise none.
+	 */
+	#completedExtensionOf(leafId: string | null, activePath: readonly SessionEntry[]): readonly SessionEntry[] {
+		const firstUnknown = activePath.findIndex(entry => !this.#index.has(entry.id));
+		if (firstUnknown < 0) return [];
+		const extension = activePath.slice(firstUnknown);
+		if (extension.some(entry => this.#index.has(entry.id))) return [];
+		if ((extension[0]!.parentId ?? null) !== leafId) return [];
+
+		const calls = new Set<string>();
+		const results = new Set<string>();
+		let lastMessage: AgentMessage | undefined;
+		for (const entry of extension) {
+			if (entry.type !== "message") continue;
+			const message = entry.message;
+			lastMessage = message;
+			if (message.role === "assistant") {
+				for (const block of message.content) if (block.type === "toolCall") calls.add(block.id);
+			} else if (message.role === "toolResult") {
+				results.add(message.toolCallId);
+			}
+		}
+		if (lastMessage?.role !== "assistant" || (lastMessage.stopReason !== "stop" && lastMessage.stopReason !== "length")) {
+			return [];
+		}
+		for (const id of calls) if (!results.has(id)) return [];
+		return extension;
 	}
 
 	/**
@@ -2982,6 +3024,16 @@ export class SessionManager {
 			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index, options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
+	}
+
+	/**
+	 * The display transcript one persisted entry contributes: its message, its
+	 * visible custom message or its compaction divider, and nothing for entries
+	 * that carry no message. Built from the entry alone, so a caller that tracks
+	 * entries by id can map each id to what the transcript shows for it.
+	 */
+	buildEntryContext(entry: SessionEntry, options?: BuildSessionContextOptions): SessionContext {
+		return buildSessionContextFromPath([entry], { ...options, transcript: true, keepDanglingToolCalls: true });
 	}
 
 	/**

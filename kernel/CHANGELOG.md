@@ -7,6 +7,7 @@
 ### Fixed
 
 - Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- External-turn reconciliation preserves the selected branch and accepts only completed descendant runs with settled tool calls ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
 
 ## [1.7.5] - 2026-11-02
 

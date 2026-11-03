@@ -3,10 +3,35 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { makeAssistantMessage } from "./helpers";
 
 const directories: string[] = [];
+
+class PausedReadStorage extends FileSessionStorage {
+	#started = Promise.withResolvers<void>();
+	#release = Promise.withResolvers<void>();
+	#paused = false;
+
+	pauseNextRead(): Promise<void> {
+		this.#paused = true;
+		return this.#started.promise;
+	}
+
+	resumeRead(): void {
+		this.#release.resolve();
+	}
+
+	override async readText(filePath: string): Promise<string> {
+		if (this.#paused) {
+			this.#paused = false;
+			this.#started.resolve();
+			await this.#release.promise;
+		}
+		return super.readText(filePath);
+	}
+}
 
 afterEach(() => {
 	for (const directory of directories.splice(0)) removeSyncWithRetries(directory);
@@ -61,7 +86,9 @@ describe("a warm session with a sequential external writer", () => {
 		await writeExternalTurn(file, directory, marker);
 
 		expect(await warm.holdsForeignEntries()).toBe(true);
-		expect(await warm.refreshExternalTurn()).toBe(true);
+		const adopted = await warm.refreshExternalTurn();
+		expect(adopted).toHaveLength(2);
+		expect(adopted).toEqual(warm.getBranch().slice(-2).map(entry => entry.id));
 		expect(contextText(warm)).toContain(marker);
 		expect(warm.getSessionFile()).toBe(file);
 
@@ -83,9 +110,127 @@ describe("a warm session with a sequential external writer", () => {
 		const directory = await makeWorkspace();
 		const { file, warm } = await seedWarmSession(directory);
 
-		expect(await warm.refreshExternalTurn()).toBe(false);
+		expect(await warm.refreshExternalTurn()).toEqual([]);
 		expect(warm.getSessionFile()).toBe(file);
 		expect(contextText(warm)).toContain("Stored the first marker.");
+		await warm.close();
+	});
+
+	// WHY: an external branch that does not extend the warm leaf must never replace the warm
+	// active branch. Closes: sibling-branch adoption. Leaves open: concurrent local writes
+	// racing the load (guarded by the leaf recheck, not driven here).
+	it("keeps its own branch when the external writer branched away from an earlier entry", async () => {
+		const directory = await makeWorkspace();
+		const { file, warm } = await seedWarmSession(directory);
+		const warmLeaf = warm.getLeafId();
+		const firstEntry = warm.getBranch()[0];
+		if (!firstEntry) throw new Error("the seeded session has no entries");
+
+		const external = await SessionManager.open(file, directory);
+		external.branch(firstEntry.id);
+		external.appendMessage({ role: "user", content: "Sibling question.", timestamp: 2 });
+		external.appendMessage(makeAssistantMessage("SIBLING-MARKER"));
+		await external.flush();
+		await external.close();
+
+		expect(await warm.refreshExternalTurn()).toEqual([]);
+		expect(warm.getLeafId()).toBe(warmLeaf);
+		expect(contextText(warm)).not.toContain("SIBLING-MARKER");
+		await warm.close();
+	});
+
+	// WHY: an assistant message alone does not prove the external run finished. Closes: adopting
+	// a turn whose assistant message still waits on a tool, or has a tool call with no result.
+	it("does not adopt an external run that is still waiting on a tool", async () => {
+		const directory = await makeWorkspace();
+		const { file, warm } = await seedWarmSession(directory);
+		const leaf = warm.getLeafId();
+
+		const external = await SessionManager.open(file, directory);
+		external.appendMessage({ role: "user", content: "Run a tool.", timestamp: 2 });
+		external.appendMessage({
+			...makeAssistantMessage("Calling."),
+			content: [{ type: "toolCall" as const, id: "call-1", name: "bash", arguments: {} }],
+			stopReason: "toolUse" as const,
+		});
+		await external.flush();
+		await external.close();
+
+		expect(await warm.refreshExternalTurn()).toEqual([]);
+		expect(warm.getLeafId()).toBe(leaf);
+		await warm.close();
+	});
+
+	// WHY: a persisted assistant message is not terminal when generation failed or was
+	// cancelled. Closes: adopting a nonterminal assistant boundary. Leaves open: provider
+	// execution status beyond the persisted stop reason.
+	it("does not adopt an external assistant message with a failed or cancelled stop reason", async () => {
+		for (const stopReason of ["error", "aborted"] as const) {
+			const directory = await makeWorkspace();
+			const { file, warm } = await seedWarmSession(directory);
+			const leaf = warm.getLeafId();
+
+			const external = await SessionManager.open(file, directory);
+			external.appendMessage({ role: "user", content: "Continue.", timestamp: 2 });
+			external.appendMessage({
+				...makeAssistantMessage("The run did not finish."),
+				stopReason,
+			});
+			await external.flush();
+			await external.close();
+
+			expect(await warm.refreshExternalTurn()).toEqual([]);
+			expect(warm.getLeafId()).toBe(leaf);
+			await warm.close();
+		}
+	});
+
+	// WHY: a valid turn on a sibling branch must not replace an explicit local
+	// selection. Closes: divergent ancestry adoption. Leaves open: races after load.
+	it("keeps an explicitly selected branch when external history diverges from it", async () => {
+		const directory = await makeWorkspace();
+		const { file, warm } = await seedWarmSession(directory);
+		const branchEntry = warm.getBranch()[0];
+		if (!branchEntry) throw new Error("the seeded session has no entries");
+		warm.branch(branchEntry.id);
+		const selectedLeaf = warm.getLeafId();
+
+		const external = await SessionManager.open(file, directory);
+		external.appendMessage({ role: "user", content: "Foreign turn.", timestamp: 2 });
+		external.appendMessage(makeAssistantMessage("FOREIGN-DIVERGENT"));
+		await external.flush();
+		await external.close();
+
+		expect(await warm.refreshExternalTurn()).toEqual([]);
+		expect(warm.getLeafId()).toBe(selectedLeaf);
+		expect(contextText(warm)).not.toContain("FOREIGN-DIVERGENT");
+		await warm.close();
+	});
+	// WHY: an asynchronous file load can finish after the user selects another branch.
+	// Closes: adopting a valid extension onto a stale local selection.
+	it("keeps a branch selected while loading foreign history", async () => {
+		const directory = await makeWorkspace();
+		const storage = new PausedReadStorage();
+		const warm = SessionManager.create(directory, directory, storage);
+		warm.appendMessage({ role: "user", content: "Remember the first marker.", timestamp: 1 });
+		warm.appendMessage(makeAssistantMessage("Stored the first marker."));
+		await warm.flush();
+		const file = warm.getSessionFile();
+		if (!file) throw new Error("the seeded session has no transcript file");
+		const firstEntry = warm.getBranch()[0];
+		if (!firstEntry) throw new Error("the seeded session has no entries");
+
+		await writeExternalTurn(file, directory, "RACE-MARKER");
+		const loadStarted = storage.pauseNextRead();
+		const refresh = warm.refreshExternalTurn();
+		await loadStarted;
+		warm.branch(firstEntry.id);
+		const selectedLeaf = warm.getLeafId();
+		storage.resumeRead();
+
+		expect(await refresh).toEqual([]);
+		expect(warm.getLeafId()).toBe(selectedLeaf);
+		expect(contextText(warm)).not.toContain("RACE-MARKER");
 		await warm.close();
 	});
 });
