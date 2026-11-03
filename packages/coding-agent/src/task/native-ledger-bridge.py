@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 workflows_dir = os.environ.get("VEYYON_WORKFLOWS_DIR")
@@ -262,6 +263,44 @@ def get_iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
+    """Validate the persisted execution identity without changing accountable ownership."""
+    if any(req.get(key) not in (None, "") for key in ("native_run_id", "native_task_handle")):
+        return "Legacy native identity requires an explicit owner decision"
+    if "native_claim" not in req:
+        return None
+    claim = req["native_claim"]
+    if not isinstance(claim, dict) or set(claim) != {"version", "state", "worker_id", "run_id", "task_handle"}:
+        return "Malformed native claim"
+    if type(claim["version"]) is not int or claim["version"] != 1:
+        return "Unsupported native claim version"
+    if claim["state"] == "retryable":
+        if any(claim[key] is not None for key in ("worker_id", "run_id", "task_handle")):
+            return "Retryable native claim still has an execution identity"
+        return None
+    if claim["state"] != "active":
+        return "Unsupported native claim state"
+    if any(not isinstance(claim[key], str) or not claim[key].strip() for key in ("worker_id", "run_id")):
+        return "Active native claim has no worker or run identity"
+    handle = claim["task_handle"]
+    if handle is not None and (not isinstance(handle, str) or not handle.startswith("agent://") or not handle[8:].strip()):
+        return "Invalid native task handle"
+    if handle is not None and handle.removeprefix("agent://") != claim["worker_id"]:
+        return "Conflicting native worker and task identities"
+    return None
+
+
+def retryable_native_claim() -> Dict[str, Any]:
+    return {"version": 1, "state": "retryable", "worker_id": None, "run_id": None, "task_handle": None}
+
+
+def active_native_claim(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if native_claim_error(req):
+        return None
+    claim = req.get("native_claim")
+    return claim if claim and claim["state"] == "active" else None
+
+
 def cmd_claim(args: argparse.Namespace) -> int:
     ledger_path = os.path.abspath(args.ledger)
     lock_path = ledger_path + ".lock"
@@ -307,9 +346,14 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
             state = str(req.get("state") or "pending").lower()
 
-            # Skip if claimed and in progress by an active owner
-            owner = str(req.get("owner") or "").strip()
-            if owner and state != "pending":
+            # Accountable owners are not execution identities. Never-native human
+            # work stays excluded; only an explicit retryable claim can resume it.
+            if native_claim_error(req):
+                continue
+            claim = req.get("native_claim")
+            if claim and claim["state"] == "active":
+                continue
+            if not claim and req.get("owner") and state != "pending":
                 continue
 
             # 5. Check decision blockers
@@ -375,7 +419,6 @@ def cmd_claim(args: argparse.Namespace) -> int:
         from_state = chosen_req.get("state") or "pending"
         to_state = "implementation" if from_state.lower() == "pending" else chosen_req.get("state")
         chosen_req["state"] = to_state
-        chosen_req["owner"] = worker_id
         chosen_req["claimed_at"] = now_iso
         chosen_req["updated_at"] = now_iso
 
@@ -441,10 +484,15 @@ def cmd_claim(args: argparse.Namespace) -> int:
             if native_ticket.prompt:
                 prepared_prompt = native_ticket.prompt
         else:
-            run_id = f"native_{chosen_id}_{int(time.time()*1000)}"
+            run_id = f"native_{chosen_id}_{uuid.uuid4().hex}"
 
-        chosen_req["native_run_id"] = run_id
-        chosen_req["native_task_handle"] = ""
+        if not isinstance(run_id, str) or not run_id.strip() or not worker_id.strip():
+            print(json.dumps({"claimed": False, "reason": "Invalid native worker or run identity"}))
+            return 0
+        chosen_req["native_claim"] = {
+            "version": 1, "state": "active", "worker_id": worker_id,
+            "run_id": run_id, "task_handle": None,
+        }
 
         # Write file atomically inside FileLock
         temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
@@ -459,7 +507,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "task": prepared_prompt,
             "state": to_state,
             "previousState": from_state,
-            "owner": worker_id,
+            "owner": chosen_req.get("owner", ""),
             "role": str(chosen_req.get("agent_role") or "task"),
             "criteria": chosen_req.get("criteria", []),
             "dependencies": chosen_req.get("dependencies", []),
@@ -486,42 +534,38 @@ def cmd_claim(args: argparse.Namespace) -> int:
 def cmd_record_dispatch(args: argparse.Namespace) -> int:
     run_id = args.run_id
     task_handle = args.task_handle
-    if WorkerBackend is not None:
-        try:
-            backend = WorkerBackend(state_dir=os.path.abspath(args.state_dir))
-            ticket = backend.record_native_dispatch(run_id, task_handle)
-        except Exception as e:
-            print(json.dumps({"recorded": False, "error": str(e)}))
+    if not args.ledger or not args.ticket_id:
+        print(json.dumps({"recorded": False, "error": "A ledger claim is required for native dispatch"}))
+        return 1
+    ledger_path = os.path.abspath(args.ledger)
+    with FileLock(ledger_path + ".lock", timeout=float(args.timeout)):
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        req = data.get("requests", {}).get(args.ticket_id)
+        claim = active_native_claim(req) if req else None
+        if (not claim or claim["run_id"] != run_id
+                or not task_handle.startswith("agent://") or not task_handle[8:].strip()
+                or claim["task_handle"] not in (None, task_handle)):
+            print(json.dumps({"recorded": False, "error": "Ledger claim no longer owns this native dispatch"}))
             return 1
-    else:
         ticket = None
-
-    if args.ledger and args.ticket_id:
-        ledger_path = os.path.abspath(args.ledger)
-        lock_path = ledger_path + ".lock"
-        with FileLock(lock_path, timeout=float(args.timeout)):
-            with open(ledger_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            req = data.get("requests", {}).get(args.ticket_id)
-            if not req:
-                print(json.dumps({"recorded": False, "error": f"Ticket {args.ticket_id} not found"}))
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.abspath(args.state_dir))
+                ticket = backend.record_native_dispatch(run_id, task_handle)
+            except Exception as exc:
+                print(json.dumps({"recorded": False, "error": str(exc)}))
                 return 1
-            if req.get("native_run_id") != run_id or not str(req.get("owner") or "").strip():
-                print(json.dumps({"recorded": False, "error": "Ledger claim no longer owns this native run"}))
-                return 1
-            req["native_task_handle"] = task_handle
-            req["owner"] = task_handle.removeprefix("agent://")
-            req["updated_at"] = get_iso_now()
-            data["updated_at"] = req["updated_at"]
-            temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_path, ledger_path)
-
+        claim["task_handle"] = task_handle
+        claim["worker_id"] = task_handle.removeprefix("agent://")
+        req["updated_at"] = get_iso_now()
+        data["updated_at"] = req["updated_at"]
+        temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp_path, ledger_path)
     print(json.dumps({
-        "recorded": True,
-        "run_id": run_id,
-        "task_handle": task_handle,
+        "recorded": True, "run_id": run_id, "task_handle": task_handle,
         "state": ticket.state if ticket is not None else "dispatched",
     }))
     return 0
@@ -546,7 +590,8 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if not req:
             print(json.dumps({"rolled_back": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
-        if not args.run_id or req.get("native_run_id") != args.run_id:
+        claim = active_native_claim(req)
+        if not claim or not args.run_id or claim["run_id"] != args.run_id:
             print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native run"}))
             return 0
 
@@ -560,11 +605,9 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             else "pending"
         )
         req["state"] = to_state
-        req["owner"] = ""
+        req["native_claim"] = retryable_native_claim()
         req["blocker"] = None
         req["updated_at"] = now_iso
-        req["native_run_id"] = ""
-        req["native_task_handle"] = ""
 
         history = req.setdefault("history", [])
         history.append({
@@ -601,12 +644,11 @@ def cmd_recover(args: argparse.Namespace) -> int:
         now_iso = get_iso_now()
         for ticket_id, req in data.get("requests", {}).items():
             state = str(req.get("state") or "pending").lower()
-            owner = str(req.get("owner") or "").strip()
-            if state not in {"implementation", "qa", "review"} or not owner or owner in running_worker_ids:
+            claim = active_native_claim(req)
+            if state not in {"implementation", "qa", "review"} or not claim or claim["worker_id"] in running_worker_ids:
                 continue
-            req["owner"] = ""
-            req["native_run_id"] = ""
-            req["native_task_handle"] = ""
+            owner = claim["worker_id"]
+            req["native_claim"] = retryable_native_claim()
             req["updated_at"] = now_iso
             req.setdefault("history", []).append({
                 "actor": "TopicReplenishmentEngine",
@@ -629,17 +671,11 @@ def cmd_recover(args: argparse.Namespace) -> int:
 
 
 def completion_identity_error(req: Dict[str, Any], run_id: str, task_handle: str) -> Optional[str]:
-    expected_run_id = str(req.get("native_run_id") or "")
-    expected_task_handle = str(req.get("native_task_handle") or "")
-    expected_owner = expected_task_handle.removeprefix("agent://")
-    if not expected_run_id or not expected_task_handle or not expected_owner:
+    claim = active_native_claim(req)
+    if not claim or claim["task_handle"] is None:
         return "Ticket has no active native dispatch identity"
-    if run_id != expected_run_id:
-        return f"Stale native run {run_id}; active run is {expected_run_id}"
-    if task_handle != expected_task_handle:
-        return f"Stale task handle {task_handle}; active handle is {expected_task_handle}"
-    if str(req.get("owner") or "") != expected_owner:
-        return f"Ticket owner no longer matches {expected_owner}"
+    if run_id != claim["run_id"] or task_handle != claim["task_handle"]:
+        return "Stale native run or task handle"
     return None
 
 
@@ -795,9 +831,7 @@ def cmd_complete(args: argparse.Namespace) -> int:
                 req["head"] = outcome_dict["head_sha"]
             req["blocker"] = None
             req["updated_at"] = now_iso
-            req["owner"] = ""
-            req["native_run_id"] = ""
-            req["native_task_handle"] = ""
+            req["native_claim"] = retryable_native_claim()
 
             evidence_list = req.setdefault("evidence", [])
             if outcome_dict.get("evidence"):
@@ -815,9 +849,7 @@ def cmd_complete(args: argparse.Namespace) -> int:
             reason = outcome_dict.get("blocked_reason") or "Worker verification failed"
             req["blocker"] = reason
             req["updated_at"] = now_iso
-            req["owner"] = ""
-            req["native_run_id"] = ""
-            req["native_task_handle"] = ""
+            req["native_claim"] = retryable_native_claim()
             history.append({
                 "actor": "WorkerBackend",
                 "timestamp": now_iso,

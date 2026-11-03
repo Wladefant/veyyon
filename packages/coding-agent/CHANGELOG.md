@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native worker claims preserve each request's accountable owner and reject stale or malformed execution identities ([#802](https://github.com/Wladefant/veyyon/issues/802)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

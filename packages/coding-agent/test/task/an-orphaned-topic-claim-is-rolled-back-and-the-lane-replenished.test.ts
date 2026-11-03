@@ -25,8 +25,8 @@ import {
 	reconcileRunningTopics,
 	recordNativeDispatch,
 	recoverOrphanedClaims,
-	rollbackClaimedTicket,
 	resolvePythonExecutable,
+	rollbackClaimedTicket,
 	type SubagentCompleteEvent,
 	setSystemMemoryProviderForTesting,
 	TopicReplenishmentEngine,
@@ -449,7 +449,7 @@ async function runTests(): Promise<void> {
 			"req-eligible-motion",
 			"Must prioritize uncovered topic Motion over already-covered GUI",
 		);
-		assert.equal(claim1.ticket.owner, "native-worker-motion-1", "Must assign specified worker id");
+		assert.equal(claim1.ticket.owner, "", "An absent accountable owner stays absent");
 		assert.equal(claim1.ticket.state, "implementation", "Must advance state from pending to implementation");
 
 		// Verify decision blockers and explicit blockers were tracked (Finding 5)
@@ -465,7 +465,7 @@ async function runTests(): Promise<void> {
 		const rawUpdated = await fs.promises.readFile(ledgerPath, "utf-8");
 		const updatedLedger = JSON.parse(rawUpdated) as LedgerFileShape;
 		assert.equal(updatedLedger.requests["req-eligible-motion"].state, "implementation");
-		assert.equal(updatedLedger.requests["req-eligible-motion"].owner, "native-worker-motion-1");
+		assert.equal(updatedLedger.requests["req-eligible-motion"].native_claim?.worker_id, "native-worker-motion-1");
 		assert.ok(Array.isArray(updatedLedger.requests["req-eligible-motion"].history), "History must be array");
 		assert.equal(updatedLedger.requests["req-eligible-motion"].history?.length, 1);
 		assert.equal(updatedLedger.requests["req-eligible-motion"].history?.[0].actor, "TopicReplenishmentEngine");
@@ -632,7 +632,7 @@ async function runTests(): Promise<void> {
 		const postRaw = await fs.promises.readFile(ledgerPath, "utf-8");
 		const postLedger = JSON.parse(postRaw) as LedgerFileShape;
 		assert.equal(postLedger.requests["req-1"].state, "QA", "Successful implementation must advance to QA");
-		assert.ok(postLedger.requests["req-1"].owner, "The newly claimed QA stage must have a fresh owner");
+		assert.equal(postLedger.requests["req-1"].native_claim?.worker_id, "worker-4");
 		assert.equal(postLedger.requests["req-4"].state, "pending", "Unrelated pending work remains preserved");
 		// Finding 6: Recover failed spawn claims and prevent ticket leakage
 		// Add failing ticket to ledger
@@ -669,7 +669,7 @@ async function runTests(): Promise<void> {
 		const postFailLedger = JSON.parse(postFailRaw) as LedgerFileShape;
 		const failReq = postFailLedger.requests[rolledId];
 		assert.equal(failReq.state, "pending", "Failed dispatch must roll back ticket to pending");
-		assert.equal(failReq.owner, "", "Owner must be cleared on rollback");
+		assert.equal(failReq.native_claim?.state, "retryable", "Rollback must clear only native execution ownership");
 		assert.equal(failReq.blocker, null, "Retryable dispatch failure must not permanently block the ticket");
 		assert.ok(
 			Array.isArray(failReq.history) && failReq.history.length >= 2,
@@ -795,9 +795,13 @@ async function runTests(): Promise<void> {
 		const bindCompletion = async (runId: string, taskHandle = "agent://worker-native-1"): Promise<void> => {
 			const current = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
 			const request = current.requests["req-native-1"];
-			request.owner = taskHandle.replace("agent://", "");
-			request.native_run_id = runId;
-			request.native_task_handle = taskHandle;
+			request.native_claim = {
+				version: 1,
+				state: "active",
+				worker_id: taskHandle.replace("agent://", ""),
+				run_id: runId,
+				task_handle: taskHandle,
+			};
 			request.blocker = undefined;
 			await fs.promises.writeFile(ledgerPath, JSON.stringify(current, null, 2), "utf-8");
 		};
@@ -1008,7 +1012,7 @@ async function runTests(): Promise<void> {
 		console.log("  [PASS] concurrent cycles share reservations and respect maxCeiling\n");
 	}
 
-	// Test 10: session recovery releases only owners absent from the live roster.
+	// Test 10: session recovery releases only native claims absent from the live roster.
 	{
 		console.log("Test 10: recovery reclaims a crashed worker's durable claim");
 		const testDir = path.join(
@@ -1023,9 +1027,14 @@ async function runTests(): Promise<void> {
 				"orphan-ticket": {
 					prompt: "Resume interrupted workflow implementation",
 					state: "implementation",
-					owner: "worker-that-crashed",
-					native_run_id: "old-run",
-					native_task_handle: "agent://worker-that-crashed",
+					owner: "person-1",
+					native_claim: {
+						version: 1,
+						state: "active",
+						worker_id: "worker-that-crashed",
+						run_id: "old-run",
+						task_handle: "agent://worker-that-crashed",
+					},
 					authorization: validAuthorization,
 				},
 			},
@@ -1045,14 +1054,15 @@ async function runTests(): Promise<void> {
 		await engine.onSessionRecovery([], { dispatchWorker: async ticket => void dispatched.push(ticket.id) });
 		assert.deepEqual(dispatched, ["orphan-ticket"], "The crashed worker's request must be immediately reclaimable");
 		const recovered = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as LedgerFileShape;
+		assert.equal(recovered.requests["orphan-ticket"].owner, "person-1");
 		assert.ok(
 			recovered.requests["orphan-ticket"].history?.some(item => item.reason.includes("Recovered orphaned claim")),
-			"Recovery must preserve an audit event for the released owner",
+			"Recovery must preserve an audit event for the released native claim",
 		);
 		if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;
 		else process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
 		await fs.promises.rm(testDir, { recursive: true, force: true });
-		console.log("  [PASS] crashed owners are reconciled against the live roster\n");
+		console.log("  [PASS] crashed native claims are reconciled against the live roster\n");
 	}
 
 	// Test 11: a late completion cannot advance a ticket after rollback and reclaim.
@@ -1112,8 +1122,8 @@ async function runTests(): Promise<void> {
 		});
 		assert.equal(stale.completed, false, "A stale completion must be rejected");
 		const afterStale = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as LedgerFileShape;
-		assert.equal(afterStale.requests["reclaimed-ticket"].owner, "new-worker");
-		assert.equal(afterStale.requests["reclaimed-ticket"].native_run_id, newClaim.ticket.runId);
+		assert.equal(afterStale.requests["reclaimed-ticket"].native_claim?.worker_id, "new-worker");
+		assert.equal(afterStale.requests["reclaimed-ticket"].native_claim?.run_id, newClaim.ticket.runId);
 		const current = await completeClaimedTicket(ledgerPath, "reclaimed-ticket", {
 			runId: newClaim.ticket.runId,
 			taskHandle: "agent://new-worker",
@@ -1143,8 +1153,13 @@ async function runTests(): Promise<void> {
 					prompt: "Persist worker completion",
 					state: "implementation",
 					owner: "current-worker",
-					native_run_id: "current-run",
-					native_task_handle: "agent://current-worker",
+					native_claim: {
+						version: 1,
+						state: "active",
+						worker_id: "current-worker",
+						run_id: "current-run",
+						task_handle: "agent://current-worker",
+					},
 					authorization: validAuthorization,
 				},
 				"replacement-ticket": {
@@ -1403,7 +1418,6 @@ print("PYTHON_BRIDGE_AUTH_OK")
 		}
 		console.log("  [PASS] interpreter resolution prefers overrides and locates a runnable python\n");
 	}
-
 
 	console.log("=================================================");
 	console.log("ALL 15 TOPIC REPLENISHMENT TESTS PASSED!");
