@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP-sourced MCP tool calls wait for completion without a default transport deadline while retaining caller cancellation and explicit deadlines ([Refs #829](https://github.com/Wladefant/veyyon/pull/829)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { callTool, listTools } from "@veyyon/coding-agent/mcp/client";
 import { resolveMCPTimeoutMs } from "@veyyon/coding-agent/mcp/timeout";
+import { HttpTransport } from "@veyyon/coding-agent/mcp/transports/http";
 import type { MCPRequestOptions, MCPServerConnection, MCPTransport } from "@veyyon/coding-agent/mcp/types";
 
 const toolResult = { content: [{ text: "child finished", type: "text" as const }] };
@@ -96,5 +97,51 @@ describe("ACP delegated tool call deadlines", () => {
 		await expect(pending).rejects.toThrow("parent cancelled");
 		expect(received).toBe(controller.signal);
 		expect(calls[0]?.options?.timeoutMs).toBe(0);
+	});
+	it("only ACP calls outlive a real HTTP transport's default deadline", async () => {
+		const server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				const { id } = (await request.json()) as { id: string | number };
+				// A real delay is required to cross HttpTransport's actual AbortController deadline; fake timers do not drive fetch.
+				await Bun.sleep(140);
+				return Response.json({ jsonrpc: "2.0", id, result: toolResult });
+			},
+		});
+		const url = `http://127.0.0.1:${server.port}/mcp`;
+		const makeLiveConnection = async (provider: string): Promise<{ connection: MCPServerConnection; transport: HttpTransport }> => {
+			const transport = new HttpTransport({ type: "http", url, timeout: 60 });
+			await transport.connect();
+			const { connection } = makeConnection(provider);
+			connection.transport = transport;
+			return { connection, transport };
+		};
+
+		try {
+			const acp = await makeLiveConnection("acp");
+			try {
+				await expect(callTool(acp.connection, "delegate")).resolves.toEqual(toolResult);
+			} finally {
+				await acp.transport.close();
+			}
+
+			const native = await makeLiveConnection("native");
+			try {
+				await expect(callTool(native.connection, "delegate")).rejects.toThrow("within 60ms");
+			} finally {
+				await native.transport.close();
+			}
+
+			const explicitlyTimedAcp = await makeLiveConnection("acp");
+			try {
+				await expect(callTool(explicitlyTimedAcp.connection, "delegate", {}, { timeoutMs: 60 })).rejects.toThrow(
+					"within 60ms",
+				);
+			} finally {
+				await explicitlyTimedAcp.transport.close();
+			}
+		} finally {
+			server.stop(true);
+		}
 	});
 });
