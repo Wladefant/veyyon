@@ -1,1 +1,0 @@
-- Use `{{toolRefs.search}}` to locate workspace targets and map repository structure before reading files.

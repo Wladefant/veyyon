@@ -1,1 +1,0 @@
-  - You MUST run `{{toolRefs.lsp}} references` before modifying exported symbols. Missed callsites are bugs.

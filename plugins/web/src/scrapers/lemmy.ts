@@ -1,5 +1,0 @@
-import { lemmyDeclaration } from "./declarations/discussions";
-import { createDiscussionHandler } from "./engine/discussion";
-import type { SpecialHandler } from "./types";
-
-export const handleLemmy: SpecialHandler = createDiscussionHandler(lemmyDeclaration, "handleLemmy");

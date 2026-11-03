@@ -1,1 +1,0 @@
-- Litmus: one external-CLI call or short pipeline returning a count, frequency, set difference, or checksum → bash. Merely moves, pages, or trims bytes a tool can fetch → use the tool.

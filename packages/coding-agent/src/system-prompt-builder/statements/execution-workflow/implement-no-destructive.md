@@ -1,1 +1,0 @@
-- Don't run destructive git commands or delete code you didn't write.
