@@ -1890,3 +1890,88 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 });
+
+
+describe("SessionManager.createBranchedSession fail-closed artifact ownership", () => {
+	it("refuses a retained encoded local artifact before changing source identity or evidence", async () => {
+		using temp = TempDir.createSync("@veyyon-branch-local-evidence-");
+		const source = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
+		try {
+			const original = "synthetic exact recovery bytes Ω \r\nwith spaces  ";
+			expect(await source.saveArtifact(original, "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Retain local recovery artifact://%30", timestamp: Date.now(),
+			});
+			await source.ensureOnDisk();
+			const oldFile = source.getSessionFile();
+			const oldLeaf = source.getLeafId();
+			if (!oldFile || !oldLeaf) throw new Error("expected persisted source and branch leaf");
+			const originalId = source.getSessionId();
+			const originalState = source.getLifecycleState();
+			const originalTranscript = await fs.readFile(oldFile);
+			const artifactFile = await source.getArtifactPath("0");
+			if (!artifactFile) throw new Error("expected original artifact");
+			const originalArtifact = await fs.readFile(artifactFile);
+			const sessionFilesBefore = (await fs.readdir(path.dirname(oldFile))).sort();
+			const artifactsBefore = (await fs.readdir(path.dirname(artifactFile))).sort();
+
+			expect(() => source.createBranchedSession(oldLeaf)).toThrow(/Cannot branch session: retained local artifact evidence/i);
+			expect(source.getSessionId()).toBe(originalId);
+			expect(source.getSessionFile()).toBe(oldFile);
+			expect(source.getLifecycleState()).toBe(originalState);
+			expect(await fs.readFile(oldFile)).toEqual(originalTranscript);
+			expect(await fs.readFile(artifactFile)).toEqual(originalArtifact);
+			expect((await fs.readdir(path.dirname(oldFile))).sort()).toEqual(sessionFilesBefore);
+			expect((await fs.readdir(path.dirname(artifactFile))).sort()).toEqual(artifactsBefore);
+		} finally {
+			await source.close();
+		}
+	});
+
+	it("permits an explicit foreign-only branch and rebinds later writes away from an adopted parent", async () => {
+		using temp = TempDir.createSync("@veyyon-branch-adopted-evidence-");
+		const sessions = path.join(temp.path(), "sessions");
+		const parent = SessionManager.create(temp.path(), sessions);
+		const child = SessionManager.create(temp.path(), sessions);
+		try {
+			expect(await parent.saveArtifact("synthetic parent evidence", "bash")).toBe("0");
+			const parentFile = await parent.getArtifactPath("0");
+			const parentManager = parent.getArtifactManager();
+			if (!parentFile || !parentManager) throw new Error("expected parent artifact owner");
+			const parentDir = path.dirname(parentFile);
+			const parentInventory = (await fs.readdir(parentDir)).sort();
+			const parentBytes = await fs.readFile(parentFile);
+			const foreignReference = "Foreign recovery: artifact://0?session=other-owned-session";
+			child.appendMessage({ role: "user", content: foreignReference, timestamp: Date.now() });
+			await child.ensureOnDisk();
+			const sourceFile = child.getSessionFile();
+			const leaf = child.getLeafId();
+			if (!sourceFile || !leaf) throw new Error("expected persisted child and branch leaf");
+			const oldChildId = child.getSessionId();
+			child.adoptArtifactManager(parentManager);
+			expect(child.getArtifactsDir()).toBe(parentDir);
+
+			const branchedFile = child.createBranchedSession(leaf);
+			if (!branchedFile) throw new Error("expected new branch file");
+			expect(branchedFile).not.toBe(sourceFile);
+			expect(child.getSessionFile()).toBe(branchedFile);
+			expect(child.getSessionId()).not.toBe(oldChildId);
+			expect(child.getArtifactsDir()).toBe(branchedFile.slice(0, -".jsonl".length));
+			expect(child.getEntries().some(entry =>
+				entry.type === "message" && entry.message.role === "user" &&
+				entry.message.content === foreignReference
+			)).toBe(true);
+
+			expect(await child.saveArtifact("synthetic new branch evidence", "bash")).toBe("0");
+			const branchArtifact = await child.getArtifactPath("0");
+			if (!branchArtifact) throw new Error("expected new branch artifact");
+			expect(path.dirname(branchArtifact)).not.toBe(parentDir);
+			expect(await fs.readFile(branchArtifact, "utf8")).toBe("synthetic new branch evidence");
+			expect(await fs.readFile(parentFile)).toEqual(parentBytes);
+			expect((await fs.readdir(parentDir)).sort()).toEqual(parentInventory);
+		} finally {
+			await child.close();
+			await parent.close();
+		}
+	});
+});
