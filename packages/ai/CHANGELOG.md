@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Remote auth-broker long-poll fallback periodically requests an unconditional canonical snapshot when idle, preventing a broker restart with a reused numeric generation from hiding credential revocation behind repeated HTTP 304 responses ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker ignores countdown-only same-generation SSE replays for snapshot freshness, preserving authoritative revoke reconciliation and legitimate refresh-policy updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker ignores unchanged same-generation SSE replays, including reordered snapshots and locally pending safety-block overlays, so duplicated frames cannot defer idle broker reconciliation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker reconciles canonical snapshot truth after prematurely closed SSE streams, backs off clean EOF retries, and ignores unchanged equal-generation initial snapshots replayed on each reconnect rather than resetting the idle-verification deadline ([#602](https://github.com/Wladefant/veyyon/issues/602)).
