@@ -17,10 +17,10 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import * as executor from "@veyyon/coding-agent/task/executor";
+import * as successorCheckpoint from "@veyyon/coding-agent/task/successor-checkpoint";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import { TempDir } from "@veyyon/utils";
 import * as atomicWriter from "@veyyon/utils/atomic-write";
-import * as successorCheckpoint from "@veyyon/coding-agent/task/successor-checkpoint";
 import { makeToolSession, type ToolSessionOverrides } from "../helpers/tool-session";
 
 const assignment = "Continue the same slice.";
@@ -276,9 +276,7 @@ describe("explicit bounded lane successors", () => {
 
 		expect(executed).toHaveLength(2);
 		expect(registry.get(predecessor)).toBeUndefined();
-		await expect(AgentLifecycleManager.global().ensureLive(predecessor)).rejects.toThrow(
-			`history://${predecessor}`,
-		);
+		await expect(AgentLifecycleManager.global().ensureLive(predecessor)).rejects.toThrow(`history://${predecessor}`);
 		expect(reviveCalls).toBe(0);
 		expect(await fs.readFile(transcript, "utf8")).toBe(transcriptBytes);
 	});
