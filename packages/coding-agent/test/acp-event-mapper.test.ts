@@ -992,7 +992,6 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "src/current.ts" }, { path: "src/old.ts" }, { path: "src/new.ts" }]);
 	});
 
-
 	// WHY: a real ACP editor gets a session cwd, and locations it navigates
 	// must be valid absolute paths. An invalid tool argument remains visible
 	// in rawInput but must not become an invalid editor navigation target.
@@ -1066,7 +1065,6 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/valid.ts") }]);
 	});
 
-
 	// WHY: ACP v1 Diff.path is an editor navigation target, not unchecked tool
 	// output. A rejected result path must not leak into diff content even when
 	// the separate locations[] path correctly omits it. Raw tool output remains
@@ -1125,7 +1123,10 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string }>; locations?: { path: string }[] };
+		const update = updates[0]!.update as {
+			content?: Array<{ type: string; path?: string }>;
+			locations?: { path: string }[];
+		};
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
 			{ type: "diff", path: path.resolve("/repo", "src/single.ts"), oldText: "old", newText: "new" },
 		]);
