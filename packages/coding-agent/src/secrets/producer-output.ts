@@ -13,8 +13,62 @@ const CREDENTIAL_KEY_PREFIX =
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
 const ENV_ASSIGNMENT = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
-const ENV_MAP_KEY = /(?:["'](?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)["']|(?:^|[,{]\s*)[A-Z_][A-Z0-9_]*)\s*:/gm;
+const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
+
+function isQuote(character: string): boolean {
+	return character === '"' || character === "'" || character === "`";
+}
+
+function quotedEnd(text: string, start: number): number {
+	const quote = text[start];
+	for (let index = start + 1; index < text.length; index++) {
+		if (text[index] === "\\") index++;
+		else if (text[index] === quote) return index;
+	}
+	return text.length;
+}
+
+function structuredStart(text: string): number {
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index];
+		if (isQuote(character)) index = quotedEnd(text, index);
+		else if (character === "{" || character === "[") return index;
+	}
+	return -1;
+}
+
+function hasInventoryKeys(text: string): boolean {
+	const containers: string[] = [];
+	let expectingKey = false;
+	let keys = 0;
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index];
+		if (/\s/.test(character)) continue;
+		if (character === "{" || character === "[") {
+			containers.push(character);
+			expectingKey = character === "{";
+		} else if (character === "}" || character === "]") {
+			containers.pop();
+			expectingKey = false;
+		} else if (character === ",") {
+			expectingKey = containers.at(-1) === "{";
+		} else {
+			const start = index;
+			const quoted = isQuote(character);
+			if (quoted) index = quotedEnd(text, index);
+			else while (index + 1 < text.length && /[A-Za-z0-9_$]/.test(text[index + 1])) index++;
+			if (expectingKey) {
+				const name = text.slice(start + (quoted ? 1 : 0), index + (quoted ? 0 : 1));
+				let next = index + 1;
+				while (next < text.length && /\s/.test(text[next])) next++;
+				if (text[next] === ":" && ENV_MAP_KEY.test(name) && ++keys >= 3) return true;
+			}
+			expectingKey = false;
+		}
+	}
+	return false;
+}
 
 function isInventory(text: string): boolean {
 	if (ENV_TABLE_HEADER.test(text)) return true;
@@ -24,11 +78,7 @@ function isInventory(text: string): boolean {
 		assignments = ENV_ASSIGNMENT.test(line) ? assignments + 1 : 0;
 		if (assignments >= 3) return true;
 	}
-	let keys = 0;
-	for (const _match of text.matchAll(ENV_MAP_KEY)) {
-		if (++keys >= 3) return true;
-	}
-	return false;
+	return hasInventoryKeys(text);
 }
 
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
@@ -101,7 +151,7 @@ export class ProducerOutputGuard {
 		let prefix = "";
 		if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
 		if (this.#withholding) return prefix;
-		const structured = this.#structured || lines.some(line => /^\s*[[{]/.test(line));
+		const structured = this.#structured || lines.some(line => structuredStart(line) >= 0);
 		if (structured || assignment || separator) {
 			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
 				return prefix + this.#block() + newline;
@@ -111,19 +161,22 @@ export class ProducerOutputGuard {
 					this.#assignments = ENV_ASSIGNMENT.test(line) ? this.#assignments + 1 : 0;
 					if (this.#assignments >= 3) return prefix + this.#block() + newline;
 				}
+				let start = 0;
 				if (!this.#structured) {
-					if (!/^\s*[[{]/.test(line)) continue;
+					start = structuredStart(line);
+					if (start < 0) continue;
 					this.#structured = true;
 				}
-				// Track quoted delimiters only inside a structured record: an earlier
-				// ordinary line in the held group may itself contain quotes or braces.
-				for (const character of line) {
+				// A logging label can precede the object. Ignore its quotes and braces
+				// before tracking every delimiter util.inspect uses for string values.
+				for (let index = start; index < line.length; index++) {
+					const character = line[index];
 					if (this.#escaped) {
 						this.#escaped = false;
 					} else if (this.#quote) {
 						if (character === "\\") this.#escaped = true;
 						else if (character === this.#quote) this.#quote = "";
-					} else if (character === '"' || character === "'") {
+					} else if (isQuote(character)) {
 						this.#quote = character;
 					} else if (character === "{" || character === "[") {
 						this.#depth++;

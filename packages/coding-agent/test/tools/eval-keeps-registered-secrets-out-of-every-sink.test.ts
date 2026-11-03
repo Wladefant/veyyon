@@ -142,4 +142,124 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		expect(output).toContain("{ alpha: 'ordinary-a', beta: 'ordinary-b', gamma: 'ordinary-c' }");
 		expect(output).toContain("{ ALPHA: 'ordinary-a', BETA: 'ordinary-b' }");
 	});
+	it("withholds a labeled multiline inventory and creates its artifact", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-labeled-inventory-"));
+		const artifactPath = path.join(directory, "inventory.txt");
+		const session = makeSession(artifactPath);
+		const progress: AgentToolResult[] = [];
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			"console.log('harmless-padding-before-inventory-'.repeat(30))",
+			"console.log('env', {",
+			"  ALPHA: 'fake-a'.repeat(8),",
+			"  BETA: 'fake-b'.repeat(8),",
+			"  GAMMA: 'fake-c'.repeat(8)",
+			"})",
+		].join("\n");
+		const result = await tool.execute(
+			"synthetic-labeled-inventory",
+			{ language: "js", code, reset: true },
+			undefined,
+			update => progress.push(update),
+		);
+		const details = result.details as EvalToolDetails;
+		const output = details.cells?.[0]?.output ?? "";
+		const content = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		const callbackOutputs = progress.map(
+			update => (update.details as EvalToolDetails | undefined)?.cells?.[0]?.output ?? "",
+		);
+		const artifact = fs.readFileSync(artifactPath, "utf8");
+		const sinks = [JSON.stringify(progress), JSON.stringify(details), content, artifact];
+		expect(callbackOutputs.length).toBeGreaterThan(0);
+		expect(fs.existsSync(artifactPath), "artifact file should exist").toBe(true);
+		for (const canary of ["fake-a".repeat(8), "fake-b".repeat(8), "fake-c".repeat(8)]) {
+			for (const callbackOutput of callbackOutputs) {
+				expect(callbackOutput, `live callback must withhold ${canary}`).not.toContain(canary);
+			}
+			expect(JSON.stringify(details), `details must withhold ${canary}`).not.toContain(canary);
+			expect(content, `final text must withhold ${canary}`).not.toContain(canary);
+			expect(artifact, `artifact bytes must withhold ${canary}`).not.toContain(canary);
+			expect(sinks.join("\n"), `all sinks must withhold ${canary}`).not.toContain(canary);
+		}
+		expect(content).toContain("[credential output withheld]");
+	});
+
+	it("withholds quoted Path, SystemRoot, and ComSpec alongside two uppercase keys", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-quoted-windows-env-"));
+		for (const [key, value] of [
+			["Path", "path-value"],
+			["SystemRoot", "system-root-value"],
+			["ComSpec", "command-value"],
+		]) {
+			const session = makeSession(path.join(directory, "unused.txt"));
+			const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+			const code = `console.log({ ALPHA: 'fake-a', BETA: 'fake-b', "${key}": "${value}" })`;
+			const result = await tool.execute(`synthetic-quoted-windows-env-${key}`, {
+				language: "js",
+				code,
+				reset: true,
+			});
+			const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
+			expect(output).not.toContain("fake-a");
+			expect(output).not.toContain("fake-b");
+			expect(output).not.toContain(value);
+		}
+	});
+
+	it("withholds an inspected backtick value with braces and both quotes", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-inspected-quotes-"));
+		const session = makeSession(path.join(directory, "unused.txt"));
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			"console.log({",
+			"  ALPHA: `fake}'\"a`,",
+			"  BETA: 'fake-b'.repeat(8),",
+			"  GAMMA: 'fake-c'.repeat(8)",
+			"})",
+		].join("\n");
+		const result = await tool.execute("synthetic-inspected-quotes", { language: "js", code, reset: true });
+		const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
+		expect(output).not.toContain("fake}");
+		expect(output).not.toContain("fake-b");
+		expect(output).not.toContain("fake-c");
+	});
+
+	it("withholds Path, SystemRoot, and ComSpec alongside two uppercase keys", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-windows-env-"));
+		for (const [key, value] of [
+			["Path", "path-value"],
+			["SystemRoot", "system-root-value"],
+			["ComSpec", "command-value"],
+		]) {
+			const session = makeSession(path.join(directory, "unused.txt"));
+			const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+			const code = `console.log({ ALPHA: 'fake-a', BETA: 'fake-b', ${key}: '${value}' })`;
+			const result = await tool.execute(`synthetic-windows-env-${key}`, { language: "js", code, reset: true });
+			const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
+			expect(output).not.toContain("fake-a");
+			expect(output).not.toContain("fake-b");
+			expect(output).not.toContain(value);
+		}
+	});
+
+	it("keeps ordinary lowercase properties with uppercase values visible in console and display", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-ordinary-uppercase-"));
+		const session = makeSession(path.join(directory, "unused.txt"));
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			"console.log({ message: 'Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending' })",
+			"console.log('completed')",
+			"display({ message: 'Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending' })",
+		].join("\n");
+		const result = await tool.execute("synthetic-ordinary-uppercase", { language: "js", code, reset: true });
+		const details = result.details as EvalToolDetails;
+		const output = details.cells?.[0]?.output ?? "";
+		const content = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+		expect(output).toContain("Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending");
+		expect(output).toContain("completed");
+		expect(details.jsonOutputs).toContainEqual({
+			message: "Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending",
+		});
+		expect(content).toContain("completed");
+	});
 });

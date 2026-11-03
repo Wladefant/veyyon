@@ -37,15 +37,74 @@ describe("producer output withholds multiline registered literals", () => {
 		const input = `before\n${SECRET}\nafter\n`;
 		for (let split = 0; split <= input.length; split++) {
 			const guard = guardFor();
-			const streamed =
-				guard.push(input.slice(0, split)) +
-				guard.push(input.slice(split)) +
-				guard.finish();
+			const streamed = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
 
 			expect(streamed).not.toContain(SECRET);
 			expect(streamed).toContain("#MULTILINE_CANARY#");
 			expect(streamed).toContain("before\n");
 			expect(streamed).toContain("after\n");
+		}
+	});
+	it("keeps serialization-shaped records safe across every two-chunk split", () => {
+		const cases = [
+			{
+				input: "env {\n  ALPHA: 'fake-a-fake-a-fake-a-fake-a-fake-a-fake-a-fake-a-fake-a',\n  BETA: 'fake-b-fake-b-fake-b-fake-b-fake-b-fake-b-fake-b-fake-b',\n  GAMMA: 'fake-c-fake-c-fake-c-fake-c-fake-c-fake-c-fake-c-fake-c'\n}\n",
+				values: ["fake-a-fake-a", "fake-b-fake-b", "fake-c-fake-c"],
+				visible: false,
+			},
+			{
+				input: "{\n  ALPHA: `fake}'\"a`,\n  BETA: 'fake-bfake-bfake-bfake-bfake-bfake-bfake-bfake-b',\n  GAMMA: 'fake-cfake-cfake-cfake-cfake-cfake-cfake-cfake-c'\n}\n",
+				values: ["fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "{ ALPHA: 'fake-a', BETA: 'fake-b', Path: 'path-value' }\n",
+				values: ["fake-a", "fake-b", "path-value"],
+				visible: false,
+			},
+			{
+				input: "{ ALPHA: 'fake-a', BETA: 'fake-b', SystemRoot: 'system-root-value' }\n",
+				values: ["fake-a", "fake-b", "system-root-value"],
+				visible: false,
+			},
+			{
+				input: "{ ALPHA: 'fake-a', BETA: 'fake-b', ComSpec: 'command-value' }\n",
+				values: ["fake-a", "fake-b", "command-value"],
+				visible: false,
+			},
+			{
+				input: '{ "ALPHA": "fake-a", "BETA": "fake-b", "Path": "path-value" }\n',
+				values: ["fake-a", "fake-b", "path-value"],
+				visible: false,
+			},
+			{
+				input: '{ "ALPHA": "fake-a", "BETA": "fake-b", "SystemRoot": "system-root-value" }\n',
+				values: ["fake-a", "fake-b", "system-root-value"],
+				visible: false,
+			},
+			{
+				input: '{ "ALPHA": "fake-a", "BETA": "fake-b", "ComSpec": "command-value" }\n',
+				values: ["fake-a", "fake-b", "command-value"],
+				visible: false,
+			},
+			{
+				input: "{ message: 'Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending' }\ncompleted\n",
+				values: ["Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending", "completed"],
+				visible: true,
+			},
+		];
+
+		for (const { input, values, visible } of cases) {
+			for (let split = 0; split <= input.length; split++) {
+				const guard = guardFor();
+				const output = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
+				if (visible) {
+					for (const value of values) expect(output).toContain(value);
+				} else {
+					for (const value of values) expect(output).not.toContain(value);
+					expect(output).toContain("[credential output withheld]");
+				}
+			}
 		}
 	});
 
@@ -77,8 +136,7 @@ describe("producer output withholds multiline registered literals", () => {
 	});
 	it("matches multiline literals after supported ANSI normalization", () => {
 		const guard = guardFor();
-		const streamed =
-			guard.push(`synthetic-first-line\nsyn\u001b[31mthetic-second-line\n`) + guard.finish();
+		const streamed = guard.push(`synthetic-first-line\nsyn\u001b[31mthetic-second-line\n`) + guard.finish();
 
 		expect(streamed).not.toContain(SECRET);
 		expect(streamed).not.toContain("synthetic-second-line");
@@ -103,5 +161,4 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(guard.push(secret)).toBe("#MULTILINE_CANARY#");
 		expect(guard.finish()).toBe("");
 	});
-
 });
