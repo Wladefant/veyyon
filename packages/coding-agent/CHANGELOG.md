@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Legacy MCP SSE requests honor per-request timeout overrides, including `timeoutMs: 0` to disable the deadline ([Refs #860](https://github.com/Wladefant/veyyon/issues/860)).
 
 ## [1.7.8] - 2026-11-03
 
