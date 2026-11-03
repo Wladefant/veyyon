@@ -84,6 +84,91 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+	test("countdown-only SSE churn cannot conceal an independently revoked broker credential", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const revokedId = canonical.snapshot.credentials[0]!.id;
+		const initial: SnapshotResponse = {
+			...canonical.snapshot,
+			refresher: {
+				enabled: true, intervalMs: 1_000, skewMs: 100, nextSweepInMs: 900,
+			},
+			credentials: canonical.snapshot.credentials.map(entry => ({ ...entry, rotatesInMs: 900 })),
+		};
+		const connected = Promise.withResolvers<void>();
+		let frames = 0;
+		let acceptedSnapshots = 0;
+		// A faulty relay alternates old, schema-valid time-relative countdown
+		// telemetry but never forwards the peer's revocation generation.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial };
+			connected.resolve();
+			while (!opts.signal?.aborted) {
+				const countdown = frames++ % 2 === 0 ? 700 : 800;
+				const refresher = { ...initial.refresher, nextSweepInMs: countdown };
+				const entry = { ...initial.credentials[0]!, rotatesInMs: countdown };
+				yield {
+					kind: "snapshot" as const, ...initial,
+					refresher, credentials: [{ ...entry }],
+				};
+				yield {
+					kind: "entry" as const, entry,
+					generation: initial.generation, serverNowMs: initial.serverNowMs,
+					refresher,
+				};
+				yield {
+					kind: "removed" as const, id: revokedId + 1_000_000,
+					generation: initial.generation, serverNowMs: initial.serverNowMs,
+					refresher,
+				};
+				await Bun.sleep(5);
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial,
+			snapshotStreamVerifyIntervalMs: 40,
+			onSnapshot: () => { acceptedSnapshots += 1; },
+		});
+		await connected.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([revokedId]);
+		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke behind countdown-only frames")).toBe(true);
+		// The worker must autonomously make an unconditional canonical GET.
+		// Counting accepted callbacks also catches false countdown-only progress.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(frames).toBeGreaterThan(2);
+		expect(acceptedSnapshots).toBe(1);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		const authoritative = await peer.fetchSnapshot();
+		if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
+		expect(authoritative.snapshot.credentials).toEqual([]);
+	});
+
+	test("a genuine same-generation SSE refresher-policy change remains progress", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const changed: SnapshotResponse = {
+			...initial.snapshot,
+			refresher: {
+				enabled: true, intervalMs: 1_000, skewMs: 250, nextSweepInMs: 750,
+			},
+			credentials: initial.snapshot.credentials.map(entry => ({ ...entry, rotatesInMs: 750 })),
+		};
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...changed };
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
+		await waitUntil(() => remote!.snapshot.refresher.enabled);
+		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+		expect(remote.snapshot.refresher).toEqual(changed.refresher);
+		expect(remote.snapshot.credentials[0]!.rotatesInMs).toBe(750);
+	});
+
 	test("identical initial SSE frames on reconnect cannot hide a broker peer revocation", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
