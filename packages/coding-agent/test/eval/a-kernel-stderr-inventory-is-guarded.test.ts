@@ -43,6 +43,20 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 			const structuredResult = await kernel.execute(
 				'import os; os.write(2, b\'{\\n  "ALPHA": "fake-structured",\\n\\n  "BETA": ["quoted } brace", {"deep": [true, null]}],\\n\\n  "GAMMA": {"array": [{"text": "fake-map"}]}\\n}\\n\\nsafe after structured inventory\\n\\n\')',
 			);
+			const earlyRejectedStructuredResult = await kernel.execute(
+				'import os; os.write(2, b\'{\\n"ALPHA":"fake-a", "BETA":"fake-b", "GAMMA":"fake-c",\\n\\n"DELTA":"fake-tail-value"\\n}\\n\\nsafe after early rejection\\n\\n\')',
+			);
+			expect(earlyRejectedStructuredResult.status).toBe("ok");
+			const earlyRejectedCredentialResult = await kernel.execute(
+				'import os; os.write(2, b\'{\\n"API_TOKEN":"fake-token",\\n\\n"ORDINARY_A":"fake-a",\\n\\n"ORDINARY_B":"fake-b"\\n}\\n\\nsafe after credential rejection\\n\\n\')',
+			);
+			expect(earlyRejectedCredentialResult.status).toBe("ok");
+			const fourAssignmentsResult = await kernel.execute(
+				"import os; os.write(2, b'ASSIGN_A=fake-a\\n\\nASSIGN_B=fake-b\\n\\nASSIGN_C=fake-c\\n\\nASSIGN_D=fake-tail-value\\n\\nsafe after fourth assignment\\n\\n')",
+			);
+			expect(fourAssignmentsResult.status).toBe("ok");
+			expect(structuredResult.status).toBe("ok");
+			expect(await readLogDirectory(logs)).not.toContain("fake-tail-value");
 			expect(structuredResult.status).toBe("ok");
 			const ordinaryAssignmentsResult = await kernel.execute(
 				"import os; [os.write(2, bytes([byte])) for byte in b'ORDINARY_A=fake-ordinary-a\\n\\nORDINARY_B=fake-ordinary-b\\n\\nORDINARY_C=fake-ordinary-c\\n\\nsafe after ordinary assignments\\n\\n']",

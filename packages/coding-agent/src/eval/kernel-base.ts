@@ -992,6 +992,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		let groupOverflow = false;
 		let lineHasCharacters = false;
 		let pendingCR = false;
+		let structureDepth = 0;
+		let structureQuote = "";
+		let structureEscaped = false;
+		let assignmentRun = 0;
+		let structuredInventory = false;
 		const markOverflow = (): void => {
 			groupOverflow = true;
 			group = "";
@@ -1008,25 +1013,70 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			line = "";
 			lineHasCharacters = false;
 			groupOverflow = false;
+			assignmentRun = 0;
+			structureDepth = 0;
+			structureQuote = "";
+			structureEscaped = false;
+			structuredInventory = false;
 			guard.reset();
+		};
+		const trackRecord = (record: string): void => {
+			if (!structuredInventory && /^\s*[[{]/.test(record)) {
+				assignmentRun = 0;
+				structuredInventory = true;
+			} else if (!structuredInventory) {
+				if (/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(record)) assignmentRun++;
+				else if (record.trim()) assignmentRun = 0;
+				return;
+			}
+			for (const character of record) {
+				if (structureEscaped) {
+					structureEscaped = false;
+				} else if (structureQuote) {
+					if (character === "\\") structureEscaped = true;
+					else if (character === structureQuote) structureQuote = "";
+				} else if (character === '"' || character === "'") {
+					structureQuote = character;
+				} else if (character === "{" || character === "[") {
+					structureDepth++;
+				} else if (character === "}" || character === "]") {
+					structureDepth--;
+				}
+			}
+			if (structuredInventory && structureDepth <= 0) {
+				structureDepth = 0;
+				structureQuote = "";
+				structureEscaped = false;
+				structuredInventory = false;
+			}
 		};
 		const endRecord = (): void => {
 			if (!lineHasCharacters) {
-				if (!groupOverflow && guard.hasPendingCandidate) {
+				if (!groupOverflow && (structuredInventory || assignmentRun > 0)) {
 					if (group.length + 1 > MAX_GROUP_CHARACTERS) markOverflow();
 					else group += "\n";
 					return;
 				}
 				flushGroup();
 			} else {
+				const record = line;
+				if (
+					!groupOverflow &&
+					!structuredInventory &&
+					assignmentRun > 0 &&
+					!/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(record)
+				) {
+					flushGroup();
+				}
+				const addition = `${record}\n`;
 				if (!groupOverflow) {
-					const addition = `${line}\n`;
 					if (group.length + addition.length > MAX_GROUP_CHARACTERS) markOverflow();
 					else {
 						group += addition;
 						guard.push(addition);
 					}
 				}
+				trackRecord(record);
 				line = "";
 				lineHasCharacters = false;
 			}
@@ -1045,10 +1095,8 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 					endRecord();
 				} else {
 					lineHasCharacters = true;
-					if (!groupOverflow) {
-						if (group.length + line.length + 1 > MAX_GROUP_CHARACTERS) markOverflow();
-						else line += character;
-					}
+					if (line.length < MAX_GROUP_CHARACTERS) line += character;
+					if (!groupOverflow && group.length + line.length + 1 > MAX_GROUP_CHARACTERS) markOverflow();
 				}
 			}
 		};
