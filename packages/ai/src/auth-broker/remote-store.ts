@@ -510,7 +510,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const iterator = this.#client.openSnapshotStream({ signal: this.#backgroundAbort.signal });
 		const watchdogAbort = new AbortController();
 		const watchdogSignal = AbortSignal.any([this.#backgroundAbort.signal, watchdogAbort.signal]);
-		let watchdog: Promise<void> | undefined;
+		// Verify broker truth even when the SSE connection never yields its first
+		// frame (for example a proxy holding the initial response body open).
+		// The existing revision fence rejects a late superseded initial frame.
+		const watchdog = this.#verifyIdleSnapshotStream(watchdogSignal);
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
@@ -528,7 +531,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				}
 				firstFrame = false;
 				this.#streamingActive = true;
-				watchdog ??= this.#verifyIdleSnapshotStream(watchdogSignal);
 			}
 		} finally {
 			this.#streamingActive = false;
