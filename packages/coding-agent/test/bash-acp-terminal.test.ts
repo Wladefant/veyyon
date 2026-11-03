@@ -321,11 +321,17 @@ describe("BashTool ACP terminal routing", () => {
 
 	it("keeps the finite command deadline while reading final ACP terminal output", async () => {
 		const pendingOutput = Promise.withResolvers<{ output: string; truncated: boolean }>();
+		const observer = Promise.withResolvers<{ kind: "no-settlement" }>();
+		let observerTimer: NodeJS.Timeout | undefined;
 		let releases = 0;
 		const handle: ClientBridgeTerminalHandle = {
 			terminalId: "final-read-deadline",
 			waitForExit: async () => ({ exitCode: 0 }),
-			currentOutput: () => pendingOutput.promise,
+			currentOutput: () => {
+				// The timeout path allows 250ms for best-effort final output.
+				observerTimer ??= setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_600);
+				return pendingOutput.promise;
+			},
 			kill: async () => {},
 			release: async () => { releases++; },
 		};
@@ -338,8 +344,6 @@ describe("BashTool ACP terminal routing", () => {
 			() => ({ kind: "success" as const }),
 			(error: unknown) => ({ kind: "failure" as const, error }),
 		);
-		const observer = Promise.withResolvers<{ kind: "no-settlement" }>();
-		const timer = setTimeout(() => observer.resolve({ kind: "no-settlement" }), 1_200);
 		try {
 			const observed = await driveFakeTime(Promise.race([outcome, observer.promise]));
 			expect(observed.kind).toBe("failure");
@@ -348,7 +352,7 @@ describe("BashTool ACP terminal routing", () => {
 			expect((observed.error as Error).message).toContain("Command timed out after 1 seconds");
 			expect(releases).toBe(1);
 		} finally {
-			clearTimeout(timer);
+			clearTimeout(observerTimer);
 			pendingOutput.resolve({ output: "", truncated: false });
 		}
 	}, 12_000);
