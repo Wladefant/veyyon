@@ -76,7 +76,9 @@ it("drops a non-object JSON-RPC frame without logging its bytes or losing a foll
 // This only tests warnings, not the separate documented caller-error contract.
 it("does not persist an unattributable server parse-error message", async () => {
 	const program = [
-		"process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:null,error:{code:-32700,message:" + JSON.stringify(FAKE_PRIVATE_FRAME) + "}}) + '\\n');",
+		"process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:null,error:{code:-32700,message:" +
+			JSON.stringify(FAKE_PRIVATE_FRAME) +
+			"}}) + '\\n');",
 		"let buffered = '';",
 		"process.stdin.setEncoding('utf8');",
 		"process.stdin.on('data', chunk => {",

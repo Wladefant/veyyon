@@ -18,9 +18,9 @@ import type {
 	JsonRpcRequest,
 	JsonRpcResponse,
 	MCPRequestOptions,
+	MCPStdioServerConfig,
 	MCPStreamRequest,
 	MCPStreamRequestOptions,
-	MCPStdioServerConfig,
 	MCPTransport,
 	ServerRequestResponse,
 } from "../types";
@@ -478,7 +478,13 @@ export class StdioTransport implements MCPTransport {
 	>();
 	#streamRequests = new Map<
 		string | number,
-		{ onNotification: (notification: JsonRpcMessage) => void; resolve: () => void; reject: (error: Error) => void; signal?: AbortSignal; onAbort?: () => void }
+		{
+			onNotification: (notification: JsonRpcMessage) => void;
+			resolve: () => void;
+			reject: (error: Error) => void;
+			signal?: AbortSignal;
+			onAbort?: () => void;
+		}
 	>();
 	#connected = false;
 	#readLoop: Promise<void> | null = null;
@@ -695,10 +701,12 @@ export class StdioTransport implements MCPTransport {
 			const stream = this.#streamRequests.get(responseId);
 			if (stream) {
 				if (response.error) {
-					stream.reject(Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
-						code: response.error.code,
-						data: response.error.data,
-					}));
+					stream.reject(
+						Object.assign(new Error(`MCP error ${response.error.code}: ${response.error.message}`), {
+							code: response.error.code,
+							data: response.error.data,
+						}),
+					);
 				} else {
 					stream.resolve();
 				}
@@ -741,9 +749,7 @@ export class StdioTransport implements MCPTransport {
 		const requestParams = {
 			...(params ?? {}),
 			_meta: {
-				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta)
-					? params._meta
-					: {}),
+				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta) ? params._meta : {}),
 				"io.modelcontextprotocol/subscriptionId": id,
 			},
 		};
@@ -947,7 +953,6 @@ export class StdioTransport implements MCPTransport {
 				reject(new Error(mcpTimeoutMessage({ command: this.config.command }, `request "${method}"`, timeout)));
 			}, timeout);
 		}
-
 
 		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
