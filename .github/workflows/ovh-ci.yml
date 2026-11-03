@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
-      rust_changed: ${{ steps.selection.outputs.rust_changed || 'false' }}
+      native_ready: ${{ steps.native.outputs.native_ready || 'false' }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -164,13 +164,11 @@ jobs:
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           FOCUSED_TESTS: ${{ inputs.test_files }}
-          FOCUSED_NATIVE: ${{ inputs.native }}
         run: |
           set -euo pipefail
           if [[ -n "$FOCUSED_TESTS" ]]; then
             count="$(wc -l < "$RELATED_TESTS")"
             sed -i "s/^selected-tests=0$/selected-tests=$count/" "$RECEIPT"
-            echo "rust_changed=$FOCUSED_NATIVE" >> "$GITHUB_OUTPUT"
             echo "ts_changed=false" >> "$GITHUB_OUTPUT"
           else
             node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD --typecheck-planned
@@ -222,6 +220,29 @@ jobs:
               echo "- Elapsed: 0s"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Build and verify native addon
+        id: native
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          NATIVE_INPUT: ${{ inputs.native }}
+        run: |
+          set -euo pipefail
+          if [[ -s "$RELATED_TESTS" || "$NATIVE_INPUT" == "true" ]]; then
+            bun run ci:build:native
+            shopt -s nullglob
+            node_files=(natives/bridge/bindings/native/veyyon_natives.linux-x64*.node)
+            if [[ ${#node_files[@]} -eq 0 ]]; then
+              echo '::error::Missing native binding veyyon_natives.linux-x64*.node'
+              exit 1
+            fi
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+            echo "native_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native_ready=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Plan test shards
         id: planner
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
@@ -256,6 +277,14 @@ jobs:
         with:
           name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ovh-shards
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload native artifact
+        if: steps.native.outputs.native_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native/veyyon_natives.linux-x64*.node
           if-no-files-found: error
           retention-days: 7
       - name: Upload preparation receipt
@@ -312,11 +341,12 @@ jobs:
         uses: ./.github/actions/bun-install
         with:
           shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
-      - name: Build native addon when required
-        if: ${{ !cancelled() && needs.prepare.outputs.rust_changed == 'true' }}
-        env:
-          CARGO_BUILD_JOBS: "2"
-        run: bun run ci:build:native
+      - name: Download native addon
+        if: needs.prepare.outputs.native_ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native
       - name: Run cargo tests
         id: cargo
         if: ${{ !cancelled() && inputs.cargo_packages != '' && matrix.index == 0 }}
@@ -338,6 +368,21 @@ jobs:
           ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
           ((fail==0)) || status=1
           exit "$status"
+      - name: Verify native addon
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          FILES: ${{ matrix.files }}
+          NATIVE_READY: ${{ needs.prepare.outputs.native_ready }}
+        run: |
+          set -euo pipefail
+          if [[ "$FILES" != "0" && "$NATIVE_READY" != "true" ]]; then
+            echo '::error::Nonempty shard requires prepared native artifact'
+            exit 1
+          fi
+          if [[ "$NATIVE_READY" == "true" ]]; then
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+          fi
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'
