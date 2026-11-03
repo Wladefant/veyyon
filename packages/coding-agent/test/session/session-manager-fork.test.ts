@@ -432,6 +432,51 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     return fs.readFile(artifactPath, "utf8");
   }
 
+  it("rebinds same-sidecar adopted evidence to the new fork before the next artifact save", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-same-sidecar-owner-");
+    const cwd = path.join(temp.path(), "project");
+    const manager = SessionManager.create(cwd, path.join(temp.path(), "sessions"));
+    try {
+      const originalBytes = "SYNTHETIC OLD-SIDE ARTIFACT";
+      const nextBytes = "SYNTHETIC NEW-FORK ARTIFACT";
+      expect(await manager.saveArtifact(originalBytes, "bash")).toBe("0");
+      const sameSidecarOwner = manager.getArtifactManager();
+      if (!sameSidecarOwner) throw new Error("expected original artifact manager");
+      manager.adoptArtifactManager(sameSidecarOwner);
+      manager.appendMessage({ role: "user", content: "Preserve local artifact://0", timestamp: Date.now() });
+      await manager.ensureOnDisk();
+
+      const originalFile = manager.getSessionFile();
+      const originalDir = manager.getArtifactsDir();
+      const originalPath = await manager.getArtifactPath("0");
+      if (!originalFile || !originalDir || !originalPath) throw new Error("expected persisted original");
+      expect(originalDir).toBe(originalFile.slice(0, -".jsonl".length));
+      const switched = await manager.fork();
+      if (!switched) throw new Error("expected persisted fork");
+      expect(switched.oldSessionFile).toBe(originalFile);
+      const forkDir = switched.newSessionFile.slice(0, -".jsonl".length);
+
+      // The accepted same-sidecar adoption must not retain the old manager
+      // across a new session identity: copied old evidence stays readable,
+      // but later artifacts belong exclusively to the new sidecar.
+      expect(manager.getArtifactsDir()).toBe(forkDir);
+      const inheritedPath = await manager.getArtifactPath("0");
+      expect(inheritedPath).toBe(path.join(forkDir, path.basename(originalPath)));
+      expect(await fs.readFile(inheritedPath!, "utf8")).toBe(originalBytes);
+      expect(await fs.readFile(originalPath, "utf8")).toBe(originalBytes);
+      expect(await manager.saveArtifact(nextBytes, "bash")).toBe("1");
+      const nextPath = await manager.getArtifactPath("1");
+      if (!nextPath) throw new Error("expected new artifact");
+      expect(path.dirname(nextPath)).toBe(forkDir);
+      expect(await fs.readFile(nextPath, "utf8")).toBe(nextBytes);
+      expect(await Bun.file(path.join(originalDir, path.basename(nextPath))).exists()).toBe(false);
+      expect(await Bun.file(originalFile).exists()).toBe(true);
+      expect(await Bun.file(switched.newSessionFile).exists()).toBe(true);
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("refuses an adopted parent artifact scope even if a stale child sidecar has the same ID", async () => {
     using temp = TempDir.createSync("@veyyon-fork-adopted-artifact-owner-");
     const cwd = path.join(temp.path(), "project");
