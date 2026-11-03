@@ -2366,6 +2366,9 @@ export class SessionManager {
 		this.#startLifecycle("created");
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		// Same-sidecar adoption was scoped to the original session. Later
+		// allocations must use the fork's newly copied artifact directory.
+		this.#adoptedArtifactManager = null;
 
 		// A new file, so another writer's tail on the old one is not ours to carry,
 		// and the history we brought along is.
