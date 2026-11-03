@@ -284,3 +284,29 @@ test.each([
 		}
 	},
 );
+
+test.each([
+	["complete", '{ count: 1 } config / {"ALPHA": "/private/a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}'],
+	["unfinished", '{ count: 1 } config / {"ALPHA": "https://example.invalid/path",\n  "BETA": "fake-b"'],
+])("slash separators do not hide %s inventories from sink outputs", async (_label, record) => {
+	for (const spill of [false, true]) {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+		directories.push(directory);
+		const artifactPath = path.join(directory, "output.txt");
+		const live: string[] = [];
+		const sink = new OutputSink({
+			outputGuard: new ProducerOutputGuard(),
+			...(spill ? { artifactPath, artifactId: "fake-output", spillThreshold: 1 } : {}),
+			onChunk: chunk => live.push(chunk),
+		});
+		sink.pushHostText(`${record}\n`);
+		const result = await sink.dumpWithArtifactStatus();
+		const outputs = [live.join(""), result.output];
+		if (spill) outputs.push(await fs.readFile(artifactPath, "utf8"));
+		for (const output of outputs) {
+			for (const value of ["private/a", "https://example.invalid/path", "fake-b", "fake-c"]) {
+				expect(output).not.toContain(value);
+			}
+		}
+	}
+});

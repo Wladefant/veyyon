@@ -48,7 +48,10 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous]) && !consoleArgument) return 0;
 	REGEX_LITERAL.lastIndex = start;
 	const match = REGEX_LITERAL.exec(line);
-	return match ? match[0].length - 1 : 0;
+	if (!match) return 0;
+	const end = start + match[0].length;
+	if (consoleArgument && end < line.length && line[end] !== " " && line[end] !== "\t") return 0;
+	return match[0].length - 1;
 }
 
 /** Filters text before a producer can stream, retain, minimize, or persist it. */

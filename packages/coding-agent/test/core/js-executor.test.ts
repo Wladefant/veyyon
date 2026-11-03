@@ -589,6 +589,22 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toBe(`${expected}\ndone\n`);
 	});
+	it("withholds complete and unfinished inventories after a slash-bearing scalar argument", async () => {
+		for (const inventory of [
+			'{"ALPHA": "/private/a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}',
+			'{"ALPHA": "https://example.invalid/path",\n  "BETA": "fake-b"',
+		]) {
+			const result = await executeJs(
+				`console.log({ count: 1 }, "config /", ${JSON.stringify(inventory)});\nconsole.log("done");`,
+				{ sessionId, session, sessionFile },
+			);
+			expect(result.exitCode).toBe(0);
+			for (const value of ["private/a", "https://example.invalid/path", "fake-b", "fake-c"]) {
+				expect(result.output).not.toContain(value);
+			}
+			expect(result.output).toContain(BLOCKED_OUTPUT_RECORD);
+		}
+	});
 	it("prints a complete object holding a RegExp and the text after it", async () => {
 		const result = await executeJs('console.log({ pattern: /\\{/ });\nconsole.log("done");', {
 			sessionId,

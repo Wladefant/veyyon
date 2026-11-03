@@ -9,6 +9,7 @@
 - Complete output that prints a RegExp such as `{ pattern: /\{/ }` streams unchanged instead of being withheld as an unfinished structure ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - Error explanations withhold embedded incomplete inventories, and JS eval preserves RegExp output after object or array console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - Error explanations withhold complete prefixed inventories, and JS eval preserves RegExp output after scalar console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- JS eval only treats a top-level RegExp as a console argument when its closing slash and flags end at whitespace or the line boundary ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 
 ## [1.7.7] - 2026-11-02
 
