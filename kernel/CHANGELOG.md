@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-11-03
+
 ### Fixed
 
 - Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).

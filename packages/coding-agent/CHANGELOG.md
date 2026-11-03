@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-11-03
+
 ### Fixed
 
 - ACP clients receive each completed external turn once before the next prompt, replay string-content messages, and return cancellation while a disk refresh is pending without starting provider work ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
