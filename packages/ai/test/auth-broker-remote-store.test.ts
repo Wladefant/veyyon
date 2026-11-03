@@ -84,6 +84,39 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+	test("recovers broker truth when short SSE connections end cleanly before any frame", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const firstEof = Promise.withResolvers<void>();
+		let completedStreams = 0;
+		// A faulty relay terminates each 200-SSE response without a frame.
+		// The current per-connection watchdog is aborted on each short EOF.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (_opts) {
+			await Bun.sleep(5);
+			completedStreams += 1;
+			if (completedStreams === 1) firstEof.resolve();
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+		});
+		await firstEof.promise;
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+		expect(storage!.disableCredentialById(id, "synthetic peer revocation during clean SSE EOFs")).toBe(true);
+		// No manual refresh and no forwarded SSE update: the real store must
+		// eventually perform an unconditional canonical GET despite quick EOFs.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		// Clean EOF must also use the existing failure backoff rather than
+		// opening an unbounded number of 200-SSE connections.
+		expect(completedStreams).toBeLessThan(10);
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected broker truth");
+		expect(canonical.snapshot.credentials).toEqual([]);
+	});
+
 	test("reconciles a peer revocation while the initial SSE connection emits no frame", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
