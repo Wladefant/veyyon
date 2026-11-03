@@ -580,8 +580,11 @@ describe("executeJs", () => {
 	});
 	it.each([
 		["console.log({ count: 1 }, /\\{/);", "{ count: 1 } /\\{/"],
-		["console.log([{ count: 1 }, /\\{/]);", "[ { count: 1 }, /\\{/ ]"],
-	])("prints RegExp after a completed object or array: %s", async (code, expected) => {
+		["console.log([1], /\\{/);", "[ 1 ] /\\{/"],
+		["console.log({ count: 1 }, 42, /\\{/);", "{ count: 1 } 42 /\\{/"],
+		['console.log({ count: 1 }, "value", /\\{/);', "{ count: 1 } value /\\{/"],
+		["console.log({ count: 1 }, /ok/, /\\{/);", "{ count: 1 } /ok/ /\\{/"],
+	])("prints RegExp after a completed container and console arguments: %s", async (code, expected) => {
 		const result = await executeJs(`${code}\nconsole.log("done");`, { sessionId, session, sessionFile });
 		expect(result.exitCode).toBe(0);
 		expect(result.output).toBe(`${expected}\ndone\n`);

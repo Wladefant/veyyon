@@ -254,3 +254,33 @@ test.each([
 		}
 	},
 );
+test.each([
+	["complete", 'Error: {\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}'],
+	["unfinished", 'Error: {\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"'],
+])(
+	"pushHostText with a %s prefixed inventory withholds values in inline and spill output",
+	async (_label, diagnostic) => {
+		for (const spill of [false, true]) {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-host-error-"));
+			directories.push(directory);
+			const artifactPath = path.join(directory, "output.txt");
+			const live: string[] = [];
+			const sink = new OutputSink({
+				outputGuard: new ProducerOutputGuard(),
+				...(spill ? { artifactPath, artifactId: "fake-host-error", spillThreshold: 1 } : {}),
+				onChunk: chunk => live.push(chunk),
+			});
+			sink.pushHostText(diagnostic);
+			const result = await sink.dumpWithArtifactStatus();
+			const inline = live.join("");
+			for (const value of ["fake-a", "fake-b", "fake-c"]) {
+				expect(inline).not.toContain(value);
+				expect(result.output).not.toContain(value);
+			}
+			if (spill) {
+				const artifact = await fs.readFile(artifactPath, "utf8");
+				for (const value of ["fake-a", "fake-b", "fake-c"]) expect(artifact).not.toContain(value);
+			}
+		}
+	},
+);

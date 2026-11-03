@@ -41,9 +41,10 @@ const REGEX_VALUE_START = ":,[{>";
 function regexLiteralLength(line: string, start: number, depth: number): number {
 	let previous = start - 1;
 	while (previous >= 0 && (line[previous] === " " || line[previous] === "\t")) previous--;
-	// Console arguments have a space between them; a completed top-level container
-	// can precede a RegExp argument, unlike a nested container or a division operand.
-	const consoleArgument = depth === 0 && previous < start - 1 && (line[previous] === "}" || line[previous] === "]");
+	// Console arguments are flattened with spaces, so later RegExp arguments may
+	// follow a scalar or another RegExp; the complete-literal check below still
+	// rejects a lone slash or division operator.
+	const consoleArgument = depth === 0 && previous < start - 1;
 	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous]) && !consoleArgument) return 0;
 	REGEX_LITERAL.lastIndex = start;
 	const match = REGEX_LITERAL.exec(line);
@@ -90,6 +91,7 @@ export class ProducerOutputGuard {
 
 	/** Validate a separate, complete payload without reopening this producer stream. */
 	sanitizeComplete(text: string): string {
+		if (this.sanitize(text) === BLOCKED_OUTPUT_RECORD) return BLOCKED_OUTPUT_RECORD;
 		const guard = new ProducerOutputGuard(
 			value => this.#redact?.(value) ?? value,
 			value => this.#pendingPrefixLength?.(value) ?? 0,
