@@ -312,7 +312,7 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		},
 		{
 			name: "console.log array of one-key objects",
-			expression: `console.log([{ ALPHA: 'array-log-a' }, { BETA: 'array-log-b' }, { GAMMA: 'array-log-c' }])`,
+			expression: `console.log('env', [{ ALPHA: 'array-log-a' }, { BETA: 'array-log-b' }, { GAMMA: 'array-log-c' }])`,
 			canaries: ["array-log-a", "array-log-b", "array-log-c"],
 		},
 		{
