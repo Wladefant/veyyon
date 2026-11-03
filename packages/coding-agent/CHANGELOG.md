@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Withhold startup text and parser error reflections from invalid kernel frame diagnostics ([Refs #942](https://github.com/Wladefant/veyyon/issues/942)).
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

@@ -1008,10 +1008,10 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		let frame: Frame;
 		try {
 			frame = JSON.parse(line) as Frame;
-		} catch (err) {
+		} catch {
 			logger.warn(`${this.#options.languageName} runner emitted invalid JSON`, {
-				line: line.slice(0, 200),
-				error: errorMessage(err),
+				length: line.length,
+				byteLength: Buffer.byteLength(line),
 			});
 			return;
 		}
