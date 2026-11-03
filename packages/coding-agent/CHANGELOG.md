@@ -5,6 +5,7 @@
 ### Fixed
 
 - ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+- ACP bash terminal output withholds a truncated client snapshot whole, because the cut-off start can hold the context that marks the rest as an inventory ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
 
 ## [1.7.7] - 2026-11-02
 

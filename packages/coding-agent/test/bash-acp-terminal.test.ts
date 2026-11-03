@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BLOCKED_OUTPUT_RECORD } from "@veyyon/coding-agent/secrets/producer-output";
+import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type { ClientBridge, ClientBridgeTerminalHandle } from "@veyyon/kernel/session/client-bridge";
@@ -318,6 +320,114 @@ describe("BashTool ACP terminal routing", () => {
 		expect((failure as Error).message).not.toContain("ALPHA=classified-alpha");
 		expect((failure as Error).message).not.toContain("BETA=classified-beta");
 		expect((failure as Error).message).not.toContain("GAMMA=classified-gamma");
+	});
+
+	// ACP truncates a terminal buffer from the beginning at any character boundary, so a
+	// truncated snapshot can lose the assignment name, table header or earlier rows that make
+	// what remains an inventory. Both cases below keep that classifying part in the lost prefix.
+	// Gap: a client that reports `truncated: false` for a cut buffer is outside this contract.
+	const inventoryValues = ["classified-alpha", "classified-beta", "classified-gamma", "classified-delta"];
+	const rollingSnapshot = (stream: string) => ({
+		output: stream.slice(-DEFAULT_MAX_BYTES),
+		truncated: stream.length > DEFAULT_MAX_BYTES,
+	});
+	const fillTo = (text: string, length: number) => {
+		const rows = "ordinary output row\n".repeat(Math.ceil(length / 20));
+		return `${text}${rows.slice(0, length - text.length - 1)}\n`;
+	};
+	// Trigger A: the first snapshot starts inside ALPHA's value; `ALPHA=` was cut away.
+	const midValueStream = `ALPHA=${fillTo(
+		"classified-alpha\nBETA=classified-beta\nGAMMA=classified-gamma\nDELTA=classified-delta\n",
+		DEFAULT_MAX_BYTES,
+	)}`;
+	// Trigger B: a preview already withheld the whole inventory; later output evicts ALPHA.
+	const withheldInventory = "ALPHA=classified-alpha\nBETA=classified-beta\nGAMMA=classified-gamma\n";
+	const evictedStream = `ALPHA=classified-alpha\n${fillTo("BETA=classified-beta\nGAMMA=classified-gamma\n", DEFAULT_MAX_BYTES)}`;
+	const truncatedCases = [
+		{ name: "first snapshot starts mid-value", previews: [midValueStream], final: midValueStream, exitCode: 0 },
+		{
+			name: "buffer evicts the first row of a withheld inventory",
+			previews: [withheldInventory, evictedStream],
+			final: evictedStream,
+			exitCode: 1,
+		},
+	];
+
+	it.each(truncatedCases)("withholds a truncated snapshot whose classifying prefix was cut: $name", async testCase => {
+		expect(rollingSnapshot(testCase.final).truncated).toBe(true);
+		let finalRead = false;
+		let previewIndex = 0;
+		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-truncated-inventory",
+			waitForExit: async () => pendingExit.promise,
+			// The command exits once every staged preview has been read, so each one is polled
+			// regardless of how much fake time the setup before the poll loop consumed.
+			currentOutput: async () => {
+				if (finalRead) return rollingSnapshot(testCase.final);
+				const preview = testCase.previews[previewIndex++]!;
+				if (previewIndex === testCase.previews.length) {
+					finalRead = true;
+					pendingExit.resolve({ exitCode: testCase.exitCode, signal: null });
+				}
+				return rollingSnapshot(preview);
+			},
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		const artifactDirectory = await mkdtemp(join(tmpdir(), "bash-acp-truncated-"));
+		try {
+			const tool = new BashTool(makeSession(bridge, { artifactThreshold: 1, artifactDirectory }));
+			const updates: string[] = [];
+			const running = tool.execute("call-truncated-inventory", { command: "env" }, undefined, update =>
+				updates.push(update.content.map(item => (item.type === "text" ? item.text : "")).join("")),
+			);
+			installFakeTime();
+			const outcome = await driveFakeTime(running).then(
+				result => result.content.find(item => item.type === "text")?.text ?? "",
+				(error: unknown) => (error as Error).message,
+			);
+			// The terminalId update plus one update per staged preview: the truncated one was published.
+			expect(previewIndex).toBe(testCase.previews.length);
+			expect(updates.length).toBeGreaterThanOrEqual(testCase.previews.length + 1);
+			expect(outcome).toContain(BLOCKED_OUTPUT_RECORD);
+			const artifacts = await Promise.all(
+				(await readdir(artifactDirectory)).map(file => readFile(join(artifactDirectory, file), "utf8")),
+			);
+			for (const output of [...updates, outcome, ...artifacts]) {
+				for (const value of inventoryValues) expect(output).not.toContain(value);
+			}
+		} finally {
+			await rm(artifactDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("withholds a truncated mid-value snapshot from the timeout error", async () => {
+		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
+		const handle: ClientBridgeTerminalHandle = {
+			terminalId: "term-truncated-timeout",
+			waitForExit: () => pendingExit.promise,
+			currentOutput: async () => rollingSnapshot(midValueStream),
+			kill: async () => {},
+			release: async () => {},
+		};
+		const bridge: ClientBridge = {
+			capabilities: { terminal: true },
+			createTerminal: async () => handle,
+		};
+		installFakeTime();
+		const tool = new BashTool(makeSession(bridge));
+		const failure = await driveFakeTime(tool.execute("call-truncated-timeout", { command: "env", timeout: 1 })).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toContain(BLOCKED_OUTPUT_RECORD);
+		for (const value of inventoryValues) expect((failure as Error).message).not.toContain(value);
 	});
 
 	// The command deadline and the poll tick used to be `Bun.sleep` promises raced against the exit:

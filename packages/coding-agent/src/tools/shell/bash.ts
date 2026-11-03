@@ -24,7 +24,7 @@ import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
-import { ProducerOutputGuard } from "../../secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
 import { type SessionCpuLimit, sessionBudgetLimits, sessionCpuLimit } from "../../session/cpu-limit";
 import {
 	artifactFooter,
@@ -1488,8 +1488,12 @@ function resolveWaitMs(baseMs: number, timeoutMs: number | undefined): number {
 /**
  * ACP returns cumulative snapshots, not chunks. Classify each snapshot from its start,
  * holding incomplete records and assignment prefixes until the command's final read.
+ * A truncated snapshot has lost its start at an arbitrary character, and that lost prefix
+ * can hold the assignment name, table header or earlier rows that classify the rest, so it
+ * is withheld whole rather than classified from a suffix.
  */
 function guardClientTerminalOutput(output: ClientBridgeTerminalOutput, completed = false): ClientBridgeTerminalOutput {
+	if (output.truncated) return { ...output, output: BLOCKED_OUTPUT_RECORD };
 	const guard = new ProducerOutputGuard();
 	const filtered = guard.push(output.output);
 	return { ...output, output: filtered + (completed ? guard.finish() : "") };
