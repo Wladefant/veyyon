@@ -213,6 +213,40 @@ describe("explicit bounded lane successors", () => {
 		expect(registry.get(predecessor)?.status).toBe("running");
 		expect(registry.get(predecessor)?.terminalOutcome).toBeUndefined();
 	});
+	it("releases a claim when predecessor revival refuses dispatch before successor work starts", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "parked",
+			session: null,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "completed");
+
+		const claim = successorCheckpoint.claimSuccessorCheckpoint;
+		const race = vi.spyOn(successorCheckpoint, "claimSuccessorCheckpoint").mockImplementation(async (...args) => {
+			const checkpoint = await claim(...args);
+			registry.setStatus(predecessor, "idle");
+			registry.setStatus(predecessor, "running");
+			return checkpoint;
+		});
+		const refused = await dispatch("Raced successor", predecessor);
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("successor-predecessor-active");
+		expect(executed).toHaveLength(1);
+
+		race.mockRestore();
+		registry.mirrorStatus(predecessor, "parked");
+		registry.recordTerminalOutcome(predecessor, "completed");
+		await dispatch("Safe retry", predecessor);
+		expect(executed).toHaveLength(2);
+		expect(executed[1].task).toContain(`Completed safe result from ${predecessor}`);
+	});
+
 	it("retires a settled parked predecessor after a successful successor handoff", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;

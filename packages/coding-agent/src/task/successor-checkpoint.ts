@@ -113,6 +113,27 @@ export async function claimSuccessorCheckpoint(
 	return checkpoint;
 }
 
+/** Release only this invocation's claim after an explicit refusal before dispatch. */
+export async function releasePreDispatchSuccessorClaim(
+	directory: string,
+	predecessorId: string,
+	successorId: string,
+): Promise<boolean> {
+	const file = `${checkpointPath(directory, predecessorId)}.claim`;
+	let claim: unknown;
+	try {
+		claim = JSON.parse(await fs.readFile(file, "utf8"));
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+		throw error;
+	}
+	if (typeof claim !== "object" || claim === null || Array.isArray(claim)) return false;
+	const record = claim as Record<string, unknown>;
+	if (record.predecessorId !== predecessorId || record.successorId !== successorId) return false;
+	await fs.unlink(file);
+	return true;
+}
+
 /** Save the settled lane's result before reporting it to the parent, using the existing crash-safe writer. */
 export async function writeSuccessorCheckpoint(
 	directory: string,
