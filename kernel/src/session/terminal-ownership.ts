@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir, readOwnerOnlyFile } from "@veyyon/utils";
+import { getConfigRootDir, readOwnerOnlyFile, WINDOWS_ACL_TIMEOUT_MS } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -36,13 +36,23 @@ export async function assertNotTerminalOwned(sessionFile: string, root = getConf
 	for (const file of files) {
 		if (!file.endsWith(".json")) continue;
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
+		const record = path.join(directory, file);
+		const started = performance.now();
+		let step = "open";
 		// A record another user can read or write is refused, not skipped: a claim we cannot verify may be a
 		// live owner, so the session is not opened. A missing record is still no owner.
 		try {
-			owner = JSON.parse(await readOwnerOnlyFile(path.join(directory, file)));
+			const contents = await readOwnerOnlyFile(record, { onStep: current => { step = current; } });
+			step = "parse";
+			owner = JSON.parse(contents);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-			throw new Error("Cannot establish terminal writer ownership", { cause: error });
+			const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "unknown");
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new Error(
+				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${detail}`,
+				{ cause: error },
+			);
 		}
 		if (
 			owner?.version !== 1 ||
