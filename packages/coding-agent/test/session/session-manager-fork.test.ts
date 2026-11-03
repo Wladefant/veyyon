@@ -432,6 +432,75 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     return fs.readFile(artifactPath, "utf8");
   }
 
+  it("refuses an adopted parent artifact scope even if a stale child sidecar has the same ID", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-adopted-artifact-owner-");
+    const cwd = path.join(temp.path(), "project");
+    const parent = SessionManager.create(cwd, path.join(temp.path(), "sessions"));
+    let child: SessionManager | undefined;
+    try {
+      const parentEvidence = "SYNTHETIC ORIGINAL PARENT EVIDENCE";
+      const staleEvidence = "SYNTHETIC UNRELATED CHILD SIDECAR";
+      expect(await parent.saveArtifact(parentEvidence, "bash")).toBe("0");
+      parent.appendMessage({ role: "user", content: "Parent owns artifact://0", timestamp: Date.now() });
+      await parent.ensureOnDisk();
+      const parentArtifactDir = parent.getArtifactsDir();
+      const parentArtifactPath = await parent.getArtifactPath("0");
+      const parentFile = parent.getSessionFile();
+      const parentArtifactManager = parent.getArtifactManager();
+      if (!parentArtifactDir || !parentArtifactPath || !parentFile || !parentArtifactManager) {
+        throw new Error("expected persisted parent artifact owner");
+      }
+
+      // A real agent adopts the parent's directory and ID space while writing
+      // its JSONL under that directory, not under a matching child sidecar.
+      child = SessionManager.create(cwd, parentArtifactDir);
+      child.adoptArtifactManager(parentArtifactManager);
+      child.appendMessage({ role: "user", content: "Child inherited artifact://0", timestamp: Date.now() });
+      await child.ensureOnDisk();
+      const childFile = child.getSessionFile();
+      if (!childFile) throw new Error("expected persisted child JSONL");
+      expect(path.dirname(childFile)).toBe(parentArtifactDir);
+      expect(child.getArtifactsDir()).toBe(parentArtifactDir);
+      expect(await child.getArtifactPath("0")).toBe(parentArtifactPath);
+      const childSidecar = childFile.slice(0, -".jsonl".length);
+      const parentBefore = await fs.readFile(parentFile, "utf8");
+      const childBefore = await fs.readFile(childFile, "utf8");
+      const childId = child.getSessionId();
+      const originalNames = (await fs.readdir(parentArtifactDir)).sort();
+
+      // Missing child sidecar must not cause a successful fork that loses the
+      // still-valid parent reference, or leave a reservation after refusal.
+      expect(await Bun.file(childSidecar).exists()).toBe(false);
+      await expect(child.fork()).rejects.toThrow(/adopted artifact scope.*session sidecar/i);
+      expect(child.getSessionFile()).toBe(childFile);
+      expect(child.getSessionId()).toBe(childId);
+      expect((await fs.readdir(parentArtifactDir)).sort()).toEqual(originalNames);
+      expect(await fs.readFile(parentFile, "utf8")).toBe(parentBefore);
+      expect(await fs.readFile(childFile, "utf8")).toBe(childBefore);
+      expect(await fs.readFile(parentArtifactPath, "utf8")).toBe(parentEvidence);
+
+      // More dangerous twin: the child's independent sidecar *does* contain
+      // artifact ID 0 but its bytes are unrelated to the adopted parent owner.
+      // A self-consistent copy + SHA-256 of those stale bytes is still wrong.
+      await fs.mkdir(childSidecar);
+      const stalePath = path.join(childSidecar, "0.bash.log");
+      await fs.writeFile(stalePath, staleEvidence);
+      const namesWithStaleSidecar = (await fs.readdir(parentArtifactDir)).sort();
+      await expect(child.fork()).rejects.toThrow(/adopted artifact scope.*session sidecar/i);
+      expect(child.getSessionFile()).toBe(childFile);
+      expect(child.getSessionId()).toBe(childId);
+      expect((await fs.readdir(parentArtifactDir)).sort()).toEqual(namesWithStaleSidecar);
+      expect(await fs.readFile(parentFile, "utf8")).toBe(parentBefore);
+      expect(await fs.readFile(childFile, "utf8")).toBe(childBefore);
+      expect(await fs.readFile(parentArtifactPath, "utf8")).toBe(parentEvidence);
+      expect(await fs.readFile(stalePath, "utf8")).toBe(staleEvidence);
+      expect(await child.getArtifactPath("0")).toBe(parentArtifactPath);
+    } finally {
+      await child?.close();
+      await parent.close();
+    }
+  });
+
   it("copies the original evidence before switching and keeps the next artifact ID distinct", async () => {
     using temp = TempDir.createSync("@veyyon-fork-archive-");
     const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
