@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Corrected the owner-only reader's import order; runtime behavior is unchanged.
+
 ## [1.7.2] - 2026-11-01
 
 ### Added
