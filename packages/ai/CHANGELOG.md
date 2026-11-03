@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Remote auth-broker ignores countdown-only same-generation SSE replays for snapshot freshness, preserving authoritative revoke reconciliation and legitimate refresh-policy updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker ignores unchanged same-generation SSE replays, including reordered snapshots and locally pending safety-block overlays, so duplicated frames cannot defer idle broker reconciliation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker reconciles canonical snapshot truth after prematurely closed SSE streams, backs off clean EOF retries, and ignores unchanged equal-generation initial snapshots replayed on each reconnect rather than resetting the idle-verification deadline ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker conservatively combines broker-authoritative peer block scopes with locally pending restrictions, without losing either during incoming snapshots, then reconciles after write settlement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
