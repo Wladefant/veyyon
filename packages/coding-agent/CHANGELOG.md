@@ -6,6 +6,14 @@
 
 - Supervision phases now use bounded watchdogs (120 s for startup, 180 s for streams, 15 min for tools, and 30 min for children). A timed-out phase supports one acknowledged recovery in the same session, and terminal outcomes remain durable with five-minute parked retention and bounded orphan cleanup.
 - Task successors cannot start after another successor claims the predecessor checkpoint. Retiring a predecessor preserves its history.
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- ACP clients receive each completed external turn once before the next prompt, replay string-content messages, and return cancellation while a disk refresh is pending without starting provider work ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- ACP external-turn reconciliation preserves cancelled or failed history delivery, excludes imported usage from prompt totals, and refreshes todo and display projections ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- ACP rejects unfinished external turns, excludes imported usage during cancelled replay, and acknowledges imported history after a successful full load ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+
 ## [1.7.7] - 2026-11-02
 
 - OVH CI now builds and verifies one native addon for selected test shards, then shares it with those shards; no user-facing change ([PR #900](https://github.com/Wladefant/veyyon/pull/900)).
