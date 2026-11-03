@@ -3663,6 +3663,23 @@ export class SessionManager {
 		const suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		manager.#suppressBreadcrumb = true;
 
+		// forkFrom reads a transcript by pathname but derives its evidence
+		// sidecar from that SAME name. A directly symlinked or hardlinked
+		// transcript can therefore load somebody else's history and copy an
+		// unrelated alias sidecar with matching artifact IDs. Refuse before
+		// loading or reserving a destination; a hash of the wrong sidecar
+		// would not prove that its bytes belong to this transcript.
+		// An injected virtual SessionStorage may have no host file; retain
+		// its existing loader error/success behavior on a truly absent path.
+		try {
+			const sourceStat = await fs.promises.lstat(sourcePath);
+			if (sourceStat.isSymbolicLink() || (sourceStat.isFile() && sourceStat.nlink > 1)) {
+				throw new Error("Cannot fork session: source transcript alias cannot establish artifact provenance");
+			}
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
 		) as FileEntry[];
