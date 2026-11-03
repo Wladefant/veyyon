@@ -350,6 +350,48 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 		}
 	});
 
+	it("refuses transcript symlink and hardlink aliases before copying unrelated artifact evidence", async () => {
+		using temp = TempDir.createSync("@veyyon-forkfrom-source-alias-provenance-");
+		const cwd = path.join(temp.path(), "project");
+		const sessions = path.join(temp.path(), "sessions");
+		const source = SessionManager.create(cwd, sessions);
+		try {
+			const evidence = "synthetic evidence owned by the original transcript";
+			expect(await source.saveArtifact(evidence, "bash")).toBe("0");
+			source.appendMessage({
+				role: "user", content: "Preserve the original artifact://0", timestamp: Date.now(),
+			});
+			await source.ensureOnDisk();
+			const sourceFile = source.getSessionFile();
+			const originalArtifact = await source.getArtifactPath("0");
+			if (!sourceFile || !originalArtifact) throw new Error("expected persistent synthetic source evidence");
+			const sourceBytes = await fs.readFile(sourceFile, "utf8");
+			const originalInventory = (await fs.readdir(path.dirname(originalArtifact))).sort();
+			for (const kind of ["symlink", "hardlink"] as const) {
+				const aliasFile = path.join(sessions, `source-${kind}-alias.jsonl`);
+				if (kind === "symlink") await fs.symlink(sourceFile, aliasFile, "file");
+				else await fs.link(sourceFile, aliasFile);
+				const aliasSidecar = aliasFile.slice(0, -".jsonl".length);
+				await fs.mkdir(aliasSidecar);
+				const wrongBytes = `synthetic DIFFERENT artifact for ${kind} alias`;
+				const wrongLog = path.join(aliasSidecar, "0.bash.log");
+				await fs.writeFile(wrongLog, wrongBytes);
+				const destination = path.join(sessions, `fork-${kind}-alias.jsonl`);
+				await expect(SessionManager.forkFrom(aliasFile, cwd, sessions, undefined, {
+					sessionFile: destination, suppressBreadcrumb: true,
+				})).rejects.toThrow(/source transcript alias/i);
+				expect(await Bun.file(destination).exists()).toBe(false);
+				expect(await Bun.file(destination.slice(0, -".jsonl".length)).exists()).toBe(false);
+				expect(await fs.readFile(wrongLog, "utf8")).toBe(wrongBytes);
+				expect(await fs.readFile(originalArtifact, "utf8")).toBe(evidence);
+				expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+				expect((await fs.readdir(path.dirname(originalArtifact))).sort()).toEqual(originalInventory);
+		}
+	} finally {
+		await source.close();
+	}
+	});
+
 	it("refuses a pinned forkFrom destination equal to the source without rewriting history", async () => {
 		using temp = TempDir.createSync("@veyyon-forkfrom-same-path-");
 		const cwd = path.join(temp.path(), "project");
