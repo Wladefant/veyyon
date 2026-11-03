@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal ownership diagnostics no longer report a shell command deadline when Windows ACL verification runs natively ([#932](https://github.com/Wladefant/veyyon/issues/932)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
