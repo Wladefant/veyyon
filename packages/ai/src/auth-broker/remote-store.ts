@@ -8,6 +8,7 @@
  * runs isn't required.
  */
 import { scheduler } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import * as logger from "@veyyon/utils/logger";
 import {
@@ -551,22 +552,44 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					});
 					return;
 				}
+				// Replayed equal-generation state is not progress: accepting it
+				// repeatedly would starve the canonical idle GET and invalidate
+				// in-flight GETs through the applied-revision fence.
+				if (
+					snapshot.generation === this.#generation &&
+					isDeepStrictEqual(
+						snapshot.credentials.map(entry => normalizeSnapshotEntryBlocks(entry, Date.now())),
+						this.#snapshot.credentials,
+					) &&
+					isDeepStrictEqual(snapshot.refresher, this.#snapshot.refresher)
+				) return;
 				this.#applySnapshot(snapshot, snapshot.generation);
 				return;
 			}
 			case "entry": {
 				if (event.generation < this.#generation) return;
+				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
+				if (
+					event.generation === this.#generation &&
+					current &&
+					isDeepStrictEqual(current, normalizeSnapshotEntryBlocks(event.entry, Date.now())) &&
+					isDeepStrictEqual(event.refresher, this.#snapshot.refresher)
+				) return;
 				this.#applyStreamEntry(event.entry, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}
 			case "removed": {
 				if (event.generation < this.#generation) return;
+				if (
+					event.generation === this.#generation &&
+					!this.#snapshot.credentials.some(entry => entry.id === event.id) &&
+					isDeepStrictEqual(event.refresher, this.#snapshot.refresher)
+				) return;
 				this.#removeStreamCredential(event.id, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}
 		}
 	}
-
 	#applyStreamEntry(
 		entry: SnapshotEntry,
 		refresher: RefresherSchedule,
