@@ -459,11 +459,22 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	async #pollSnapshot(): Promise<void> {
 		const generationAtRequest = this.#generation;
 		const revisionAtRequest = this.#appliedSnapshotRevision;
-		const result = await this.#client.fetchSnapshot({
-			ifGenerationGt: generationAtRequest,
-			waitMs: BACKGROUND_WAIT_MS,
-			signal: this.#backgroundAbort.signal,
-		});
+		// Broker generations are process-local: after a restart, a changed
+		// credential set can reuse our last numeric generation. Conditional
+		// polls would then return 304 forever. Reuse the idle verifier's
+		// monotonic deadline to periodically fetch canonical broker truth,
+		// while preserving ordinary 30s conditional long-polls between checks.
+		const needsCanonicalVerification =
+			performance.now() - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs;
+		const result = await this.#client.fetchSnapshot(
+			needsCanonicalVerification
+				? { signal: this.#backgroundAbort.signal }
+				: {
+						ifGenerationGt: generationAtRequest,
+						waitMs: BACKGROUND_WAIT_MS,
+						signal: this.#backgroundAbort.signal,
+					},
+		);
 		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 	}
 
