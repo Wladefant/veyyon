@@ -538,6 +538,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			watchdogAbort.abort();
 			await watchdog;
 		}
+		if (!this.#closed && !this.#backgroundAbort.signal.aborted) {
+			// A broken relay can complete 200-SSE responses before *any* frame.
+			// Each reconnect cancels the per-stream watchdog before its first tick.
+			// Probe canonical broker truth once the monotonic freshness deadline
+			// has elapsed, then use the existing stream failure backoff rather than
+			// hot-looping through more immediately completed connections.
+			if (performance.now() - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs) {
+				const revisionAtRequest = this.#appliedSnapshotRevision;
+				const result = await this.#client.fetchSnapshot({ signal: this.#backgroundAbort.signal });
+				if (result.status === 200) {
+					this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				} else {
+					this.#reportStaleSnapshot(
+						"snapshot-stream-early-eof",
+						new AIError.AuthBrokerError("Unexpected broker snapshot verification response after SSE EOF"),
+					);
+				}
+			}
+			throw new AIError.AuthBrokerError("Auth broker snapshot stream ended unexpectedly");
+		}
 	}
 
 	#applyStreamEvent(event: SnapshotStreamEvent): void {
