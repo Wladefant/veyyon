@@ -149,7 +149,10 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 						try {
 							const serialized = JSON.stringify(output.data);
 							const filtered = outputGuard.sanitize(serialized);
-							output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+							output = {
+								type: "json",
+								data: filtered === serialized ? output.data : "[credential output withheld]",
+							};
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };
 						}

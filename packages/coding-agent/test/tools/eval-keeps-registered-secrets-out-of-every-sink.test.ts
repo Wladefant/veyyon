@@ -21,9 +21,7 @@ import { makeToolSession } from "../helpers/tool-session";
 import "@veyyon/coding-agent/tools/index";
 
 const CANARY = "synthetic-eval-\n\nregistered-value-6c84f1";
-const obfuscator = new SecretObfuscator([
-	{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" },
-]);
+const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" }]);
 let directory: string | undefined;
 
 afterEach(() => {
@@ -31,7 +29,6 @@ afterEach(() => {
 	directory = undefined;
 	disposeAllVmContexts();
 });
-
 
 function makeSession(artifactPath: string): ToolSession {
 	const settings = Settings.isolated();
@@ -61,10 +58,10 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const code = [
 			'const value = "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 			'print("split=" + value.slice(0, 16));',
-			'print(value.slice(16));',
+			"print(value.slice(16));",
 			'print("harmless-padding\\n".repeat(12000));',
 			'display(value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1");',
-			'display({ value });',
+			"display({ value });",
 			'return value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 		].join("\n");
 
@@ -77,7 +74,12 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const artifact = fs.existsSync(artifactPath) ? fs.readFileSync(artifactPath, "utf8") : "";
 		const details = result.details as EvalToolDetails & { meta?: unknown };
 		const originalOutput = details.cells?.[0]?.output ?? "";
-		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details), artifact];
+		const retained = [
+			JSON.stringify(progress),
+			JSON.stringify(result.content),
+			JSON.stringify(result.details),
+			artifact,
+		];
 
 		expect(progress.length).toBeGreaterThan(0);
 		for (const sink of retained) expect(sink).not.toContain(CANARY);
