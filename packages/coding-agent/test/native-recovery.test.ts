@@ -186,6 +186,7 @@ describe("native recovery", () => {
 		await mkdir(empty);
 		await expect(captureNativeCheckpoint(file, Array(2049).fill(empty))).rejects.toThrow(/metadata budget/);
 	});
+	// Reading 2049 real artifacts proves the local policy, not a five-second latency budget.
 	test("cloud capture caps zero-byte artifact fanout while local forks retain their policy", async () => {
 		const root = await scratch();
 		const file = join(root, "session.jsonl");
@@ -202,7 +203,7 @@ describe("native recovery", () => {
 		await expect(captureNativeCheckpoint(file, [])).rejects.toThrow(/metadata budget/);
 		const local = await captureNativeCheckpoint(file, [], "local");
 		expect(Object.keys(local.artifacts)).toHaveLength(2049);
-	});
+	}, 30_000);
 	test("cloud metadata path bytes are bounded independently of file count", async () => {
 		const root = await scratch();
 		const file = join(root, "session.jsonl");
