@@ -45,9 +45,11 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		if (
 			outputId.length > 240 ||
 			/[<>:"|?*\u0000-\u001f\u007f]/u.test(outputId) ||
-			outputId.includes("/") || outputId.includes("\\") ||
-			outputId === "." || outputId === ".." ||
-			/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(outputId)
+			outputId.includes("/") ||
+			outputId.includes("\\") ||
+			outputId === "." ||
+			outputId === ".." ||
+			/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(outputId)
 		) {
 			throw new Error("Invalid agent output ID: expected one portable filename component");
 		}

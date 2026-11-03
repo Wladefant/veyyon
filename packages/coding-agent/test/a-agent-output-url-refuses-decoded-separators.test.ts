@@ -8,7 +8,9 @@ import { parseInternalUrl } from "../src/internal-urls/parse";
 import { registerArtifactsDir } from "../src/internal-urls/registry-helpers";
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0)) await cleanup();
+});
 
 async function disposableArtifacts(): Promise<{ directory: string; outside: string }> {
 	const temp = TempDir.createSync("agent-url-single-component-");
@@ -17,7 +19,10 @@ async function disposableArtifacts(): Promise<{ directory: string; outside: stri
 	await fs.mkdir(directory, { recursive: true });
 	await fs.writeFile(outside, "synthetic OUTSIDE artifact, not private data");
 	const unregister = registerArtifactsDir(directory);
-	cleanups.push(async () => { unregister(); await temp.remove(); });
+	cleanups.push(async () => {
+		unregister();
+		await temp.remove();
+	});
 	return { directory, outside };
 }
 
@@ -30,6 +35,14 @@ it("refuses percent-decoded slash, backslash, ADS syntax and reserved output IDs
 		"agent://..%2f..%2foutside",
 		"agent://Worker%3Astream",
 		"agent://con",
+		"agent://COM%C2%B9",
+		"agent://COM%C2%B2",
+		"agent://COM%C2%B3",
+		"agent://LPT%C2%B9",
+		"agent://LPT%C2%B2",
+		"agent://LPT%C2%B3",
+		"agent://COM%C2%B9.result",
+		"agent://LPT%C2%B2.result",
 		"agent://..",
 	] as const) {
 		await expect(handler.resolve(parseInternalUrl(uri))).rejects.toThrow("Invalid agent output ID");
@@ -44,6 +57,8 @@ it("continues to resolve ordinary and versioned native-result IDs from the regis
 	for (const [name, body] of [
 		["B20SafeReader852", "immutable original"],
 		["B20SafeReader852.phase-deadbeef", "immutable continuation"],
+		["Worker-é😀", "valid Unicode output"],
+		["COM10", "ordinary non-device output"],
 	] as const) {
 		await fs.writeFile(path.join(directory, name + ".md"), body);
 		const result = await handler.resolve(parseInternalUrl("agent://" + name));

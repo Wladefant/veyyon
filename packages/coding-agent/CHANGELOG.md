@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Reject encoded path separators in `agent://` result identifiers before artifact lookup ([#852](https://github.com/Wladefant/veyyon/issues/852)).
+- Reject encoded path separators and reserved Windows device names in `agent://` result identifiers before artifact lookup ([#852](https://github.com/Wladefant/veyyon/issues/852)).
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
