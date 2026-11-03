@@ -199,9 +199,9 @@ export async function sendTerminalControlRotate(
 		}
 	});
 
-		socket.on("error", () => {
-			settle(() => reject(new Error("Failed to connect to terminal control owner")));
-		});
+	socket.on("error", () => {
+		settle(() => reject(new Error("Failed to connect to terminal control owner")));
+	});
 
 	socket.on("close", () => {
 		settle(() => reject(new Error("Terminal control socket closed before response was received")));

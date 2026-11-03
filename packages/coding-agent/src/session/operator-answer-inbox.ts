@@ -1,5 +1,5 @@
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { logger } from "@veyyon/utils";
+import { logger, type TelegramDeliveryTraceData } from "@veyyon/utils";
 
 const ENTRY_TYPE = "terminal:operator-answer";
 const ANSWER_MARKER = /^\[operator-answer question=([^\s\]]{1,256}) event=[^\s\]]{1,256}\](?:\s|$)/;
@@ -28,14 +28,22 @@ export function operatorAnswerQuestionId(text: string): string | undefined {
  */
 export class OperatorAnswerInbox {
 	readonly #journal: () => SessionManager;
-	readonly #dispatch: (text: string, mode: DeliveryMode) => Promise<string>;
+	readonly #dispatch: (
+		text: string,
+		mode: DeliveryMode,
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
+	) => Promise<string>;
 	readonly #isQueued: (questionId: string) => boolean;
 	readonly #queued = new Set<string>();
 	#chain: Promise<void> = Promise.resolve();
 
 	constructor(
 		journal: () => SessionManager,
-		dispatch: (text: string, mode: DeliveryMode) => Promise<string>,
+		dispatch: (
+			text: string,
+			mode: DeliveryMode,
+			options?: { telegramTrace?: TelegramDeliveryTraceData },
+		) => Promise<string>,
 		isQueued: (questionId: string) => boolean,
 	) {
 		this.#journal = journal;
@@ -50,7 +58,13 @@ export class OperatorAnswerInbox {
 		for (const entry of journal.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "user") {
 				const content = entry.message.content;
-				const text = typeof content === "string" ? content : content.filter(block => block.type === "text").map(block => block.text).join("\n");
+				const text =
+					typeof content === "string"
+						? content
+						: content
+								.filter(block => block.type === "text")
+								.map(block => block.text)
+								.join("\n");
 				const questionId = operatorAnswerQuestionId(text);
 				if (questionId) consumed.add(questionId);
 			}
@@ -63,9 +77,14 @@ export class OperatorAnswerInbox {
 			if (answer.sessionId !== sessionId) continue;
 			// A record this build cannot read (another version, a damaged field) is not pending. It must never stop
 			// the session from opening or a later answer from being accepted.
-			if (answer.version !== 1 || typeof answer.text !== "string" || typeof answer.questionId !== "string" ||
-				answer.inputId !== `operator-answer:${answer.questionId}` || operatorAnswerQuestionId(answer.text) !== answer.questionId ||
-				!(["auto", "steer", "followUp"] as unknown[]).includes(answer.mode)) {
+			if (
+				answer.version !== 1 ||
+				typeof answer.text !== "string" ||
+				typeof answer.questionId !== "string" ||
+				answer.inputId !== `operator-answer:${answer.questionId}` ||
+				operatorAnswerQuestionId(answer.text) !== answer.questionId ||
+				!(["auto", "steer", "followUp"] as unknown[]).includes(answer.mode)
+			) {
 				logger.warn("Skipping unreadable operator-answer journal record", { entryId: entry.id });
 				continue;
 			}
@@ -81,18 +100,27 @@ export class OperatorAnswerInbox {
 			// Serialize both instances against their shared durable journal, not only each inbox's chain.
 			const previous = journalOperationChains.get(journal) ?? Promise.resolve();
 			const queued = previous.then(() => operation(journal));
-			journalOperationChains.set(journal, queued.then(() => {}, () => {}));
+			journalOperationChains.set(
+				journal,
+				queued.then(
+					() => {},
+					() => {},
+				),
+			);
 			return queued;
 		});
-		this.#chain = run.then(() => {}, () => {});
+		this.#chain = run.then(
+			() => {},
+			() => {},
+		);
 		return run;
 	}
 
-	async #queue(answer: PendingAnswer): Promise<string> {
+	async #queue(answer: PendingAnswer, options?: { telegramTrace?: TelegramDeliveryTraceData }): Promise<string> {
 		const key = `${answer.sessionId}:${answer.questionId}`;
 		this.#queued.add(key);
 		try {
-			return await this.#dispatch(answer.text, answer.mode);
+			return await this.#dispatch(answer.text, answer.mode, options);
 		} catch (error) {
 			this.#queued.delete(key);
 			throw error;
@@ -100,7 +128,11 @@ export class OperatorAnswerInbox {
 	}
 
 	/** Return undefined for ordinary input; only the operator envelope enters this protocol. */
-	accept(text: string, mode: DeliveryMode): Promise<string | undefined> {
+	accept(
+		text: string,
+		mode: DeliveryMode,
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
+	): Promise<string | undefined> {
 		const questionId = operatorAnswerQuestionId(text);
 		if (!questionId) return Promise.resolve(undefined);
 		return this.#serialize(async journal => {
@@ -122,14 +154,19 @@ export class OperatorAnswerInbox {
 				return "duplicate";
 			}
 			const answer: PendingAnswer = pending.get(questionId) ?? {
-				version: 1, sessionId, questionId, inputId: `operator-answer:${questionId}`, text, mode,
+				version: 1,
+				sessionId,
+				questionId,
+				inputId: `operator-answer:${questionId}`,
+				text,
+				mode,
 			};
 			if (!pending.has(questionId)) journal.appendCustomEntry(ENTRY_TYPE, answer);
 			// append alone can remain behind the lazy-file gate or a foreign-file rewrite.
 			await journal.ensureOnDisk();
 			await journal.flush();
 			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before injection");
-			return this.#queue(answer);
+			return this.#queue(answer, options);
 		});
 	}
 
