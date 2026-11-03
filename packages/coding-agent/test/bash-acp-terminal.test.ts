@@ -252,9 +252,16 @@ describe("BashTool ACP terminal routing", () => {
 		const handle: ClientBridgeTerminalHandle = {
 			terminalId: "output-poll-stalled",
 			waitForExit: () => exit.promise,
-			currentOutput: () => { outputStarted.resolve(); return outputStuck.promise; },
-			kill: async () => { kills++; },
-			release: async () => { releases++; },
+			currentOutput: () => {
+				outputStarted.resolve();
+				return outputStuck.promise;
+			},
+			kill: async () => {
+				kills++;
+			},
+			release: async () => {
+				releases++;
+			},
 		};
 		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
 		installFakeTime();
@@ -290,9 +297,14 @@ describe("BashTool ACP terminal routing", () => {
 		const handle: ClientBridgeTerminalHandle = {
 			terminalId: "final-read-stalled",
 			waitForExit: async () => ({ exitCode: 0 }),
-			currentOutput: () => { entered.resolve(); return pendingOutput.promise; },
+			currentOutput: () => {
+				entered.resolve();
+				return pendingOutput.promise;
+			},
 			kill: async () => {},
-			release: async () => { releases++; },
+			release: async () => {
+				releases++;
+			},
 		};
 		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
 		const controller = new AbortController();
@@ -305,7 +317,10 @@ describe("BashTool ACP terminal routing", () => {
 			await Promise.race([entered.promise, timeout.promise]);
 			controller.abort();
 			const finished = Promise.withResolvers<never>();
-			const waiter = setTimeout(() => finished.reject(new Error("Cancelled final output read did not settle")), 3_000);
+			const waiter = setTimeout(
+				() => finished.reject(new Error("Cancelled final output read did not settle")),
+				3_000,
+			);
 			try {
 				await expect(Promise.race([running, finished.promise])).rejects.toThrow("Command aborted");
 			} finally {
@@ -333,7 +348,9 @@ describe("BashTool ACP terminal routing", () => {
 				return pendingOutput.promise;
 			},
 			kill: async () => {},
-			release: async () => { releases++; },
+			release: async () => {
+				releases++;
+			},
 		};
 		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
 		installFakeTime();
@@ -365,12 +382,18 @@ describe("BashTool ACP terminal routing", () => {
 			waitForExit: async () => ({ exitCode: 0 }),
 			currentOutput: async () => ({ output: "completed\n", truncated: false }),
 			kill: async () => {},
-			release: () => { releaseCalls++; return pendingRelease.promise; },
+			release: () => {
+				releaseCalls++;
+				return pendingRelease.promise;
+			},
 		};
 		const bridge: ClientBridge = { capabilities: { terminal: true }, createTerminal: async () => handle };
 		const tool = new BashTool(makeSession(bridge));
 		const finished = Promise.withResolvers<never>();
-		const timer = setTimeout(() => finished.reject(new Error("Completed command stalled in terminal release")), 3_000);
+		const timer = setTimeout(
+			() => finished.reject(new Error("Completed command stalled in terminal release")),
+			3_000,
+		);
 		try {
 			const result = await Promise.race([
 				tool.execute("release-stalled", { command: "echo completed", timeout: 0 }),

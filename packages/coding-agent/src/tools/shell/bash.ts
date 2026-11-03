@@ -1274,14 +1274,10 @@ export class BashTool
 					// The command already timed out. Give buffered output only a
 					// short best-effort read; an unresponsive editor must not hold
 					// the timeout result or terminal cleanup indefinitely.
-					const read = Promise.resolve().then(() => handle.currentOutput()).then(
-						output => ({ kind: "output" as const, output }),
-					);
-					const finalRead = await settleWithin(
-						read,
-						250,
-						{ kind: "expired" as const },
-					);
+					const read = Promise.resolve()
+						.then(() => handle.currentOutput())
+						.then(output => ({ kind: "output" as const, output }));
+					const finalRead = await settleWithin(read, 250, { kind: "expired" as const });
 					if (finalRead.kind === "output") current = finalRead.output;
 					else logger.warn("ACP terminal final output read unconfirmed after timeout");
 				} catch {
@@ -1301,12 +1297,7 @@ export class BashTool
 
 			// Fetch final output under the original execution deadline and
 			// caller abort. A missing final buffer must not become success.
-			const finalOutput = await readFinalClientTerminalOutput(
-				handle,
-				signal,
-				executionDeadline,
-				call.timeoutSec,
-			);
+			const finalOutput = await readFinalClientTerminalOutput(handle, signal, executionDeadline, call.timeoutSec);
 			const { exitCode, signal: exitSignal } = clientTerminalExit(exitStatus);
 			const bridgeResult: BashResult = {
 				...summarizeBridgeOutput(finalOutput, { exitCode, cancelled: false }),
@@ -1325,7 +1316,9 @@ export class BashTool
 				// Release is an external client RPC; a dead editor cannot
 				// keep a completed or cancelled local tool waiting forever.
 				const released = await settleWithin(
-					Promise.resolve().then(() => handle.release()).then(() => true),
+					Promise.resolve()
+						.then(() => handle.release())
+						.then(() => true),
 					1_000,
 					false,
 				);
@@ -1589,7 +1582,9 @@ async function waitForClientTerminal(
 				// A blocked remote kill RPC must not defeat cancellation or
 				// prevent bounded best-effort terminal release.
 				const killed = await settleWithin(
-					Promise.resolve().then(() => handle.kill()).then(() => true),
+					Promise.resolve()
+						.then(() => handle.kill())
+						.then(() => true),
 					1_000,
 					false,
 				);
@@ -1643,7 +1638,9 @@ async function waitForClientTerminal(
 			// exit poll. The previous read omitted timeoutPromise and could
 			// strand a command even after its kill deadline fired.
 			const pollRacers: Array<Promise<BridgeRaceResult>> = [
-				Promise.resolve().then(() => handle.currentOutput()).then(output => ({ kind: "output" as const, output })),
+				Promise.resolve()
+					.then(() => handle.currentOutput())
+					.then(output => ({ kind: "output" as const, output })),
 				abortedP.then(() => ({ kind: "aborted" as const })),
 			];
 			if (timeoutPromise) pollRacers.push(timeoutPromise);
