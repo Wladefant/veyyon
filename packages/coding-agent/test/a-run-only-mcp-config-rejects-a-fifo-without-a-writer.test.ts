@@ -7,7 +7,11 @@ import { promisify } from "node:util";
 import { loadRuntimeMCPConfig } from "../src/mcp/runtime-config";
 
 const execFileAsync = promisify(execFile);
-const childOptions = { timeout: 5_000, killSignal: "SIGKILL" as const, maxBuffer: 64 * 1024 };
+const childOptions = {
+	timeout: 5_000,
+	killSignal: "SIGKILL" as const,
+	maxBuffer: 64 * 1024,
+};
 const loaderUrl = new URL("../src/mcp/runtime-config.ts", import.meta.url).href;
 const loaderEntryMarker = "entered-runtime-mcp-loader\n";
 
@@ -45,18 +49,24 @@ for (const route of ["direct", "symlink"] as const) {
 					}
 					process.stdout.write("rejected-non-regular\\n");
 				`;
-				const { stdout } = await execFileAsync(process.execPath, ["--eval", program], childOptions).catch(
-					(error: unknown) => {
-						const entered = error !== null && typeof error === "object" && "stdout" in error &&
-							typeof error.stdout === "string" && error.stdout.startsWith(loaderEntryMarker);
-						throw new Error(
-							entered
-								? "FIFO child failed after loader entry; inspect the cause for the intended blocking-open timeout"
-								: "FIFO child failed before loader entry; this is not a valid blocking-open negative control",
-							{ cause: error },
-						);
-					},
-				);
+				const { stdout } = await execFileAsync(
+					process.execPath,
+					["--eval", program],
+					childOptions,
+				).catch((error: unknown) => {
+					const entered =
+						error !== null &&
+						typeof error === "object" &&
+						"stdout" in error &&
+						typeof error.stdout === "string" &&
+						error.stdout.startsWith(loaderEntryMarker);
+					throw new Error(
+						entered
+							? "FIFO child failed after loader entry; inspect the cause for the intended blocking-open timeout"
+							: "FIFO child failed before loader entry; this is not a valid blocking-open negative control",
+						{ cause: error },
+					);
+				});
 				expect(stdout).toBe(`${loaderEntryMarker}rejected-non-regular\n`);
 				expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
 				if (route === "symlink") expect(await fs.readlink(input)).toBe(fifo);
@@ -68,21 +78,28 @@ for (const route of ["direct", "symlink"] as const) {
 	);
 }
 
-test.skipIf(process.platform === "win32")("run-only MCP input still accepts a symlink to a regular file", async () => {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-mcp-regular-link-"));
-	const file = path.join(dir, "source.json");
-	const link = path.join(dir, "mcp.json");
-	const config = { mcpServers: { fixture: { type: "stdio", command: process.execPath } } };
-	const original = JSON.stringify(config);
-	try {
-		await fs.writeFile(file, original);
-		await fs.symlink(file, link);
-		const loaded = await loadRuntimeMCPConfig(link);
-		expect(loaded.path).toBe(link);
-		expect(loaded.configs.fixture).toEqual(config.mcpServers.fixture);
-		expect(await fs.readFile(file, "utf8")).toBe(original);
-		expect(await fs.readlink(link)).toBe(file);
-	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
-	}
-});
+test.skipIf(process.platform === "win32")(
+	"run-only MCP input still accepts a symlink to a regular file",
+	async () => {
+		const dir = await fs.mkdtemp(
+			path.join(os.tmpdir(), "veyyon-mcp-regular-link-"),
+		);
+		const file = path.join(dir, "source.json");
+		const link = path.join(dir, "mcp.json");
+		const config = {
+			mcpServers: { fixture: { type: "stdio", command: process.execPath } },
+		};
+		const original = JSON.stringify(config);
+		try {
+			await fs.writeFile(file, original);
+			await fs.symlink(file, link);
+			const loaded = await loadRuntimeMCPConfig(link);
+			expect(loaded.path).toBe(link);
+			expect(loaded.configs.fixture).toEqual(config.mcpServers.fixture);
+			expect(await fs.readFile(file, "utf8")).toBe(original);
+			expect(await fs.readlink(link)).toBe(file);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	},
+);

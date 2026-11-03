@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- Run-only MCP configuration rejects writerless FIFOs without blocking before it checks the file type ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
 ## [1.7.8] - 2026-11-03
 
