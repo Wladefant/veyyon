@@ -18,7 +18,7 @@ async function within<T>(promise: Promise<T>, stage: string): Promise<T> {
 }
 
 it("adding B and reconnecting an already-connected A preserves both peer tool catalogs", async () => {
-	const names = { a: "incremental-a", b: "incremental-b" };
+	const names = { a: "incremental", b: "incremental_peer" };
 	const initialized = { a: 0, b: 0 };
 	const listRequests = { a: 0, b: 0 };
 	const server = createServer(async (request, response) => {
@@ -89,7 +89,11 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 		if (current.includes(bTool)) seenB.resolve();
 		if (initialized.a === 2 && current.includes(aTool) && current.includes(bTool)) restoredA.resolve();
 	});
-	const catalog = () => manager.getTools().map(tool => tool.name).sort();
+	const catalog = () =>
+		manager
+			.getTools()
+			.map(tool => tool.name)
+			.sort();
 	const expected = [aTool, bTool].sort();
 	try {
 		await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "connect A");
@@ -125,7 +129,10 @@ it("adding B and reconnecting an already-connected A preserves both peer tool ca
 		const noOp = await within(manager.connectServers({}, {}), "empty incremental batch");
 		expect(noOp.tools.map(tool => tool.name)).toEqual([bTool]);
 		expect(catalog()).toEqual([bTool]);
-		const restored = await within(manager.connectServers({ [names.a]: configs[names.a]! }, {}), "explicit A recovery");
+		const restored = await within(
+			manager.connectServers({ [names.a]: configs[names.a]! }, {}),
+			"explicit A recovery",
+		);
 		expect(restored.tools.map(tool => tool.name)).toContain(bTool);
 		await within(restoredA.promise, "second A tools/list notification");
 		expect(catalog()).toEqual(expected);
