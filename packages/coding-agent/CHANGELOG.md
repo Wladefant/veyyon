@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP stdio rejects malformed matching-ID JSON-RPC responses before completing tool calls or stream subscriptions ([Refs #876](https://github.com/Wladefant/veyyon/issues/876)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
