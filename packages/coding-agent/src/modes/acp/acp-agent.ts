@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type Agent,
 	type AgentSideConnection,
@@ -751,6 +752,8 @@ export class AcpAgent implements Agent {
 			const promptTurn = record.promptTurn;
 			try {
 				for (const id of await record.session.refreshExternalTurn()) record.pendingExternalEntryIds.add(id);
+				// Adoption commits session usage before replay can yield to cancellation.
+				promptTurn.usageBaseline = cloneUsageStatistics(record.session.sessionManager.getUsageStatistics());
 				if (!promptTurn.settled) await this.#replayPendingExternalHistory(record);
 				throwIfRecordClosed(record);
 			} catch (error: unknown) {
@@ -759,8 +762,6 @@ export class AcpAgent implements Agent {
 			}
 			// Cancellation also applies while the disk refresh is in flight.
 			if (promptTurn.settled) return await pendingPrompt.promise;
-			// Adopted usage belongs to the session total, not to this request.
-			promptTurn.usageBaseline = cloneUsageStatistics(record.session.sessionManager.getUsageStatistics());
 
 			record.promptTurn.unsubscribe = record.session.subscribe(event => {
 				this.#trackPromptEvent(record, event);
@@ -1767,7 +1768,19 @@ export class AcpAgent implements Agent {
 		const cwd = record.session.sessionManager.getCwd();
 		const replayedToolCallIds = new Set<string>();
 		const replayedToolCallArgs = new Map<string, unknown>();
-		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
+		const messages = record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[];
+		const representedPendingIds = record.session.sessionManager
+			.getBranch()
+			.filter(entry => {
+				if (!record.pendingExternalEntryIds.has(entry.id)) return false;
+				const projected = record.session.sessionManager.buildEntryContext(entry).messages;
+				return (
+					projected.length > 0 &&
+					projected.every(message => messages.some(full => isDeepStrictEqual(full, message)))
+				);
+			})
+			.map(entry => entry.id);
+		for (const message of messages) {
 			for (const notification of this.#messageToReplayNotifications(
 				record.session.sessionId,
 				message,
@@ -1778,6 +1791,8 @@ export class AcpAgent implements Agent {
 				await this.#connection.sessionUpdate(notification);
 			}
 		}
+		// Only acknowledge the snapshot represented by this successful full replay.
+		for (const id of representedPendingIds) record.pendingExternalEntryIds.delete(id);
 	}
 
 	/**

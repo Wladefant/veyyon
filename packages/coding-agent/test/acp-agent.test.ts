@@ -469,9 +469,11 @@ function holdPromptStreaming(session: FakeAgentSession): () => void {
 	return () => finishPrompt();
 }
 
-/** Makes the next `sessionUpdate` fail, once, as a client connection that drops mid-replay would. */
+/** Makes a client notification boundary fail or wait, once. */
 interface DeliveryFailure {
 	next: Error | undefined;
+	holdNext: Promise<void> | undefined;
+	onHold: (() => void) | undefined;
 }
 
 interface AgentHarness {
@@ -537,9 +539,15 @@ async function createHarness(
 	const updates: SessionNotification[] = [];
 	const abortController = new AbortController();
 	const sessions: FakeAgentSession[] = [];
-	const deliveryFailure: DeliveryFailure = { next: undefined };
+	const deliveryFailure: DeliveryFailure = { next: undefined, holdNext: undefined, onHold: undefined };
 	const connection = {
 		sessionUpdate: async (notification: SessionNotification) => {
+			const hold = deliveryFailure.holdNext;
+			if (hold) {
+				deliveryFailure.holdNext = undefined;
+				deliveryFailure.onHold?.();
+				await hold;
+			}
 			const failure = deliveryFailure.next;
 			if (failure) {
 				deliveryFailure.next = undefined;
@@ -2763,6 +2771,194 @@ describe("ACP agent", () => {
 			);
 			expect(retriedText).toHaveLength(2);
 			expect(session.promptCalls).toEqual(["initial turn", "next turn"]);
+		} finally {
+			releaseRefresh.resolve();
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.abortController.abort();
+		}
+	});
+	it("does not dispatch against an unfinished external tool turn, then adopts its completion", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "seed" }] });
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+		const external = await SessionManager.open(file, harness.cwdA);
+		const marker = "EXTERNAL-TOOL-COMPLETION";
+		const toolCallId = "toolu_external_pending";
+		external.appendMessage({ role: "user", content: "run external operation", timestamp: Date.now() });
+		external.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: toolCallId, name: "bash", arguments: { command: "true" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: TEST_MODELS[0].id,
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		});
+		await external.flush();
+		await external.close();
+		const before = session.promptCalls.length;
+		let dispatchFollowedExternalReplay = false;
+		const prompt = session.prompt.bind(session);
+		session.prompt = async text => {
+			if (text === "continue after completion") {
+				dispatchFollowedExternalReplay = harness.updates.some(
+					({ update }) =>
+						update.sessionUpdate === "agent_message_chunk" &&
+						update.content.type === "text" &&
+						update.content.text.includes(marker),
+				);
+			}
+			return await prompt(text);
+		};
+		try {
+			await expect(
+				harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "must wait" }] }),
+			).rejects.toThrow("Unfinished external session extension");
+			expect(session.promptCalls).toHaveLength(before);
+			const completed = await SessionManager.open(file, harness.cwdA);
+			completed.appendMessage({
+				role: "toolResult",
+				toolCallId,
+				toolName: "bash",
+				content: [{ type: "text", text: marker }],
+				isError: false,
+				timestamp: Date.now(),
+			});
+			completed.appendMessage(makeAssistantMessage(`Finished ${marker}.`));
+			await completed.flush();
+			await completed.close();
+			await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "continue after completion" }],
+			});
+			expect(session.promptCalls).toHaveLength(before + 1);
+			expect(dispatchFollowedExternalReplay).toBe(true);
+			expect(
+				harness.updates.some(
+					({ update }) =>
+						update.sessionUpdate === "agent_message_chunk" &&
+						update.content.type === "text" &&
+						update.content.text.includes(marker),
+				),
+			).toBe(true);
+		} finally {
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.abortController.abort();
+		}
+	});
+	it("excludes imported usage when cancellation interrupts external replay", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "initial turn" }] });
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+		const external = await SessionManager.open(file, harness.cwdA);
+		external.appendMessage({ role: "user", content: "external usage fixture", timestamp: Date.now() });
+		external.appendMessage({
+			...makeAssistantMessage("external answer"),
+			usage: {
+				input: 100,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		});
+		await external.flush();
+		await external.close();
+		const replayHeld = Promise.withResolvers<void>();
+		const releaseReplay = Promise.withResolvers<void>();
+		harness.deliveryFailure.holdNext = releaseReplay.promise;
+		harness.deliveryFailure.onHold = () => replayHeld.resolve();
+		session.promptCalls.length = 0;
+		try {
+			const pending = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "cancel before dispatch" }],
+			});
+			await replayHeld.promise;
+			await harness.agent.cancel({ sessionId: created.sessionId });
+			const cancelled = await pending;
+			expect(cancelled.stopReason).toBe("cancelled");
+			expect(cancelled.usage).toBeUndefined();
+			expect(session.promptCalls).toEqual([]);
+		} finally {
+			harness.deliveryFailure.onHold = undefined;
+			releaseReplay.resolve();
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.abortController.abort();
+		}
+	});
+	it("does not replay adopted external messages twice after a cancelled refresh and full load", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("ACP session was not registered");
+		const file = session.sessionManager.getSessionFile();
+		if (!file) throw new Error("ACP session has no transcript file");
+		const external = await SessionManager.open(file, harness.cwdA);
+		const marker = "CANCEL-THEN-LOAD-EXTERNAL";
+		external.appendMessage({ role: "user", content: marker, timestamp: Date.now() });
+		external.appendMessage(makeAssistantMessage(`Stored ${marker}.`));
+		await external.flush();
+		await external.close();
+		const refreshEntered = Promise.withResolvers<void>();
+		const refreshCompleted = Promise.withResolvers<void>();
+		const releaseRefresh = Promise.withResolvers<void>();
+		const refresh = session.refreshExternalTurn.bind(session);
+		session.refreshExternalTurn = async () => {
+			refreshEntered.resolve();
+			await releaseRefresh.promise;
+			try {
+				return await refresh();
+			} finally {
+				refreshCompleted.resolve();
+			}
+		};
+		try {
+			const pending = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "cancel during refresh" }],
+			});
+			await refreshEntered.promise;
+			await harness.agent.cancel({ sessionId: created.sessionId });
+			expect((await pending).stopReason).toBe("cancelled");
+			releaseRefresh.resolve();
+			await refreshCompleted.promise;
+			await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
+			const markerChunks = harness.updates.filter(
+				({ sessionId, update }) =>
+					sessionId === created.sessionId &&
+					(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
+					update.content.type === "text" &&
+					update.content.text.includes(marker),
+			);
+			expect(markerChunks).toHaveLength(2);
+			await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "continue after load" }],
+			});
+			const allMarkerChunks = harness.updates.filter(
+				({ sessionId, update }) =>
+					sessionId === created.sessionId &&
+					(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
+					update.content.type === "text" &&
+					update.content.text.includes(marker),
+			);
+			expect(allMarkerChunks).toHaveLength(2);
 		} finally {
 			releaseRefresh.resolve();
 			await harness.agent.closeSession({ sessionId: created.sessionId });

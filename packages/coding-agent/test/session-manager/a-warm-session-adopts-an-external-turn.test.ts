@@ -88,7 +88,12 @@ describe("a warm session with a sequential external writer", () => {
 		expect(await warm.holdsForeignEntries()).toBe(true);
 		const adopted = await warm.refreshExternalTurn();
 		expect(adopted).toHaveLength(2);
-		expect(adopted).toEqual(warm.getBranch().slice(-2).map(entry => entry.id));
+		expect(adopted).toEqual(
+			warm
+				.getBranch()
+				.slice(-2)
+				.map(entry => entry.id),
+		);
 		expect(contextText(warm)).toContain(marker);
 		expect(warm.getSessionFile()).toBe(file);
 
@@ -139,9 +144,10 @@ describe("a warm session with a sequential external writer", () => {
 		await warm.close();
 	});
 
-	// WHY: an assistant message alone does not prove the external run finished. Closes: adopting
-	// a turn whose assistant message still waits on a tool, or has a tool call with no result.
-	it("does not adopt an external run that is still waiting on a tool", async () => {
+	// WHY: a sequential external branch with messages but no resolved run must not
+	// make stale prompt context look current. Closes: admitting unfinished external
+	// extensions. Leaves open: provider execution status beyond persisted entries.
+	it("rejects an external run that is still waiting on a tool", async () => {
 		const directory = await makeWorkspace();
 		const { file, warm } = await seedWarmSession(directory);
 		const leaf = warm.getLeafId();
@@ -156,15 +162,35 @@ describe("a warm session with a sequential external writer", () => {
 		await external.flush();
 		await external.close();
 
-		expect(await warm.refreshExternalTurn()).toEqual([]);
+		await expect(warm.refreshExternalTurn()).rejects.toThrow(/unfinished external session extension/i);
 		expect(warm.getLeafId()).toBe(leaf);
+		expect(contextText(warm)).not.toContain("Run a tool.");
+		await warm.close();
+	});
+
+	it("rejects an external tool call without a result", async () => {
+		const directory = await makeWorkspace();
+		const { file, warm } = await seedWarmSession(directory);
+		const leaf = warm.getLeafId();
+
+		const external = await SessionManager.open(file, directory);
+		external.appendMessage({ role: "user", content: "Run a tool.", timestamp: 2 });
+		external.appendMessage({
+			...makeAssistantMessage("Calling."),
+			content: [{ type: "toolCall" as const, id: "call-2", name: "bash", arguments: {} }],
+		});
+		await external.flush();
+		await external.close();
+
+		await expect(warm.refreshExternalTurn()).rejects.toThrow(/unfinished external session extension/i);
+		expect(warm.getLeafId()).toBe(leaf);
+		expect(contextText(warm)).not.toContain("Run a tool.");
 		await warm.close();
 	});
 
 	// WHY: a persisted assistant message is not terminal when generation failed or was
-	// cancelled. Closes: adopting a nonterminal assistant boundary. Leaves open: provider
-	// execution status beyond the persisted stop reason.
-	it("does not adopt an external assistant message with a failed or cancelled stop reason", async () => {
+	// cancelled. Closes: accepting nonterminal assistant boundaries on external branches.
+	it("rejects an external assistant message with a failed or cancelled stop reason", async () => {
 		for (const stopReason of ["error", "aborted"] as const) {
 			const directory = await makeWorkspace();
 			const { file, warm } = await seedWarmSession(directory);
@@ -179,10 +205,24 @@ describe("a warm session with a sequential external writer", () => {
 			await external.flush();
 			await external.close();
 
-			expect(await warm.refreshExternalTurn()).toEqual([]);
+			await expect(warm.refreshExternalTurn()).rejects.toThrow(/unfinished external session extension/i);
 			expect(warm.getLeafId()).toBe(leaf);
 			await warm.close();
 		}
+	});
+
+	it("rejects a user-only external extension", async () => {
+		const directory = await makeWorkspace();
+		const { file, warm } = await seedWarmSession(directory);
+		const leaf = warm.getLeafId();
+		const external = await SessionManager.open(file, directory);
+		external.appendMessage({ role: "user", content: "Unanswered request.", timestamp: 2 });
+		await external.flush();
+		await external.close();
+
+		await expect(warm.refreshExternalTurn()).rejects.toThrow(/unfinished external session extension/i);
+		expect(warm.getLeafId()).toBe(leaf);
+		await warm.close();
 	});
 
 	// WHY: a valid turn on a sibling branch must not replace an explicit local

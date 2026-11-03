@@ -171,8 +171,17 @@ describe("external turn adoption keeps real AgentSession state current", () => {
 		const manager = SessionManager.inMemory(directory.path());
 		const messages = await seedManager(manager);
 		const localBranchIds = manager.getBranch().map(entry => entry.id);
-		const provider = vi.fn(() => new AssistantMessageEventStream());
-		const refresh = vi.spyOn(manager, "refreshExternalTurn").mockResolvedValue([]);
+		const providerCalls: string[] = [];
+		const provider = (): AssistantMessageEventStream => {
+			providerCalls.push("provider");
+			return new AssistantMessageEventStream();
+		};
+		let refreshCalls = 0;
+		const originalRefresh = manager.refreshExternalTurn.bind(manager);
+		manager.refreshExternalTurn = async (...args) => {
+			refreshCalls++;
+			return await originalRefresh(...args);
+		};
 		const admitted = Promise.withResolvers<void>();
 		const released = Promise.withResolvers<void>();
 		vi.spyOn(RetryRuntime.prototype, "maybeRestoreFallbackPrimary").mockImplementationOnce(async () => {
@@ -195,8 +204,8 @@ describe("external turn adoption keeps real AgentSession state current", () => {
 		released.resolve();
 		await turn;
 
-		expect(refresh).not.toHaveBeenCalled();
-		expect(provider).not.toHaveBeenCalled();
+		expect(refreshCalls).toBe(0);
+		expect(providerCalls).toEqual([]);
 		expect(session.agent.state.messages).toEqual(messages);
 		expect(manager.getBranch().map(entry => entry.id)).toEqual(localBranchIds);
 	});

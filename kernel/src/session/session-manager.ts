@@ -2316,10 +2316,23 @@ export class SessionManager {
 				results.add(message.toolCallId);
 			}
 		}
-		if (lastMessage?.role !== "assistant" || (lastMessage.stopReason !== "stop" && lastMessage.stopReason !== "length")) {
+		if (lastMessage === undefined && extension.some(entry => entry.type === "message")) {
+			throw new Error("Unfinished external session extension: messages do not end in a completed assistant turn");
+		}
+		if (
+			lastMessage?.role !== "assistant" ||
+			(lastMessage.stopReason !== "stop" && lastMessage.stopReason !== "length")
+		) {
+			if (lastMessage !== undefined) {
+				throw new Error("Unfinished external session extension: messages do not end in a completed assistant turn");
+			}
 			return [];
 		}
-		for (const id of calls) if (!results.has(id)) return [];
+		for (const id of calls) {
+			if (!results.has(id)) {
+				throw new Error(`Unfinished external session extension: tool call ${id} has no result`);
+			}
+		}
 		return extension;
 	}
 
