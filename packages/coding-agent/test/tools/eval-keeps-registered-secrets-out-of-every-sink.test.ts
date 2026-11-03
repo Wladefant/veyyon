@@ -294,7 +294,82 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		}
 	});
 
-	it("preserves serialized diagnostic strings and later completed output", async () => {
+	const inventories = [
+		{
+			name: "raw env label",
+			expression: `console.log('env "', { ALPHA: 'short-a', BETA: 'short-b', GAMMA: 'short-c' })`,
+			canaries: ["short-a", "short-b", "short-c"],
+		},
+		{
+			name: "long inspected map",
+			expression: `console.log({ ALPHA: '${"long-a".repeat(8)}', BETA: '${"long-b".repeat(8)}', GAMMA: '${"long-c".repeat(8)}' })`,
+			canaries: ["long-a", "long-b", "long-c"].map(value => value.repeat(8)),
+		},
+		{
+			name: "serialized three-key map",
+			expression: `console.log(JSON.stringify({ ALPHA: 'json-a', BETA: 'json-b', GAMMA: 'json-c' }))`,
+			canaries: ["json-a", "json-b", "json-c"],
+		},
+		{
+			name: "console.log array of one-key objects",
+			expression: `console.log([{ ALPHA: 'array-log-a' }, { BETA: 'array-log-b' }, { GAMMA: 'array-log-c' }])`,
+			canaries: ["array-log-a", "array-log-b", "array-log-c"],
+		},
+		{
+			name: "console.warn array of one-key objects",
+			expression: `console.warn([{ ALPHA: 'array-warn-a' }, { BETA: 'array-warn-b' }, { GAMMA: 'array-warn-c' }])`,
+			canaries: ["array-warn-a", "array-warn-b", "array-warn-c"],
+		},
+	] as const;
+
+	for (const [index, inventory] of inventories.entries()) {
+		it(`withholds ${inventory.name} independently from every eval sink`, async () => {
+			directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-inspected-inventory-"));
+			const artifactPath = path.join(directory, `inventory-${index}.txt`);
+			const session = makeSession(artifactPath);
+			const progress: AgentToolResult[] = [];
+			const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+			const code = [`console.log("spill-padding-".repeat(400))`, inventory.expression].join("\n");
+			const result = await tool.execute(
+				`synthetic-eval-inventory-${index}`,
+				{ language: "js", code, reset: true },
+				undefined,
+				update => progress.push(update),
+			);
+			const details = result.details as EvalToolDetails;
+			const content = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+			const artifact = fs.readFileSync(artifactPath, "utf8");
+			const sinks = [
+				...progress.map(update => (update.details as EvalToolDetails | undefined)?.cells?.[0]?.output ?? ""),
+				details.cells?.[0]?.output ?? "",
+				JSON.stringify(details.jsonOutputs) ?? "",
+				content,
+				artifact,
+			];
+
+			expect(fs.existsSync(artifactPath), inventory.name).toBe(true);
+			expect(content, inventory.name).toContain("[credential output withheld]");
+			for (const sink of sinks) {
+				for (const canary of inventory.canaries) expect(sink, inventory.name).not.toContain(canary);
+			}
+		});
+	}
+
+	it("keeps an ordinary array diagnostic visible before completed output", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-array-diagnostic-"));
+		const session = makeSession(path.join(directory, "unused.txt"));
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const code = [
+			'console.log(["Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"])',
+			'console.log("completed")',
+		].join("\n");
+		const result = await tool.execute("synthetic-array-diagnostic", { language: "js", code, reset: true });
+		const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
+		expect(output).toContain("Expected response { HTTP: 200, RETRY: 1, STATUS: pending }");
+		expect(output).toContain("completed");
+	});
+
+	it("preserves a serialized scalar diagnostic and later completed output", async () => {
 		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-serialized-diagnostic-"));
 		const session = makeSession(path.join(directory, "unused.txt"));
 		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);

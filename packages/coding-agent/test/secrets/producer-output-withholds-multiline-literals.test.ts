@@ -123,17 +123,41 @@ describe("producer output withholds multiline registered literals", () => {
 				visible: false,
 			},
 			{
+				input: "[\n{ ALPHA: 'fake-a' },\n{ BETA: 'fake-b' },\n{ GAMMA: 'fake-c' }\n]\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "env: [\n{ ALPHA: 'fake-a' },\n{ BETA: 'fake-b' },\n{ GAMMA: 'fake-c' }\n]\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "[warn] env: [\n{ ALPHA: 'fake-a' },\n{ BETA: 'fake-b' },\n{ GAMMA: 'fake-c' }\n]\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "[worker] \"unmatched label { ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' }\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "[ 'Expected response { HTTP: 200, RETRY: 1, STATUS: pending }' ]\ncompleted\n",
+				values: ["Expected response { HTTP: 200, RETRY: 1, STATUS: pending }", "completed"],
+				visible: true,
+			},
+			{
 				input: '"Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"\ncompleted\n',
 				values: ["Expected response", "completed"],
 				visible: true,
 			},
 			{
-				input: "[\n{ ALPHA: 'fake-a' },\n{ BETA: 'fake-b' },\n{ GAMMA: 'fake-c' }\n]\n",
-				values: ["fake-a", "fake-b", "fake-c"],
+				input: 'env " { ALPHA: "fake\'a", BETA: "fake\'b", GAMMA: "fake\'c" }\n',
+				values: ["fake'a", "fake'b", "fake'c"],
 				visible: false,
 			},
 		];
-
 		for (const { input, values, visible } of cases) {
 			const atomic = guardFor().sanitize(input);
 			if (visible) expect(atomic).toBe(input);
@@ -148,7 +172,7 @@ describe("producer output withholds multiline registered literals", () => {
 					expect(output).toContain("[credential output withheld]");
 				}
 			}
-			if (input.includes("[warn]") || input.includes("Expected response")) {
+			{
 				const guard = guardFor();
 				const output = [...input].map(character => guard.push(character)).join("") + guard.finish();
 				if (visible) {
@@ -160,7 +184,6 @@ describe("producer output withholds multiline registered literals", () => {
 			}
 		}
 	});
-
 	it("flushes a complete secret on finish and blocks later chunks after an incomplete prefix", () => {
 		const complete = guardFor();
 		complete.push(SECRET);

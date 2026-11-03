@@ -5,6 +5,7 @@
 ### Fixed
 
 - Eval console output withholds inventories after bracketed labels and preserves serialized diagnostic strings with later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
+- Eval console output withholds inventories after unmatched label quotes and inside labeled arrays, while preserving array diagnostics and later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
 
 ## [1.7.7] - 2026-11-02
 

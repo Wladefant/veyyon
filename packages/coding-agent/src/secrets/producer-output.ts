@@ -30,27 +30,31 @@ function quotedEnd(text: string, start: number): number {
 }
 
 function structuredStart(text: string): number {
-	// A serialized scalar can contain braces, but console labels are raw text.
-	let start = text.search(/\S/);
-	if (start >= 0 && text[start] === "[") {
-		let next = start + 1;
-		while (next < text.length && /\s/.test(text[next])) next++;
-		if (text[next] === "{") return start;
-		if (next === text.length) return start;
-	}
-	let brace = text.indexOf("{");
-	while (start >= 0 && start < brace) {
-		if (text[start] === '"') {
+	// Only a complete scalar record owns its quotes. Quotes in raw labels must
+	// not consume delimiters belonging to a later structured argument.
+	for (let start = 0; start < text.length; start++) {
+		const character = text[start];
+		if (character === '"' && !text.slice(0, start).trim()) {
 			const end = quotedEnd(text, start);
-			if (end < text.length) {
-				start = end + 1;
-				brace = text.indexOf("{", start);
+			const lineEnd = text.indexOf("\n", end);
+			const remainder = text.slice(end + 1, lineEnd < 0 ? text.length : lineEnd);
+			if (end < text.length && !remainder.trim()) {
+				start = end;
 				continue;
 			}
 		}
-		start++;
+		if (character === "{") return start;
+		if (character === "[") {
+			// Runtime severity prefixes and bracketed labels are not arrays.
+			const label = /^\[[A-Za-z_][^\n[\]{}]*\]/.exec(text.slice(start));
+			if (label) {
+				start += label[0].length - 1;
+				continue;
+			}
+			return start;
+		}
 	}
-	return brace;
+	return -1;
 }
 
 function hasInventoryKeys(text: string): boolean {
