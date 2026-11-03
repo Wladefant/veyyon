@@ -30,10 +30,10 @@ function quotedEnd(text: string, start: number): number {
 }
 
 function structuredStart(text: string): number {
+	// Console string arguments are raw labels, not quoted source. Their quote
+	// characters cannot start lexical state before a structured argument begins.
 	for (let index = 0; index < text.length; index++) {
-		const character = text[index];
-		if (isQuote(character)) index = quotedEnd(text, index);
-		else if (character === "{" || character === "[") return index;
+		if (text[index] === "{" || text[index] === "[") return index;
 	}
 	return -1;
 }
@@ -55,7 +55,7 @@ function hasInventoryKeys(text: string): boolean {
 			expectingKey = containers.at(-1) === "{";
 		} else {
 			const start = index;
-			const quoted = isQuote(character);
+			const quoted = containers.length > 0 && isQuote(character);
 			if (quoted) index = quotedEnd(text, index);
 			else while (index + 1 < text.length && /[A-Za-z0-9_$]/.test(text[index + 1])) index++;
 			if (expectingKey) {

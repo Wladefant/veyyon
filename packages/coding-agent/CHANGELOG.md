@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Eval console output withholds labeled and backtick-quoted environment inventories, recognizes Windows environment keys, and preserves labels inside ordinary string values ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
+- Eval console output withholds environment inventories after labels containing apostrophes or unmatched quotes, recognizes Windows environment keys, and preserves labels inside ordinary string values ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
 
 ## [1.7.7] - 2026-11-02
 

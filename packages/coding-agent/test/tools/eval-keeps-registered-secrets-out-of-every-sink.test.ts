@@ -150,7 +150,7 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
 		const code = [
 			"console.log('harmless-padding-before-inventory-'.repeat(30))",
-			"console.log('env', {",
+			'console.log("Here\'s env", {',
 			"  ALPHA: 'fake-a'.repeat(8),",
 			"  BETA: 'fake-b'.repeat(8),",
 			"  GAMMA: 'fake-c'.repeat(8)",

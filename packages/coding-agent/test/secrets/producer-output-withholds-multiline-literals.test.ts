@@ -88,6 +88,26 @@ describe("producer output withholds multiline registered literals", () => {
 				visible: false,
 			},
 			{
+				input: "Here's env: { ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' }\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "Here's \"env: { ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' }\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "Here's `env: { ALPHA: 'fake-a', BETA: 'fake-b', GAMMA: 'fake-c' }\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
+				input: "Here's env: {\n  ALPHA: 'fake-a',\n  BETA: 'fake-b',\n  GAMMA: 'fake-c'\n}\n",
+				values: ["fake-a", "fake-b", "fake-c"],
+				visible: false,
+			},
+			{
 				input: "{ message: 'Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending' }\ncompleted\n",
 				values: ["Expected HTTP: 200, GOT: 404, RETRY: 1, STATUS: pending", "completed"],
 				visible: true,
@@ -95,6 +115,9 @@ describe("producer output withholds multiline registered literals", () => {
 		];
 
 		for (const { input, values, visible } of cases) {
+			const atomic = guardFor().sanitize(input);
+			if (visible) expect(atomic).toBe(input);
+			else expect(atomic).toBe("[credential output withheld]");
 			for (let split = 0; split <= input.length; split++) {
 				const guard = guardFor();
 				const output = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
