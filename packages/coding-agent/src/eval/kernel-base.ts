@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Process } from "@veyyon/natives";
-import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, sanitizeText, Snowflake } from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
@@ -1060,11 +1060,13 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				flushGroup();
 			} else {
 				const record = line;
+				const normalizedRecord = sanitizeText(record);
 				if (
 					!groupOverflow &&
 					!structuredInventory &&
 					assignmentRun > 0 &&
-					!/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(record)
+					!/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(normalizedRecord) &&
+					normalizedRecord.trim() !== ""
 				) {
 					flushGroup();
 				}
@@ -1076,7 +1078,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 						guard.push(addition);
 					}
 				}
-				trackRecord(record);
+				trackRecord(normalizedRecord);
 				line = "";
 				lineHasCharacters = false;
 			}

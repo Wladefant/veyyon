@@ -62,6 +62,34 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 				"import os; [os.write(2, bytes([byte])) for byte in b'ORDINARY_A=fake-ordinary-a\\n\\nORDINARY_B=fake-ordinary-b\\n\\nORDINARY_C=fake-ordinary-c\\n\\nsafe after ordinary assignments\\n\\n']",
 			);
 			expect(ordinaryAssignmentsResult.status).toBe("ok");
+			const normalizedAssignmentsResult = await kernel.execute(
+				"import os; os.write(2, b'CTRL_A=fake-ctrl-a\\n \\t\\nCTRL_B=fake-ctrl-b\\n \\nCTRL_C=fake-ctrl-c\\n\\nsafe after normalized assignments\\n\\n')",
+			);
+			expect(normalizedAssignmentsResult.status).toBe("ok");
+			const prefixedStructuredResult = await kernel.execute(
+				"import os; os.write(2, b'\\x00\\x1b[31m{\\n\\x00\\x1b[31m\"ALPHA\":\"fake-prefixed-a\",\\n\\n\\x00\\x1b[31m\"BETA\":\"fake-prefixed-b\",\\n\\x00\\x1b[31m\"GAMMA\":\"fake-prefixed-c\"\\n}\\n\\nsafe after prefixed structured inventory\\n\\n')",
+			);
+			expect(prefixedStructuredResult.status).toBe("ok");
+			const prefixedAssignmentsResult = await kernel.execute(
+				"import os; os.write(2, b'\\x00\\x1b[31mPREF_A=fake-prefixed-a\\n\\x00\\x1b[31mPREF_B=fake-prefixed-b\\n\\x00\\x1b[31mPREF_C=fake-prefixed-c\\n\\nsafe after prefixed assignments\\n\\n')",
+			);
+			expect(prefixedAssignmentsResult.status).toBe("ok");
+			const mixedNormalizedResult = await kernel.execute(
+				"import os; [os.write(2, bytes([byte])) for byte in b'MIX_A=fake-mix-a\\n\\x00 \\t\\nMIX_B=fake-mix-b\\n\\x00\\x1b[31mMIX_C=fake-mix-c\\n\\nsafe after mixed normalized assignments\\n\\n']",
+			);
+			expect(mixedNormalizedResult.status).toBe("ok");
+			const normalizedContent = await readLogDirectory(logs);
+			expect(normalizedContent).not.toContain("fake-ctrl-a");
+			expect(normalizedContent).not.toContain("fake-prefixed-a");
+			expect(normalizedContent).not.toContain("fake-prefixed-b");
+			expect(normalizedContent).not.toContain("fake-prefixed-c");
+			expect(normalizedContent).not.toContain("fake-mix-a");
+			expect(normalizedContent).not.toContain("fake-mix-b");
+			expect(normalizedContent).not.toContain("fake-mix-c");
+			expect(normalizedContent).toContain("safe after normalized assignments");
+			expect(normalizedContent).toContain("safe after prefixed structured inventory");
+			expect(normalizedContent).toContain("safe after prefixed assignments");
+			expect(normalizedContent).toContain("safe after mixed normalized assignments");
 			expect(firstResult.status).toBe("ok");
 			const pendingGroupResult = await kernel.execute("import os; os.write(2, b'safe split delimiter\\n')");
 			expect(pendingGroupResult.status).toBe("ok");
