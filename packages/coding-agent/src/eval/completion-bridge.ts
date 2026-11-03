@@ -29,6 +29,7 @@ import { AUTO_THINKING, type ConfiguredThinkingLevel, toReasoningEffort } from "
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/core/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
+import { sanitizeJsonValue } from "./json-sanitizer";
 import type { EvalBridgeOptions } from "./types";
 
 /** Synthetic bridge name reserved for the `completion()` helper across both runtimes. */
@@ -123,39 +124,11 @@ function completionReasoning(model: Model<Api>, level: ConfiguredThinkingLevel |
  * If two distinct keys collapse to the same redacted name, forwarding either
  * schema would silently change its meaning, so the request fails closed.
  */
-function sanitizeProviderJson(
-	value: unknown,
-	sanitize: (text: string) => string,
-	ancestors = new WeakSet<object>(),
-): unknown {
-	if (typeof value === "string") return sanitize(value);
-	if (value === null || typeof value !== "object") return value;
-	if (ancestors.has(value)) {
-		throw new ToolError("completion() could not safely sanitize provider metadata.");
-	}
-
-	ancestors.add(value);
+function sanitizeProviderJson(value: unknown, sanitize: (text: string) => string): unknown {
 	try {
-		if (Array.isArray(value)) {
-			return value.map(item => sanitizeProviderJson(item, sanitize, ancestors));
-		}
-
-		const sanitized: Record<string, unknown> = {};
-		for (const [key, nested] of Object.entries(value)) {
-			const sanitizedKey = sanitize(key);
-			if (Object.hasOwn(sanitized, sanitizedKey)) {
-				throw new ToolError("completion() could not safely sanitize provider metadata.");
-			}
-			Object.defineProperty(sanitized, sanitizedKey, {
-				value: sanitizeProviderJson(nested, sanitize, ancestors),
-				enumerable: true,
-				configurable: true,
-				writable: true,
-			});
-		}
-		return sanitized;
-	} finally {
-		ancestors.delete(value);
+		return sanitizeJsonValue(value, sanitize);
+	} catch {
+		throw new ToolError("completion() could not safely sanitize provider metadata.");
 	}
 }
 

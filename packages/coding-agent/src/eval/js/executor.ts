@@ -1,7 +1,7 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
-import { OutputSink } from "../../session/streaming-output";
 import { ProducerOutputGuard } from "../../secrets/producer-output";
+import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
 import {
@@ -11,6 +11,7 @@ import {
 	resolveOutputSinkHeadBytes,
 } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
+import { sanitizeJsonValue } from "../json-sanitizer";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -136,9 +137,15 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				onDisplay: output => {
 					if (output.type === "json") {
 						try {
-							const serialized = JSON.stringify(output.data);
-							const filtered = new ProducerOutputGuard(options.session.obfuscateProviderText).sanitize(serialized);
-							output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+							const displayGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
+							const sanitizedData = sanitizeJsonValue(output.data, text => displayGuard.sanitize(text));
+							const serialized = JSON.stringify(sanitizedData);
+							if (serialized === undefined) throw new Error("Unable to serialize JavaScript display output.");
+							const filtered = displayGuard.sanitize(serialized);
+							output = {
+								type: "json",
+								data: filtered === serialized ? sanitizedData : "[credential output withheld]",
+							};
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };
 						}

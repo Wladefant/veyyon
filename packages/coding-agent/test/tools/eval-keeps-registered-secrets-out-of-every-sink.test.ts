@@ -1,27 +1,26 @@
 /**
  * WHY: ordinary tool fixtures cannot prove the real EvalTool JS backend keeps
- * a registered value out of its live callback, display details, and raw output
- * artifact. This drives those producer sinks end to end with a true JS result.
- * It does not exercise Python/Ruby/Julia evaluators or provider-side masking.
+ * a registered value out of its live callback, display details, raw output
+ * artifact, and persisted session. This drives those producer sinks end to end
+ * with a true JS result. It does not cover other evaluators or provider masking.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
+import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { makeToolSession } from "../helpers/tool-session";
 
 const CANARY = "synthetic-eval-\n\nregistered-value-6c84f1";
-const obfuscator = new SecretObfuscator([
-	{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" },
-]);
+const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" }]);
 let directory: string | undefined;
 
 afterEach(() => {
@@ -29,7 +28,6 @@ afterEach(() => {
 	directory = undefined;
 	disposeAllVmContexts();
 });
-
 
 function makeSession(artifactPath: string): ToolSession {
 	const settings = Settings.isolated();
@@ -50,7 +48,7 @@ function makeSession(artifactPath: string): ToolSession {
 }
 
 describe("real EvalTool output stays redacted under its registered producer owner", () => {
-	it("guards streamed output, display values, retained details, and artifact bytes without changing JS computation", async () => {
+	it("keeps escaped JSON secrets out of live output, details, artifacts, and persisted sessions", async () => {
 		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-producer-owner-"));
 		const artifactPath = path.join(directory, "eval-output.txt");
 		const session = makeSession(artifactPath);
@@ -59,10 +57,10 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const code = [
 			'const value = "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 			'print("split=" + value.slice(0, 16));',
-			'print(value.slice(16));',
+			"print(value.slice(16));",
 			'print("harmless-padding\\n".repeat(12000));',
 			'display(value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1");',
-			'display({ value });',
+			"display({ value, padding: 'x'.repeat(12000) });",
 			'return value === "synthetic-eval-\\n\\n" + "registered-value-6c84f1";',
 		].join("\n");
 
@@ -72,17 +70,44 @@ describe("real EvalTool output stays redacted under its registered producer owne
 			undefined,
 			update => progress.push(update),
 		);
+		const manager = SessionManager.create(directory, path.join(directory, "sessions"));
+		await manager.ensureOnDisk();
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-eval-call",
+			toolName: "eval",
+			content: result.content,
+			details: result.details,
+			isError: result.isError ?? false,
+			timestamp: Date.now(),
+		});
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const persisted = fs.readFileSync(sessionFile!, "utf8");
+		const reopened = await SessionManager.open(sessionFile!);
+		const reopenedText = JSON.stringify(reopened.getBranch());
 		const artifact = fs.existsSync(artifactPath) ? fs.readFileSync(artifactPath, "utf8") : "";
 		const details = result.details as EvalToolDetails & { meta?: unknown };
-		const originalOutput = details.cells?.[0]?.output ?? "";
-		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details), artifact];
+		const retained = [
+			JSON.stringify(progress),
+			JSON.stringify(result.content),
+			JSON.stringify(result.details),
+			artifact,
+			persisted,
+			reopenedText,
+		];
+		for (const sink of retained) {
+			let candidate = CANARY;
+			for (let depth = 0; depth < 5; depth++) {
+				expect(sink).not.toContain(candidate);
+				candidate = JSON.stringify(candidate).slice(1, -1);
+			}
+		}
 
 		expect(progress.length).toBeGreaterThan(0);
-		for (const sink of retained) expect(sink).not.toContain(CANARY);
-		expect(JSON.stringify(result.content)).not.toContain(CANARY);
-		expect(originalOutput).not.toContain(CANARY);
-		expect(details.jsonOutputs).toEqual([{ value: obfuscator.obfuscate(CANARY) }]);
+		expect(JSON.stringify(details.jsonOutputs)).toContain(obfuscator.obfuscate(CANARY));
+		expect(artifact).toContain("display[1]:");
 		expect(JSON.stringify(result.content)).toContain("true");
-		expect(artifact).not.toContain(CANARY);
 	});
 });

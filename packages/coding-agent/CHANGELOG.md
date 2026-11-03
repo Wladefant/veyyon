@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- JavaScript eval sanitizes registered strings inside JSON display values before serialization ([Refs #937](https://github.com/Wladefant/veyyon/issues/937)).
 
 ## [1.7.8] - 2026-11-03
 
