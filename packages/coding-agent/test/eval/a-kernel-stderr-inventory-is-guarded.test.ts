@@ -78,6 +78,15 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 				"import os; [os.write(2, bytes([byte])) for byte in b'MIX_A=fake-mix-a\\n\\x00 \\t\\nMIX_B=fake-mix-b\\n\\x00\\x1b[31mMIX_C=fake-mix-c\\n\\nsafe after mixed normalized assignments\\n\\n']",
 			);
 			expect(mixedNormalizedResult.status).toBe("ok");
+			const ansiStructuredResult = await kernel.execute(
+				"import os; os.write(2, b'\\x1b[31m{\\n\\x1b[31m\"ANSI_A\":\"fake-ansi-struct-a\",\\n\\n\\x1b[31m\"ANSI_B\":\"fake-ansi-struct-b\",\\n\\x1b[31m\"ANSI_C\":\"fake-ansi-struct-c\"\\n}\\n\\nsafe after ANSI structured inventory\\n\\n')",
+			);
+			expect(ansiStructuredResult.status).toBe("ok");
+			const ansiAssignmentsResult = await kernel.execute(
+				"import os; [os.write(2, bytes([byte])) for byte in b'\\x1b[31mANSI_A=fake-ansi-a\\n\\x1b[31mANSI_B=fake-ansi-b\\n\\x1b[31mANSI_C=fake-ansi-c\\n\\nsafe after ANSI assignments\\n\\n']",
+			);
+			expect(ansiAssignmentsResult.status).toBe("ok");
+			
 			const normalizedContent = await readLogDirectory(logs);
 			expect(normalizedContent).not.toContain("fake-ctrl-a");
 			expect(normalizedContent).not.toContain("fake-prefixed-a");
@@ -90,6 +99,14 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 			expect(normalizedContent).toContain("safe after prefixed structured inventory");
 			expect(normalizedContent).toContain("safe after prefixed assignments");
 			expect(normalizedContent).toContain("safe after mixed normalized assignments");
+			expect(normalizedContent).not.toContain("fake-ansi-struct-a");
+			expect(normalizedContent).not.toContain("fake-ansi-struct-b");
+			expect(normalizedContent).not.toContain("fake-ansi-struct-c");
+			expect(normalizedContent).not.toContain("fake-ansi-a");
+			expect(normalizedContent).not.toContain("fake-ansi-b");
+			expect(normalizedContent).not.toContain("fake-ansi-c");
+			expect(normalizedContent).toContain("safe after ANSI structured inventory");
+			expect(normalizedContent).toContain("safe after ANSI assignments");
 			expect(firstResult.status).toBe("ok");
 			const pendingGroupResult = await kernel.execute("import os; os.write(2, b'safe split delimiter\\n')");
 			expect(pendingGroupResult.status).toBe("ok");
