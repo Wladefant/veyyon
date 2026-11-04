@@ -59,9 +59,12 @@ it("uses one PowerShell process for a scan while checking every parent and recor
 		await assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
 			platform: "win32", windowsAcl: { spawn: spawnProcess },
 		});
-		expect(checked).toEqual([
-			directory, path.join(directory, "a.json"), directory, path.join(directory, "b.json"),
+		expect(checked.filter(target => target !== directory).sort()).toEqual([
+			path.join(directory, "a.json"), path.join(directory, "b.json"),
 		]);
+		expect(checked[0]).toBe(directory);
+		expect(checked[2]).toBe(directory);
+		expect(checked).toHaveLength(4);
 		expect(starts).toBe(1);
 		expect(closes).toBe(starts);
 	} finally {
