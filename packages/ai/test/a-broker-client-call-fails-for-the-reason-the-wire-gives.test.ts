@@ -189,6 +189,29 @@ describe("a response body its schema rejects", () => {
 	});
 });
 
+describe("the full snapshot generation header", () => {
+	const { kind: _kind, ...snapshot } = SNAPSHOT_EVENT;
+
+	test("rejects a schema-valid snapshot whose strong ETag names a different generation", async () => {
+		const broker = fakeBroker(() => Response.json(snapshot, { headers: { etag: '"2"' } }));
+		const error = await rejection(brokerClient(broker.fetchImpl).fetchSnapshot());
+		expect(error.message).toBe("Auth broker snapshot ETag generation disagrees with response body");
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+
+	test.each([
+		{ name: "matching strong ETag", etag: '"1"' },
+		{ name: "absent ETag", etag: undefined },
+	])("accepts a $name and returns the body generation", async ({ etag }) => {
+		const broker = fakeBroker(() => Response.json(snapshot, {
+			headers: etag === undefined ? {} : { etag },
+		}));
+		const result = await brokerClient(broker.fetchImpl).fetchSnapshot();
+		expect(result).toEqual({ status: 200, generation: snapshot.generation, snapshot });
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+});
+
 describe("a long poll", () => {
 	afterEach(() => {
 		vi.useRealTimers();

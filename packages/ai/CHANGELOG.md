@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Auth-broker snapshot clients reject conflicting HTTP 200 ETag and body generations before installing remote broker state, while preserving missing-ETag fallback ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 - Remote auth-broker treats unchanged conditional HTTP 200 snapshots as no-progress and preserves its authoritative revoke-verification deadline without delaying genuine same-generation updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker paces premature conditional HTTP 304 replies to the existing freshness deadline and backs off invalid unconditional 304 responses instead of hot-looping snapshot requests ([#602](https://github.com/Wladefant/veyyon/issues/602)).

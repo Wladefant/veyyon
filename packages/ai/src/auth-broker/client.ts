@@ -102,7 +102,13 @@ export class AuthBrokerClient {
 			"Auth broker response failed schema validation",
 			response.status,
 		);
-		return { status: 200, snapshot, generation: etagGeneration ?? snapshot.generation };
+		// A full broker snapshot carries one generation in both its strong ETag
+		// and its validated body. Conflicting metadata cannot select a different
+		// local epoch from the snapshot that was actually received.
+		if (etagGeneration !== undefined && etagGeneration !== snapshot.generation) {
+			throw new AuthBrokerError("Auth broker snapshot ETag generation disagrees with response body");
+		}
+		return { status: 200, snapshot, generation: snapshot.generation };
 	}
 
 	/**
