@@ -29,6 +29,13 @@ export default class Usage extends Command {
 			default: false,
 		}),
 		days: Flags.integer({ char: "d", description: "History window in days (with --history)", default: 7 }),
+		"reset-credits": Flags.boolean({
+			description: "List saved OpenAI Codex rate-limit reset credits",
+			default: false,
+		}),
+		redeem: Flags.string({
+			description: "Redeem a saved OpenAI Codex reset for this numeric credential ID",
+		}),
 	};
 
 	static examples = [
@@ -39,6 +46,8 @@ export default class Usage extends Command {
 		`# Usage-limit trend over the last 30 days\n  ${APP_NAME} usage --history --days 30`,
 		`# Invalidate cached usage reports for all providers\n  ${APP_NAME} usage invalidate`,
 		`# Invalidate cached usage reports for a specific provider\n  ${APP_NAME} usage invalidate --provider anthropic`,
+		`# List OpenAI Codex reset credits as JSON\n  ${APP_NAME} usage --reset-credits --provider openai-codex --json`,
+		`# Redeem a reset for credential ID 42\n  ${APP_NAME} usage --redeem 42 --provider openai-codex --json`,
 	];
 
 	async run(): Promise<void> {
@@ -50,6 +59,8 @@ export default class Usage extends Command {
 			redact: flags.redact,
 			history: flags.history,
 			days: flags.days,
+			resetCredits: flags["reset-credits"],
+			redeem: flags.redeem,
 		});
 	}
 }

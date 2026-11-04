@@ -18,6 +18,9 @@ import { formatProviderName } from "../session/account-format";
 // `session/auth-broker-config`, which OWNS this, not the `sdk` barrel that re-exports it: the barrel is
 // the whole application and this file wants one function.
 import { discoverAuthStorage } from "../session/auth-broker-config";
+import { validateUsageResetOptions } from "./usage-reset-options";
+import { executeUsageResetCommand } from "./usage-reset-cli";
+
 
 const BAR_WIDTH = 28;
 
@@ -30,6 +33,8 @@ export interface UsageCommandArgs {
 	history?: boolean;
 	/** History window in days (with `history`). */
 	days?: number;
+	resetCredits?: boolean;
+	redeem?: string;
 }
 
 /** Identity slice of a stored credential, for "every account" coverage. */
@@ -840,6 +845,17 @@ function redactReportForJson(
 }
 
 export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
+	const resetCommand = validateUsageResetOptions(cmd);
+	if (resetCommand) {
+		const resetStorage = await discoverAuthStorage();
+		try {
+			const result = await executeUsageResetCommand(resetStorage, resetCommand);
+			process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+		} finally {
+			resetStorage.close();
+		}
+		return;
+	}
 	const authStorage = await discoverAuthStorage();
 	try {
 		if (cmd.action === "invalidate") {

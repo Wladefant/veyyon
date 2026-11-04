@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `veyyon usage` can list OpenAI Codex reset credits and redeem one by numeric credential ID.
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
