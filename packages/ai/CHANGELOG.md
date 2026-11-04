@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Auth-broker SSE protocol errors omit credential-bearing frame contents and parser/schema details while retaining explicit failure messages ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Auth-broker snapshot clients reject conflicting HTTP 200 ETag and body generations before installing remote broker state, while preserving missing-ETag fallback ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 - Remote auth-broker treats unchanged conditional HTTP 200 snapshots as no-progress and preserves its authoritative revoke-verification deadline without delaying genuine same-generation updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
