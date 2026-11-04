@@ -1496,6 +1496,7 @@ describe("ACP agent", () => {
 				fs.utimesSync(secondPath, older, newerProject === "second" ? newer : older);
 				const storedBefore = (await SessionManager.listAll()).map(session => session.path).sort();
 				const updatesBefore = harness.updates.length;
+				const sessionsBefore = harness.sessions.length;
 				try {
 					const request = { sessionId: first.sessionId, cwd: harness.cwdB, mcpServers: [] };
 					await expect(
@@ -1503,7 +1504,7 @@ describe("ACP agent", () => {
 							? harness.agent.loadSession(request)
 							: harness.agent.unstable_forkSession(request),
 					).rejects.toThrow("ACP session ID is ambiguous");
-					expect(harness.sessions).toHaveLength(2);
+					expect(harness.sessions).toHaveLength(sessionsBefore);
 					expect(harness.updates).toHaveLength(updatesBefore);
 					expect(fs.readFileSync(firstPath, "utf8")).toBe(firstBytes);
 					expect(fs.readFileSync(secondPath, "utf8")).toBe(secondBytes);
