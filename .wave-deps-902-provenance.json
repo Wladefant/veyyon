@@ -1,0 +1,3855 @@
+{
+  "candidate": "C:/Users/wkiri/development/.wt-bun-cache-cleanup-fix902",
+  "lockSha256": "707a6cdfd8d345acc2d9afb0f6315e374b88339fc32d40998687959c0ca608e4",
+  "mainLockSha256": "fe785d2436f4de9ddba58f6dbe324ff38e0d36301a7710cf520070df692ede7f",
+  "thirdPartyResolutionChanges": [],
+  "checked": 574,
+  "mismatches": [],
+  "excludedOptional": [
+    {
+      "key": "@anush008/tokenizers-darwin-universal",
+      "name": "@anush008/tokenizers-darwin-universal",
+      "expected": "0.0.0",
+      "os": "darwin"
+    },
+    {
+      "key": "@biomejs/cli-darwin-arm64",
+      "name": "@biomejs/cli-darwin-arm64",
+      "expected": "2.5.4",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@biomejs/cli-darwin-x64",
+      "name": "@biomejs/cli-darwin-x64",
+      "expected": "2.5.4",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@biomejs/cli-linux-arm64",
+      "name": "@biomejs/cli-linux-arm64",
+      "expected": "2.5.4",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@biomejs/cli-linux-arm64-musl",
+      "name": "@biomejs/cli-linux-arm64-musl",
+      "expected": "2.5.4",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@biomejs/cli-win32-arm64",
+      "name": "@biomejs/cli-win32-arm64",
+      "expected": "2.5.4",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-darwin-arm64",
+      "name": "@img/sharp-darwin-arm64",
+      "expected": "0.35.3",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-darwin-x64",
+      "name": "@img/sharp-darwin-x64",
+      "expected": "0.35.3",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@img/sharp-freebsd-wasm32",
+      "name": "@img/sharp-freebsd-wasm32",
+      "expected": "0.35.3",
+      "os": "freebsd"
+    },
+    {
+      "key": "@img/sharp-libvips-darwin-arm64",
+      "name": "@img/sharp-libvips-darwin-arm64",
+      "expected": "1.3.2",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-libvips-darwin-x64",
+      "name": "@img/sharp-libvips-darwin-x64",
+      "expected": "1.3.2",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@img/sharp-libvips-linux-arm",
+      "name": "@img/sharp-libvips-linux-arm",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@img/sharp-libvips-linux-arm64",
+      "name": "@img/sharp-libvips-linux-arm64",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-libvips-linux-ppc64",
+      "name": "@img/sharp-libvips-linux-ppc64",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@img/sharp-libvips-linux-riscv64",
+      "name": "@img/sharp-libvips-linux-riscv64",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@img/sharp-libvips-linux-s390x",
+      "name": "@img/sharp-libvips-linux-s390x",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@img/sharp-libvips-linuxmusl-arm64",
+      "name": "@img/sharp-libvips-linuxmusl-arm64",
+      "expected": "1.3.2",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-linux-arm",
+      "name": "@img/sharp-linux-arm",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@img/sharp-linux-arm64",
+      "name": "@img/sharp-linux-arm64",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-linux-ppc64",
+      "name": "@img/sharp-linux-ppc64",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@img/sharp-linux-riscv64",
+      "name": "@img/sharp-linux-riscv64",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@img/sharp-linux-s390x",
+      "name": "@img/sharp-linux-s390x",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@img/sharp-linuxmusl-arm64",
+      "name": "@img/sharp-linuxmusl-arm64",
+      "expected": "0.35.3",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-webcontainers-wasm32",
+      "name": "@img/sharp-webcontainers-wasm32",
+      "expected": "0.35.3",
+      "cpu": "none"
+    },
+    {
+      "key": "@img/sharp-win32-arm64",
+      "name": "@img/sharp-win32-arm64",
+      "expected": "0.35.3",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@img/sharp-win32-ia32",
+      "name": "@img/sharp-win32-ia32",
+      "expected": "0.35.3",
+      "os": "win32",
+      "cpu": "ia32"
+    },
+    {
+      "key": "@napi-rs/lzma-android-arm-eabi",
+      "name": "@napi-rs/lzma-android-arm-eabi",
+      "expected": "1.5.1",
+      "os": "android",
+      "cpu": "arm"
+    },
+    {
+      "key": "@napi-rs/lzma-android-arm64",
+      "name": "@napi-rs/lzma-android-arm64",
+      "expected": "1.5.1",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/lzma-darwin-arm64",
+      "name": "@napi-rs/lzma-darwin-arm64",
+      "expected": "1.5.1",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/lzma-darwin-x64",
+      "name": "@napi-rs/lzma-darwin-x64",
+      "expected": "1.5.1",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/lzma-freebsd-x64",
+      "name": "@napi-rs/lzma-freebsd-x64",
+      "expected": "1.5.1",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-arm-gnueabihf",
+      "name": "@napi-rs/lzma-linux-arm-gnueabihf",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-arm64-gnu",
+      "name": "@napi-rs/lzma-linux-arm64-gnu",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-arm64-musl",
+      "name": "@napi-rs/lzma-linux-arm64-musl",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-ppc64-gnu",
+      "name": "@napi-rs/lzma-linux-ppc64-gnu",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-riscv64-gnu",
+      "name": "@napi-rs/lzma-linux-riscv64-gnu",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@napi-rs/lzma-linux-s390x-gnu",
+      "name": "@napi-rs/lzma-linux-s390x-gnu",
+      "expected": "1.5.1",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@napi-rs/lzma-wasm32-wasi",
+      "name": "@napi-rs/lzma-wasm32-wasi",
+      "expected": "1.5.1",
+      "cpu": "none"
+    },
+    {
+      "key": "@napi-rs/lzma-win32-arm64-msvc",
+      "name": "@napi-rs/lzma-win32-arm64-msvc",
+      "expected": "1.5.1",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/lzma-win32-ia32-msvc",
+      "name": "@napi-rs/lzma-win32-ia32-msvc",
+      "expected": "1.5.1",
+      "os": "win32",
+      "cpu": "ia32"
+    },
+    {
+      "key": "@napi-rs/tar-android-arm-eabi",
+      "name": "@napi-rs/tar-android-arm-eabi",
+      "expected": "1.1.1",
+      "os": "android",
+      "cpu": "arm"
+    },
+    {
+      "key": "@napi-rs/tar-android-arm64",
+      "name": "@napi-rs/tar-android-arm64",
+      "expected": "1.1.1",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/tar-darwin-arm64",
+      "name": "@napi-rs/tar-darwin-arm64",
+      "expected": "1.1.1",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/tar-darwin-x64",
+      "name": "@napi-rs/tar-darwin-x64",
+      "expected": "1.1.1",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/tar-freebsd-x64",
+      "name": "@napi-rs/tar-freebsd-x64",
+      "expected": "1.1.1",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/tar-linux-arm-gnueabihf",
+      "name": "@napi-rs/tar-linux-arm-gnueabihf",
+      "expected": "1.1.1",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@napi-rs/tar-linux-arm64-gnu",
+      "name": "@napi-rs/tar-linux-arm64-gnu",
+      "expected": "1.1.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/tar-linux-arm64-musl",
+      "name": "@napi-rs/tar-linux-arm64-musl",
+      "expected": "1.1.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/tar-linux-ppc64-gnu",
+      "name": "@napi-rs/tar-linux-ppc64-gnu",
+      "expected": "1.1.1",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@napi-rs/tar-linux-s390x-gnu",
+      "name": "@napi-rs/tar-linux-s390x-gnu",
+      "expected": "1.1.1",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@napi-rs/tar-wasm32-wasi",
+      "name": "@napi-rs/tar-wasm32-wasi",
+      "expected": "1.1.1",
+      "cpu": "none"
+    },
+    {
+      "key": "@napi-rs/tar-win32-arm64-msvc",
+      "name": "@napi-rs/tar-win32-arm64-msvc",
+      "expected": "1.1.1",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/tar-win32-ia32-msvc",
+      "name": "@napi-rs/tar-win32-ia32-msvc",
+      "expected": "1.1.1",
+      "os": "win32",
+      "cpu": "ia32"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-android-arm-eabi",
+      "name": "@napi-rs/wasm-tools-android-arm-eabi",
+      "expected": "1.0.1",
+      "os": "android",
+      "cpu": "arm"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-android-arm64",
+      "name": "@napi-rs/wasm-tools-android-arm64",
+      "expected": "1.0.1",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-darwin-arm64",
+      "name": "@napi-rs/wasm-tools-darwin-arm64",
+      "expected": "1.0.1",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-darwin-x64",
+      "name": "@napi-rs/wasm-tools-darwin-x64",
+      "expected": "1.0.1",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-freebsd-x64",
+      "name": "@napi-rs/wasm-tools-freebsd-x64",
+      "expected": "1.0.1",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-linux-arm64-gnu",
+      "name": "@napi-rs/wasm-tools-linux-arm64-gnu",
+      "expected": "1.0.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-linux-arm64-musl",
+      "name": "@napi-rs/wasm-tools-linux-arm64-musl",
+      "expected": "1.0.1",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-wasm32-wasi",
+      "name": "@napi-rs/wasm-tools-wasm32-wasi",
+      "expected": "1.0.1",
+      "cpu": "none"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-win32-arm64-msvc",
+      "name": "@napi-rs/wasm-tools-win32-arm64-msvc",
+      "expected": "1.0.1",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@napi-rs/wasm-tools-win32-ia32-msvc",
+      "name": "@napi-rs/wasm-tools-win32-ia32-msvc",
+      "expected": "1.0.1",
+      "os": "win32",
+      "cpu": "ia32"
+    },
+    {
+      "key": "@rolldown/binding-android-arm64",
+      "name": "@rolldown/binding-android-arm64",
+      "expected": "1.1.5",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@rolldown/binding-darwin-arm64",
+      "name": "@rolldown/binding-darwin-arm64",
+      "expected": "1.1.5",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@rolldown/binding-darwin-x64",
+      "name": "@rolldown/binding-darwin-x64",
+      "expected": "1.1.5",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@rolldown/binding-freebsd-x64",
+      "name": "@rolldown/binding-freebsd-x64",
+      "expected": "1.1.5",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@rolldown/binding-linux-arm-gnueabihf",
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "expected": "1.1.5",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@rolldown/binding-linux-arm64-gnu",
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "expected": "1.1.5",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@rolldown/binding-linux-arm64-musl",
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "expected": "1.1.5",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@rolldown/binding-linux-ppc64-gnu",
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "expected": "1.1.5",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@rolldown/binding-linux-s390x-gnu",
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "expected": "1.1.5",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@rolldown/binding-openharmony-arm64",
+      "name": "@rolldown/binding-openharmony-arm64",
+      "expected": "1.1.5",
+      "os": "none",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@rolldown/binding-wasm32-wasi",
+      "name": "@rolldown/binding-wasm32-wasi",
+      "expected": "1.1.5",
+      "cpu": "none"
+    },
+    {
+      "key": "@rolldown/binding-win32-arm64-msvc",
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "expected": "1.1.5",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@tailwindcss/oxide-android-arm64",
+      "name": "@tailwindcss/oxide-android-arm64",
+      "expected": "4.3.3",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@tailwindcss/oxide-darwin-arm64",
+      "name": "@tailwindcss/oxide-darwin-arm64",
+      "expected": "4.3.3",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@tailwindcss/oxide-darwin-x64",
+      "name": "@tailwindcss/oxide-darwin-x64",
+      "expected": "4.3.3",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@tailwindcss/oxide-freebsd-x64",
+      "name": "@tailwindcss/oxide-freebsd-x64",
+      "expected": "4.3.3",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@tailwindcss/oxide-linux-arm-gnueabihf",
+      "name": "@tailwindcss/oxide-linux-arm-gnueabihf",
+      "expected": "4.3.3",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@tailwindcss/oxide-linux-arm64-gnu",
+      "name": "@tailwindcss/oxide-linux-arm64-gnu",
+      "expected": "4.3.3",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@tailwindcss/oxide-linux-arm64-musl",
+      "name": "@tailwindcss/oxide-linux-arm64-musl",
+      "expected": "4.3.3",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@tailwindcss/oxide-wasm32-wasi",
+      "name": "@tailwindcss/oxide-wasm32-wasi",
+      "expected": "4.3.3",
+      "cpu": "none"
+    },
+    {
+      "key": "@tailwindcss/oxide-win32-arm64-msvc",
+      "name": "@tailwindcss/oxide-win32-arm64-msvc",
+      "expected": "4.3.3",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/native-preview-darwin-arm64",
+      "name": "@typescript/native-preview-darwin-arm64",
+      "expected": "7.0.0-dev.20260707.2",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/native-preview-darwin-x64",
+      "name": "@typescript/native-preview-darwin-x64",
+      "expected": "7.0.0-dev.20260707.2",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/native-preview-linux-arm",
+      "name": "@typescript/native-preview-linux-arm",
+      "expected": "7.0.0-dev.20260707.2",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@typescript/native-preview-linux-arm64",
+      "name": "@typescript/native-preview-linux-arm64",
+      "expected": "7.0.0-dev.20260707.2",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/native-preview-win32-arm64",
+      "name": "@typescript/native-preview-win32-arm64",
+      "expected": "7.0.0-dev.20260707.2",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-aix-ppc64",
+      "name": "@typescript/typescript-aix-ppc64",
+      "expected": "7.0.2",
+      "os": "aix",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@typescript/typescript-darwin-arm64",
+      "name": "@typescript/typescript-darwin-arm64",
+      "expected": "7.0.2",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-darwin-x64",
+      "name": "@typescript/typescript-darwin-x64",
+      "expected": "7.0.2",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/typescript-freebsd-arm64",
+      "name": "@typescript/typescript-freebsd-arm64",
+      "expected": "7.0.2",
+      "os": "freebsd",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-freebsd-x64",
+      "name": "@typescript/typescript-freebsd-x64",
+      "expected": "7.0.2",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/typescript-linux-arm",
+      "name": "@typescript/typescript-linux-arm",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "@typescript/typescript-linux-arm64",
+      "name": "@typescript/typescript-linux-arm64",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-linux-loong64",
+      "name": "@typescript/typescript-linux-loong64",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@typescript/typescript-linux-mips64el",
+      "name": "@typescript/typescript-linux-mips64el",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@typescript/typescript-linux-ppc64",
+      "name": "@typescript/typescript-linux-ppc64",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "ppc64"
+    },
+    {
+      "key": "@typescript/typescript-linux-riscv64",
+      "name": "@typescript/typescript-linux-riscv64",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "none"
+    },
+    {
+      "key": "@typescript/typescript-linux-s390x",
+      "name": "@typescript/typescript-linux-s390x",
+      "expected": "7.0.2",
+      "os": "linux",
+      "cpu": "s390x"
+    },
+    {
+      "key": "@typescript/typescript-netbsd-arm64",
+      "name": "@typescript/typescript-netbsd-arm64",
+      "expected": "7.0.2",
+      "os": "none",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-netbsd-x64",
+      "name": "@typescript/typescript-netbsd-x64",
+      "expected": "7.0.2",
+      "os": "none",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/typescript-openbsd-arm64",
+      "name": "@typescript/typescript-openbsd-arm64",
+      "expected": "7.0.2",
+      "os": "openbsd",
+      "cpu": "arm64"
+    },
+    {
+      "key": "@typescript/typescript-openbsd-x64",
+      "name": "@typescript/typescript-openbsd-x64",
+      "expected": "7.0.2",
+      "os": "openbsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/typescript-sunos-x64",
+      "name": "@typescript/typescript-sunos-x64",
+      "expected": "7.0.2",
+      "os": "sunos",
+      "cpu": "x64"
+    },
+    {
+      "key": "@typescript/typescript-win32-arm64",
+      "name": "@typescript/typescript-win32-arm64",
+      "expected": "7.0.2",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "fsevents",
+      "name": "fsevents",
+      "expected": "2.3.3",
+      "os": "darwin"
+    },
+    {
+      "key": "lightningcss-android-arm64",
+      "name": "lightningcss-android-arm64",
+      "expected": "1.32.0",
+      "os": "android",
+      "cpu": "arm64"
+    },
+    {
+      "key": "lightningcss-darwin-arm64",
+      "name": "lightningcss-darwin-arm64",
+      "expected": "1.32.0",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "lightningcss-darwin-x64",
+      "name": "lightningcss-darwin-x64",
+      "expected": "1.32.0",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "lightningcss-freebsd-x64",
+      "name": "lightningcss-freebsd-x64",
+      "expected": "1.32.0",
+      "os": "freebsd",
+      "cpu": "x64"
+    },
+    {
+      "key": "lightningcss-linux-arm-gnueabihf",
+      "name": "lightningcss-linux-arm-gnueabihf",
+      "expected": "1.32.0",
+      "os": "linux",
+      "cpu": "arm"
+    },
+    {
+      "key": "lightningcss-linux-arm64-gnu",
+      "name": "lightningcss-linux-arm64-gnu",
+      "expected": "1.32.0",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "lightningcss-linux-arm64-musl",
+      "name": "lightningcss-linux-arm64-musl",
+      "expected": "1.32.0",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "lightningcss-win32-arm64-msvc",
+      "name": "lightningcss-win32-arm64-msvc",
+      "expected": "1.32.0",
+      "os": "win32",
+      "cpu": "arm64"
+    },
+    {
+      "key": "sherpa-onnx-darwin-arm64",
+      "name": "sherpa-onnx-darwin-arm64",
+      "expected": "1.13.3",
+      "os": "darwin",
+      "cpu": "arm64"
+    },
+    {
+      "key": "sherpa-onnx-darwin-x64",
+      "name": "sherpa-onnx-darwin-x64",
+      "expected": "1.13.4",
+      "os": "darwin",
+      "cpu": "x64"
+    },
+    {
+      "key": "sherpa-onnx-linux-arm64",
+      "name": "sherpa-onnx-linux-arm64",
+      "expected": "1.13.4",
+      "os": "linux",
+      "cpu": "arm64"
+    },
+    {
+      "key": "sherpa-onnx-win-ia32",
+      "name": "sherpa-onnx-win-ia32",
+      "expected": "1.13.4",
+      "os": "win32",
+      "cpu": "ia32"
+    }
+  ],
+  "excludedWasm": [
+    {
+      "key": "@tailwindcss/oxide-wasm32-wasi/@tybys/wasm-util",
+      "name": "@tybys/wasm-util",
+      "expected": "0.10.3",
+      "installed": [],
+      "proof": {
+        "name": "@tybys/wasm-util",
+        "dependents": [
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+      "name": "@napi-rs/wasm-runtime",
+      "expected": "1.1.6",
+      "installed": [],
+      "proof": {
+        "name": "@napi-rs/wasm-runtime",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-tools-wasm32-wasi",
+            "name": "@napi-rs/wasm-tools-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-tools-wasm32-wasi",
+              "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+              "version": "1.0.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@tailwindcss/oxide-wasm32-wasi/@emnapi/wasi-threads",
+      "name": "@emnapi/wasi-threads",
+      "expected": "1.2.2",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/wasi-threads",
+        "dependents": [
+          {
+            "key": "@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@tailwindcss/oxide-wasm32-wasi/@emnapi/core",
+      "name": "@emnapi/core",
+      "expected": "1.11.2",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/core",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@rolldown/binding-wasm32-wasi/@emnapi/runtime",
+      "name": "@emnapi/runtime",
+      "expected": "1.11.1",
+      "installed": [
+        {
+          "version": "1.11.2",
+          "path": "C:\\Users\\wkiri\\development\\veyyon\\node_modules\\@emnapi\\runtime"
+        }
+      ],
+      "proof": {
+        "name": "@emnapi/runtime",
+        "dependents": [
+          {
+            "key": "@img/sharp-wasm32",
+            "name": "@img/sharp-wasm32",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@img/sharp-wasm32",
+              "native": "@img/sharp-linux-x64",
+              "version": "0.35.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/cli",
+            "name": "@napi-rs/cli",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/cli",
+              "allowed": true,
+              "guard": {
+                "file": "C:/Users/wkiri/development/veyyon/node_modules/@napi-rs/cli/dist/index.js",
+                "lines": [
+                  1416,
+                  1452,
+                  1453
+                ],
+                "guard": "target.platform === 'wasi'",
+                "sha256": "03e7c8e12a9544936dbe826eb14fe237fbd80e1d7b9cfd453187da6a80370e77",
+                "verified": true
+              }
+            }
+          },
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@napi-rs/tar-wasm32-wasi/@emnapi/core",
+      "name": "@emnapi/core",
+      "expected": "1.11.2",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/core",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@napi-rs/lzma-wasm32-wasi/@emnapi/core",
+      "name": "@emnapi/core",
+      "expected": "1.11.2",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/core",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@tybys/wasm-util",
+      "name": "@tybys/wasm-util",
+      "expected": "0.10.3",
+      "installed": [],
+      "proof": {
+        "name": "@tybys/wasm-util",
+        "dependents": [
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@napi-rs/wasm-runtime",
+      "name": "@napi-rs/wasm-runtime",
+      "expected": "1.1.6",
+      "installed": [],
+      "proof": {
+        "name": "@napi-rs/wasm-runtime",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-tools-wasm32-wasi",
+            "name": "@napi-rs/wasm-tools-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-tools-wasm32-wasi",
+              "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+              "version": "1.0.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@img/sharp-wasm32",
+      "name": "@img/sharp-wasm32",
+      "expected": "0.35.3",
+      "installed": [],
+      "proof": {
+        "name": "@img/sharp-wasm32",
+        "native": "@img/sharp-linux-x64",
+        "version": "0.35.3",
+        "allowed": true
+      }
+    },
+    {
+      "key": "@emnapi/wasi-threads",
+      "name": "@emnapi/wasi-threads",
+      "expected": "1.2.2",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/wasi-threads",
+        "dependents": [
+          {
+            "key": "@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@emnapi/core",
+            "name": "@emnapi/core",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@emnapi/core",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+                  "name": "@napi-rs/wasm-runtime",
+                  "kind": "peerDependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-runtime",
+                    "dependents": [
+                      {
+                        "key": "@napi-rs/lzma-wasm32-wasi",
+                        "name": "@napi-rs/lzma-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/lzma-wasm32-wasi",
+                          "native": "@napi-rs/lzma-linux-x64-gnu",
+                          "version": "1.5.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/tar-wasm32-wasi",
+                        "name": "@napi-rs/tar-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/tar-wasm32-wasi",
+                          "native": "@napi-rs/tar-linux-x64-gnu",
+                          "version": "1.1.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                          "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                          "version": "1.0.1",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@rolldown/binding-wasm32-wasi",
+                        "name": "@rolldown/binding-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@rolldown/binding-wasm32-wasi",
+                          "native": "@rolldown/binding-linux-x64-gnu",
+                          "version": "1.1.5",
+                          "allowed": true
+                        }
+                      },
+                      {
+                        "key": "@tailwindcss/oxide-wasm32-wasi",
+                        "name": "@tailwindcss/oxide-wasm32-wasi",
+                        "kind": "dependencies",
+                        "proof": {
+                          "name": "@tailwindcss/oxide-wasm32-wasi",
+                          "native": "@tailwindcss/oxide-linux-x64-gnu",
+                          "version": "4.3.3",
+                          "allowed": true
+                        }
+                      }
+                    ],
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    },
+    {
+      "key": "@emnapi/core",
+      "name": "@emnapi/core",
+      "expected": "1.11.1",
+      "installed": [],
+      "proof": {
+        "name": "@emnapi/core",
+        "dependents": [
+          {
+            "key": "@napi-rs/lzma-wasm32-wasi",
+            "name": "@napi-rs/lzma-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/lzma-wasm32-wasi",
+              "native": "@napi-rs/lzma-linux-x64-gnu",
+              "version": "1.5.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/tar-wasm32-wasi",
+            "name": "@napi-rs/tar-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@napi-rs/tar-wasm32-wasi",
+              "native": "@napi-rs/tar-linux-x64-gnu",
+              "version": "1.1.1",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          },
+          {
+            "key": "@rolldown/binding-wasm32-wasi",
+            "name": "@rolldown/binding-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@rolldown/binding-wasm32-wasi",
+              "native": "@rolldown/binding-linux-x64-gnu",
+              "version": "1.1.5",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi",
+            "name": "@tailwindcss/oxide-wasm32-wasi",
+            "kind": "dependencies",
+            "proof": {
+              "name": "@tailwindcss/oxide-wasm32-wasi",
+              "native": "@tailwindcss/oxide-linux-x64-gnu",
+              "version": "4.3.3",
+              "allowed": true
+            }
+          },
+          {
+            "key": "@tailwindcss/oxide-wasm32-wasi/@napi-rs/wasm-runtime",
+            "name": "@napi-rs/wasm-runtime",
+            "kind": "peerDependencies",
+            "proof": {
+              "name": "@napi-rs/wasm-runtime",
+              "dependents": [
+                {
+                  "key": "@napi-rs/lzma-wasm32-wasi",
+                  "name": "@napi-rs/lzma-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/lzma-wasm32-wasi",
+                    "native": "@napi-rs/lzma-linux-x64-gnu",
+                    "version": "1.5.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/tar-wasm32-wasi",
+                  "name": "@napi-rs/tar-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/tar-wasm32-wasi",
+                    "native": "@napi-rs/tar-linux-x64-gnu",
+                    "version": "1.1.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@napi-rs/wasm-tools-wasm32-wasi",
+                    "native": "@napi-rs/wasm-tools-linux-x64-gnu",
+                    "version": "1.0.1",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@rolldown/binding-wasm32-wasi",
+                  "name": "@rolldown/binding-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@rolldown/binding-wasm32-wasi",
+                    "native": "@rolldown/binding-linux-x64-gnu",
+                    "version": "1.1.5",
+                    "allowed": true
+                  }
+                },
+                {
+                  "key": "@tailwindcss/oxide-wasm32-wasi",
+                  "name": "@tailwindcss/oxide-wasm32-wasi",
+                  "kind": "dependencies",
+                  "proof": {
+                    "name": "@tailwindcss/oxide-wasm32-wasi",
+                    "native": "@tailwindcss/oxide-linux-x64-gnu",
+                    "version": "4.3.3",
+                    "allowed": true
+                  }
+                }
+              ],
+              "allowed": true
+            }
+          }
+        ],
+        "allowed": true
+      }
+    }
+  ],
+  "cliGuard": {
+    "file": "C:/Users/wkiri/development/veyyon/node_modules/@napi-rs/cli/dist/index.js",
+    "lines": [
+      1416,
+      1452,
+      1453
+    ],
+    "guard": "target.platform === 'wasi'",
+    "sha256": "03e7c8e12a9544936dbe826eb14fe237fbd80e1d7b9cfd453187da6a80370e77",
+    "verified": true
+  },
+  "resolutions": [
+    {
+      "specifier": "@veyyon/catalog/models",
+      "resolved": "file:///C:/Users/wkiri/development/.wt-bun-cache-cleanup-fix902/packages/catalog/src/models.ts",
+      "real": "C:\\Users\\wkiri\\development\\.wt-bun-cache-cleanup-fix902\\packages\\catalog\\src\\models.ts",
+      "inCandidate": true
+    },
+    {
+      "specifier": "@veyyon/kernel/session/session-manager",
+      "resolved": "file:///C:/Users/wkiri/development/.wt-bun-cache-cleanup-fix902/kernel/src/session/session-manager.ts",
+      "real": "C:\\Users\\wkiri\\development\\.wt-bun-cache-cleanup-fix902\\kernel\\src\\session\\session-manager.ts",
+      "inCandidate": true
+    },
+    {
+      "specifier": "@veyyon/natives",
+      "resolved": "file:///C:/Users/wkiri/development/.wt-bun-cache-cleanup-fix902/natives/bridge/bindings/native/index.js",
+      "real": "C:\\Users\\wkiri\\development\\.wt-bun-cache-cleanup-fix902\\natives\\bridge\\bindings\\native\\index.js",
+      "inCandidate": true
+    },
+    {
+      "specifier": "argot/constants",
+      "resolved": "file:///C:/Users/wkiri/development/.wt-bun-cache-cleanup-fix902/plugins/argot/src/constants.ts",
+      "real": "C:\\Users\\wkiri\\development\\.wt-bun-cache-cleanup-fix902\\plugins\\argot\\src\\constants.ts",
+      "inCandidate": true
+    }
+  ],
+  "status": "deps-verified(workspace-remap)"
+}
