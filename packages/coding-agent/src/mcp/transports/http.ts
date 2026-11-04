@@ -247,9 +247,13 @@ export class HttpTransport implements MCPTransport {
 	async #dispatchSSEMessage(message: unknown): Promise<void> {
 		const members = Array.isArray(message) ? message : [message];
 		if (members.length > MAX_HTTP_SSE_BATCH_MEMBERS) {
-			// Reject the complete oversized batch: partial execution could leave
-			// other batch requests awaiting replies after a truncated dispatch.
-			logger.warn("Skipping oversized MCP HTTP SSE message batch");
+			// Fail the connection instead of silently stranding valid request IDs.
+			// Closing bounds rejection work independently of the batch length.
+			try {
+				this.onError?.(new Error("MCP HTTP SSE batch exceeds the 256-member limit"));
+			} finally {
+				await this.close();
+			}
 			return;
 		}
 		let invalidMember = false;

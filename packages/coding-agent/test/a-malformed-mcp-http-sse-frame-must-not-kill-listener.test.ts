@@ -169,14 +169,13 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 	// A single server-controlled SSE frame must not fan out thousands of
 	// concurrent client callbacks or diagnostics. This probes the actual
 	// transport over a loopback GET while all request handlers remain pending.
-	it("bounds oversized and repeated flat SSE batches without losing the next notification", async () => {
+	it("bounds repeated legal-size SSE batches without losing the next notification", async () => {
 		const makeRequest = (id: number) => ({
 			jsonrpc: "2.0",
 			id,
 			method: "roots/list",
 			params: {},
 		});
-		const oversized = Array.from({ length: 300 }, (_, index) => makeRequest(1_000 + index));
 		const bursts = Array.from({ length: 5 }, (_, burst) =>
 			Array.from({ length: 16 }, (_, index) => makeRequest(burst * 16 + index)),
 		);
@@ -185,7 +184,7 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			method: "notifications/tools/list_changed",
 			params: { source: "after-flood" },
 		};
-		await withLiveSSE([oversized, ...bursts, Array.from({ length: 128 }, () => null), next], async transport => {
+		await withLiveSSE([...bursts, Array.from({ length: 128 }, () => null), next], async transport => {
 			const gate = Promise.withResolvers<void>();
 			const reachedCapacity = Promise.withResolvers<void>();
 			const receivedNext = Promise.withResolvers<void>();
@@ -360,11 +359,9 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		});
 	}, 15_000);
 
-	// Reject an oversized frame as a whole, including valid messages inside
-	// that frame, while keeping the immediately adjacent legal-size frame
-	// and a later event usable on the exact same open connection.
+	// A legal-size frame retains its valid sibling and the next event.
 
-	it("enforces the flat SSE batch member budget at both edges", async () => {
+	it("retains valid notifications at the flat SSE batch member limit", async () => {
 		const notification = (source: string) => ({
 			jsonrpc: "2.0",
 			method: "notifications/tools/list_changed",
@@ -376,7 +373,6 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 			await withLiveSSE(
 				[
 					[...Array.from({ length: 255 }, () => null), notification("at-limit")],
-					[...Array.from({ length: 256 }, () => null), notification("over-limit")],
 					notification("later"),
 				],
 				async transport => {
@@ -398,12 +394,8 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		} finally {
 			warnSpy.mockRestore();
 		}
-		expect(
-			warnings.filter(
-				message =>
-					message === "Skipping invalid MCP HTTP SSE batch member" ||
-					message === "Skipping oversized MCP HTTP SSE message batch",
-			),
-		).toEqual(["Skipping invalid MCP HTTP SSE batch member", "Skipping oversized MCP HTTP SSE message batch"]);
+		expect(warnings.filter(message => message === "Skipping invalid MCP HTTP SSE batch member")).toEqual([
+			"Skipping invalid MCP HTTP SSE batch member",
+		]);
 	}, 15_000);
 });
