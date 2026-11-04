@@ -1,7 +1,8 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
 import { OutputSink } from "../../session/streaming-output";
-import { ProducerOutputGuard } from "../../secrets/producer-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
 import {
@@ -79,8 +80,18 @@ function formatJsTimeoutAnnotation(timeoutMs: number | undefined): string {
 
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
+	const outputGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
+	// Status callbacks publish immediately, so they cannot retract the prefix of
+	// an inventory split across events. Conservatively withhold each assignment
+	// record, including a single assignment, without delaying safe progress.
+	const sanitizeStatus = (text: string): string =>
+		sanitizeText(text)
+			.split("\n")
+			.some(line => /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line))
+			? BLOCKED_OUTPUT_RECORD
+			: outputGuard.sanitize(text);
 	const outputSink = new OutputSink({
-		outputGuard: new ProducerOutputGuard(options.session.obfuscateProviderText),
+		outputGuard,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
@@ -137,13 +148,27 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 					if (output.type === "json") {
 						try {
 							const serialized = JSON.stringify(output.data);
-							const filtered = new ProducerOutputGuard(options.session.obfuscateProviderText).sanitize(serialized);
-							output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+							const filtered = outputGuard.sanitize(serialized);
+							output = {
+								type: "json",
+								data: filtered === serialized ? output.data : "[credential output withheld]",
+							};
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };
 						}
 					}
 					if (output.type === "status") {
+						const { event } = output;
+						if (typeof event.message === "string" || typeof event.title === "string") {
+							output = {
+								...output,
+								event: {
+									...event,
+									...(typeof event.message === "string" ? { message: sanitizeStatus(event.message) } : {}),
+									...(typeof event.title === "string" ? { title: sanitizeStatus(event.title) } : {}),
+								},
+							};
+						}
 						// Timeout-control events drive the eval watchdog only; never
 						// store or render them as cell output.
 						options.onStatus?.(output.event);

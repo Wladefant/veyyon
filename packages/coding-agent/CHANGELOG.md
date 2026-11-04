@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
 ## [1.7.9] - 2026-11-04
 
 ### Fixed
