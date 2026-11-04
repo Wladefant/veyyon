@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in SageOx extension searches team context and shares reviewed Veyyon conversation snapshots and repository handoffs ([Refs #954](https://github.com/Wladefant/veyyon/issues/954)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

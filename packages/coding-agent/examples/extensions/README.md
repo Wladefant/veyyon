@@ -14,6 +14,8 @@ cp permission-gate.ts ~/.veyyon/profiles/<profile>/agent/extensions/
 
 ## Examples
 
+See [SageOx team handoffs](sageox.md) for the opt-in Veyyon extension for teams using Codex and Claude Code.
+
 ### Lifecycle & Safety
 
 | Extension                | Description                                                                  |
