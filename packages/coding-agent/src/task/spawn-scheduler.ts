@@ -101,6 +101,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
+	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
