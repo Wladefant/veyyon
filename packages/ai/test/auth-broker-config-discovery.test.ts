@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveAuthBrokerConfig } from "@veyyon/ai/auth-broker";
+import { REMOTE_REFRESH_SENTINEL } from "@veyyon/ai";
+import { discoverAuthStorage, resolveAuthBrokerConfig, type SnapshotResponse } from "@veyyon/ai/auth-broker";
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { withEnv } from "./helpers";
@@ -16,6 +17,8 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	// a per-test sandbox — otherwise a developer's real ~/.veyyon broker entry
 	// would leak into (or break) these assertions.
 	let suppressEnv: Record<string, string | undefined> = {};
+	let activeStorage: Awaited<ReturnType<typeof discoverAuthStorage>> | undefined;
+	let stopBrokerServer: (() => void) | undefined;
 
 	beforeEach(async () => {
 		agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-broker-config-"));
@@ -27,10 +30,15 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			VEYYON_AUTH_BROKER_URL: undefined,
 			VEYYON_AUTH_BROKER_TOKEN: undefined,
 			VEYYON_CONFIG_DIR: isolated.envValue,
+		VEYYON_AUTH_BROKER_SNAPSHOT_TTL_MS: undefined,
 		};
 	});
 
 	afterEach(async () => {
+		activeStorage?.close();
+		activeStorage = undefined;
+		stopBrokerServer?.();
+		stopBrokerServer = undefined;
 		if (agentDir) {
 			await removeWithRetries(agentDir);
 			agentDir = "";
@@ -182,4 +190,165 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			expect(message).not.toContain("synthetic-query-token");
 		});
 	});
+	test("uses credential-safe provenance for broker OAuth and API-key sources", async () => {
+		const queryMarker = "synthetic-query-token";
+		const fragmentMarker = "synthetic-fragment-token";
+		const brokerToken = "synthetic-broker-token";
+		const now = Date.now();
+		const snapshot: SnapshotResponse = {
+			generation: 1,
+			generatedAt: now,
+			serverNowMs: now,
+			refresher: {
+				enabled: false,
+				intervalMs: 60_000,
+				skewMs: 300_000,
+				nextSweepInMs: Number.MAX_SAFE_INTEGER,
+			},
+			credentials: [
+				{
+					id: 1,
+					provider: "anthropic",
+					identityKey: null,
+					rotatesInMs: null,
+					credential: {
+						type: "oauth",
+						access: "synthetic-oauth-access",
+						refresh: REMOTE_REFRESH_SENTINEL,
+						expires: now + 60_000,
+						email: "synthetic-oauth@example.test",
+					},
+				},
+				{
+					id: 2,
+					provider: "openai-codex",
+					identityKey: null,
+					rotatesInMs: null,
+					credential: { type: "api_key", key: "synthetic-api-key" },
+				},
+			],
+		};
+		let observedQuery: string | null = null;
+		let snapshotRequests = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: request => {
+				if (request.headers.get("authorization") !== "Bearer " + brokerToken)
+					return new Response("unauthorized", { status: 401 });
+				if (request.headers.get("accept")?.includes("text/event-stream"))
+					return new Response(null, { status: 404 });
+				snapshotRequests += 1;
+				observedQuery = new URL(request.url).searchParams.get("access_token");
+				return new Response(JSON.stringify(snapshot), {
+					headers: { "content-type": "application/json", etag: '"1"' },
+				});
+			},
+		});
+		stopBrokerServer = () => server.stop(true);
+		// The fake broker accepts the client's request URL to isolate provenance generation;
+		// this does not claim query/fragment-bearing broker base URLs are a supported route.
+		const serverUrl = server.url.toString();
+		const baseUrl = serverUrl.endsWith("/") ? serverUrl.slice(0, -1) : serverUrl;
+		const brokerUrl =
+			baseUrl +
+			"/synthetic-user:synthetic-password?access_token=" +
+			queryMarker +
+			"#" +
+			fragmentMarker;
+
+		await withEnv(
+			{
+				...suppressEnv,
+				VEYYON_AUTH_BROKER_URL: brokerUrl,
+				VEYYON_AUTH_BROKER_TOKEN: brokerToken,
+				VEYYON_AUTH_BROKER_SNAPSHOT_TTL_MS: "0",
+			},
+			async () => {
+				const storage = await discoverAuthStorage({ agentDir });
+				activeStorage = storage;
+				try {
+					const oauthSource = storage.describeCredentialSource("anthropic");
+					const apiKeySource = storage.describeCredentialSource("openai-codex");
+					if (!oauthSource || !apiKeySource) throw new Error("expected both synthetic broker credentials");
+					expect(oauthSource).toContain("remote broker");
+					expect(oauthSource).toContain("oauth");
+					expect(apiKeySource).toContain("remote broker");
+					expect(apiKeySource).toContain("api_key");
+					for (const marker of [
+						"synthetic-user",
+						"synthetic-password",
+						queryMarker,
+						fragmentMarker,
+					]) {
+						expect(oauthSource).not.toContain(marker);
+						expect(apiKeySource).not.toContain(marker);
+					}
+					expect(observedQuery).toBe(queryMarker);
+					expect(snapshotRequests).toBeGreaterThan(0);
+				} finally {
+					storage.close();
+					activeStorage = undefined;
+				}
+
+				const labelledStorage = await discoverAuthStorage({
+					agentDir,
+					sourceLabel: "caller-supplied broker label",
+				});
+				activeStorage = labelledStorage;
+				try {
+					const source = labelledStorage.describeCredentialSource("anthropic");
+					if (!source) throw new Error("expected synthetic OAuth provenance");
+					expect(source).toContain("caller-supplied broker label");
+				} finally {
+					labelledStorage.close();
+					activeStorage = undefined;
+				}
+			},
+		);
+	});
+
+	test("keeps local SQLite provenance when broker configuration is unset", async () => {
+		await withEnv(suppressEnv, async () => {
+			const storage = await discoverAuthStorage({ agentDir });
+			activeStorage = storage;
+			try {
+				storage.upsertCredential("anthropic", {
+					type: "api_key",
+					key: "synthetic-local-api-key",
+				});
+				const source = storage.describeCredentialSource("anthropic");
+				if (!source) throw new Error("expected local credential provenance");
+				expect(source).toContain("local ");
+				expect(source).toContain("api_key");
+				expect(source).not.toContain("remote broker");
+			} finally {
+				storage.close();
+				activeStorage = undefined;
+			}
+		});
+	});
+
+	test("does not fall back to local SQLite when a configured broker URL cannot be fetched", async () => {
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("synthetic broker unavailable", { status: 503 }),
+		});
+		stopBrokerServer = () => server.stop(true);
+		const brokerUrl =
+			"http://synthetic-user:synthetic-password@127.0.0.1:" + server.port;
+		await withEnv(
+			{
+				...suppressEnv,
+				VEYYON_AUTH_BROKER_URL: brokerUrl,
+				VEYYON_AUTH_BROKER_TOKEN: "synthetic-broker-token",
+				VEYYON_AUTH_BROKER_SNAPSHOT_TTL_MS: "0",
+			},
+			async () => {
+				await expect(discoverAuthStorage({ agentDir })).rejects.toThrow();
+			},
+		);
+	});
+
 });
