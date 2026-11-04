@@ -86,6 +86,24 @@ describeRequiringTool("python3", "kernel OS stderr logging", () => {
 				"import os; [os.write(2, bytes([byte])) for byte in b'\\x1b[31mANSI_A=fake-ansi-a\\n\\x1b[31mANSI_B=fake-ansi-b\\n\\x1b[31mANSI_C=fake-ansi-c\\n\\nsafe after ANSI assignments\\n\\n']",
 			);
 			expect(ansiAssignmentsResult.status).toBe("ok");
+			for (const opening of ["{", "["]) {
+				for (const bytewise of [false, true]) {
+					const payload = opening === "{"
+						? '\x00CONFIG={"ALPHA":"fake-assigned-a",\n  "BETA":"fake-assigned-b",\n  "GAMMA":"fake-assigned-c"}\n\nsafe after assigned inventory\n\n'
+						: '\x1b[31mexport CONFIG=[{"ALPHA":"fake-assigned-a",\n  "BETA":"fake-assigned-b",\n  "GAMMA":"fake-assigned-c"}]\n\nsafe after assigned inventory\n\n';
+					const encoded = JSON.stringify(payload);
+					const write = bytewise
+						? `[os.write(2, bytes([byte])) for byte in ${encoded}.encode()]`
+						: `os.write(2, ${encoded}.encode())`;
+					const assignedResult = await kernel.execute(`import os; ${write}`);
+					expect(assignedResult.status).toBe("ok");
+					const assignedContent = await readLogDirectory(logs);
+					for (const value of ["fake-assigned-a", "fake-assigned-b", "fake-assigned-c"]) {
+						expect(assignedContent).not.toContain(value);
+					}
+					expect(assignedContent).toContain("safe after assigned inventory");
+				}
+			}
 			
 			const normalizedContent = await readLogDirectory(logs);
 			expect(normalizedContent).not.toContain("fake-ctrl-a");
