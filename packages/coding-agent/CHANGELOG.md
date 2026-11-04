@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP rejects stored session IDs that identify different histories before cross-cwd loads or unloaded forks change session state ([Refs #901](https://github.com/Wladefant/veyyon/issues/901)).
+
 ## [1.7.9] - 2026-11-04
 
 ### Fixed
