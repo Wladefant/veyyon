@@ -6,7 +6,9 @@
  * still the trust boundary; a process that can read both the token and this file
  * can decrypt the snapshot.
  */
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { asStrictBytes } from "@veyyon/utils/bytes";
 import { isEnoent } from "@veyyon/utils/fs-error";
@@ -25,6 +27,43 @@ const TEXT_DECODER = new TextDecoder();
 
 /** FIFO per target path, before encryption/rename: the atomic writer alone cannot order snapshots. */
 const pendingCacheWrites = new Map<string, Promise<void>>();
+
+/** An atomic write follows final-component and parent symlinks, so aliases must share one FIFO. */
+function cacheWriteTargetKey(filePath: string): string {
+	let target = path.resolve(filePath);
+	const visited = new Set<string>();
+	for (;;) {
+		let stats: ReturnType<typeof fsSync.lstatSync>;
+		try {
+			stats = fsSync.lstatSync(target);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// A cache need not exist yet. Resolve its nearest existing parent so
+			// dangling basename links and parent-directory aliases share the key.
+			let parent = path.dirname(target);
+			const suffix = [path.basename(target)];
+			for (;;) {
+				try {
+					return path.join(fsSync.realpathSync(parent), ...suffix);
+				} catch (parentError) {
+					if (!isEnoent(parentError)) throw parentError;
+					const nextParent = path.dirname(parent);
+					if (nextParent === parent) throw parentError;
+					suffix.unshift(path.basename(parent));
+					parent = nextParent;
+				}
+			}
+		}
+		if (!stats.isSymbolicLink()) return fsSync.realpathSync(target);
+		if (visited.has(target)) {
+			const error = new Error("Auth-broker snapshot cache path has a symlink loop") as NodeJS.ErrnoException;
+			error.code = "ELOOP";
+			throw error;
+		}
+		visited.add(target);
+		target = path.resolve(path.dirname(target), fsSync.readlinkSync(target));
+	}
+}
 
 export interface ReadAuthBrokerSnapshotCacheOptions {
 	path: string;
@@ -101,15 +140,23 @@ export async function readAuthBrokerSnapshotCache(
  * single process and cache path, not simultaneous writes from other processes.
  */
 export function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheOptions): Promise<void> {
-	const preceding = pendingCacheWrites.get(opts.path);
+	let targetKey: string;
+	try {
+		// Resolve synchronously before registration: asynchronous key lookups can
+		// themselves reorder two calls while an older encryption is in flight.
+		targetKey = cacheWriteTargetKey(opts.path);
+	} catch (error) {
+		return Promise.reject(error);
+	}
+	const preceding = pendingCacheWrites.get(targetKey);
 	const write = async (): Promise<void> => {
 		const payload = await encryptCachePayload(opts.snapshot, opts.token, opts.url);
 		await atomicWriteFile(opts.path, payload, { mode: 0o600 });
 	};
 	const pending = preceding ? preceding.then(write, write) : write();
-	pendingCacheWrites.set(opts.path, pending);
+	pendingCacheWrites.set(targetKey, pending);
 	const clear = (): void => {
-		if (pendingCacheWrites.get(opts.path) === pending) pendingCacheWrites.delete(opts.path);
+		if (pendingCacheWrites.get(targetKey) === pending) pendingCacheWrites.delete(targetKey);
 	};
 	void pending.then(clear, clear);
 	return pending;
