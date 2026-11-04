@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { REMOTE_REFRESH_SENTINEL } from "@veyyon/ai";
@@ -7,6 +8,38 @@ import { discoverAuthStorage, resolveAuthBrokerConfig, type SnapshotResponse } f
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { withEnv } from "./helpers";
+
+type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
+
+async function startLoopbackServer(
+	handler: LoopbackHandler,
+): Promise<{ url: string; close: () => Promise<void> }> {
+	const server = createServer(handler);
+	await new Promise<void>((resolve, reject) => {
+		const onError = (error: Error) => reject(error);
+		server.once("error", onError);
+		server.listen(0, "127.0.0.1", () => {
+			server.off("error", onError);
+			resolve();
+		});
+	});
+
+	const address = server.address();
+	if (!address || typeof address === "string") {
+		await new Promise<void>((resolve, reject) => {
+			server.close(error => (error ? reject(error) : resolve()));
+		});
+		throw new Error("expected loopback server address");
+	}
+
+	return {
+		url: `http://127.0.0.1:${address.port}`,
+		close: () =>
+			new Promise<void>((resolve, reject) => {
+				server.close(error => (error ? reject(error) : resolve()));
+			}),
+	};
+}
 
 describe("resolveAuthBrokerConfig config discovery", () => {
 	let agentDir = "";
@@ -18,7 +51,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	// would leak into (or break) these assertions.
 	let suppressEnv: Record<string, string | undefined> = {};
 	let activeStorage: Awaited<ReturnType<typeof discoverAuthStorage>> | undefined;
-	let stopBrokerServer: (() => void) | undefined;
+	let stopBrokerServer: (() => Promise<void>) | undefined;
 
 	beforeEach(async () => {
 		agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-broker-config-"));
@@ -37,7 +70,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	afterEach(async () => {
 		activeStorage?.close();
 		activeStorage = undefined;
-		stopBrokerServer?.();
+		await stopBrokerServer?.();
 		stopBrokerServer = undefined;
 		if (agentDir) {
 			await removeWithRetries(agentDir);
@@ -122,7 +155,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	});
 
 	test("treats an empty env-backed broker URL as unset", async () => {
-		await Bun.write(
+		await fs.writeFile(
 			path.join(agentDir, "config.yml"),
 			"auth.broker.url: EMPTY_BROKER_URL\nauth.broker.token: unused-token\n",
 		);
@@ -133,12 +166,12 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	});
 
 	test("falls back to the isolated token file when an env-backed config token is empty", async () => {
-		await Bun.write(
+		await fs.writeFile(
 			path.join(agentDir, "config.yml"),
 			"auth.broker.url: https://profile-broker.example/v1\nauth.broker.token: EMPTY_BROKER_TOKEN\n",
 		);
 		await fs.mkdir(configRoot, { recursive: true });
-		await Bun.write(path.join(configRoot, "auth-broker.token"), "synthetic-broker-token\n");
+		await fs.writeFile(path.join(configRoot, "auth-broker.token"), "synthetic-broker-token\n");
 
 		await withEnv({ ...suppressEnv, EMPTY_BROKER_TOKEN: "" }, async () => {
 			await expect(resolveAuthBrokerConfig({ agentDir })).resolves.toEqual({
@@ -149,7 +182,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	});
 
 	test("non-empty env-backed values still override config literals", async () => {
-		await Bun.write(
+		await fs.writeFile(
 			path.join(agentDir, "config.yml"),
 			"auth.broker.url: BROKER_URL_FROM_ENV\nauth.broker.token: BROKER_TOKEN_FROM_ENV\n",
 		);
@@ -169,7 +202,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	test("does not echo credential-bearing broker URLs when the token is missing", async () => {
 		const endpoint =
 			"https://synthetic-user:synthetic-password@profile-broker.example/v1?access_token=synthetic-query-token";
-		await Bun.write(path.join(agentDir, "config.yml"), `auth.broker.url: "${endpoint}"\n`);
+		await fs.writeFile(path.join(agentDir, "config.yml"), `auth.broker.url: "${endpoint}"\n`);
 
 		await withEnv(suppressEnv, async () => {
 			let caught: unknown;
@@ -230,22 +263,23 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		};
 		let observedQuery: string | null = null;
 		let snapshotRequests = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: request => {
-				if (request.headers.get("authorization") !== "Bearer " + brokerToken)
-					return new Response("unauthorized", { status: 401 });
-				if (request.headers.get("accept")?.includes("text/event-stream"))
-					return new Response(null, { status: 404 });
-				snapshotRequests += 1;
-				observedQuery = new URL(request.url).searchParams.get("access_token");
-				return new Response(JSON.stringify(snapshot), {
-					headers: { "content-type": "application/json", etag: '"1"' },
-				});
-			},
+		const server = await startLoopbackServer((request, response) => {
+			if (request.headers.authorization !== "Bearer " + brokerToken) {
+				response.writeHead(401);
+				response.end("unauthorized");
+				return;
+			}
+			if (request.headers.accept?.includes("text/event-stream")) {
+				response.writeHead(404);
+				response.end();
+				return;
+			}
+			snapshotRequests += 1;
+			observedQuery = new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("access_token");
+			response.writeHead(200, { "content-type": "application/json", etag: '"1"' });
+			response.end(JSON.stringify(snapshot));
 		});
-		stopBrokerServer = () => server.stop(true);
+		stopBrokerServer = server.close;
 		// The fake broker accepts the client's request URL to isolate provenance generation;
 		// this does not claim query/fragment-bearing broker base URLs are a supported route.
 		const serverUrl = server.url.toString();
@@ -331,16 +365,13 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 
 	test("does not fall back to local SQLite when a configured broker returns HTTP 503", async () => {
 		let requestCount = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: () => {
-				requestCount += 1;
-				return new Response("synthetic broker unavailable", { status: 503 });
-			},
+		const server = await startLoopbackServer((_request, response) => {
+			requestCount += 1;
+			response.writeHead(503);
+			response.end("synthetic broker unavailable");
 		});
-		stopBrokerServer = () => server.stop(true);
-		const brokerUrl = "http://127.0.0.1:" + server.port;
+		stopBrokerServer = server.close;
+		const brokerUrl = server.url;
 		await withEnv(
 			{
 				...suppressEnv,
