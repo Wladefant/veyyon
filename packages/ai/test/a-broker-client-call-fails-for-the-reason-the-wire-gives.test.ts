@@ -189,6 +189,32 @@ describe("a response body its schema rejects", () => {
 	});
 });
 
+describe("credential-bearing successful REST JSON parse failures", () => {
+	// A disposable, visibly synthetic value: neither a real account nor a credential-store access.
+	const marker = "SYNTHETIC_ONLY_BROKER_REST_602_NOT_A_REAL_KEY";
+	test.each([
+		{
+			name: "malformed HTTP 200 JSON",
+			body: `{"access_token":"${marker}",`,
+			message: "Auth broker returned malformed JSON",
+		},
+		{
+			name: "schema-invalid HTTP 200 JSON",
+			body: JSON.stringify({ generation: marker, credentials: [{ access_token: marker }] }),
+			message: "Auth broker response failed schema validation",
+		},
+	])("does not retain $name on an error object", async ({ body, message }) => {
+		const broker = fakeBroker(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } }));
+		const error = await rejection(brokerClient(broker.fetchImpl).fetchSnapshot());
+		expect(error.message).toBe(message);
+		expect(error.status).toBe(200);
+		expect(error.body).toBeUndefined();
+		expect(error.cause).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain(marker);
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+});
+
 describe("the full snapshot generation header", () => {
 	const { kind: _kind, ...snapshot } = SNAPSHOT_EVENT;
 
