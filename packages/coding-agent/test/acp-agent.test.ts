@@ -1470,29 +1470,33 @@ describe("ACP agent", () => {
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
-	it("reloads a loaded session from disk before replaying its history", async () => {
+	it("replays the full transcript after loading a compacted session from disk", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.sessions.at(-1)!;
-		session.sessionManager.appendMessage({ role: "user", content: "original message", timestamp: Date.now() });
-		session.sessionManager.appendMessage(makeAssistantMessage("original reply"));
+		session.sessionManager.appendMessage({ role: "user", content: "EARLY-USER-ORIGINAL", timestamp: Date.now() });
+		session.sessionManager.appendMessage(makeAssistantMessage("EARLY-ASSISTANT-ORIGINAL"));
+		const tailUserId = session.sessionManager.appendMessage({
+			role: "user",
+			content: "TAIL-USER-ORIGINAL",
+			timestamp: Date.now(),
+		});
+		session.sessionManager.appendMessage(makeAssistantMessage("TAIL-ASSISTANT-ORIGINAL"));
+		session.sessionManager.appendCompaction("COMPACTION-SUMMARY", undefined, tailUserId, 1000);
 		await session.sessionManager.ensureOnDisk();
 		await session.sessionManager.flush();
 		const file = session.sessionManager.getSessionFile();
 		if (!file) throw new Error("ACP session has no transcript file");
-		const external = await SessionManager.open(file, harness.cwdA);
-		external.appendMessage({ role: "user", content: "EXTERNAL-BEFORE-REOPEN", timestamp: Date.now() });
-		external.appendMessage(makeAssistantMessage("external reply"));
-		await external.flush();
-		await external.close();
 		harness.updates.length = 0;
 		await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
 		const replay = harness.updates.flatMap(({ update }) =>
 			(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
 			update.content.type === "text" ? [update.content.text] : [],
 		);
-		expect(replay).toContain("EXTERNAL-BEFORE-REOPEN");
-		expect(replay).toContain("original message");
+		expect(replay).toContain("EARLY-USER-ORIGINAL");
+		expect(replay).toContain("EARLY-ASSISTANT-ORIGINAL");
+		expect(replay).toContain("TAIL-USER-ORIGINAL");
+		expect(replay).toContain("TAIL-ASSISTANT-ORIGINAL");
 		expect(session.sessionId).toBe(created.sessionId);
 		expect(session.sessionManager.getSessionFile()).toBe(file);
 		await harness.agent.closeSession({ sessionId: created.sessionId });
