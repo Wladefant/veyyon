@@ -329,15 +329,18 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		});
 	});
 
-	test("does not fall back to local SQLite when a configured broker URL cannot be fetched", async () => {
+	test("does not fall back to local SQLite when a configured broker returns HTTP 503", async () => {
+		let requestCount = 0;
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
-			fetch: () => new Response("synthetic broker unavailable", { status: 503 }),
+			fetch: () => {
+				requestCount += 1;
+				return new Response("synthetic broker unavailable", { status: 503 });
+			},
 		});
 		stopBrokerServer = () => server.stop(true);
-		const brokerUrl =
-			"http://synthetic-user:synthetic-password@127.0.0.1:" + server.port;
+		const brokerUrl = "http://127.0.0.1:" + server.port;
 		await withEnv(
 			{
 				...suppressEnv,
@@ -346,7 +349,11 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 				VEYYON_AUTH_BROKER_SNAPSHOT_TTL_MS: "0",
 			},
 			async () => {
-				await expect(discoverAuthStorage({ agentDir })).rejects.toThrow();
+				await expect(discoverAuthStorage({ agentDir })).rejects.toMatchObject({
+					name: "AuthBrokerError",
+					status: 503,
+				});
+				expect(requestCount).toBe(1);
 			},
 		);
 	});
