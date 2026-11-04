@@ -40,11 +40,8 @@ async function fixture() {
 		assignment: "Continue the handed-off edit", exitCode: 0, output: "done", stderr: "",
 		truncated: false, durationMs: 0, tokens: 0, requests: 1,
 	} as SingleResult));
-	const tool = await TaskTool.create(makeToolSession({
-		cwd: root, hasUI: false, getAgentId: () => "Parent", getSessionFile: () => null,
-		getArtifactsDir: () => artifacts, getSessionSpawns: () => "*",
-		settings: Settings.isolated({ "async.enabled": false, "agent.batch": false }),
-	}));
+	const tool = await TaskTool.create(makeToolSession({ cwd: root, hasUI: false, getAgentId: () => "Parent", getSessionFile: () => join(root, "artifacts.jsonl"), getArtifactsDir: () => artifacts, getSessionSpawns: () => "*",
+		settings: Settings.isolated({ "async.enabled": false, "agent.batch": false }), }));
 	return { root, artifacts, run, tool };
 }
 
