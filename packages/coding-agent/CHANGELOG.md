@@ -13,6 +13,8 @@
 - Error explanations withhold complete prefixed inventories, and JS eval preserves RegExp output after scalar console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - JS eval only treats a top-level RegExp as a console argument when its closing slash and flags end at whitespace or the line boundary ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 ## [1.7.9] - 2026-11-04
+- Config hot reload now includes `github.enabled` in the reloaded whitelist, so disk changes take effect without restart and propagate to child forks, and an explicit tool allowlist cannot bypass a disabled setting (Refs Wladefant/superboard#2203).
+- MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
 
 ### Fixed
 
