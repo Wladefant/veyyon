@@ -1021,15 +1021,17 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			guard.reset();
 		};
 		const trackRecord = (record: string): void => {
-			if (!structuredInventory && /^\s*[[{]/.test(record)) {
+			const assignment = record.match(/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(.*)$/);
+			const structuredRecord = !structuredInventory && assignment ? assignment[1]! : record;
+			if (!structuredInventory && /^\s*[[{]/.test(structuredRecord)) {
 				assignmentRun = 0;
 				structuredInventory = true;
 			} else if (!structuredInventory) {
-				if (/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(record)) assignmentRun++;
+				if (assignment) assignmentRun++;
 				else if (record.trim()) assignmentRun = 0;
 				return;
 			}
-			for (const character of record) {
+			for (const character of structuredRecord) {
 				if (structureEscaped) {
 					structureEscaped = false;
 				} else if (structureQuote) {

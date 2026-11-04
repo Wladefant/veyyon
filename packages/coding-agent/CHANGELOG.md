@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Kernel stderr grouping classifies each completed record after sanitization, keeping control-prefixed assignment and structured inventories withheld across whitespace-only separators ([Refs #907](https://github.com/Wladefant/veyyon/issues/907)).
+- Kernel stderr grouping keeps normalized assignment records and their multiline map or array values together before sanitization ([Refs #907](https://github.com/Wladefant/veyyon/issues/907)).
 
 ## [1.7.7] - 2026-11-02
 
