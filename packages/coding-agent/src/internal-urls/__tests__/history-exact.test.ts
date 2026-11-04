@@ -342,7 +342,6 @@ describe("history exact record lookup", () => {
 				'{"type":"message"}',
 				'{"type":"message","id":42}',
 				'{"id":"new-tip"}',
-				'{"type":"session"}',
 				'{"type":"message","id":"invalid-parent-number","parentId":42}',
 				'{"type":"message","id":"invalid-parent-boolean","parentId":false}',
 				'{"type":"message","id":"invalid-parent-array","parentId":[]}',
@@ -654,6 +653,141 @@ describe("history exact record lookup", () => {
 			});
 			expect(search.status).toBe("unavailable");
 			expect(search.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it.each([
+		["repeated same session header", [{ type: "session", id: "s" }, { type: "session", id: "s" }]],
+		["repeated different session header", [{ type: "session", id: "s" }, { type: "session", id: "other" }]],
+		["entry before session header", [{ type: "message", id: "root", parentId: null, message: "forged needle" }, { type: "session", id: "s" }]],
+		["missing session header", [{ type: "message", id: "root", parentId: null, message: "forged needle" }]],
+	] as const)("rejects %s for implicit read and search", async (_name, records) => {
+		const dir = TempDir.createSync("@veyyon-history-header-shape-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const read = await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 });
+			expect(read.status).toBe("unavailable");
+			expect(read.fragment).toBeUndefined();
+			const search = await searchStoredHistoryEntries(file, { query: "forged needle", limit: 5 });
+			expect(search.status).toBe("unavailable");
+			expect(search.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it.each([
+		["repeated leading title", [{ type: "title", title: "first title" }, { type: "title", title: "second title" }, { type: "session", id: "s" }, { type: "message", id: "root", parentId: null, message: "trusted atlas" }]],
+		["late id-bearing title", [{ type: "session", id: "s" }, { type: "message", id: "root", parentId: null, message: "trusted atlas" }, { type: "title", id: "forged", title: "forged needle" }]],
+	] as const)("does not accept %s as a history header", async (_name, records) => {
+		const dir = TempDir.createSync("@veyyon-history-title-shape-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, records.map(record => typeof record === "string" ? record : JSON.stringify(record)).join("\n") + "\n");
+			const implicit = await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 });
+			expect(implicit.status).toBe("unavailable");
+			expect(implicit.fragment).toBeUndefined();
+			const implicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", limit: 5 });
+			expect(implicitSearch.status).toBe("unavailable");
+			expect(implicitSearch.matches).toEqual([]);
+			const explicit = await readStoredHistoryEntry(file, { entryId: "root", leafId: "root", offset: 0, limit: 256 });
+			expect(explicit.status).toBe("ok");
+			expect(explicit.fragment).toContain("trusted atlas");
+			const exactSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "root", limit: 5 });
+			expect(exactSearch.status).toBe("partial");
+			expect(exactSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+			const partialSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "root", limit: 5 });
+			expect(partialSearch.status).toBe("partial");
+			expect(partialSearch.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it.each([
+		["duplicate top-level id", '{"type":"message","id":"forged","parentId":null,"message":"forged needle","id":"forged"}'],
+		["duplicate top-level parentId", '{"type":"message","id":"forged","parentId":null,"parentId":null,"message":"forged needle"}'],
+		["duplicate top-level type", '{"type":"message","type":"message","id":"forged","parentId":null,"message":"forged needle"}'],
+		["escaped-equivalent top-level id", '{"type":"message","id":"forged","\\u0069d":"forged","parentId":null,"message":"forged needle"}'],
+		["escaped-equivalent top-level parentId", '{"type":"message","id":"forged","parentId":null,"parent\\u0049d":null,"message":"forged needle"}'],
+		["escaped-equivalent top-level type", '{"type":"message","\\u0074ype":"message","id":"forged","parentId":null,"message":"forged needle"}'],
+		["duplicate top-level id alongside nested message keys", '{"type":"message","id":"forged","id":"forged","parentId":null,"message":{"id":"safe","parentId":"nested","type":"message","content":[{"text":"forged needle"}]}}'],
+	] as const)("rejects %s without returning forged evidence", async (_name, invalid) => {
+		const dir = TempDir.createSync("@veyyon-history-duplicate-members-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const prefix = [
+				JSON.stringify({ type: "session", id: "s" }),
+				JSON.stringify({ type: "message", id: "root", parentId: null, message: "trusted atlas" }),
+			].join("\n") + "\n";
+			await fs.writeFile(file, prefix + invalid + "\n");
+			const implicit = await readStoredHistoryEntry(file, { entryId: "forged", offset: 0, limit: 256 });
+			expect(implicit.status).toBe("unavailable");
+			expect(implicit.fragment).toBeUndefined();
+			const explicit = await readStoredHistoryEntry(file, { entryId: "forged", leafId: "forged", offset: 0, limit: 256 });
+			expect(explicit.status).toBe("unavailable");
+			expect(explicit.fragment).toBeUndefined();
+			const implicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", limit: 5 });
+			expect(implicitSearch.status).toBe("unavailable");
+			expect(implicitSearch.matches).toEqual([]);
+			const explicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "forged", limit: 5 });
+			expect(explicitSearch.status).toBe("unavailable");
+			expect(explicitSearch.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it.each(["", "   "])("rejects blank session and entry IDs (%j), including valid child's ancestry", async blankId => {
+		const dir = TempDir.createSync("@veyyon-history-blank-id-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: blankId }),
+				JSON.stringify({ type: "message", id: blankId, parentId: null, message: "forged needle" }),
+				JSON.stringify({ type: "message", id: "child", parentId: blankId, message: "trusted atlas" }),
+			].join("\n") + "\n");
+			const implicit = await readStoredHistoryEntry(file, { entryId: "child", offset: 0, limit: 256 });
+			expect(implicit.status).toBe("unavailable");
+			expect(implicit.fragment).toBeUndefined();
+			const implicitSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", limit: 5 });
+			expect(implicitSearch.status).toBe("unavailable");
+			expect(implicitSearch.matches).toEqual([]);
+			const exact = await readStoredHistoryEntry(file, { entryId: "child", leafId: "child", offset: 0, limit: 256 });
+			expect(exact.status).toBe("unavailable");
+			expect(exact.fragment).toBeUndefined();
+			const explicitSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "child", limit: 5 });
+			expect(explicitSearch.status).toBe("unavailable");
+			expect(explicitSearch.matches).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("does not treat an absent explicit leaf after malformed suffix as a healthy archive", async () => {
+		const dir = TempDir.createSync("@veyyon-history-absent-leaf-tail-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s" }),
+				JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "trusted atlas" }),
+				'{"type":"message","id":bad}',
+			].join("\n") + "\n");
+			const missingRead = await readStoredHistoryEntry(file, { entryId: "absent", leafId: "absent", offset: 0, limit: 256 });
+			expect(missingRead.status).toBe("unavailable");
+			expect(missingRead.fragment).toBeUndefined();
+			const missingSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "absent", limit: 5 });
+			expect(missingSearch.status).toBe("unavailable");
+			expect(missingSearch.matches).toEqual([]);
+			const healthyRead = await readStoredHistoryEntry(file, { entryId: "healthy", leafId: "healthy", offset: 0, limit: 256 });
+			expect(healthyRead.status).toBe("ok");
+			expect(healthyRead.fragment).toContain("trusted atlas");
+			const healthySearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "healthy", limit: 5 });
+			expect(healthySearch.status).toBe("partial");
+			expect(healthySearch.matches.map(match => match.entryId)).toEqual(["healthy"]);
 		} finally {
 			await dir.remove();
 		}

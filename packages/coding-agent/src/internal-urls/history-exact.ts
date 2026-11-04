@@ -78,8 +78,80 @@ function isFileReadError(error: unknown): boolean {
 
 /** Both search passes and exact reads must agree on what is a stored entry. */
 type StoredEntryShape = { type?: unknown; id?: unknown; parentId?: unknown };
+type StoredAdmissionState = { sessionId?: string; headerSeen: boolean; entrySeen: boolean; titleSeen: boolean; invalidIdentity: boolean };
+type StoredRecordResult =
+	| { kind: "entry"; entry: StoredEntryShape }
+	| { kind: "metadata" }
+	| { kind: "invalid"; invalidIdentity: boolean };
+
+function hasDuplicateTopLevelKeys(raw: string): boolean {
+	const keys = new Set<string>();
+	let depth = 0;
+	for (let i = 0; i < raw.length;) {
+		const char = raw[i]!;
+		if (char === '"') {
+			const start = i++;
+			while (i < raw.length) {
+				if (raw[i] === "\\") { i += 2; continue; }
+				if (raw[i++] === '"') break;
+			}
+			if (depth === 1) {
+				let next = i;
+				while (/\s/.test(raw[next] ?? "")) next++;
+				if (raw[next] === ":") {
+					const key = JSON.parse(raw.slice(start, i)) as string;
+					if (keys.has(key)) return true;
+					keys.add(key);
+				}
+			}
+			continue;
+		}
+		if (char === "{") depth++;
+		else if (char === "}") depth--;
+		i++;
+	}
+	return false;
+}
+
+function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
+	try {
+		if (hasDuplicateTopLevelKeys(raw)) return { kind: "invalid", invalidIdentity: false };
+	} catch {
+		return { kind: "invalid", invalidIdentity: false };
+	}
+	let value: unknown;
+	try { value = JSON.parse(raw); } catch { return { kind: "invalid", invalidIdentity: false }; }
+	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
+	const entry = value as StoredEntryShape;
+	if (entry.type === "session") {
+		if (state.headerSeen || state.entrySeen) {
+			state.invalidIdentity = true;
+		} else if (typeof entry.id !== "string") {
+			return { kind: "invalid", invalidIdentity: false };
+		} else if (!entry.id.trim()) {
+			state.invalidIdentity = true;
+		} else {
+			state.headerSeen = true;
+			state.sessionId = entry.id;
+		}
+		return { kind: "metadata" };
+	}
+	if (entry.type === "title") {
+		if (state.titleSeen || state.headerSeen || state.entrySeen) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+		state.titleSeen = true;
+		return { kind: "metadata" };
+	}
+	if (!state.headerSeen) {
+		state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: true };
+	}
+	if (!isStoredEntry(entry)) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+	state.entrySeen = true;
+	return { kind: "entry", entry };
+}
+
 function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: string; parentId?: string | null } {
-	return typeof entry.id === "string" && typeof entry.type === "string"
+	return typeof entry.id === "string" && entry.id.trim().length > 0 && typeof entry.type === "string"
 		&& (entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string");
 }
 
@@ -215,6 +287,7 @@ export async function readStoredHistoryEntry(
 	request: ExactHistoryRequest,
 ): Promise<ExactHistoryResult> {
 	const parents = new Map<string, string | undefined>();
+	const admission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
 	let sessionId: string | undefined;
 	let lastId: string | undefined;
 	let raw: string | undefined;
@@ -236,25 +309,14 @@ export async function readStoredHistoryEntry(
 				continue;
 			}
 			startedJsonl = true;
-			let record: unknown;
-			try {
-				record = JSON.parse(line);
-			} catch {
+			const decoded = decodeStoredRecord(line, admission);
+			sessionId = admission.sessionId;
+			if (decoded.kind === "invalid") {
 				incomplete = true;
 				continue;
 			}
-			if (!record || typeof record !== "object" || Array.isArray(record)) {
-				incomplete = true;
-				continue;
-			}
-			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
-			// A fixed-width title slot can precede the session header. It is not an entry.
-			if (entry.type === "title" && !sessionId && !lastId) continue;
-			if (entry.type === "session") {
-				if (typeof entry.id === "string") sessionId = entry.id;
-				else incomplete = true;
-				continue;
-			}
+			if (decoded.kind === "metadata") continue;
+			const entry = decoded.entry;
 			if (!isStoredEntry(entry)) {
 				incomplete = true;
 				continue;
@@ -265,7 +327,7 @@ export async function readStoredHistoryEntry(
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
+			if (parents.size >= MAX_INDEX_ENTRIES) {
 				return { status: "unavailable", entryId: request.entryId, sessionId,
 					source: "stored-jsonl", detail: HARD_BOUND_DETAIL };
 			}
@@ -282,6 +344,10 @@ export async function readStoredHistoryEntry(
 			status: "unavailable", entryId: request.entryId, source: "stored-jsonl",
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
+	}
+	if (!admission.headerSeen || admission.invalidIdentity) {
+		return { status: "unavailable", entryId: request.entryId, sessionId, source: "stored-jsonl",
+			detail: "Stored session identity is missing or ambiguous" };
 	}
 	// An unreadable record may be the real tip rather than the last readable sibling.
 	if (request.leafId === undefined && incomplete) {
@@ -398,6 +464,7 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
+	const admission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
@@ -420,25 +487,14 @@ export async function searchStoredHistoryEntries(
 				continue;
 			}
 			startedJsonl = true;
-			let record: unknown;
-			try {
-				record = JSON.parse(line);
-			} catch {
+			const decoded = decodeStoredRecord(line, admission);
+			sessionId = admission.sessionId;
+			if (decoded.kind === "invalid") {
 				unreadable = true;
 				continue;
 			}
-			if (!record || typeof record !== "object" || Array.isArray(record)) {
-				unreadable = true;
-				continue;
-			}
-			const entry = record as { type?: unknown; id?: unknown; parentId?: unknown };
-			// A fixed-width title slot can precede the session header. It is not an entry.
-			if (entry.type === "title" && !sessionId && !lastId) continue;
-			if (entry.type === "session") {
-				if (typeof entry.id === "string") sessionId = entry.id;
-				else unreadable = true;
-				continue;
-			}
+			if (decoded.kind === "metadata") continue;
+			const entry = decoded.entry;
 			if (!isStoredEntry(entry)) {
 				unreadable = true;
 				continue;
@@ -449,7 +505,7 @@ export async function searchStoredHistoryEntries(
 					matches: [], detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES && !parents.has(entry.id)) {
+			if (parents.size >= MAX_INDEX_ENTRIES) {
 				return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
 					matches: [], detail: HARD_BOUND_DETAIL };
 			}
@@ -463,6 +519,10 @@ export async function searchStoredHistoryEntries(
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
+	if (!admission.headerSeen || admission.invalidIdentity) {
+		return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl", matches: [],
+			detail: "Stored session identity is missing or ambiguous" };
+	}
 	// An unreadable record may be the real tip rather than the last readable sibling.
 	if (request.leafId === undefined && unreadable) {
 		return {
@@ -474,9 +534,9 @@ export async function searchStoredHistoryEntries(
 	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
 	if (!leafId || !parents.has(leafId)) {
 		return {
-			status: "missing_branch", sessionId, leafId, query: request.query,
+			status: unreadable ? "unavailable" : "missing_branch", sessionId, leafId, query: request.query,
 			source: "stored-jsonl", matches: [],
-			detail: "Requested session branch was not found",
+			detail: unreadable ? "Cannot verify the requested branch after unreadable records" : "Requested session branch was not found",
 		};
 	}
 	// Select the lineage before enforcing the candidate cap. Otherwise
@@ -492,8 +552,7 @@ export async function searchStoredHistoryEntries(
 	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	let truncated = false;
 	const matchesHash = createHash("sha256");
-	let replaySessionId: string | undefined;
-	let replayLastId: string | undefined;
+	const replayAdmission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
@@ -502,23 +561,10 @@ export async function searchStoredHistoryEntries(
 			}
 			matchesHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined || !line.trimStart().startsWith("{")) continue;
-			let record: unknown;
-			try {
-				record = JSON.parse(line);
-			} catch {
-				continue;
-			}
-			if (!record || typeof record !== "object" || Array.isArray(record)) continue;
-			const entry = record as StoredEntryShape;
-			// Metadata and malformed records rejected by the lineage scan cannot
-			// masquerade as an indexed entry just because they reuse its ID.
-			if (entry.type === "title" && !replaySessionId && !replayLastId) continue;
-			if (entry.type === "session") {
-				if (typeof entry.id === "string") replaySessionId = entry.id;
-				continue;
-			}
+			const decoded = decodeStoredRecord(line, replayAdmission);
+			if (decoded.kind !== "entry") continue;
+			const entry = decoded.entry;
 			if (!isStoredEntry(entry)) continue;
-			replayLastId = entry.id;
 			if (!selectedIds.has(entry.id) || !line.toLowerCase().includes(query)) continue;
 			if (candidates.length >= MAX_CANDIDATE_MATCHES) {
 				candidates.shift();

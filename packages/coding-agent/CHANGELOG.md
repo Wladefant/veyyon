@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- Refuse implicit history-branch selection after a structurally invalid stored JSONL entry (Refs #774).
+### Fixed
+
+- Refuse stored history with ambiguous session headers, misplaced titles, duplicate members, blank IDs, or an unverifiable leaf after malformed entries ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.7.0] - 2026-10-31
 
