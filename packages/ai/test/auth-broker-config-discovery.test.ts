@@ -112,10 +112,11 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			await expect(resolveAuthBrokerConfig({ agentDir })).resolves.toBeNull();
 		});
 	});
+
 	test("treats an empty env-backed broker URL as unset", async () => {
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			"auth.broker.url: EMPTY_BROKER_URL\\nauth.broker.token: unused-token\\n",
+			"auth.broker.url: EMPTY_BROKER_URL\nauth.broker.token: unused-token\n",
 		);
 
 		await withEnv({ ...suppressEnv, EMPTY_BROKER_URL: "" }, async () => {
@@ -126,10 +127,10 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	test("falls back to the isolated token file when an env-backed config token is empty", async () => {
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			"auth.broker.url: https://profile-broker.example/v1\\nauth.broker.token: EMPTY_BROKER_TOKEN\\n",
+			"auth.broker.url: https://profile-broker.example/v1\nauth.broker.token: EMPTY_BROKER_TOKEN\n",
 		);
 		await fs.mkdir(configRoot, { recursive: true });
-		await Bun.write(path.join(configRoot, "auth-broker.token"), "synthetic-broker-token\\n");
+		await Bun.write(path.join(configRoot, "auth-broker.token"), "synthetic-broker-token\n");
 
 		await withEnv({ ...suppressEnv, EMPTY_BROKER_TOKEN: "" }, async () => {
 			await expect(resolveAuthBrokerConfig({ agentDir })).resolves.toEqual({
@@ -142,7 +143,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	test("non-empty env-backed values still override config literals", async () => {
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			"auth.broker.url: BROKER_URL_FROM_ENV\\nauth.broker.token: BROKER_TOKEN_FROM_ENV\\n",
+			"auth.broker.url: BROKER_URL_FROM_ENV\nauth.broker.token: BROKER_TOKEN_FROM_ENV\n",
 		);
 
 		await withEnv({
