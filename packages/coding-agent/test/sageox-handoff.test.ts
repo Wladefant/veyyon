@@ -113,7 +113,7 @@ function fixture(wsl = false) {
 			if (args[0] === "import") {
 				if (windows) {
 					expect(args.at(-1)).toBe("/mnt/c/with spaces/approved-context.json");
-					expect(args[args.indexOf("--text") + 1]).toBe(args.at(-1));
+					expect(args[args.indexOf("--text") + 1]).toBe("/mnt/c/with spaces/approved-context.json");
 				} else state.path = args.at(-1)!;
 				expect((await stat(state.path)).mode & 0o077).toBe(0);
 				state.imported = await readFile(state.path, "utf8");
