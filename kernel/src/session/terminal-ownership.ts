@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { errorMessage, getConfigRootDir, logger, type OwnerOnlyReadOptions, readOwnerOnlyFiles, WINDOWS_ACL_TIMEOUT_MS } from "@veyyon/utils";
+import { getConfigRootDir, getWindowsAclTimeoutMs, type OwnerOnlyReadOptions, readOwnerOnlyFile } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -21,18 +21,28 @@ async function isEndpointServing(endpoint: string): Promise<boolean> {
 	});
 }
 
-/** Only ESRCH for the publisher PID proves that an unverifiable claim is obsolete. */
-function isDeadTerminalRecord(filePath: string): boolean {
-	const match = /^([1-9]\d*)-[^.]+\.json$/.exec(path.basename(filePath));
-	if (!match) return false;
-	const pid = Number(match[1]);
+/** Recover only claims whose publisher identity independently proves there is no writer. */
+async function isAbsentPublisher(file: string, directory: string): Promise<boolean> {
+	const publisher = /^([1-9]\d*)-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/.exec(
+		file,
+	);
+	if (!publisher) return false;
+	const pid = Number(publisher[1]);
 	if (!Number.isSafeInteger(pid)) return false;
 	try {
 		process.kill(pid, 0);
 	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "ESRCH";
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
 	}
-	return false;
+	const endpoint =
+		process.platform === "win32"
+			? `\\\\.\\pipe\\veyyon-terminal-${publisher[2]}`
+			: path.join(directory, `${publisher[2]}.sock`);
+	try {
+		return !(await isEndpointServing(endpoint));
+	} catch {
+		return false;
+	}
 }
 
 /** Live terminal discovery is an ownership claim, never permission to open another writer. */
@@ -51,56 +61,30 @@ export async function assertNotTerminalOwned(
 	}
 	const resolved = path.resolve(sessionFile);
 	const target = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	const recordPaths = files.filter(file => file.endsWith(".json")).map(file => path.join(directory, file));
-	let records: string[];
-	const record = recordPaths.join(", ");
-	const started = performance.now();
-	let step = "open";
-	try {
-		records = await readOwnerOnlyFiles(
-			recordPaths,
-			untrusted => {
-				try {
-					const claim: { sessionFile?: unknown } | null = JSON.parse(untrusted);
-					if (typeof claim?.sessionFile !== "string") return true;
-					const candidate = path.resolve(claim.sessionFile);
-					return (process.platform === "win32" ? candidate.toLowerCase() : candidate) === target;
-				} catch {
-					return true;
-				}
-			},
-			{
-				...options,
-				isRecordObsolete: isDeadTerminalRecord,
-				onStep: current => { step = current; options.onStep?.(current); },
-			},
-		);
-	} catch (error) {
-		logger.warn("Cannot establish terminal writer ownership", { path: directory, reason: errorMessage(error) });
-		let diagnostic = error;
-		for (let depth = 0; depth < 16 && diagnostic instanceof Error; depth++) {
-			if (typeof (diagnostic as NodeJS.ErrnoException).code === "string" || !diagnostic.cause) break;
-			diagnostic = diagnostic.cause;
-		}
-		const code = (diagnostic as NodeJS.ErrnoException)?.code ?? (diagnostic instanceof Error ? diagnostic.name : "unknown");
-		const detail = errorMessage(error);
-		throw new Error(
-			`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${detail}`,
-			{ cause: error },
-		);
-	}
-	for (const record of records) {
+	for (const file of files) {
+		if (!file.endsWith(".json")) continue;
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
+		const record = path.join(directory, file);
+		const started = performance.now();
+		let step = "open";
+		// Unreadable claims remain fail-closed unless the publisher PID or endpoint proves absence.
 		try {
-			owner = JSON.parse(record);
-		} catch (error) {
-			logger.warn("Cannot establish terminal writer ownership", {
-				path: directory,
-				reason: "Invalid discovery JSON",
+			const contents = await readOwnerOnlyFile(record, {
+				...options,
+				onStep: current => {
+					step = current;
+					options.onStep?.(current);
+				},
 			});
-			const code = error instanceof Error ? error.name : "unknown";
+			step = "parse";
+			owner = JSON.parse(contents);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			if (await isAbsentPublisher(file, directory)) continue;
+			const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "unknown");
+			const detail = error instanceof Error ? error.message : String(error);
 			throw new Error(
-				`Cannot establish terminal writer ownership: ${recordPaths.join(", ")}; step=parse; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${WINDOWS_ACL_TIMEOUT_MS}ms per command; ${errorMessage(error)}`,
+				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${getWindowsAclTimeoutMs()}ms per command; ${detail}`,
 				{ cause: error },
 			);
 		}

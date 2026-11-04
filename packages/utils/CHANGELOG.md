@@ -7,6 +7,11 @@
 ### Added
 
 - Discovery readers check sibling records with one parent ACL check, at most 32 open files per batch, bounded descriptor reads, and three verification attempts before failure ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+## [1.7.9] - 2026-11-04
+
+### Fixed
+
+- Allow Windows ACL commands 60 seconds by default. Accept `VEYYON_WINDOWS_ACL_TIMEOUT_MS` as an integer from 1 to 2147483647 milliseconds; ignore invalid values. Keep every owner, reparse-point, inheritance and DACL check ([Refs #849](https://github.com/Wladefant/veyyon/issues/849)).
 
 ## [1.7.2] - 2026-11-01
 
