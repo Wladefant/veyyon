@@ -1470,6 +1470,49 @@ describe("ACP agent", () => {
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
+	// WHY: copied transcripts can retain an ID in another project bucket. Neither
+	// load nor unloaded fork may pick a history by recency or mutate either copy.
+	for (const operation of ["load", "fork"] as const) {
+		for (const newerProject of ["first", "second"] as const) {
+			it(`rejects ambiguous stored IDs during ${operation} with the ${newerProject} project newer`, async () => {
+				const harness = await createHarness();
+				const first = new FakeAgentSession(harness.cwdA);
+				const second = new FakeAgentSession(harness.cwdB);
+				harness.sessions.push(first, second);
+				first.sessionManager.appendMessage({ role: "user", content: "FIRST-HISTORY", timestamp: Date.now() });
+				second.sessionManager.appendMessage({ role: "user", content: "SECOND-HISTORY", timestamp: Date.now() });
+				await first.sessionManager.ensureOnDisk();
+				await second.sessionManager.ensureOnDisk();
+				await first.sessionManager.close();
+				await second.sessionManager.close();
+				const firstPath = first.sessionManager.getSessionFile()!;
+				const secondPath = second.sessionManager.getSessionFile()!;
+				const firstBytes = fs.readFileSync(firstPath, "utf8");
+				const secondBytes = fs.readFileSync(secondPath, "utf8").replace(second.sessionId, first.sessionId);
+				fs.writeFileSync(secondPath, secondBytes);
+				const older = new Date("2025-01-01T00:00:00Z");
+				const newer = new Date("2025-01-02T00:00:00Z");
+				fs.utimesSync(firstPath, older, newerProject === "first" ? newer : older);
+				fs.utimesSync(secondPath, older, newerProject === "second" ? newer : older);
+				const storedBefore = (await SessionManager.listAll()).map(session => session.path).sort();
+				const updatesBefore = harness.updates.length;
+				try {
+					const request = { sessionId: first.sessionId, cwd: harness.cwdB, mcpServers: [] };
+					await expect(
+						operation === "load" ? harness.agent.loadSession(request) : harness.agent.unstable_forkSession(request),
+					).rejects.toThrow("ACP session ID is ambiguous");
+					expect(harness.sessions).toHaveLength(2);
+					expect(harness.updates).toHaveLength(updatesBefore);
+					expect(fs.readFileSync(firstPath, "utf8")).toBe(firstBytes);
+					expect(fs.readFileSync(secondPath, "utf8")).toBe(secondBytes);
+					expect((await SessionManager.listAll()).map(session => session.path).sort()).toEqual(storedBefore);
+				} finally {
+					harness.abortController.abort();
+				}
+			});
+		}
+	}
+
 	it("loads a stored session by ID when the client cwd has changed", async () => {
 		const harness = await createHarness();
 		const stored = new FakeAgentSession(harness.cwdA);
