@@ -18,7 +18,8 @@ const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
 const SCAN_BOUND_EXCEEDED = Symbol("stored-history-scan-bound");
-const HARD_BOUND_DETAIL = "Stored history exceeded the 128 MiB or 100,000-entry scan bound; branch identity and unique record IDs cannot be verified";
+const HARD_BOUND_DETAIL =
+	"Stored history exceeded the 128 MiB or 100,000-entry scan bound; branch identity and unique record IDs cannot be verified";
 const DUPLICATE_ID_DETAIL = "Duplicate stored entry ID makes branch identity and exact evidence ambiguous";
 
 function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
@@ -78,7 +79,13 @@ function isFileReadError(error: unknown): boolean {
 
 /** Both search passes and exact reads must agree on what is a stored entry. */
 type StoredEntryShape = { type?: unknown; id?: unknown; parentId?: unknown };
-type StoredAdmissionState = { sessionId?: string; headerSeen: boolean; entrySeen: boolean; titleSeen: boolean; invalidIdentity: boolean };
+type StoredAdmissionState = {
+	sessionId?: string;
+	headerSeen: boolean;
+	entrySeen: boolean;
+	titleSeen: boolean;
+	invalidIdentity: boolean;
+};
 type StoredRecordResult =
 	| { kind: "entry"; entry: StoredEntryShape }
 	| { kind: "metadata" }
@@ -87,12 +94,15 @@ type StoredRecordResult =
 function hasDuplicateTopLevelKeys(raw: string): boolean {
 	const keys = new Set<string>();
 	let depth = 0;
-	for (let i = 0; i < raw.length;) {
+	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
 			const start = i++;
 			while (i < raw.length) {
-				if (raw[i] === "\\") { i += 2; continue; }
+				if (raw[i] === "\\") {
+					i += 2;
+					continue;
+				}
 				if (raw[i++] === '"') break;
 			}
 			if (depth === 1) {
@@ -120,7 +130,11 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		return { kind: "invalid", invalidIdentity: false };
 	}
 	let value: unknown;
-	try { value = JSON.parse(raw); } catch { return { kind: "invalid", invalidIdentity: false }; }
+	try {
+		value = JSON.parse(raw);
+	} catch {
+		return { kind: "invalid", invalidIdentity: false };
+	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
@@ -137,7 +151,8 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		return { kind: "metadata" };
 	}
 	if (entry.type === "title") {
-		if (state.titleSeen || state.headerSeen || state.entrySeen) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+		if (state.titleSeen || state.headerSeen || state.entrySeen)
+			return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 		state.titleSeen = true;
 		return { kind: "metadata" };
 	}
@@ -151,8 +166,12 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 }
 
 function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: string; parentId?: string | null } {
-	return typeof entry.id === "string" && entry.id.trim().length > 0 && typeof entry.type === "string"
-		&& (entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string");
+	return (
+		typeof entry.id === "string" &&
+		entry.id.trim().length > 0 &&
+		typeof entry.type === "string" &&
+		(entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string")
+	);
 }
 
 export interface ExactHistoryRequest {
@@ -220,8 +239,15 @@ function recordDigest(raw: string): string {
 	return createHash("sha256").update(raw, "utf8").digest("hex");
 }
 
-function recordRevision(digest: string, source: ExactHistoryResult["source"], leafId: string, sessionId?: string): string {
-	return createHash("sha256").update(JSON.stringify([1, source, sessionId ?? null, leafId, digest])).digest("hex");
+function recordRevision(
+	digest: string,
+	source: ExactHistoryResult["source"],
+	leafId: string,
+	sessionId?: string,
+): string {
+	return createHash("sha256")
+		.update(JSON.stringify([1, source, sessionId ?? null, leafId, digest]))
+		.digest("hex");
 }
 
 function page(
@@ -238,7 +264,12 @@ function page(
 	const revision = recordRevision(recordDigest(raw), source, leafId, sessionId);
 	if (request.revision !== undefined && request.revision !== revision) {
 		return {
-			status: "stale", entryId: request.entryId, leafId, sessionId, source, revision,
+			status: "stale",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source,
+			revision,
 			detail: "Record or selected branch changed; restart the read at offset zero",
 		};
 	}
@@ -252,14 +283,26 @@ function page(
 	}
 	if (request.offset > totalCharacters) {
 		return {
-			status: "missing", entryId: request.entryId, leafId, sessionId, source,
+			status: "missing",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source,
 			detail: "Page offset is beyond the end of this saved record",
 		};
 	}
 	const next = Math.min(totalCharacters, request.offset + request.limit);
 	return {
-		status: "ok", entryId: request.entryId, leafId, sessionId, source, recordType, revision,
-		offset: request.offset, totalCharacters, fragment,
+		status: "ok",
+		entryId: request.entryId,
+		leafId,
+		sessionId,
+		source,
+		recordType,
+		revision,
+		offset: request.offset,
+		totalCharacters,
+		fragment,
 		nextOffset: next < totalCharacters ? next : null,
 		detail: "Exact saved record text; historic pruning and external blob references are not reversed",
 	};
@@ -287,7 +330,12 @@ export async function readStoredHistoryEntry(
 	request: ExactHistoryRequest,
 ): Promise<ExactHistoryResult> {
 	const parents = new Map<string, string | undefined>();
-	const admission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
+	const admission: StoredAdmissionState = {
+		headerSeen: false,
+		entrySeen: false,
+		titleSeen: false,
+		invalidIdentity: false,
+	};
 	let sessionId: string | undefined;
 	let lastId: string | undefined;
 	let raw: string | undefined;
@@ -297,8 +345,13 @@ export async function readStoredHistoryEntry(
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
-				return { status: "unavailable", entryId: request.entryId, sessionId,
-					source: "stored-jsonl", detail: HARD_BOUND_DETAIL };
+				return {
+					status: "unavailable",
+					entryId: request.entryId,
+					sessionId,
+					source: "stored-jsonl",
+					detail: HARD_BOUND_DETAIL,
+				};
 			}
 			if (line === undefined) {
 				incomplete = true;
@@ -323,13 +376,21 @@ export async function readStoredHistoryEntry(
 			}
 			if (parents.has(entry.id)) {
 				return {
-					status: "unavailable", entryId: request.entryId, sessionId, source: "stored-jsonl",
+					status: "unavailable",
+					entryId: request.entryId,
+					sessionId,
+					source: "stored-jsonl",
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
 			if (parents.size >= MAX_INDEX_ENTRIES) {
-				return { status: "unavailable", entryId: request.entryId, sessionId,
-					source: "stored-jsonl", detail: HARD_BOUND_DETAIL };
+				return {
+					status: "unavailable",
+					entryId: request.entryId,
+					sessionId,
+					source: "stored-jsonl",
+					detail: HARD_BOUND_DETAIL,
+				};
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
@@ -341,44 +402,66 @@ export async function readStoredHistoryEntry(
 	} catch (error) {
 		if (!isFileReadError(error)) throw error;
 		return {
-			status: "unavailable", entryId: request.entryId, source: "stored-jsonl",
+			status: "unavailable",
+			entryId: request.entryId,
+			source: "stored-jsonl",
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
 	if (!admission.headerSeen || admission.invalidIdentity) {
-		return { status: "unavailable", entryId: request.entryId, sessionId, source: "stored-jsonl",
-			detail: "Stored session identity is missing or ambiguous" };
+		return {
+			status: "unavailable",
+			entryId: request.entryId,
+			sessionId,
+			source: "stored-jsonl",
+			detail: "Stored session identity is missing or ambiguous",
+		};
 	}
 	// An unreadable record may be the real tip rather than the last readable sibling.
 	if (request.leafId === undefined && incomplete) {
 		return {
-			status: "unavailable", entryId: request.entryId, sessionId,
+			status: "unavailable",
+			entryId: request.entryId,
+			sessionId,
 			source: "stored-jsonl",
-			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch reads",
+			detail:
+				"Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch reads",
 		};
 	}
-	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
+	const leafId = request.leafId === null ? undefined : (request.leafId ?? lastId);
 	const selectedIds = leafId && parents.has(leafId) ? selectedBranchIds(parents, leafId) : undefined;
 	if (leafId && parents.has(leafId) && !selectedIds) {
 		return {
-			status: "unavailable", entryId: request.entryId, leafId, sessionId, source: "stored-jsonl",
+			status: "unavailable",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "stored-jsonl",
 			detail: "Selected branch has cyclic parent links; exact history is ambiguous",
 		};
 	}
 	if (!raw || !recordType || !leafId || !parents.has(leafId)) {
 		return {
-			status: request.revision ? "stale" : incomplete ? "unavailable" : "missing", entryId: request.entryId, leafId,
-			sessionId, source: "stored-jsonl",
-			detail: incomplete ? "Malformed/oversized records or the 128 MiB/100,000-entry scan bound prevents a reliable negative lookup" :
-				"No stored record or requested branch leaf was found",
+			status: request.revision ? "stale" : incomplete ? "unavailable" : "missing",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "stored-jsonl",
+			detail: incomplete
+				? "Malformed/oversized records or the 128 MiB/100,000-entry scan bound prevents a reliable negative lookup"
+				: "No stored record or requested branch leaf was found",
 		};
 	}
 	if (!selectedIds!.has(request.entryId)) {
 		return {
-			status: incomplete ? "unavailable" : "not_on_branch", entryId: request.entryId,
-			leafId, sessionId, source: "stored-jsonl",
-			detail: incomplete ? "A record could not be inspected to verify branch membership" :
-				"Record exists, but is not an ancestor of the selected branch leaf",
+			status: incomplete ? "unavailable" : "not_on_branch",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "stored-jsonl",
+			detail: incomplete
+				? "A record could not be inspected to verify branch membership"
+				: "Record exists, but is not an ancestor of the selected branch leaf",
 		};
 	}
 	return page(raw, request, leafId, "stored-jsonl", recordType, sessionId);
@@ -390,20 +473,31 @@ export function readLiveHistoryEntry(
 	request: ExactHistoryRequest,
 	sessionId?: string,
 ): ExactHistoryResult {
-	const leafIndex = request.leafId === null ? -1 : request.leafId
-		? branch.findIndex(entry => entry.id === request.leafId)
-		: branch.length - 1;
-	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : request.leafId ?? undefined;
+	const leafIndex =
+		request.leafId === null
+			? -1
+			: request.leafId
+				? branch.findIndex(entry => entry.id === request.leafId)
+				: branch.length - 1;
+	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : (request.leafId ?? undefined);
 	const index = branch.findIndex(entry => entry.id === request.entryId);
 	if (index < 0 || leafIndex < 0) {
 		return {
-			status: request.revision ? "stale" : "missing", entryId: request.entryId, leafId, sessionId, source: "live-session",
+			status: request.revision ? "stale" : "missing",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "live-session",
 			detail: "Entry or branch leaf not present in the active in-memory branch",
 		};
 	}
 	if (index > leafIndex) {
 		return {
-			status: "not_on_branch", entryId: request.entryId, leafId, sessionId, source: "live-session",
+			status: "not_on_branch",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "live-session",
 			detail: "Entry is newer than the selected branch leaf",
 		};
 	}
@@ -464,7 +558,12 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
-	const admission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
+	const admission: StoredAdmissionState = {
+		headerSeen: false,
+		entrySeen: false,
+		titleSeen: false,
+		invalidIdentity: false,
+	};
 	const query = request.query.toLowerCase();
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
@@ -474,8 +573,14 @@ export async function searchStoredHistoryEntries(
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
-				return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
-					matches: [], detail: HARD_BOUND_DETAIL };
+				return {
+					status: "unavailable",
+					sessionId,
+					query: request.query,
+					source: "stored-jsonl",
+					matches: [],
+					detail: HARD_BOUND_DETAIL,
+				};
 			}
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
@@ -501,13 +606,23 @@ export async function searchStoredHistoryEntries(
 			}
 			if (parents.has(entry.id)) {
 				return {
-					status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
-					matches: [], detail: DUPLICATE_ID_DETAIL,
+					status: "unavailable",
+					sessionId,
+					query: request.query,
+					source: "stored-jsonl",
+					matches: [],
+					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
 			if (parents.size >= MAX_INDEX_ENTRIES) {
-				return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl",
-					matches: [], detail: HARD_BOUND_DETAIL };
+				return {
+					status: "unavailable",
+					sessionId,
+					query: request.query,
+					source: "stored-jsonl",
+					matches: [],
+					detail: HARD_BOUND_DETAIL,
+				};
 			}
 			parents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : undefined);
 			lastId = entry.id;
@@ -515,28 +630,47 @@ export async function searchStoredHistoryEntries(
 	} catch (error) {
 		if (!isFileReadError(error)) throw error;
 		return {
-			status: "unavailable", query: request.query, source: "stored-jsonl", matches: [],
+			status: "unavailable",
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
 	if (!admission.headerSeen || admission.invalidIdentity) {
-		return { status: "unavailable", sessionId, query: request.query, source: "stored-jsonl", matches: [],
-			detail: "Stored session identity is missing or ambiguous" };
+		return {
+			status: "unavailable",
+			sessionId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
+			detail: "Stored session identity is missing or ambiguous",
+		};
 	}
 	// An unreadable record may be the real tip rather than the last readable sibling.
 	if (request.leafId === undefined && unreadable) {
 		return {
-			status: "unavailable", sessionId, query: request.query,
-			source: "stored-jsonl", matches: [],
-			detail: "Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch search",
+			status: "unavailable",
+			sessionId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
+			detail:
+				"Cannot select a default branch after unreadable/oversized stored records; provide leaf= for intentional archived-branch search",
 		};
 	}
-	const leafId = request.leafId === null ? undefined : request.leafId ?? lastId;
+	const leafId = request.leafId === null ? undefined : (request.leafId ?? lastId);
 	if (!leafId || !parents.has(leafId)) {
 		return {
-			status: unreadable ? "unavailable" : "missing_branch", sessionId, leafId, query: request.query,
-			source: "stored-jsonl", matches: [],
-			detail: unreadable ? "Cannot verify the requested branch after unreadable records" : "Requested session branch was not found",
+			status: unreadable ? "unavailable" : "missing_branch",
+			sessionId,
+			leafId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
+			detail: unreadable
+				? "Cannot verify the requested branch after unreadable records"
+				: "Requested session branch was not found",
 		};
 	}
 	// Select the lineage before enforcing the candidate cap. Otherwise
@@ -544,20 +678,36 @@ export async function searchStoredHistoryEntries(
 	const selectedIds = selectedBranchIds(parents, leafId);
 	if (!selectedIds) {
 		return {
-			status: "unavailable", sessionId, leafId, query: request.query,
-			source: "stored-jsonl", matches: [],
+			status: "unavailable",
+			sessionId,
+			leafId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
 			detail: "Selected branch has cyclic parent links; search ancestry is ambiguous",
 		};
 	}
 	const candidates: Array<{ entryId: string; recordType: string; preview: string; digest: string }> = [];
 	let truncated = false;
 	const matchesHash = createHash("sha256");
-	const replayAdmission: StoredAdmissionState = { headerSeen: false, entrySeen: false, titleSeen: false, invalidIdentity: false };
+	const replayAdmission: StoredAdmissionState = {
+		headerSeen: false,
+		entrySeen: false,
+		titleSeen: false,
+		invalidIdentity: false,
+	};
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
-				return { status: "unavailable", sessionId, leafId, query: request.query, source: "stored-jsonl",
-					matches: [], detail: HARD_BOUND_DETAIL };
+				return {
+					status: "unavailable",
+					sessionId,
+					leafId,
+					query: request.query,
+					source: "stored-jsonl",
+					matches: [],
+					detail: HARD_BOUND_DETAIL,
+				};
 			}
 			matchesHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined || !line.trimStart().startsWith("{")) continue;
@@ -571,14 +721,21 @@ export async function searchStoredHistoryEntries(
 				truncated = true;
 			}
 			candidates.push({
-				entryId: entry.id, recordType: entry.type, preview: previewAt(line, query), digest: recordDigest(line),
+				entryId: entry.id,
+				recordType: entry.type,
+				preview: previewAt(line, query),
+				digest: recordDigest(line),
 			});
 		}
 	} catch (error) {
 		if (!isFileReadError(error)) throw error;
 		return {
-			status: "unavailable", sessionId, leafId, query: request.query,
-			source: "stored-jsonl", matches: [],
+			status: "unavailable",
+			sessionId,
+			leafId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
 			detail: "Stored session file could not be read; this is not a negative evidence lookup",
 		};
 	}
@@ -586,19 +743,33 @@ export async function searchStoredHistoryEntries(
 	// A second pass must not combine newer text with an older branch graph.
 	if (topologyHash.digest("hex") !== matchesHash.digest("hex")) {
 		return {
-			status: "unavailable", sessionId, leafId, query: request.query,
-			source: "stored-jsonl", matches: [],
+			status: "unavailable",
+			sessionId,
+			leafId,
+			query: request.query,
+			source: "stored-jsonl",
+			matches: [],
 			detail: "Stored session changed during search; retry to select a consistent branch",
 		};
 	}
-	const matches = candidates.reverse().slice(0, request.limit)
-		.map(({ digest, ...match }) => ({ ...match, revision: recordRevision(digest, "stored-jsonl", leafId, sessionId) }));
+	const matches = candidates
+		.reverse()
+		.slice(0, request.limit)
+		.map(({ digest, ...match }) => ({
+			...match,
+			revision: recordRevision(digest, "stored-jsonl", leafId, sessionId),
+		}));
 	return {
-		status: unreadable || truncated ? "partial" : "ok", sessionId, leafId, query: request.query,
-		source: "stored-jsonl", matches,
-		detail: unreadable || truncated
-			? "Not exhaustive: malformed/oversized records or more than 500 selected-branch candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
-			: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
+		status: unreadable || truncated ? "partial" : "ok",
+		sessionId,
+		leafId,
+		query: request.query,
+		source: "stored-jsonl",
+		matches,
+		detail:
+			unreadable || truncated
+				? "Not exhaustive: malformed/oversized records or more than 500 selected-branch candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
+				: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
 }
 
@@ -608,14 +779,22 @@ export function searchLiveHistoryEntries(
 	request: HistorySearchRequest,
 	sessionId?: string,
 ): HistorySearchResult {
-	const leafIndex = request.leafId === null ? -1 : request.leafId
-		? branch.findIndex(entry => entry.id === request.leafId)
-		: branch.length - 1;
+	const leafIndex =
+		request.leafId === null
+			? -1
+			: request.leafId
+				? branch.findIndex(entry => entry.id === request.leafId)
+				: branch.length - 1;
 	const leafId = branch[leafIndex]?.id ?? request.leafId ?? undefined;
 	if (leafIndex < 0) {
 		return {
-			status: "missing_branch", leafId, sessionId, query: request.query, source: "live-session",
-			matches: [], detail: "Requested leaf is not in the active in-memory branch",
+			status: "missing_branch",
+			leafId,
+			sessionId,
+			query: request.query,
+			source: "live-session",
+			matches: [],
+			detail: "Requested leaf is not in the active in-memory branch",
 		};
 	}
 	const query = request.query.toLowerCase();
@@ -625,13 +804,19 @@ export function searchLiveHistoryEntries(
 		const raw = JSON.stringify(entry);
 		if (!raw.toLowerCase().includes(query)) continue;
 		matches.push({
-			entryId: entry.id, recordType: entry.type, preview: previewAt(raw, query),
+			entryId: entry.id,
+			recordType: entry.type,
+			preview: previewAt(raw, query),
 			revision: recordRevision(recordDigest(raw), "live-session", leafId!, sessionId),
 		});
 	}
 	return {
-		status: "ok", leafId, sessionId, query: request.query, source: "live-session", matches,
+		status: "ok",
+		leafId,
+		sessionId,
+		query: request.query,
+		source: "live-session",
+		matches,
 		detail: "Bounded newest-first matches in the active in-memory branch",
 	};
 }
-

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@veyyon/utils";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { TempDir } from "@veyyon/utils";
 import {
 	parseExactHistoryRequest,
+	parseHistorySearchRequest,
 	readLiveHistoryEntry,
 	readStoredHistoryEntry,
-	parseHistorySearchRequest,
 	searchStoredHistoryEntries,
 } from "../history-exact";
 
@@ -33,13 +33,23 @@ describe("history exact record lookup", () => {
 			expect(Array.from(first.fragment ?? "").length).toBeLessThanOrEqual(17);
 			const nextOffset = first.nextOffset;
 			if (nextOffset === null || nextOffset === undefined) throw new Error("Expected another page");
-			const second = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset: nextOffset });
+			const second = await readStoredHistoryEntry(file, {
+				...query!,
+				leafId: first.leafId,
+				revision: first.revision,
+				offset: nextOffset,
+			});
 			expect(second.offset).toBe(nextOffset);
 			const whole = JSON.stringify(records[3]);
 			const parts: string[] = [];
 			let offset = 0;
 			while (true) {
-				const read = await readStoredHistoryEntry(file, { ...query!, leafId: first.leafId, revision: first.revision, offset });
+				const read = await readStoredHistoryEntry(file, {
+					...query!,
+					leafId: first.leafId,
+					revision: first.revision,
+					offset,
+				});
 				expect(read.status).toBe("ok");
 				parts.push(read.fragment!);
 				if (read.nextOffset === null) break;
@@ -65,14 +75,19 @@ describe("history exact record lookup", () => {
 			const file = path.join(dir.path(), "session.jsonl");
 			await fs.writeFile(file, JSON.stringify({ type: "session", id: "s" }) + "\n" + raw + "\n");
 			const first = await readStoredHistoryEntry(file, { entryId: "emoji", offset: 0, limit: 1 });
-			const read = await readStoredHistoryEntry(file, { entryId: "emoji", leafId: first.leafId, revision: first.revision, offset: index, limit: 1 });
+			const read = await readStoredHistoryEntry(file, {
+				entryId: "emoji",
+				leafId: first.leafId,
+				revision: first.revision,
+				offset: index,
+				limit: 1,
+			});
 			expect(read.fragment).toBe("🔑");
 			expect(read.nextOffset).toBe(index + 1);
 		} finally {
 			await dir.remove();
 		}
 	});
-
 
 	it("rejects continuation after a same-ID record rewrite", async () => {
 		const dir = TempDir.createSync("@veyyon-history-revision-");
@@ -86,13 +101,21 @@ describe("history exact record lookup", () => {
 			expect(first.status).toBe("ok");
 			expect(first.revision).toMatch(/^[0-9a-f]{64}$/);
 			const same = await readStoredHistoryEntry(file, {
-				entryId: "same", leafId: first.leafId, offset: first.nextOffset!, limit: 24, revision: first.revision,
+				entryId: "same",
+				leafId: first.leafId,
+				offset: first.nextOffset!,
+				limit: 24,
+				revision: first.revision,
 			});
 			expect(same.status).toBe("ok");
 			expect(same.revision).toBe(first.revision);
 			await fs.writeFile(file, header + "\n" + JSON.stringify(rewritten) + "\n");
 			const stale = await readStoredHistoryEntry(file, {
-				entryId: "same", leafId: first.leafId, offset: first.nextOffset!, limit: 24, revision: first.revision,
+				entryId: "same",
+				leafId: first.leafId,
+				offset: first.nextOffset!,
+				limit: 24,
+				revision: first.revision,
 			});
 			expect(stale.status).toBe("stale");
 			expect(stale.fragment).toBeUndefined();
@@ -100,7 +123,11 @@ describe("history exact record lookup", () => {
 			expect(fresh.revision).not.toBe(first.revision);
 			const offset = JSON.stringify(rewritten).indexOf("omega");
 			const page = await readStoredHistoryEntry(file, {
-				entryId: "same", leafId: fresh.leafId, offset, limit: 5, revision: fresh.revision,
+				entryId: "same",
+				leafId: fresh.leafId,
+				offset,
+				limit: 5,
+				revision: fresh.revision,
 			});
 			expect(page.fragment).toBe("omega");
 		} finally {
@@ -118,8 +145,9 @@ describe("history exact record lookup", () => {
 			expect(found.fragment).toBeUndefined();
 			const corrupted = path.join(dir.path(), "corrupted.jsonl");
 			await fs.writeFile(corrupted, '{"type":"message","id":bad}\n');
-			expect((await readStoredHistoryEntry(corrupted, { entryId: "gone", offset: 0, limit: 8 })).status)
-				.toBe("unavailable");
+			expect((await readStoredHistoryEntry(corrupted, { entryId: "gone", offset: 0, limit: 8 })).status).toBe(
+				"unavailable",
+			);
 		} finally {
 			await dir.remove();
 		}
@@ -133,8 +161,9 @@ describe("history exact record lookup", () => {
 		const read = readLiveHistoryEntry(branch, { entryId: "a", offset: 0, limit: 1000 });
 		expect(read.status).toBe("ok");
 		expect(read.fragment).toContain("hello");
-		expect(readLiveHistoryEntry(branch, { entryId: "b", leafId: "a", offset: 0, limit: 1000 }).status)
-			.toBe("not_on_branch");
+		expect(readLiveHistoryEntry(branch, { entryId: "b", leafId: "a", offset: 0, limit: 1000 }).status).toBe(
+			"not_on_branch",
+		);
 	});
 
 	it("rejects malformed page IDs and unbounded reads", () => {
@@ -142,8 +171,12 @@ describe("history exact record lookup", () => {
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&limit=999999"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=-1"))).toThrow();
 		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10"))).toThrow(/rev/);
-		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&leaf=a&revision=short"))).toThrow(/SHA-256/);
-		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&revision=short"))).toThrow(/SHA-256/);
+		expect(() =>
+			parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&leaf=a&revision=short")),
+		).toThrow(/SHA-256/);
+		expect(() => parseExactHistoryRequest(new URL("history://Scout?entry=a&offset=10&revision=short"))).toThrow(
+			/SHA-256/,
+		);
 		expect(parseExactHistoryRequest(new URL("history://Scout"))).toBeUndefined();
 	});
 	it("finds stored evidence IDs on the selected branch and returns newest matches first", async () => {
@@ -180,7 +213,9 @@ describe("history exact record lookup", () => {
 			];
 			for (let i = 0; i < 501; i++) {
 				records.push({
-					type: "message", id: `s${i}`, parentId: i === 0 ? "root" : `s${i - 1}`,
+					type: "message",
+					id: `s${i}`,
+					parentId: i === 0 ? "root" : `s${i - 1}`,
 					message: `needle abandoned sibling ${i}`,
 				});
 			}
@@ -191,7 +226,9 @@ describe("history exact record lookup", () => {
 			expect(current.leafId).toBe("active");
 			expect(current.matches.map(match => match.entryId)).toEqual(["active", "root"]);
 			const archived = await searchStoredHistoryEntries(file, {
-				query: "needle", leafId: "s500", limit: 3,
+				query: "needle",
+				leafId: "s500",
+				limit: 3,
 			});
 			expect(archived.status).toBe("partial");
 			expect(archived.matches.map(match => match.entryId)).toEqual(["s500", "s499", "s498"]);
@@ -209,7 +246,9 @@ describe("history exact record lookup", () => {
 			];
 			for (let i = 0; i < 502; i++) {
 				records.push({
-					type: "message", id: `e${i}`, parentId: i === 0 ? null : `e${i - 1}`,
+					type: "message",
+					id: `e${i}`,
+					parentId: i === 0 ? null : `e${i - 1}`,
 					message: `needle record ${i}`,
 				});
 			}
@@ -218,10 +257,8 @@ describe("history exact record lookup", () => {
 			expect(result.status).toBe("partial");
 			expect(result.leafId).toBe("e501");
 			expect(result.sessionId).toBe("s-many");
-			expect(result.matches.map(match => match.entryId))
-				.toEqual(["e501", "e500", "e499", "e498", "e497"]);
-			expect((await readStoredHistoryEntry(file, { entryId: "e501", offset: 0, limit: 100 })).status)
-				.toBe("ok");
+			expect(result.matches.map(match => match.entryId)).toEqual(["e501", "e500", "e499", "e498", "e497"]);
+			expect((await readStoredHistoryEntry(file, { entryId: "e501", offset: 0, limit: 100 })).status).toBe("ok");
 		} finally {
 			await dir.remove();
 		}
@@ -249,7 +286,9 @@ describe("history exact record lookup", () => {
 			const explicitRead = await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 100 });
 			expect(explicitRead.status).toBe("ok");
 			const explicitSearch = await searchStoredHistoryEntries(file, {
-				query: "branchb-only", leafId: "b", limit: 10,
+				query: "branchb-only",
+				leafId: "b",
+				limit: 10,
 			});
 			expect(explicitSearch.status).toBe("partial");
 			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
@@ -267,15 +306,19 @@ describe("history exact record lookup", () => {
 				{ type: "message", id: "a", parentId: null, message: "root" },
 				{ type: "message", id: "b", parentId: "a", message: "old sibling" },
 			];
-			await fs.writeFile(file, valid.map(record => JSON.stringify(record)).join("\n") +
-				'\n{"type":"message","id":bad}\n');
-			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 })).status)
-				.toBe("unavailable");
+			await fs.writeFile(
+				file,
+				valid.map(record => JSON.stringify(record)).join("\n") + '\n{"type":"message","id":bad}\n',
+			);
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 })).status).toBe(
+				"unavailable",
+			);
 			const search = await searchStoredHistoryEntries(file, { query: "old sibling", limit: 10 });
 			expect(search.status).toBe("unavailable");
 			expect(search.matches).toEqual([]);
-			expect((await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 200 })).status)
-				.toBe("ok");
+			expect((await readStoredHistoryEntry(file, { entryId: "b", leafId: "b", offset: 0, limit: 200 })).status).toBe(
+				"ok",
+			);
 		} finally {
 			await dir.remove();
 		}
@@ -290,10 +333,12 @@ describe("history exact record lookup", () => {
 				{ type: "message", id: "a", parentId: null, message: "root" },
 				{ type: "message", id: "b", parentId: "a", message: "archived-branch-only" },
 			];
-			await fs.writeFile(file, ["Optional title", "", ...records.map(record => JSON.stringify(record)), ""].join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				["Optional title", "", ...records.map(record => JSON.stringify(record)), ""].join("\n") + "\n",
+			);
 			// Initial title and blank lines must not spoil valid implicit selection.
-			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 })).status)
-				.toBe("ok");
+			expect((await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 100 })).status).toBe("ok");
 			const healthy = await searchStoredHistoryEntries(file, { query: "archived-branch-only", limit: 5 });
 			expect(healthy.status).toBe("ok");
 			expect(healthy.matches.map(match => match.entryId)).toEqual(["b"]);
@@ -308,11 +353,16 @@ describe("history exact record lookup", () => {
 
 			// Deliberately selected historic branch stays readable; search is partial.
 			const explicitRead = await readStoredHistoryEntry(file, {
-				entryId: "b", leafId: "b", offset: 0, limit: 100,
+				entryId: "b",
+				leafId: "b",
+				offset: 0,
+				limit: 100,
 			});
 			expect(explicitRead.status).toBe("ok");
 			const explicitSearch = await searchStoredHistoryEntries(file, {
-				query: "archived-branch-only", leafId: "b", limit: 5,
+				query: "archived-branch-only",
+				leafId: "b",
+				limit: 5,
 			});
 			expect(explicitSearch.status).toBe("partial");
 			expect(explicitSearch.matches.map(match => match.entryId)).toEqual(["b"]);
@@ -346,7 +396,7 @@ describe("history exact record lookup", () => {
 				'{"type":"message","id":"invalid-parent-boolean","parentId":false}',
 				'{"type":"message","id":"invalid-parent-array","parentId":[]}',
 				'{"type":"message","id":"invalid-parent-object","parentId":{}}',
-				'{}',
+				"{}",
 			]) {
 				await fs.writeFile(file, prefix + invalid + "\n");
 				const implicitRead = await readStoredHistoryEntry(file, { entryId: "b", offset: 0, limit: 200 });
@@ -356,12 +406,17 @@ describe("history exact record lookup", () => {
 				expect(implicitSearch.status).toBe("unavailable");
 				expect(implicitSearch.matches).toEqual([]);
 				const archivedRead = await readStoredHistoryEntry(file, {
-					entryId: "b", leafId: "b", offset: 0, limit: 200,
+					entryId: "b",
+					leafId: "b",
+					offset: 0,
+					limit: 200,
 				});
 				expect(archivedRead.status).toBe("ok");
 				expect(archivedRead.fragment).toContain("abandoned-only");
 				const archivedSearch = await searchStoredHistoryEntries(file, {
-					query: "abandoned-only", leafId: "b", limit: 5,
+					query: "abandoned-only",
+					leafId: "b",
+					limit: 5,
 				});
 				expect(archivedSearch.status).toBe("partial");
 				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["b"]);
@@ -370,7 +425,6 @@ describe("history exact record lookup", () => {
 			await dir.remove();
 		}
 	});
-
 
 	it("search never presents rejected JSONL records as accepted branch evidence", async () => {
 		const dir = TempDir.createSync("@veyyon-history-search-rejected-");
@@ -386,17 +440,24 @@ describe("history exact record lookup", () => {
 			]) {
 				await fs.writeFile(file, prefix + JSON.stringify(invalid) + "\n");
 				const exact = await readStoredHistoryEntry(file, {
-					entryId: "root", leafId: "leaf", offset: 0, limit: 256,
+					entryId: "root",
+					leafId: "leaf",
+					offset: 0,
+					limit: 256,
 				});
 				expect(exact.status).toBe("ok");
 				expect(exact.fragment).toBe(JSON.stringify(root));
 				const forged = await searchStoredHistoryEntries(file, {
-					query: "forged needle", leafId: "leaf", limit: 5,
+					query: "forged needle",
+					leafId: "leaf",
+					limit: 5,
 				});
 				expect(forged.status).toBe("partial");
 				expect(forged.matches).toEqual([]);
 				const trusted = await searchStoredHistoryEntries(file, {
-					query: "trusted atlas", leafId: "leaf", limit: 5,
+					query: "trusted atlas",
+					leafId: "leaf",
+					limit: 5,
 				});
 				expect(trusted.status).toBe("partial");
 				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
@@ -407,17 +468,24 @@ describe("history exact record lookup", () => {
 			const title = { type: "title", id: "root", title: "forged needle in metadata" };
 			await fs.writeFile(file, [title, header, root, leaf].map(record => JSON.stringify(record)).join("\n") + "\n");
 			const forgedTitle = await searchStoredHistoryEntries(file, {
-				query: "forged needle", leafId: "leaf", limit: 5,
+				query: "forged needle",
+				leafId: "leaf",
+				limit: 5,
 			});
 			expect(forgedTitle.status).toBe("ok");
 			expect(forgedTitle.matches).toEqual([]);
 			const accepted = await searchStoredHistoryEntries(file, {
-				query: "trusted atlas", leafId: "leaf", limit: 5,
+				query: "trusted atlas",
+				leafId: "leaf",
+				limit: 5,
 			});
 			expect(accepted.status).toBe("ok");
 			expect(accepted.matches.map(match => match.entryId)).toEqual(["root"]);
 			const exact = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "leaf", offset: 0, limit: 256,
+				entryId: "root",
+				leafId: "leaf",
+				offset: 0,
+				limit: 256,
 			});
 			expect(exact.status).toBe("ok");
 			expect(accepted.matches[0]?.revision).toBe(exact.revision);
@@ -427,7 +495,10 @@ describe("history exact record lookup", () => {
 				message: { id: "nested", type: "message", content: [{ type: "text", text: "trusted atlas" }] },
 			};
 			const titleChange = { type: "title_change", id: "renamed", parentId: "root", title: "updated title" };
-			await fs.writeFile(file, [title, header, nested, titleChange].map(record => JSON.stringify(record)).join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				[title, header, nested, titleChange].map(record => JSON.stringify(record)).join("\n") + "\n",
+			);
 			const nestedRead = await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 });
 			expect(nestedRead.status).toBe("ok");
 			expect(nestedRead.fragment).toContain("trusted atlas");
@@ -479,7 +550,10 @@ describe("history exact record lookup", () => {
 				}
 			}
 			const validContinuation = {
-				type: "message", id: "d", parentId: "c", message: "needle distinct continuation",
+				type: "message",
+				id: "d",
+				parentId: "c",
+				message: "needle distinct continuation",
 			};
 			await fs.writeFile(file, prefix + JSON.stringify(validContinuation) + "\n");
 			const continued = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
@@ -501,13 +575,16 @@ describe("history exact record lookup", () => {
 				{ type: "message", id: "healthy", parentId: "root", message: "needle healthy branch" },
 			];
 			const write = async (tail: Array<{ type: string; id: string; parentId: string; message: string }>) => {
-				await fs.writeFile(file, [header, ...healthy, ...tail].map(record => JSON.stringify(record)).join("\n") + "\n");
+				await fs.writeFile(
+					file,
+					[header, ...healthy, ...tail].map(record => JSON.stringify(record)).join("\n") + "\n",
+				);
 			};
 			await write([]);
-			expect((await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 })).status)
-				.toBe("ok");
-			expect((await searchStoredHistoryEntries(file, { query: "needle", limit: 5 })).matches
-				.map(match => match.entryId)).toEqual(["healthy", "root"]);
+			expect((await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 })).status).toBe("ok");
+			expect(
+				(await searchStoredHistoryEntries(file, { query: "needle", limit: 5 })).matches.map(match => match.entryId),
+			).toEqual(["healthy", "root"]);
 
 			for (const cycle of [
 				[{ type: "message", id: "self", parentId: "self", message: "needle self-parent" }],
@@ -525,7 +602,10 @@ describe("history exact record lookup", () => {
 				const corruptLeaf = cycle[cycle.length - 1]!.id;
 				for (const leafId of [undefined, corruptLeaf]) {
 					const read = await readStoredHistoryEntry(file, {
-						entryId: "root", leafId, offset: 0, limit: 256,
+						entryId: "root",
+						leafId,
+						offset: 0,
+						limit: 256,
 					});
 					expect(read.status).toBe("unavailable");
 					expect(read.fragment).toBeUndefined();
@@ -535,11 +615,16 @@ describe("history exact record lookup", () => {
 				}
 				// An unrelated, explicitly selected valid archived branch remains readable.
 				const archived = await readStoredHistoryEntry(file, {
-					entryId: "root", leafId: "healthy", offset: 0, limit: 256,
+					entryId: "root",
+					leafId: "healthy",
+					offset: 0,
+					limit: 256,
 				});
 				expect(archived.status).toBe("ok");
 				const healthySearch = await searchStoredHistoryEntries(file, {
-					query: "needle", leafId: "healthy", limit: 5,
+					query: "needle",
+					leafId: "healthy",
+					limit: 5,
 				});
 				expect(healthySearch.status).toBe("ok");
 				expect(healthySearch.matches.map(match => match.entryId)).toEqual(["healthy", "root"]);
@@ -563,25 +648,36 @@ describe("history exact record lookup", () => {
 				await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
 				for (const leafId of [undefined, "orphan"]) {
 					const exact = await readStoredHistoryEntry(file, {
-						entryId: "orphan", leafId, offset: 0, limit: 256,
+						entryId: "orphan",
+						leafId,
+						offset: 0,
+						limit: 256,
 					});
 					expect(exact.status).toBe("unavailable");
 					expect(exact.fragment).toBeUndefined();
 					const ancestor = await readStoredHistoryEntry(file, {
-						entryId: "root", leafId, offset: 0, limit: 256,
+						entryId: "root",
+						leafId,
+						offset: 0,
+						limit: 256,
 					});
 					expect(ancestor.status).toBe("unavailable");
-						expect(ancestor.fragment).toBeUndefined();
+					expect(ancestor.fragment).toBeUndefined();
 					const search = await searchStoredHistoryEntries(file, { query: "needle", leafId, limit: 5 });
 					expect(search.status).toBe("unavailable");
 					expect(search.matches).toEqual([]);
 				}
 				const archived = await readStoredHistoryEntry(file, {
-					entryId: "root", leafId: "archived", offset: 0, limit: 256,
+					entryId: "root",
+					leafId: "archived",
+					offset: 0,
+					limit: 256,
 				});
 				expect(archived.status).toBe("ok");
 				const healthySearch = await searchStoredHistoryEntries(file, {
-					query: "needle", leafId: "archived", limit: 5,
+					query: "needle",
+					leafId: "archived",
+					limit: 5,
 				});
 				expect(healthySearch.status).toBe("ok");
 				expect(healthySearch.matches.map(match => match.entryId)).toEqual(["archived", "root"]);
@@ -604,19 +700,31 @@ describe("history exact record lookup", () => {
 			}
 			await fs.writeFile(file, lines.join("\n") + "\n");
 			const valid = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
+				entryId: "root",
+				leafId: "root",
+				offset: 0,
+				limit: 256,
 			});
 			expect(valid.status).toBe("ok");
 			expect(valid.fragment).toContain("needle original evidence");
 
 			// A 100,001st distinct entry is beyond the bounded ancestry index.
 			// Accepting an explicit leaf would permit an unseen duplicate later.
-			await fs.appendFile(file, JSON.stringify({
-				type: "message", id: "out-of-index", parentId: "root", message: "needle extra",
-			}) + "\n");
+			await fs.appendFile(
+				file,
+				JSON.stringify({
+					type: "message",
+					id: "out-of-index",
+					parentId: "root",
+					message: "needle extra",
+				}) + "\n",
+			);
 			for (const leafId of [undefined, "root"]) {
 				const exact = await readStoredHistoryEntry(file, {
-					entryId: "root", leafId, offset: 0, limit: 256,
+					entryId: "root",
+					leafId,
+					offset: 0,
+					limit: 256,
 				});
 				expect(exact.status).toBe("unavailable");
 				expect(exact.fragment).toBeUndefined();
@@ -624,11 +732,20 @@ describe("history exact record lookup", () => {
 				expect(search.status).toBe("unavailable");
 				expect(search.matches).toEqual([]);
 			}
-			await fs.appendFile(file, JSON.stringify({
-				type: "message", id: "root", parentId: null, message: "needle forged duplicate",
-			}) + "\n");
+			await fs.appendFile(
+				file,
+				JSON.stringify({
+					type: "message",
+					id: "root",
+					parentId: null,
+					message: "needle forged duplicate",
+				}) + "\n",
+			);
 			const hiddenDuplicate = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
+				entryId: "root",
+				leafId: "root",
+				offset: 0,
+				limit: 256,
 			});
 			expect(hiddenDuplicate.status).toBe("unavailable");
 			expect(hiddenDuplicate.fragment).toBeUndefined();
@@ -641,12 +758,18 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-byte-bound-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, [
-				JSON.stringify({ type: "session", id: "s-byte-cap" }),
-				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle saved" }),
-			].join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: "s-byte-cap" }),
+					JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle saved" }),
+				].join("\n") + "\n",
+			);
 			const valid = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
+				entryId: "root",
+				leafId: "root",
+				offset: 0,
+				limit: 256,
 			});
 			expect(valid.status).toBe("ok");
 			expect(valid.fragment).toContain("needle saved");
@@ -660,12 +783,17 @@ describe("history exact record lookup", () => {
 				await handle.close();
 			}
 			const exact = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
+				entryId: "root",
+				leafId: "root",
+				offset: 0,
+				limit: 256,
 			});
 			expect(exact.status).toBe("unavailable");
 			expect(exact.fragment).toBeUndefined();
 			const search = await searchStoredHistoryEntries(file, {
-				query: "needle", leafId: "root", limit: 5,
+				query: "needle",
+				leafId: "root",
+				limit: 5,
 			});
 			expect(search.status).toBe("unavailable");
 			expect(search.matches).toEqual([]);
@@ -675,9 +803,27 @@ describe("history exact record lookup", () => {
 	});
 
 	it.each([
-		["repeated same session header", [{ type: "session", id: "s" }, { type: "session", id: "s" }]],
-		["repeated different session header", [{ type: "session", id: "s" }, { type: "session", id: "other" }]],
-		["entry before session header", [{ type: "message", id: "root", parentId: null, message: "forged needle" }, { type: "session", id: "s" }]],
+		[
+			"repeated same session header",
+			[
+				{ type: "session", id: "s" },
+				{ type: "session", id: "s" },
+			],
+		],
+		[
+			"repeated different session header",
+			[
+				{ type: "session", id: "s" },
+				{ type: "session", id: "other" },
+			],
+		],
+		[
+			"entry before session header",
+			[
+				{ type: "message", id: "root", parentId: null, message: "forged needle" },
+				{ type: "session", id: "s" },
+			],
+		],
 		["missing session header", [{ type: "message", id: "root", parentId: null, message: "forged needle" }]],
 	] as const)("rejects %s for implicit read and search", async (_name, records) => {
 		const dir = TempDir.createSync("@veyyon-history-header-shape-");
@@ -696,26 +842,57 @@ describe("history exact record lookup", () => {
 	});
 
 	it.each([
-		["repeated leading title", [{ type: "title", title: "first title" }, { type: "title", title: "second title" }, { type: "session", id: "s" }, { type: "message", id: "root", parentId: null, message: "trusted atlas" }]],
-		["late id-bearing title", [{ type: "session", id: "s" }, { type: "message", id: "root", parentId: null, message: "trusted atlas" }, { type: "title", id: "forged", title: "forged needle" }]],
+		[
+			"repeated leading title",
+			[
+				{ type: "title", title: "first title" },
+				{ type: "title", title: "second title" },
+				{ type: "session", id: "s" },
+				{ type: "message", id: "root", parentId: null, message: "trusted atlas" },
+			],
+		],
+		[
+			"late id-bearing title",
+			[
+				{ type: "session", id: "s" },
+				{ type: "message", id: "root", parentId: null, message: "trusted atlas" },
+				{ type: "title", id: "forged", title: "forged needle" },
+			],
+		],
 	] as const)("does not accept %s as a history header", async (_name, records) => {
 		const dir = TempDir.createSync("@veyyon-history-title-shape-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, records.map(record => typeof record === "string" ? record : JSON.stringify(record)).join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				records.map(record => (typeof record === "string" ? record : JSON.stringify(record))).join("\n") + "\n",
+			);
 			const implicit = await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 });
 			expect(implicit.status).toBe("unavailable");
 			expect(implicit.fragment).toBeUndefined();
 			const implicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", limit: 5 });
 			expect(implicitSearch.status).toBe("unavailable");
 			expect(implicitSearch.matches).toEqual([]);
-			const explicit = await readStoredHistoryEntry(file, { entryId: "root", leafId: "root", offset: 0, limit: 256 });
+			const explicit = await readStoredHistoryEntry(file, {
+				entryId: "root",
+				leafId: "root",
+				offset: 0,
+				limit: 256,
+			});
 			expect(explicit.status).toBe("ok");
 			expect(explicit.fragment).toContain("trusted atlas");
-			const exactSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "root", limit: 5 });
+			const exactSearch = await searchStoredHistoryEntries(file, {
+				query: "trusted atlas",
+				leafId: "root",
+				limit: 5,
+			});
 			expect(exactSearch.status).toBe("partial");
 			expect(exactSearch.matches.map(match => match.entryId)).toEqual(["root"]);
-			const partialSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "root", limit: 5 });
+			const partialSearch = await searchStoredHistoryEntries(file, {
+				query: "forged needle",
+				leafId: "root",
+				limit: 5,
+			});
 			expect(partialSearch.status).toBe("partial");
 			expect(partialSearch.matches).toEqual([]);
 		} finally {
@@ -724,32 +901,63 @@ describe("history exact record lookup", () => {
 	});
 
 	it.each([
-		["duplicate top-level id", '{"type":"message","id":"forged","parentId":null,"message":"forged needle","id":"forged"}'],
-		["duplicate top-level parentId", '{"type":"message","id":"forged","parentId":null,"parentId":null,"message":"forged needle"}'],
-		["duplicate top-level type", '{"type":"message","type":"message","id":"forged","parentId":null,"message":"forged needle"}'],
-		["escaped-equivalent top-level id", '{"type":"message","id":"forged","\\u0069d":"forged","parentId":null,"message":"forged needle"}'],
-		["escaped-equivalent top-level parentId", '{"type":"message","id":"forged","parentId":null,"parent\\u0049d":null,"message":"forged needle"}'],
-		["escaped-equivalent top-level type", '{"type":"message","\\u0074ype":"message","id":"forged","parentId":null,"message":"forged needle"}'],
-		["duplicate top-level id alongside nested message keys", '{"type":"message","id":"forged","id":"forged","parentId":null,"message":{"id":"safe","parentId":"nested","type":"message","content":[{"text":"forged needle"}]}}'],
+		[
+			"duplicate top-level id",
+			'{"type":"message","id":"forged","parentId":null,"message":"forged needle","id":"forged"}',
+		],
+		[
+			"duplicate top-level parentId",
+			'{"type":"message","id":"forged","parentId":null,"parentId":null,"message":"forged needle"}',
+		],
+		[
+			"duplicate top-level type",
+			'{"type":"message","type":"message","id":"forged","parentId":null,"message":"forged needle"}',
+		],
+		[
+			"escaped-equivalent top-level id",
+			'{"type":"message","id":"forged","\\u0069d":"forged","parentId":null,"message":"forged needle"}',
+		],
+		[
+			"escaped-equivalent top-level parentId",
+			'{"type":"message","id":"forged","parentId":null,"parent\\u0049d":null,"message":"forged needle"}',
+		],
+		[
+			"escaped-equivalent top-level type",
+			'{"type":"message","\\u0074ype":"message","id":"forged","parentId":null,"message":"forged needle"}',
+		],
+		[
+			"duplicate top-level id alongside nested message keys",
+			'{"type":"message","id":"forged","id":"forged","parentId":null,"message":{"id":"safe","parentId":"nested","type":"message","content":[{"text":"forged needle"}]}}',
+		],
 	] as const)("rejects %s without returning forged evidence", async (_name, invalid) => {
 		const dir = TempDir.createSync("@veyyon-history-duplicate-members-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			const prefix = [
-				JSON.stringify({ type: "session", id: "s" }),
-				JSON.stringify({ type: "message", id: "root", parentId: null, message: "trusted atlas" }),
-			].join("\n") + "\n";
+			const prefix =
+				[
+					JSON.stringify({ type: "session", id: "s" }),
+					JSON.stringify({ type: "message", id: "root", parentId: null, message: "trusted atlas" }),
+				].join("\n") + "\n";
 			await fs.writeFile(file, prefix + invalid + "\n");
 			const implicit = await readStoredHistoryEntry(file, { entryId: "forged", offset: 0, limit: 256 });
 			expect(implicit.status).toBe("unavailable");
 			expect(implicit.fragment).toBeUndefined();
-			const explicit = await readStoredHistoryEntry(file, { entryId: "forged", leafId: "forged", offset: 0, limit: 256 });
+			const explicit = await readStoredHistoryEntry(file, {
+				entryId: "forged",
+				leafId: "forged",
+				offset: 0,
+				limit: 256,
+			});
 			expect(explicit.status).toBe("unavailable");
 			expect(explicit.fragment).toBeUndefined();
 			const implicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", limit: 5 });
 			expect(implicitSearch.status).toBe("unavailable");
 			expect(implicitSearch.matches).toEqual([]);
-			const explicitSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "forged", limit: 5 });
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "forged needle",
+				leafId: "forged",
+				limit: 5,
+			});
 			expect(explicitSearch.status).toBe("unavailable");
 			expect(explicitSearch.matches).toEqual([]);
 		} finally {
@@ -761,11 +969,14 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-blank-id-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, [
-				JSON.stringify({ type: "session", id: blankId }),
-				JSON.stringify({ type: "message", id: blankId, parentId: null, message: "forged needle" }),
-				JSON.stringify({ type: "message", id: "child", parentId: blankId, message: "trusted atlas" }),
-			].join("\n") + "\n");
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: blankId }),
+					JSON.stringify({ type: "message", id: blankId, parentId: null, message: "forged needle" }),
+					JSON.stringify({ type: "message", id: "child", parentId: blankId, message: "trusted atlas" }),
+				].join("\n") + "\n",
+			);
 			const implicit = await readStoredHistoryEntry(file, { entryId: "child", offset: 0, limit: 256 });
 			expect(implicit.status).toBe("unavailable");
 			expect(implicit.fragment).toBeUndefined();
@@ -775,7 +986,11 @@ describe("history exact record lookup", () => {
 			const exact = await readStoredHistoryEntry(file, { entryId: "child", leafId: "child", offset: 0, limit: 256 });
 			expect(exact.status).toBe("unavailable");
 			expect(exact.fragment).toBeUndefined();
-			const explicitSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "child", limit: 5 });
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "trusted atlas",
+				leafId: "child",
+				limit: 5,
+			});
 			expect(explicitSearch.status).toBe("unavailable");
 			expect(explicitSearch.matches).toEqual([]);
 		} finally {
@@ -787,21 +1002,42 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-absent-leaf-tail-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, [
-				JSON.stringify({ type: "session", id: "s" }),
-				JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "trusted atlas" }),
-				'{"type":"message","id":bad}',
-			].join("\n") + "\n");
-			const missingRead = await readStoredHistoryEntry(file, { entryId: "absent", leafId: "absent", offset: 0, limit: 256 });
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: "s" }),
+					JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "trusted atlas" }),
+					'{"type":"message","id":bad}',
+				].join("\n") + "\n",
+			);
+			const missingRead = await readStoredHistoryEntry(file, {
+				entryId: "absent",
+				leafId: "absent",
+				offset: 0,
+				limit: 256,
+			});
 			expect(missingRead.status).toBe("unavailable");
 			expect(missingRead.fragment).toBeUndefined();
-			const missingSearch = await searchStoredHistoryEntries(file, { query: "forged needle", leafId: "absent", limit: 5 });
+			const missingSearch = await searchStoredHistoryEntries(file, {
+				query: "forged needle",
+				leafId: "absent",
+				limit: 5,
+			});
 			expect(missingSearch.status).toBe("unavailable");
 			expect(missingSearch.matches).toEqual([]);
-			const healthyRead = await readStoredHistoryEntry(file, { entryId: "healthy", leafId: "healthy", offset: 0, limit: 256 });
+			const healthyRead = await readStoredHistoryEntry(file, {
+				entryId: "healthy",
+				leafId: "healthy",
+				offset: 0,
+				limit: 256,
+			});
 			expect(healthyRead.status).toBe("ok");
 			expect(healthyRead.fragment).toContain("trusted atlas");
-			const healthySearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", leafId: "healthy", limit: 5 });
+			const healthySearch = await searchStoredHistoryEntries(file, {
+				query: "trusted atlas",
+				leafId: "healthy",
+				limit: 5,
+			});
 			expect(healthySearch.status).toBe("partial");
 			expect(healthySearch.matches.map(match => match.entryId)).toEqual(["healthy"]);
 		} finally {
@@ -816,4 +1052,3 @@ describe("history exact record lookup", () => {
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=thing&limit=999"))).toThrow();
 	});
 });
-
