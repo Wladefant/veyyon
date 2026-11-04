@@ -1,22 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@veyyon/ai/providers/google-shared";
-import type { Context, Model, ToolCall, Usage } from "@veyyon/ai/types";
+import type { Api, Context, Model, ToolCall, Usage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
-// Regression for #9638. A Gemini 3 turn with parallel tool calls carries a thought
-// signature only on the FIRST call. `convertMessages` used to substitute the
-// `skip_thought_signature_validator` sentinel for every unsigned Gemini 3 tool call.
-// That sentinel is honored ONLY by the public Gemini API (`google-generative-ai`);
-// Cloud Code Assist / Antigravity and Vertex AI reject it with 400 INVALID_ARGUMENT.
-// Since the offending turn is baked into session history, every subsequent request
-// replayed it and 400'd deterministically, permanently wedging the session.
-//
-// The contract now splits by transport:
-//   - public Gemini API: keep the sentinel for unsigned calls (it needs a signature
-//     on every call and accepts the bypass — no regression for cross-model replay,
-//     secret-redacted args, or parallel calls).
-//   - CCA/Antigravity + Vertex: omit `thoughtSignature` on unsigned calls (those
-//     backends reject the sentinel; Gemini 3 there only requires it on the first call).
+// WHY: CCA replay needs a signature on the first function call in each imported
+// model turn, not on its unsigned parallel siblings. Exact-model signatures stay
+// intact. Public Gemini and Vertex keep their existing transport policies.
+// These wire-format tests do not prove live endpoint generation.
 
 const ZERO_USAGE: Usage = {
 	input: 0,
@@ -47,7 +37,7 @@ function buildGeminiModel(api: GoogleApi, provider: string, id: string): Model<G
 	});
 }
 
-function assistantTurn(api: GoogleApi, provider: string, id: string, content: ToolCall[]): Context {
+function assistantTurn(api: Api, provider: string, id: string, content: ToolCall[]): Context {
 	return {
 		messages: [
 			{ role: "user", content: "Optimize the code", timestamp: 1000 },
@@ -84,6 +74,33 @@ function unsignedFirstCall(api: GoogleApi, provider: string, id: string): Contex
 function toolCallParts(model: Model<GoogleApi>, context: Context) {
 	const contents = convertMessages(model, context);
 	return contents.find(c => c.role === "model")?.parts?.filter(part => part.functionCall) ?? [];
+}
+
+for (const origin of [
+	{ api: "openai-completions", provider: "openai-codex", model: "gpt-6-luna" },
+	{ api: "google-gemini-cli", provider: "google-antigravity", model: "gemini-3.7-flash" },
+	{ api: "google-generative-ai", provider: "google", model: "gemini-3.8-flash" },
+] as const) {
+	it(`signs only the first imported CCA call from ${origin.provider}/${origin.model} in each turn`, () => {
+		const target = buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.8-flash");
+		const history = assistantTurn(origin.api, origin.provider, origin.model, [
+			{ type: "toolCall", id: "first", name: "read", arguments: {}, thoughtSignature: VALID_SIGNATURE },
+			{ type: "toolCall", id: "second", name: "read", arguments: {} },
+			{ type: "toolCall", id: "third", name: "read", arguments: {} },
+		]);
+		history.messages.push(
+			{ role: "user", content: "<user_interjection>Continue</user_interjection>", timestamp: 3000 },
+			...assistantTurn(origin.api, origin.provider, origin.model, [
+				{ type: "toolCall", id: "next-first", name: "read", arguments: {} },
+				{ type: "toolCall", id: "next-second", name: "read", arguments: {} },
+			]).messages.slice(1),
+		);
+		const turns = convertMessages(target, history).filter(turn => turn.role === "model");
+		expect(turns.map(turn => turn.parts?.filter(part => part.functionCall).map(part => part.thoughtSignature))).toEqual([
+			[SENTINEL, undefined, undefined],
+			[SENTINEL, undefined],
+		]);
+	});
 }
 
 describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
@@ -134,7 +151,7 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 
 		// Foreign (e.g. openai-codex) assistant turn: tool calls must carry the skip sentinel
 		// so Cloud Code Assist / Antigravity does not 400 with 'Function call is missing a thought_signature'.
-		const foreignTurn = assistantTurn("openai-completions" as GoogleApi, "openai-codex", "gpt-6-luna", [
+		const foreignTurn = assistantTurn("openai-completions", "openai-codex", "gpt-6-luna", [
 			{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "src/index.ts" } },
 		]);
 		const foreignCalls = toolCallParts(model, foreignTurn);
