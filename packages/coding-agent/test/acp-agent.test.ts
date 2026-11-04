@@ -1472,6 +1472,7 @@ describe("ACP agent", () => {
 	});
 	// WHY: copied transcripts can retain an ID in another project bucket. Neither
 	// load nor unloaded fork may pick a history by recency or mutate either copy.
+	// These fixtures do not cover aliases to one file or concurrent replacement.
 	for (const operation of ["load", "fork"] as const) {
 		for (const newerProject of ["first", "second"] as const) {
 			it(`rejects ambiguous stored IDs during ${operation} with the ${newerProject} project newer`, async () => {
@@ -1503,12 +1504,84 @@ describe("ACP agent", () => {
 						operation === "load"
 							? harness.agent.loadSession(request)
 							: harness.agent.unstable_forkSession(request),
-					).rejects.toThrow("ACP session ID is ambiguous");
+					).rejects.toMatchObject({ message: "ACP session ID is ambiguous" });
 					expect(harness.sessions).toHaveLength(sessionsBefore);
 					expect(harness.updates).toHaveLength(updatesBefore);
 					expect(fs.readFileSync(firstPath, "utf8")).toBe(firstBytes);
 					expect(fs.readFileSync(secondPath, "utf8")).toBe(secondBytes);
 					expect((await SessionManager.listAll()).map(session => session.path).sort()).toEqual(storedBefore);
+				} finally {
+					harness.abortController.abort();
+				}
+			});
+		}
+	}
+
+	it("forks an already-loaded session from its own path despite a copied stored ID", async () => {
+		const harness = await createHarness();
+		const loadedSessionIds: string[] = [];
+		try {
+			const original = await harness.createSession(harness.cwdA);
+			original.sessionManager.appendMessage({ role: "user", content: "loaded source", timestamp: Date.now() });
+			await original.sessionManager.ensureOnDisk();
+			await original.sessionManager.flush();
+			await harness.agent.loadSession({ sessionId: original.sessionId, cwd: harness.cwdA, mcpServers: [] });
+			loadedSessionIds.push(original.sessionId);
+
+			const copy = await harness.createSession(harness.cwdB);
+			copy.sessionManager.appendMessage({ role: "user", content: "copied source", timestamp: Date.now() });
+			await copy.sessionManager.ensureOnDisk();
+			await copy.sessionManager.flush();
+			const lines = (await fs.readFile(copy.sessionManager.getSessionFile()!, "utf8")).split("\n");
+			lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), id: original.sessionId });
+			await fs.writeFile(copy.sessionManager.getSessionFile()!, lines.join("\n"));
+			await fs.utimes(original.sessionManager.getSessionFile()!, new Date(1_000), new Date(1_000));
+			const newer = new Date(Date.now() + 60_000);
+			await fs.utimes(copy.sessionManager.getSessionFile()!, newer, newer);
+
+			const forked = await harness.agent.unstable_forkSession({
+				sessionId: original.sessionId,
+				cwd: harness.cwdA,
+				mcpServers: [],
+			});
+			loadedSessionIds.push(forked.sessionId);
+			const messages = harness.findSession(forked.sessionId)!.sessionManager.buildSessionContext().messages;
+			expect(forked.sessionId).not.toBe(original.sessionId);
+			expect(messages.some(message => message.role === "user" && message.content === "loaded source")).toBe(true);
+			expect(messages.some(message => message.role === "user" && message.content === "copied source")).toBe(false);
+		} finally {
+			try {
+				await Promise.all(loadedSessionIds.map(sessionId => harness.agent.closeSession({ sessionId })));
+			} finally {
+				harness.abortController.abort();
+			}
+		}
+	});
+
+	for (const operation of ["load", "fork"] as const) {
+		for (const missingId of ["", "missing-session-id"]) {
+			it(`rejects an unknown stored ID during ${operation} (${missingId ? "absent" : "empty"})`, async () => {
+				const harness = await createHarness();
+				try {
+					const unrelated = await harness.createSession(harness.cwdB);
+					unrelated.sessionManager.appendMessage({
+						role: "user",
+						content: "unrelated history",
+						timestamp: Date.now(),
+					});
+					await unrelated.sessionManager.ensureOnDisk();
+					await unrelated.sessionManager.flush();
+					const sessionsBefore = harness.sessions.length;
+					const updatesBefore = harness.updates.length;
+					const request = { sessionId: missingId, cwd: harness.cwdA, mcpServers: [] };
+
+					await expect(
+						operation === "load"
+							? harness.agent.loadSession(request)
+							: harness.agent.unstable_forkSession(request),
+					).rejects.toMatchObject({ message: `ACP session not found: ${missingId}` });
+					expect(harness.sessions).toHaveLength(sessionsBefore);
+					expect(harness.updates).toHaveLength(updatesBefore);
 				} finally {
 					harness.abortController.abort();
 				}
