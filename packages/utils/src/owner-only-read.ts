@@ -37,7 +37,6 @@ import { isFsError } from "./fs-error";
 import {
 	verifyOwnerOnlyWindowsAcl,
 	verifyOwnerOnlyWindowsAclSync,
-	verifyOwnerOnlyWindowsAcls,
 	type WindowsAclOptions,
 } from "./windows-acl";
 
@@ -57,8 +56,6 @@ export interface OwnerOnlyReadOptions {
 	windowsAcl?: WindowsAclOptions;
 	/** Reports the current verification step without changing the checks or their errors. */
 	onStep?: (step: string) => void;
-	/** Trusted caller proof that a failed record cannot describe a live owner. Never inspect its bytes here. */
-	isRecordObsolete?: (filePath: string) => boolean;
 }
 
 function refuse(filePath: string, reason: string): Error {
@@ -179,113 +176,6 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 	}
 }
 
-/**
- * Read sibling records, checking their parent once and batching Windows file ACL checks.
- * `couldMatch` excludes explicit non-matches only after the record passes all file checks.
- * Malformed or ambiguous claims must remain candidates.
- * Discovery is a snapshot: a same-user writer can change a claim after any read.
- */
-export async function readOwnerOnlyFiles(
-	filePaths: readonly string[],
-	couldMatch: (untrusted: string) => boolean,
-	options: OwnerOnlyReadOptions = {},
-): Promise<string[]> {
-	if (filePaths.length === 0) return [];
-	const platform = options.platform ?? process.platform;
-	const parent = path.dirname(filePaths[0]);
-	for (const filePath of filePaths) {
-		if (path.dirname(filePath) !== parent) throw new Error("Discovery records must share a parent directory");
-		if (platform === "win32") assertWindowsFilePath(filePath);
-	}
-	options.onStep?.(platform === "win32" ? "ACL #1 (parent)" : "parent");
-	await checkParent(filePaths[0], platform, options);
-	const records: string[] = [];
-	// Bound both descriptors and the Windows command payload, independent of stale claim count.
-	for (let offset = 0; offset < filePaths.length; offset += 32) {
-		let remaining = filePaths.slice(offset, offset + 32);
-		for (let attempt = 0; attempt < 3 && remaining.length > 0; attempt++) {
-			const candidates: Array<{ filePath: string; handle: fsp.FileHandle; stats: fs.Stats; content: string }> = [];
-			let checking = remaining.join(", ");
-			try {
-				for (const filePath of remaining) {
-					checking = filePath;
-					let handle: fsp.FileHandle | undefined;
-					try {
-						options.onStep?.("lstat");
-						if (platform === "win32" && (await fsp.lstat(filePath)).isSymbolicLink()) {
-							throw refuse(filePath, "is a symbolic link");
-						}
-						options.onStep?.("open");
-						handle = await fsp.open(filePath, platform === "win32" ? "r" : POSIX_READ_FLAGS);
-						options.onStep?.("stat");
-						const stats = await handle.stat();
-						assertRecordStats(filePath, stats, platform);
-						options.onStep?.("read");
-						const buffer = Buffer.alloc(MAX_DISCOVERY_RECORD_BYTES + 1);
-						let length = 0;
-						while (length < buffer.length) {
-							const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
-							if (bytesRead === 0) break;
-							length += bytesRead;
-						}
-						if (length > MAX_DISCOVERY_RECORD_BYTES) throw refuse(filePath, "larger than a discovery record");
-						candidates.push({ filePath, handle, stats, content: buffer.toString("utf8", 0, length) });
-						handle = undefined;
-					} catch (error) {
-						if ((!isFsError(error) || error.code !== "ENOENT") && !options.isRecordObsolete?.(filePath)) {
-							throw error;
-						}
-					} finally {
-						await handle?.close();
-					}
-				}
-				checking = candidates.map(candidate => candidate.filePath).join(", ");
-				options.onStep?.("ACL #2 (record)");
-				await verifyOwnerOnlyWindowsAcls(
-					candidates.map(candidate => candidate.filePath),
-					{ ...options.windowsAcl, platform },
-				);
-				const verified: string[] = [];
-				for (const candidate of candidates) {
-					checking = candidate.filePath;
-					try {
-						options.onStep?.("identity");
-						assertSameFile(candidate.filePath, await fsp.lstat(candidate.filePath), candidate.stats);
-						if (couldMatch(candidate.content)) verified.push(candidate.content);
-					} catch (error) {
-						if ((!isFsError(error) || error.code !== "ENOENT") && !options.isRecordObsolete?.(candidate.filePath)) {
-							throw error;
-						}
-					}
-				}
-				records.push(...verified);
-				break;
-			} catch (error) {
-				// PowerShell reports a missing path as text, not ENOENT. Only a fresh lstat can prove absence.
-				const survivors: string[] = [];
-				for (const filePath of remaining) {
-					try {
-						await fsp.lstat(filePath);
-					} catch (statError) {
-						if (isFsError(statError) && statError.code === "ENOENT") continue;
-					}
-					if (!options.isRecordObsolete?.(filePath)) survivors.push(filePath);
-				}
-				remaining = survivors;
-				if (remaining.length === 0) break;
-				if (attempt === 2) {
-					throw new Error(`Cannot verify discovery record ${checking}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-				}
-				const { promise, resolve } = Promise.withResolvers<void>();
-				setTimeout(resolve, 10);
-				await promise;
-			} finally {
-				await Promise.all(candidates.map(candidate => candidate.handle.close()));
-			}
-		}
-	}
-	return records;
-}
 
 /** Synchronous {@link readOwnerOnlyFile}, with the same refusals and the same missing-file error. */
 export function readOwnerOnlyFileSync(filePath: string, options: OwnerOnlyReadOptions = {}): string {

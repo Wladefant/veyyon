@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyOwnerOnlyWindowsAcl, readOwnerOnlyFile, readOwnerOnlyFiles, readOwnerOnlyFileSync } from "@veyyon/utils";
+import { applyOwnerOnlyWindowsAcl, readOwnerOnlyFile, readOwnerOnlyFileSync } from "@veyyon/utils";
 
 const posix = process.platform !== "win32";
 const tempDirs: string[] = [];
@@ -73,7 +73,7 @@ afterEach(async () => {
 it("bounds a discovery read when the file grows after stat", async () => {
 	const file = await tempRecord(0o600);
 	let grew = false;
-	await expect(readOwnerOnlyFiles([file], () => false, {
+	await expect(readOwnerOnlyFile(file, {
 		platform: "win32",
 		windowsAcl: { run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }) },
 		onStep: step => {
