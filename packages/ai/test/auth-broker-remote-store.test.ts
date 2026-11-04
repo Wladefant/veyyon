@@ -2764,6 +2764,34 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		);
 	}
 
+	test("an explicit unconditional snapshot refresh refuses a synthetic 304 rather than reporting stale data as refreshed", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected initial broker snapshot");
+		const before = structuredClone(initial.snapshot);
+		let callbacks = 0;
+		// The real broker never returns 304 to an unconditional GET. Inject an
+		// invalid intermediary reply while holding the unrelated background poll.
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs !== undefined) {
+				await untilAborted(opts.signal);
+				throw new Error("synthetic background poll aborted");
+			}
+			return { status: 304, generation: before.generation };
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: before,
+			streamSnapshots: false,
+			onSnapshot: () => { callbacks += 1; },
+		});
+		await expect(remote.refreshSnapshot()).rejects.toThrow(
+			"Unconditional broker snapshot verification returned no snapshot",
+		);
+		expect(remote.snapshot).toEqual(before);
+		expect(callbacks).toBe(0);
+	});
+
 	test("calls onSnapshot for broker snapshots but not the constructor snapshot", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initialResult = await client.fetchSnapshot();
