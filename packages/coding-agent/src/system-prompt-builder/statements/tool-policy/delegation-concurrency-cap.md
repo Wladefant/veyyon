@@ -1,1 +1,0 @@
-- **Concurrency cap:** At most {{pluralize MAX_CONCURRENCY "spawned agent" "spawned agents"}}. Larger fan-out only queues; stay at or below the cap.

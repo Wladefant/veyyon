@@ -1,1 +1,0 @@
-- Spawned agents provide separate context, usually with the same model. Use them to isolate a slice's tool output, not because work is lesser.

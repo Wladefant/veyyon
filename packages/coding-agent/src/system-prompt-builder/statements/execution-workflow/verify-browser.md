@@ -1,1 +1,0 @@
-  - A web UI is driven with the `browser` tool: open the page, exercise the changed path, and read the result back. Screenshot only when appearance itself is the claim.

@@ -1,1 +1,0 @@
-- NEVER shrink the requested scope under pressure; delegate only work that matches an enabled role.

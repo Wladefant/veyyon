@@ -2269,7 +2269,7 @@ export class MCPManager {
 					// A transport response may still fail while a newer change is
 					// queued; allow the later request to recover a live connection.
 					connection.tools = undefined;
-					let serverTools: Awaited<ReturnType<typeof listTools>>;
+					let serverTools: MCPToolDefinition[];
 					try {
 						serverTools = await listTools(connection);
 					} catch (error) {

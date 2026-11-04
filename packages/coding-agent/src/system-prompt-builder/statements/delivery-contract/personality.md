@@ -1,5 +1,0 @@
-
-<personality>
-{{personality}}
-</personality>
-
