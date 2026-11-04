@@ -9,6 +9,10 @@ export VEYYON_SAGEOX_TEAM_ID=team_REPLACE_ME
 veyyon --extension /absolute/path/to/sageox.ts
 ```
 
+### Install once for everyday work
+
+Choose or create a dedicated profile with `veyyon profile new team-work`. Copy the reviewed `sageox.ts` into `~/.veyyon/profiles/team-work/agent/extensions/`, creating the directory if needed. The single file has only built-in runtime imports. Set the values from this guide in that profile's `agent/.env`; keep credentials in the normal ox login store. Run `veyyon --profile team-work` or select it as the launch default once with `veyyon profile default team-work` and use plain `veyyon` afterward. For a pinned install, copy from a reviewed commit and replace that file when adopting a newer revision. Remove that copy and restart the profile to uninstall it.
+
 ### Windows 11
 
 For a native Windows Veyyon installation, install ox and run `ox login` as your ordinary Linux user in one WSL distribution. Initialize and verify the same checkout there. In PowerShell select that distribution and the Linux binary shown by `command -v ox`:
@@ -27,7 +31,7 @@ Use a checkout accessible in both systems and a private user TEMP directory acce
 - Ask Veyyon to use `sageox_search` to find a decision in team documents, meetings or this project's ledger. Use `sageox_handoffs` to check recent repository handoffs. The read tools also work in `veyyon --extension /absolute/path/to/sageox.ts -p 'Use sageox_handoffs to list recent handoffs'`.
 - Enter `/sageox-handoff <short update and issue or PR URL>` to send a repository-scoped note. The limit is 500 UTF-8 bytes. Ox reports whether it published or queued the note. Teammates in the same project can run `ox murmur list --topic handoff --scope ledger --since 24h --json`. These signals expire after 24 hours.
 - Enter `/sageox-capture` to review a snapshot of the current branch's human and assistant text. Edit the draft to remove private material before confirming the destination. Saving publishes the reviewed text as a **team document**. Its deterministic title contains a content fingerprint. Repeating the same snapshot uses ox's content deduplication. Teammates can search for a distinctive phrase with `ox query 'phrase' --source team --json` after indexing. Capture is explicit each time. It omits tools, media, synthetic messages and structured reasoning. Visible prose can still contain sensitive information.
-- Omit `--extension` to disable these tools and commands. Removing the extension does not revoke previously published records.
+- For a one-shot launch, omit `--extension` to disable the integration.
 
 ## Cross-seat acceptance
 
