@@ -324,12 +324,7 @@ class GoogleContentWriter {
 		return { text: renderDemotedThinking(this.model.id, block.thinking) };
 	}
 
-	#functionCallPart(
-		block: ToolCall,
-		messageIndex: number,
-		sameModel: boolean,
-		firstFunctionCall: boolean,
-	): Part {
+	#functionCallPart(block: ToolCall, messageIndex: number, sameModel: boolean, firstFunctionCall: boolean): Part {
 		this.#emittedToolCallNames.set(block.id, block.name);
 		// Elided by either signature rule means the call falls through the same path as one
 		// that never had a signature: it sends the transport's unsigned-call signature.

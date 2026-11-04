@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@veyyon/ai/providers/google-shared";
-import type { Api, Context, Model, ToolCall, Usage } from "@veyyon/ai/types";
+import type { Api, AssistantMessage, Context, Model, Usage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
 // WHY: CCA replay needs a signature on the first function call in each imported
@@ -20,7 +20,7 @@ const ZERO_USAGE: Usage = {
 const VALID_SIGNATURE = "QUJDRA==";
 const SENTINEL = "skip_thought_signature_validator";
 
-type GoogleApi = "google-generative-ai" | "google-gemini-cli" | "google-vertex";
+type GoogleApi = Extract<Api, `google-${string}`>;
 
 function buildGeminiModel(api: GoogleApi, provider: string, id: string): Model<GoogleApi> {
 	return buildModel({
@@ -37,7 +37,7 @@ function buildGeminiModel(api: GoogleApi, provider: string, id: string): Model<G
 	});
 }
 
-function assistantTurn(api: Api, provider: string, id: string, content: ToolCall[]): Context {
+function assistantTurn(api: Api, provider: string, id: string, content: AssistantMessage["content"]): Context {
 	return {
 		messages: [
 			{ role: "user", content: "Optimize the code", timestamp: 1000 },
@@ -76,35 +76,61 @@ function toolCallParts(model: Model<GoogleApi>, context: Context) {
 	return contents.find(c => c.role === "model")?.parts?.filter(part => part.functionCall) ?? [];
 }
 
+const REPLAY_TARGETS = {
+	"google-gemini-cli": {
+		model: buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.8-flash"),
+		signatures: [
+			[SENTINEL, undefined, undefined],
+			[SENTINEL, undefined],
+		],
+	},
+	"google-generative-ai": {
+		model: buildGeminiModel("google-generative-ai", "google", "gemini-3.8-pro"),
+		signatures: [
+			[SENTINEL, SENTINEL, SENTINEL],
+			[SENTINEL, SENTINEL],
+		],
+	},
+	"google-vertex": {
+		model: buildGeminiModel("google-vertex", "google-vertex", "gemini-3.8-flash"),
+		signatures: [
+			[undefined, undefined, undefined],
+			[undefined, undefined],
+		],
+	},
+} satisfies Record<GoogleApi, { model: Model<GoogleApi>; signatures: (string | undefined)[][] }>;
+
 for (const origin of [
 	{ api: "openai-completions", provider: "openai-codex", model: "gpt-6-luna" },
 	{ api: "google-gemini-cli", provider: "google-antigravity", model: "gemini-3.7-flash" },
 	{ api: "google-generative-ai", provider: "google", model: "gemini-3.8-flash" },
 ] as const) {
-	it(`signs only the first imported CCA call from ${origin.provider}/${origin.model} in each turn`, () => {
-		const target = buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.8-flash");
-		const history = assistantTurn(origin.api, origin.provider, origin.model, [
-			{ type: "toolCall", id: "first", name: "read", arguments: {}, thoughtSignature: VALID_SIGNATURE },
-			{ type: "toolCall", id: "second", name: "read", arguments: {} },
-			{ type: "toolCall", id: "third", name: "read", arguments: {} },
-		]);
-		history.messages.push(
-			{ role: "user", content: "<user_interjection>Continue</user_interjection>", timestamp: 3000 },
-			...assistantTurn(origin.api, origin.provider, origin.model, [
-				{ type: "toolCall", id: "next-first", name: "read", arguments: {} },
-				{ type: "toolCall", id: "next-second", name: "read", arguments: {} },
-			]).messages.slice(1),
-		);
-		const turns = convertMessages(target, history).filter(turn => turn.role === "model");
-		expect(turns.map(turn => turn.parts?.filter(part => part.functionCall).map(part => part.thoughtSignature))).toEqual([
-			[SENTINEL, undefined, undefined],
-			[SENTINEL, undefined],
-		]);
-	});
+	for (const target of Object.values(REPLAY_TARGETS)) {
+		it(`applies ${target.model.api} replay signatures to ${origin.provider}/${origin.model} in each turn`, () => {
+			const history = assistantTurn(origin.api, origin.provider, origin.model, [
+				{ type: "text", text: "Inspect the files." },
+				{ type: "toolCall", id: "first", name: "read", arguments: {}, thoughtSignature: VALID_SIGNATURE },
+				{ type: "toolCall", id: "second", name: "read", arguments: {} },
+				{ type: "toolCall", id: "third", name: "read", arguments: {} },
+			]);
+			history.messages.push(
+				{ role: "user", content: "<user_interjection>Continue</user_interjection>", timestamp: 3000 },
+				...assistantTurn(origin.api, origin.provider, origin.model, [
+					{ type: "text", text: "Inspect the next file." },
+					{ type: "toolCall", id: "next-first", name: "read", arguments: {} },
+					{ type: "toolCall", id: "next-second", name: "read", arguments: {} },
+				]).messages.slice(1),
+			);
+			const turns = convertMessages(target.model, history).filter(turn => turn.role === "model");
+			expect(
+				turns.map(turn => turn.parts?.filter(part => part.functionCall).map(part => part.thoughtSignature)),
+			).toEqual(target.signatures);
+		});
+	}
 }
 
 describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
-	it("omits unsigned signatures and never emits the sentinel on Antigravity/CCA", () => {
+	it("preserves signatures and unsigned siblings in same-model Antigravity/CCA history", () => {
 		const model = buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.7-flash");
 
 		const parallel = parallelToolCalls("google-gemini-cli", "google-antigravity", "gemini-3.7-flash");
@@ -113,7 +139,7 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 		expect(parallelCalls[0]?.thoughtSignature).toBe(VALID_SIGNATURE);
 		expect(parallelCalls[1]?.thoughtSignature).toBeUndefined();
 		expect(parallelCalls[2]?.thoughtSignature).toBeUndefined();
-		// The sentinel is what CCA rejects with 400 INVALID_ARGUMENT — it must never reach the wire.
+		// Same-model CCA history does not need the imported-history bypass.
 		expect(JSON.stringify(convertMessages(model, parallel))).not.toContain(SENTINEL);
 
 		const unsigned = unsignedFirstCall("google-gemini-cli", "google-antigravity", "gemini-3.7-flash");
@@ -149,8 +175,7 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 	it("emits the skip sentinel for foreign tool calls on Antigravity/CCA but keeps Gemini signatures (#844)", () => {
 		const model = buildGeminiModel("google-gemini-cli", "google-antigravity", "gemini-3.8-flash");
 
-		// Foreign (e.g. openai-codex) assistant turn: tool calls must carry the skip sentinel
-		// so Cloud Code Assist / Antigravity does not 400 with 'Function call is missing a thought_signature'.
+		// The first foreign call needs the bypass; same-model calls keep their own signatures.
 		const foreignTurn = assistantTurn("openai-completions", "openai-codex", "gpt-6-luna", [
 			{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "src/index.ts" } },
 		]);
@@ -160,7 +185,13 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 
 		// Gemini-produced turn: keeps its own real thought signature untouched.
 		const geminiTurn = assistantTurn("google-gemini-cli", "google-antigravity", "gemini-3.8-flash", [
-			{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "git status" }, thoughtSignature: VALID_SIGNATURE },
+			{
+				type: "toolCall",
+				id: "call_2",
+				name: "bash",
+				arguments: { command: "git status" },
+				thoughtSignature: VALID_SIGNATURE,
+			},
 		]);
 		const geminiCalls = toolCallParts(model, geminiTurn);
 		expect(geminiCalls).toHaveLength(1);
