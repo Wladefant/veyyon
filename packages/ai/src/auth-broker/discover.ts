@@ -199,7 +199,7 @@ export async function resolveAuthBrokerConfig(
 	if (!token) {
 		throw new AIError.MissingApiKeyError(
 			undefined,
-			`VEYYON_AUTH_BROKER_URL is set (${url}) but no bearer token is available. ` +
+			`VEYYON_AUTH_BROKER_URL is configured but no bearer token is available. ` +
 				`Set VEYYON_AUTH_BROKER_TOKEN, the \`auth.broker.token\` config entry, or place one at ${getAuthBrokerTokenFilePath()}.`,
 		);
 	}

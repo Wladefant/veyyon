@@ -158,4 +158,28 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		});
 	});
 
+	test("does not echo credential-bearing broker URLs when the token is missing", async () => {
+		const endpoint =
+			"https://synthetic-user:synthetic-password@profile-broker.example/v1?access_token=synthetic-query-token";
+		await Bun.write(path.join(agentDir, "config.yml"), `auth.broker.url: "${endpoint}"\n`);
+
+		await withEnv(suppressEnv, async () => {
+			let caught: unknown;
+			try {
+				await resolveAuthBrokerConfig({ agentDir });
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(Error);
+			expect((caught as Error).name).toBe("MissingApiKeyError");
+			const message = (caught as Error).message;
+			expect(message).toContain("VEYYON_AUTH_BROKER_URL");
+			expect(message).toContain("no bearer token is available");
+			expect(message).toContain("Set VEYYON_AUTH_BROKER_TOKEN");
+			expect(message).not.toContain("synthetic-user");
+			expect(message).not.toContain("synthetic-password");
+			expect(message).not.toContain("synthetic-query-token");
+		});
+	});
 });
