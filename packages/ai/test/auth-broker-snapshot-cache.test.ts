@@ -162,6 +162,79 @@ describe("auth-broker snapshot cache", () => {
 		});
 	});
 
+	test("serializes case-only aliases before a missing encrypted cache is created", async () => {
+		await withCachePath(async cachePath => {
+			const dir = path.dirname(cachePath);
+			const alternateCase = path.join(dir, "SNAPSHOT.ENC");
+			const unrelatedPath = path.join(dir, "unrelated.enc");
+			// Detect the disposable filesystem's behavior instead of assuming the
+			// host OS determines whether this volume is case-insensitive.
+			const probe = path.join(dir, "CaseProbe.marker");
+			await fs.writeFile(probe, "synthetic probe");
+			let caseInsensitive = false;
+			try {
+				caseInsensitive = await fs.stat(path.join(dir, "CASEPROBE.MARKER")).then(
+					() => true,
+					(error: NodeJS.ErrnoException) => {
+						if (error.code === "ENOENT") return false;
+						throw error;
+					},
+				);
+			} finally {
+				await fs.unlink(probe);
+			}
+			const old = makeSnapshot(1_000_000);
+			const revoked: SnapshotResponse = { ...old, generation: 8, credentials: [] };
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const nativeEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle);
+			let encryptions = 0;
+			const spy = spyOn(globalThis.crypto.subtle, "encrypt").mockImplementation(async (algorithm, key, bytes) => {
+				if (++encryptions === 1) {
+					started.resolve();
+					await release.promise;
+				}
+				return nativeEncrypt(algorithm, key, bytes);
+			});
+			const first = writeAuthBrokerSnapshotCache({
+				path: cachePath, token: TOKEN, url: URL, snapshot: old,
+			});
+			let second: Promise<void> | undefined;
+			let unrelated: Promise<void> | undefined;
+			try {
+				await started.promise;
+				second = writeAuthBrokerSnapshotCache({
+					path: alternateCase, token: TOKEN, url: URL, snapshot: revoked,
+				});
+				unrelated = writeAuthBrokerSnapshotCache({
+					path: unrelatedPath, token: TOKEN, url: URL, snapshot: revoked,
+				});
+				await unrelated;
+				// Before the older AES operation is released only the first and
+				// unrelated writes may encrypt. An unfixed case-only key starts 3.
+				expect(encryptions).toBe(2);
+				release.resolve();
+				await Promise.all([first, second]);
+				const read = (p: string) => readAuthBrokerSnapshotCache({
+					path: p, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
+				});
+				expect(await read(alternateCase)).toEqual(revoked);
+				// On case-insensitive volumes both spellings name the same file:
+				// no revoked credential may be resurrected by the late old write.
+				expect(await read(cachePath)).toEqual(caseInsensitive ? revoked : old);
+				expect(await read(unrelatedPath)).toEqual(revoked);
+				for (const p of [cachePath, alternateCase]) {
+					expect((await fs.stat(p)).mode & 0o777).toBe(0o600);
+					expect(new TextDecoder().decode(await fs.readFile(p))).not.toContain("secret-api-key");
+				}
+			} finally {
+				release.resolve();
+				await Promise.allSettled([first, ...(second ? [second] : []), ...(unrelated ? [unrelated] : [])]);
+				spy.mockRestore();
+			}
+		});
+	});
+
 	test("rejects cyclic symlinks and nonregular cache targets without replacing them", async () => {
 		await withCachePath(async cachePath => {
 			const otherPath = path.join(path.dirname(cachePath), "cycle.enc");
