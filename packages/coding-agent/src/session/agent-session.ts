@@ -6505,10 +6505,7 @@ export class AgentSession {
 					// any foreign writer's tail, before writing to it again.
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
 				} catch (restoreError) {
-					throw new AggregateError(
-						[error, restoreError],
-						"Fork failed and could not restore its original session",
-					);
+					throw new AggregateError([error, restoreError], "Fork failed and could not restore its original session");
 				}
 			}
 			throw error;
