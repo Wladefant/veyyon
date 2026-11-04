@@ -7,7 +7,7 @@ const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
 export const WINDOWS_ACL_TIMEOUT_MS = 60_000;
 
 /** Reject values Node would truncate or turn into a one-millisecond timer. */
-function windowsAclTimeoutMs(): number {
+export function getWindowsAclTimeoutMs(): number {
 	const configured = process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 	if (configured === undefined || !/^[0-9]+$/.test(configured)) return WINDOWS_ACL_TIMEOUT_MS;
 	const timeout = Number(configured);
@@ -277,7 +277,7 @@ async function defaultWindowsAclRunner(
 	});
 	timer = setTimeout(() => {
 		fail(new Error("The Windows ACL command timed out."), true);
-	}, windowsAclTimeoutMs());
+	}, getWindowsAclTimeoutMs());
 	return await promise;
 }
 
@@ -295,7 +295,7 @@ function defaultWindowsAclSyncRunner(script: string, filePath: string): WindowsA
 			env,
 			maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
 			stdio: ["ignore", "pipe", "pipe"],
-			timeout: windowsAclTimeoutMs(),
+			timeout: getWindowsAclTimeoutMs(),
 			windowsHide: true,
 		},
 	);
