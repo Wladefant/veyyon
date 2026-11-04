@@ -285,6 +285,45 @@ describe("the snapshot stream", () => {
 		expect(broker.requests).toEqual(["GET /v1/snapshot/stream"]);
 	});
 
+	const syntheticCredentialMarker = "SYNTHETIC_ONLY_BROKER_SSE_602_NOT_A_REAL_KEY";
+	test.each([
+		{
+			name: "a credential-bearing entry before the initial snapshot",
+			frames: [dataFrame({
+				kind: "entry",
+				generation: 2,
+				serverNowMs: 0,
+				refresher: REFRESHER,
+				entry: {
+					id: 7,
+					provider: "synthetic",
+					credential: { type: "api_key", key: syntheticCredentialMarker },
+					identityKey: null,
+					rotatesInMs: null,
+				},
+			})],
+			message: "Auth broker stream did not start with snapshot",
+		},
+		{
+			name: "malformed JSON containing a credential marker",
+			frames: [dataFrame(SNAPSHOT_EVENT), `data: {"access":"${syntheticCredentialMarker}"\n\n`],
+			message: "Auth broker stream returned malformed JSON",
+		},
+		{
+			name: "a schema-invalid event with a credential marker",
+			frames: [dataFrame(SNAPSHOT_EVENT), dataFrame({ ...REMOVED_EVENT, id: syntheticCredentialMarker })],
+			message: "Auth broker stream event failed schema validation",
+		},
+	])("does not expose payload contents on $name", async ({ frames, message }) => {
+		const broker = fakeBroker(() => sse(...frames));
+		const { error } = await drain(brokerClient(broker.fetchImpl).openSnapshotStream());
+		expect(error.message).toBe(message);
+		expect(error.body).toBeUndefined();
+		expect(error.cause).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain(syntheticCredentialMarker);
+		expect(broker.requests).toEqual(["GET /v1/snapshot/stream"]);
+	});
+
 	test("ends quietly when the caller aborts after the opening snapshot", async () => {
 		const controller = new AbortController();
 		const broker = fakeBroker(() => sse(dataFrame(SNAPSHOT_EVENT)));
