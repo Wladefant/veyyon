@@ -344,11 +344,12 @@ interface BrokerResponse {
 	text: string;
 }
 
-/** `raw` checked against `schema`, or an {@link AuthBrokerError} carrying the schema's summary of what failed. */
+/** Validate JSON without retaining untrusted credential-bearing values in diagnostic errors. */
 function validateWire<T>(schema: (input: unknown) => unknown, raw: unknown, message: string, status?: number): T {
 	const validated = schema(raw);
 	if (validated instanceof type.errors) {
-		throw new AuthBrokerError(message, { status, body: validated.summary });
+		// ArkType summaries can echo token/key values from an invalid broker reply.
+		throw new AuthBrokerError(message, { status });
 	}
 	return validated as T;
 }
@@ -373,11 +374,9 @@ function parseStreamEvent(data: string): SnapshotStreamEvent {
 function parseJson(text: string, status: number): unknown {
 	try {
 		return text.length === 0 ? null : JSON.parse(text);
-	} catch (parseError) {
-		throw new AuthBrokerError("Auth broker returned malformed JSON", {
-			status,
-			body: text,
-			cause: parseError,
-		});
+	} catch {
+		// Broker JSON can include access tokens/keys: neither raw text nor parser
+		// exceptions that might quote input fragments belong on the error object.
+		throw new AuthBrokerError("Auth broker returned malformed JSON", { status });
 	}
 }
