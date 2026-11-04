@@ -38,6 +38,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+
 permissions:
   contents: read
 
@@ -55,7 +59,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
-      rust_changed: ${{ steps.selection.outputs.rust_changed || 'false' }}
+      native_ready: ${{ steps.native.outputs.native_ready || 'false' }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -64,7 +68,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -76,7 +80,7 @@ jobs:
           echo "runner.name: ${RUNNER_NAME}"
       - name: Detect changed paths
         id: changed
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
@@ -145,26 +149,26 @@ jobs:
         id: install
         if: steps.changed.outputs.has_code == 'true'
         uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
       - name: Validate OVH pull-request workflow
         if: steps.changed.outputs.workflow_changed == 'true' && steps.install.outcome == 'success' && !inputs.test_files
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: bun scripts/validate-ovh-pr-workflow.ts
       - name: Resolve related test graph
         id: selection
         if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
           TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           FOCUSED_TESTS: ${{ inputs.test_files }}
-          FOCUSED_NATIVE: ${{ inputs.native }}
         run: |
           set -euo pipefail
           if [[ -n "$FOCUSED_TESTS" ]]; then
             count="$(wc -l < "$RELATED_TESTS")"
             sed -i "s/^selected-tests=0$/selected-tests=$count/" "$RECEIPT"
-            echo "rust_changed=$FOCUSED_NATIVE" >> "$GITHUB_OUTPUT"
             echo "ts_changed=false" >> "$GITHUB_OUTPUT"
           else
             node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD --typecheck-planned
@@ -172,7 +176,7 @@ jobs:
       - name: Biome changed TypeScript and JavaScript
         id: biome
         if: steps.install.outcome == 'success' && !inputs.test_files
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
           if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
@@ -205,7 +209,7 @@ jobs:
           done < "$RUNNER_TEMP/ovh-touched-packages"
       - name: Record skipped TypeScript check summary
         if: steps.selection.outputs.ts_changed != 'true'
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
@@ -216,9 +220,32 @@ jobs:
               echo "- Elapsed: 0s"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Build and verify native addon
+        id: native
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          NATIVE_INPUT: ${{ inputs.native }}
+        run: |
+          set -euo pipefail
+          if [[ -s "$RELATED_TESTS" || "$NATIVE_INPUT" == "true" ]]; then
+            bun run ci:build:native
+            shopt -s nullglob
+            node_files=(natives/bridge/bindings/native/veyyon_natives.linux-x64*.node)
+            if [[ ${#node_files[@]} -eq 0 ]]; then
+              echo '::error::Missing native binding veyyon_natives.linux-x64*.node'
+              exit 1
+            fi
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+            echo "native_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native_ready=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Plan test shards
         id: planner
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
           OUTPUT_DIR: ${{ runner.temp }}/ovh-shards
@@ -229,11 +256,35 @@ jobs:
           node scripts/ovh-test-shards.mjs --input "$INPUT_FILE" --output "$OUTPUT_DIR"
           cp "$INPUT_FILE" "$OUTPUT_DIR/selected-tests.txt"
           cp "$RECEIPT" "$OUTPUT_DIR/ovh-receipt.txt"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload selection plan artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ovh-shards
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload native artifact
+        if: steps.native.outputs.native_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native/veyyon_natives.linux-x64*.node
           if-no-files-found: error
           retention-days: 7
       - name: Upload preparation receipt
@@ -263,13 +314,14 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+      OVH_MATRIX_INDEX: ${{ matrix.index }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -287,18 +339,21 @@ jobs:
       - name: Install dependencies and generate code
         id: install
         uses: ./.github/actions/bun-install
-      - name: Build native addon when required
-        if: ${{ !cancelled() && needs.prepare.outputs.rust_changed == 'true' }}
-        env:
-          CARGO_BUILD_JOBS: "2"
-        run: bun run ci:build:native
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+      - name: Download native addon
+        if: needs.prepare.outputs.native_ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native
       - name: Run cargo tests
         id: cargo
         if: ${{ !cancelled() && inputs.cargo_packages != '' && matrix.index == 0 }}
         env:
           CARGO_BUILD_JOBS: "2"
           CARGO_PACKAGES: ${{ inputs.cargo_packages }}
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           set -euo pipefail
           package_names="$(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")"
@@ -313,6 +368,21 @@ jobs:
           ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
           ((fail==0)) || status=1
           exit "$status"
+      - name: Verify native addon
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          FILES: ${{ matrix.files }}
+          NATIVE_READY: ${{ needs.prepare.outputs.native_ready }}
+        run: |
+          set -euo pipefail
+          if [[ "$FILES" != "0" && "$NATIVE_READY" != "true" ]]; then
+            echo '::error::Nonempty shard requires prepared native artifact'
+            exit 1
+          fi
+          if [[ "$NATIVE_READY" == "true" ]]; then
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+          fi
       - name: Prepare bwrap runtime
         id: bwrap
         if: steps.install.outcome == 'success'
@@ -328,7 +398,7 @@ jobs:
           echo 'VEYYON_SANDBOX_TIMEOUT=600' >> "$GITHUB_ENV"
       - name: Run selected tests serially
         if: ${{ !cancelled() && steps.bwrap.outcome == 'success' }}
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
           SHARD_FILE: ${{ runner.temp }}/ovh-shards/shard-${{ matrix.index }}.txt
@@ -424,6 +494,22 @@ jobs:
           fi
           ((total_ran>0)) || { echo '::error::No selected tests ran'; status=1; }
           exit "$status"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload test logs and receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -448,7 +534,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
       - name: Record checkout identity
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
         run: |
@@ -461,6 +547,8 @@ jobs:
       - name: Install dependencies and generate code
         id: install
         uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
       - name: Run TypeScript check
         id: check
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
@@ -492,6 +580,22 @@ jobs:
           for (const key of keys) console.log(key);
           NODE
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
       - name: Upload typecheck artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -504,7 +608,7 @@ jobs:
           retention-days: 7
       - name: Enforce TypeScript check exit status
         if: always()
-        shell: bash
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         run: |
           exit_code="${{ steps.check.outputs.exit_code }}"
           if [[ -z "$exit_code" || "$exit_code" -ne 0 ]]; then

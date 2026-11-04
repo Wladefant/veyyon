@@ -2,11 +2,20 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { applyOwnerOnlyWindowsAcl, atomicWriteFileWith, getConfigRootDir, postmortem } from "@veyyon/utils";
+import {
+	applyOwnerOnlyWindowsAcl,
+	atomicWriteFileWith,
+	getConfigRootDir,
+	logTelegramDeliveryTrace,
+	normalizeDeliveryOutcome,
+	parseTelegramTrace,
+	postmortem,
+	type TelegramDeliveryTraceData,
+} from "@veyyon/utils";
+import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
-import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -22,9 +31,13 @@ export interface TerminalOwner {
 	capabilities: readonly string[];
 }
 
+export interface TerminalDeliveryOptions {
+	telegramTrace?: TelegramDeliveryTraceData;
+}
+
 export interface TerminalControlTarget {
 	identity(): { sessionId: string; cwd: string; sessionFile: string };
-	deliver(text: string, mode: "auto" | "steer" | "followUp"): Promise<string>;
+	deliver(text: string, mode: "auto" | "steer" | "followUp", options?: TerminalDeliveryOptions): Promise<string>;
 	abort(): Promise<boolean>;
 	history(): { entryId: string; text: string }[];
 	subscribe(listener: (event: unknown) => void): () => void;
@@ -321,7 +334,12 @@ export async function serveTerminalControl(
 			}
 		}
 	};
-	const runDelivery = (sessionId: string, text: string, mode: "auto" | "steer" | "followUp"): Promise<string> => {
+	const runDelivery = (
+		sessionId: string,
+		text: string,
+		mode: "auto" | "steer" | "followUp",
+		deliveryOptions?: TerminalDeliveryOptions,
+	): Promise<string> => {
 		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
 			return Promise.reject(new Error("Terminal busy: too many deliveries pending; retry later"));
 		}
@@ -333,7 +351,7 @@ export async function serveTerminalControl(
 					throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
 				}
 				try {
-					return await target.deliver(text, mode);
+					return await target.deliver(text, mode, deliveryOptions);
 				} catch (error) {
 					if (!(error instanceof TerminalNotReadyError) || attempt >= NOT_READY_RETRIES) throw error;
 					await Bun.sleep(NOT_READY_RETRY_MS);
@@ -356,6 +374,7 @@ export async function serveTerminalControl(
 		messageId: string,
 		text: string,
 		mode: "auto" | "steer" | "followUp",
+		deliveryOptions?: TerminalDeliveryOptions,
 	): { accepted: true; messageId: string; state: DeliveryState["state"]; outcome?: string; error?: string } => {
 		const key = deliveryKey(sessionId, messageId);
 		const known = deliveries.get(key);
@@ -374,7 +393,13 @@ export async function serveTerminalControl(
 		}
 		if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
 			throw new Error("Terminal busy: too many deliveries pending; retry later");
-		const deliveryPromise = runDelivery(sessionId, text, mode);
+		if (deliveryOptions?.telegramTrace) {
+			logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
+				stage: "session_acceptance",
+				sessionId,
+			});
+		}
+		const deliveryPromise = runDelivery(sessionId, text, mode, deliveryOptions);
 		const record = {
 			sessionId,
 			messageId,
@@ -389,9 +414,23 @@ export async function serveTerminalControl(
 			.then(
 				outcome => {
 					record.status = { state: "delivered", outcome };
+					if (deliveryOptions?.telegramTrace) {
+						logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
+							stage: "delivery_outcome",
+							sessionId,
+							outcome: normalizeDeliveryOutcome(outcome),
+						});
+					}
 				},
 				error => {
 					record.status = { state: "failed", error: String(error) };
+					if (deliveryOptions?.telegramTrace) {
+						logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
+							stage: "delivery_outcome",
+							sessionId,
+							outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
+						});
+					}
 					if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
 						retryable = true;
 					}
@@ -474,7 +513,9 @@ export async function serveTerminalControl(
 										throw new Error("Secret intake registration refused");
 									}
 									try {
-										const context = await target.registerSecretIntake(registration as TerminalSecretRegistration);
+										const context = await target.registerSecretIntake(
+											registration as TerminalSecretRegistration,
+										);
 										if (
 											context.actorId !== registration.actorId ||
 											context.ownerSessionId !== registration.ownerSessionId ||
@@ -568,13 +609,23 @@ export async function serveTerminalControl(
 								result = true;
 								break;
 							}
-							case "deliver":
+							case "deliver": {
 								if (
 									typeof request.text !== "string" ||
 									!request.text.trim() ||
 									!["auto", "steer", "followUp"].includes(request.mode)
 								)
 									throw new Error("Invalid delivery");
+								let telegramTrace: TelegramDeliveryTraceData | undefined;
+								if (request.telegramTrace !== undefined) {
+									telegramTrace = parseTelegramTrace(request.telegramTrace);
+									if (!telegramTrace) {
+										throw new Error("Invalid delivery");
+									}
+								}
+								const deliveryOptions: TerminalDeliveryOptions | undefined = telegramTrace
+									? { telegramTrace }
+									: undefined;
 								if (request.ack === true) {
 									// The terminal may be blocked for seconds. Accept now, deliver on the chain.
 									if (
@@ -589,6 +640,7 @@ export async function serveTerminalControl(
 										request.messageId,
 										request.text,
 										request.mode,
+										deliveryOptions,
 									);
 									break;
 								}
@@ -609,7 +661,18 @@ export async function serveTerminalControl(
 									}
 									if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
 										throw new Error("Terminal busy: too many deliveries pending; retry later");
-									const deliveryPromise = runDelivery(request.sessionId, request.text, request.mode);
+									if (telegramTrace) {
+										logTelegramDeliveryTrace(telegramTrace, {
+											stage: "session_acceptance",
+											sessionId: request.sessionId,
+										});
+									}
+									const deliveryPromise = runDelivery(
+										request.sessionId,
+										request.text,
+										request.mode,
+										deliveryOptions,
+									);
 									const record = {
 										sessionId: request.sessionId,
 										messageId: request.messageId,
@@ -624,9 +687,23 @@ export async function serveTerminalControl(
 										.then(
 											outcome => {
 												record.status = { state: "delivered", outcome };
+												if (telegramTrace) {
+													logTelegramDeliveryTrace(telegramTrace, {
+														stage: "delivery_outcome",
+														sessionId: request.sessionId,
+														outcome: normalizeDeliveryOutcome(outcome),
+													});
+												}
 											},
 											error => {
 												record.status = { state: "failed", error: String(error) };
+												if (telegramTrace) {
+													logTelegramDeliveryTrace(telegramTrace, {
+														stage: "delivery_outcome",
+														sessionId: request.sessionId,
+														outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
+													});
+												}
 												if (
 													error instanceof TerminalNotReadyError ||
 													error instanceof TerminalSessionChangedError
@@ -643,8 +720,33 @@ export async function serveTerminalControl(
 									result = await deliveryPromise;
 									break;
 								}
-								result = await runDelivery(request.sessionId, request.text, request.mode);
+								if (telegramTrace) {
+									logTelegramDeliveryTrace(telegramTrace, {
+										stage: "session_acceptance",
+										sessionId: request.sessionId,
+									});
+								}
+								try {
+									result = await runDelivery(request.sessionId, request.text, request.mode, deliveryOptions);
+									if (telegramTrace) {
+										logTelegramDeliveryTrace(telegramTrace, {
+											stage: "delivery_outcome",
+											sessionId: request.sessionId,
+											outcome: normalizeDeliveryOutcome(result),
+										});
+									}
+								} catch (error) {
+									if (telegramTrace) {
+										logTelegramDeliveryTrace(telegramTrace, {
+											stage: "delivery_outcome",
+											sessionId: request.sessionId,
+											outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
+										});
+									}
+									throw error;
+								}
 								break;
+							}
 							case "deliveryStatus": {
 								const known =
 									typeof request.messageId === "string"
@@ -671,7 +773,17 @@ export async function serveTerminalControl(
 								if (!target.secretRequest) throw new Error("Secret intake request refused");
 								const allowed =
 									request.action === "submit"
-										? ["id", "version", "token", "sessionId", "op", "action", "requestId", "submission", "context"]
+										? [
+												"id",
+												"version",
+												"token",
+												"sessionId",
+												"op",
+												"action",
+												"requestId",
+												"submission",
+												"context",
+											]
 										: ["id", "version", "token", "sessionId", "op", "action", "requestId", "context"];
 								if (
 									Object.keys(request).some(key => !allowed.includes(key)) ||
@@ -680,7 +792,9 @@ export async function serveTerminalControl(
 									typeof request.context !== "object" ||
 									request.context === null ||
 									Object.keys(request.context).length !== 3 ||
-									Object.keys(request.context).some(key => !["actorId", "ownerSessionId", "projectId"].includes(key)) ||
+									Object.keys(request.context).some(
+										key => !["actorId", "ownerSessionId", "projectId"].includes(key),
+									) ||
 									typeof request.context.actorId !== "string" ||
 									typeof request.context.ownerSessionId !== "string" ||
 									typeof request.context.projectId !== "string" ||

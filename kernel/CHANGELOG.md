@@ -7,6 +7,19 @@
 ### Fixed
 
 - Authoritative journal checks refuse unreadable disk state without changing ordinary best-effort session persistence ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- External-turn reconciliation preserves the selected branch and accepts only completed descendant runs with settled tool calls ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- Warm session refresh reports unfinished external message extensions instead of admitting a conflicting local turn ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+
+## [1.7.5] - 2026-11-02
+
+### Changed
+
+- Terminal ownership failures name the record, verification step, original error code and message, elapsed time, and Windows ACL command deadline. Ownership checks still fail closed without retries ([#849](https://github.com/Wladefant/veyyon/issues/849)).
 
 ## [1.6.0] - 2026-10-28
 

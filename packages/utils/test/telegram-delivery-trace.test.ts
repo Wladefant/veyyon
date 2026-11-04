@@ -1,0 +1,217 @@
+import { describe, expect, it, spyOn } from "bun:test";
+import * as logger from "../src/logger";
+import {
+	attachTelegramTrace,
+	computeTelegramTraceId,
+	consumeTelegramTrace,
+	getTelegramTrace,
+	getTelegramTraceSessionId,
+	logTelegramDeliveryTrace,
+	normalizeDeliveryOutcome,
+	parseTelegramTrace,
+	type TelegramDeliveryTraceData,
+	transferTelegramTrace,
+} from "../src/telegram-delivery-trace";
+
+describe("telegram-delivery-trace", () => {
+	it("preserves duplicate as a successful delivery outcome and fails closed for unknown outcomes", () => {
+		expect(normalizeDeliveryOutcome("duplicate")).toBe("duplicate");
+		expect(normalizeDeliveryOutcome("unrecognized")).toBe("failed");
+	});
+	it("computes traceId as chatId:updateId:messageId", () => {
+		const trace: TelegramDeliveryTraceData = {
+			chatId: "-100123456",
+			updateId: 987,
+			messageId: 42,
+		};
+		expect(computeTelegramTraceId(trace)).toBe("-100123456:987:42");
+	});
+
+	it("parses valid wire metadata and allowlists fields only", () => {
+		const parsed = parseTelegramTrace({
+			updateId: 101,
+			messageId: 202,
+			chatId: "-100123456",
+			topicId: 5,
+			sourceTimestampMs: 1700000000000,
+			extraField: "should-be-stripped",
+			text: "secret user text",
+		});
+		expect(parsed).toEqual({
+			updateId: 101,
+			messageId: 202,
+			chatId: "-100123456",
+			topicId: 5,
+			sourceTimestampMs: 1700000000000,
+		});
+		const parsedRecord = parsed as unknown as Record<string, unknown>;
+		expect(parsedRecord.extraField).toBeUndefined();
+		expect(parsedRecord.text).toBeUndefined();
+	});
+
+	it("rejects invalid wire metadata, malformed numeric IDs, and non-numeric chat IDs", () => {
+		expect(parseTelegramTrace(null)).toBeUndefined();
+		expect(parseTelegramTrace(undefined)).toBeUndefined();
+		expect(parseTelegramTrace("invalid")).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: "not-a-number", messageId: 1, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: "not-a-number", chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: 123 })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "not-numeric" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "<script>" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "0" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "123.456" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "99999999999999999999999" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 0, messageId: 1, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: -1, messageId: 1, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1.5, messageId: 1, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 0, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: -5, chatId: "-1001" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", topicId: "bad" })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", topicId: 0 })).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", topicId: -1 })).toBeUndefined();
+		expect(
+			parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", sourceTimestampMs: NaN }),
+		).toBeUndefined();
+		expect(parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", sourceTimestampMs: 0 })).toBeUndefined();
+		expect(
+			parseTelegramTrace({ updateId: 1, messageId: 2, chatId: "-1001", sourceTimestampMs: -100 }),
+		).toBeUndefined();
+	});
+
+	it("logs fixed message with allowlisted metadata and never leaks prompt text", () => {
+		const records: Array<{ message: string; context: Record<string, unknown> | undefined }> = [];
+		const infoSpy = spyOn(logger, "info").mockImplementation((message, context) => {
+			records.push({ message, context });
+		});
+		try {
+			const trace: TelegramDeliveryTraceData = {
+				chatId: "-100777",
+				updateId: 505,
+				messageId: 12,
+				topicId: 99,
+				sourceTimestampMs: 1700000005000,
+			};
+			logTelegramDeliveryTrace(trace, {
+				stage: "session_acceptance",
+				sessionId: "sess-abc",
+			});
+
+			expect(records).toHaveLength(1);
+			const { message, context } = records[0]!;
+			expect(message).toBe("Telegram delivery trace");
+			if (!context) throw new Error("Expected logger context");
+			expect(context).toMatchObject({
+				traceId: "-100777:505:12",
+				chatId: "-100777",
+				updateId: 505,
+				messageId: 12,
+				topicId: 99,
+				sourceTimestampMs: 1700000005000,
+				stage: "session_acceptance",
+				sessionId: "sess-abc",
+			});
+			expect(typeof context.wallTimeMs).toBe("number");
+			expect(typeof context.monotonicMs).toBe("number");
+			expect(typeof context.processId).toBe("number");
+			expect(typeof context.bootId).toBe("string");
+			expect(context.text).toBeUndefined();
+			expect(context.prompt).toBeUndefined();
+			expect(context.token).toBeUndefined();
+			expect(context.error).toBeUndefined();
+		} finally {
+			infoSpy.mockRestore();
+		}
+	});
+
+	it("attaches, transfers on copy, and consumes trace exactly once", () => {
+		const records: Array<Record<string, unknown> | undefined> = [];
+		const infoSpy = spyOn(logger, "info").mockImplementation((_message, context) => {
+			records.push(context);
+		});
+		try {
+			const trace: TelegramDeliveryTraceData = {
+				chatId: "c1",
+				updateId: 1,
+				messageId: 2,
+			};
+			const msg1 = { role: "user", content: "hello" };
+			attachTelegramTrace(msg1, trace, "session-owning-123");
+			expect(getTelegramTrace(msg1)).toEqual(trace);
+			expect(getTelegramTraceSessionId(msg1)).toBe("session-owning-123");
+
+			const msgCopy = { ...msg1 };
+			transferTelegramTrace(msg1, msgCopy);
+			expect(getTelegramTrace(msgCopy)).toEqual(trace);
+			expect(getTelegramTraceSessionId(msgCopy)).toBe("session-owning-123");
+
+			// First consume logs turn_consumption with the retained owning sessionId
+			const consumed = consumeTelegramTrace(msgCopy, "session-fallback");
+			expect(consumed).toEqual({ trace, sessionId: "session-owning-123" });
+			expect(records).toHaveLength(1);
+			expect(records[0]).toMatchObject({
+				stage: "turn_consumption",
+				traceId: "c1:1:2",
+				sessionId: "session-owning-123",
+			});
+
+			// Second consume on same or copied message does not log again
+			const second = consumeTelegramTrace(msgCopy, "session-owning-123");
+			expect(second).toBeUndefined();
+			expect(records).toHaveLength(1);
+
+			// Fallback sessionId used when attach omitted sessionId
+			const msgFallback = { role: "user", content: "fallback" };
+			attachTelegramTrace(msgFallback, trace);
+			const consumedFallback = consumeTelegramTrace(msgFallback, "session-fallback");
+			expect(consumedFallback).toEqual({ trace, sessionId: "session-fallback" });
+			expect(records).toHaveLength(2);
+			expect(records[1]).toMatchObject({
+				stage: "turn_consumption",
+				traceId: "c1:1:2",
+				sessionId: "session-fallback",
+			});
+		} finally {
+			infoSpy.mockRestore();
+		}
+	});
+
+	// WHY: Copies share a logical delivery, regardless of consumption order.
+	// This covers in-process transfer, not transport replay deduplication.
+	for (const order of ["original-first", "copy-first", "same-tick"] as const) {
+		it(`records one consumption across multiple copies: ${order}`, async () => {
+			const records: Array<Record<string, unknown> | undefined> = [];
+			const infoSpy = spyOn(logger, "info").mockImplementation((_message, context) => {
+				records.push(context);
+			});
+			try {
+				const trace = { chatId: "-1001", updateId: 19, messageId: 23 };
+				const original = { content: "private prompt" };
+				const copies = [{ ...original }, { ...original }];
+				attachTelegramTrace(original, trace, "owning-session");
+				for (const copy of copies) transferTelegramTrace(original, copy);
+				const messages = order === "copy-first" ? [...copies, original] : [original, ...copies];
+				const consumed =
+					order === "same-tick"
+						? await Promise.all(
+								messages.map(message => Promise.resolve().then(() => consumeTelegramTrace(message))),
+							)
+						: messages.map(message => consumeTelegramTrace(message));
+				expect(records).toEqual([
+					expect.objectContaining({
+						stage: "turn_consumption",
+						traceId: "-1001:19:23",
+						sessionId: "owning-session",
+					}),
+				]);
+				expect(consumed.filter(value => value !== undefined)).toEqual([{ trace, sessionId: "owning-session" }]);
+				const lateCopy = { ...original };
+				transferTelegramTrace(copies[0]!, lateCopy);
+				expect(consumeTelegramTrace(lateCopy)).toBeUndefined();
+				expect(records).toHaveLength(1);
+			} finally {
+				infoSpy.mockRestore();
+			}
+		});
+	}
+});

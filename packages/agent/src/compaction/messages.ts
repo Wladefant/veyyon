@@ -9,6 +9,7 @@ import type {
 	UserMessage,
 	VideoContent,
 } from "@veyyon/ai";
+import { transferTelegramTrace } from "@veyyon/utils";
 import * as prompt from "@veyyon/utils/prompt";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentMessage } from "../types";
@@ -290,6 +291,7 @@ function cachedAuthoredConversion(message: AuthoredMessage): Message | undefined
 
 /** Record `converted` as the conversion of `message`'s current role, attribution and content, and return it. */
 function cacheAuthoredConversion(message: AuthoredMessage, converted: Message): Message {
+	transferTelegramTrace(message, converted);
 	convertedMessageCache.set(message, {
 		role: message.role,
 		converted,
