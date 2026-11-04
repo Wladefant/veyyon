@@ -5,6 +5,7 @@
 ### Added
 
 - An opt-in SageOx extension searches team context and shares reviewed Veyyon conversation snapshots and repository handoffs ([Refs #954](https://github.com/Wladefant/veyyon/issues/954)).
+- Added a portable approved-context contract with explicit SageOx and Git providers ([Refs Wladefant/superboard#2397](https://github.com/Wladefant/superboard/issues/2397)).
 
 ## [1.7.8] - 2026-11-03
 
