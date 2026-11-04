@@ -23,7 +23,7 @@ function fixture(wsl = false) {
 		team: TEAM,
 		email: "operator@example.invalid",
 		id: session,
-		leaf,
+		leaf: leaf as string | null,
 		consent: true,
 		draft: "",
 		imported: "",
@@ -195,6 +195,18 @@ test("explicit handoffs keep option-looking text literal and queued receipts vis
 	expect(args).toContain("--scope=ledger");
 	expect(args.at(-2)).toBe("--");
 	expect(JSON.parse(args.at(-1)!)).toEqual({ content: '--scope=team $("noop")' });
+	expect(f.state.receipt).toContain("queued");
+});
+
+// WHY: an empty session has no leaf. Explicit handoffs must still publish after approval.
+// This covers the extension-to-provider path, not hosted delivery.
+test("an approved handoff from an empty session does not require a leaf id", async () => {
+	const f = fixture();
+	f.state.leaf = null;
+	await f.run("sageox-handoff", "new session handoff");
+	const notes = f.calls.filter(args => args.includes("murmur"));
+	expect(notes).toHaveLength(1);
+	expect(JSON.parse(notes[0]!.at(-1)!)).toEqual({ content: "new session handoff" });
 	expect(f.state.receipt).toContain("queued");
 });
 
