@@ -7,6 +7,8 @@ The auth broker and auth gateway are two cooperating HTTP services that move OAu
 
 Transport security between operator, broker, and gateway is delegated to the operator (Tailscale / Wireguard / reverse proxy + TLS). Every endpoint except `/v1/healthz` (broker) and `/healthz` (gateway) requires a bearer token.
 
+**SSE error diagnostic boundary.** Broker snapshot streams carry access-token or API-key values even though OAuth refresh values are redacted. A stream that starts with the wrong event, carries malformed JSON, or fails event-schema validation reports a generic broker protocol error without retaining the raw `data` frame, parser exception, or value-bearing schema summary in the throwable error. A faulty broker/intermediary cannot turn invalid event data into a credential-bearing diagnostic; valid snapshot and subsequent entry/removal events are unchanged.
+
 Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packages/coding-agent/src/cli/auth-broker-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-cli.ts`, `packages/coding-agent/src/session/auth-broker-config.ts`.
 
 ## Data flow
