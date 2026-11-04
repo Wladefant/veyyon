@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [1.7.9] - 2026-11-04
+
+### Fixed
+
+- MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
+- ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+- ACP bash terminal output withholds a truncated client snapshot whole, because the cut-off start can hold the context that marks the rest as an inventory ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+- Terminal ownership checks can ignore unreadable or malformed publisher records. The filename PID must be dead, or its derived endpoint must be absent. Live or uncertain claims still fail closed ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+- Allow Windows ACL commands 60 seconds by default. Accept `VEYYON_WINDOWS_ACL_TIMEOUT_MS` as an integer from 1 to 2147483647 milliseconds; ignore invalid values. Keep every owner, reparse-point, inheritance and DACL check ([Refs #849](https://github.com/Wladefant/veyyon/issues/849)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
