@@ -728,7 +728,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	async refreshSnapshot(): Promise<SnapshotResponse> {
 		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot();
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+		// An explicit unconditional refresh cannot establish broker truth from
+		// a 304: returning a cached snapshot would misreport stale state as fresh.
+		if (result.status !== 200) {
+			throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
+		}
+		this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 		return this.#snapshot;
 	}
 
