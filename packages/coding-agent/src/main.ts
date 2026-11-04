@@ -1583,6 +1583,9 @@ function applyLaunchSettingOverrides(parsedArgs: Args, settings: Settings): void
 	if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 		applyRpcDefaultSettingOverrides(settings);
 	} else if (parsedArgs.mode === "acp") {
+		if (!parsedArgs.approvalMode && !parsedArgs.autoApprove && settings.get("tools.approvalMode") === "yolo") {
+			settings.override("tools.approvalMode", "auto");
+		}
 		applyAcpDefaultSettingOverrides(settings);
 	}
 	if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
@@ -1591,6 +1594,10 @@ function applyLaunchSettingOverrides(parsedArgs: Args, settings: Settings): void
 	if (parsedArgs.noTitle || parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "acp") {
 		Bun.env.VEYYON_NO_TITLE = "1";
 	}
+}
+/** Apply launch overrides in isolation for focused settings regression tests. */
+export function __applyLaunchSettingOverridesForTests(parsedArgs: Args, targetSettings: Settings): void {
+	applyLaunchSettingOverrides(parsedArgs, targetSettings);
 }
 
 /** How this launch runs: the output mode, and whether stdin carries a prompt or a protocol or the operator. */
